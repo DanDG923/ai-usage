@@ -1,0 +1,443 @@
+'use strict';
+
+const FABLE_SOURCE_ID = 'claude-fable';
+const FABLE_BUCKET_ID = 'fable_seven_day';
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+// The one list of provenances that count as provider-backed Fable evidence,
+// shared with the estimator so both agree on what an "official" reading is.
+const OFFICIAL_PROVENANCES = ['official-claude-usage', 'official-statusline', 'manual-official', 'official'];
+const PROVIDER_WINDOW_DESCRIPTORS = [
+  { key: 'five_hour', bucketName: '5-hour', windowMinutes: 300, scope: 'overall' },
+  { key: 'seven_day', bucketName: 'Weekly', windowMinutes: 10_080, scope: 'overall' },
+  { key: 'seven_day_oauth_apps', bucketName: 'OAuth apps weekly', windowMinutes: 10_080, scope: 'oauth-apps' },
+  { key: 'seven_day_opus', bucketName: 'Opus weekly', windowMinutes: 10_080, scope: 'model' },
+  { key: 'seven_day_sonnet', bucketName: 'Sonnet weekly', windowMinutes: 10_080, scope: 'model' },
+];
+
+function isRecord(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function asIso(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return null;
+  const year = new Date(timestamp).getUTCFullYear();
+  return year >= 2020 && year <= 2100 ? new Date(timestamp).toISOString() : null;
+}
+
+function asUtilization(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100
+    ? value : null;
+}
+
+function isFableLabel(value) {
+  return typeof value === 'string' && /(?:^|[^a-z0-9])fable(?:[^a-z0-9]|$)/i.test(value);
+}
+
+function invalid(reason) {
+  return { kind: 'invalid', reason };
+}
+
+function normalizeWindow(value, label) {
+  if (value == null) return { kind: 'absent' };
+  if (!isRecord(value)) return invalid(`${label} must be an object or null`);
+  if (value.utilization == null || value.resets_at == null) return { kind: 'absent' };
+  const utilization = asUtilization(value.utilization);
+  const resetsAt = asIso(value.resets_at);
+  if (utilization == null || resetsAt == null) return invalid(`${label} has an invalid utilization or reset time`);
+  return { kind: 'window', utilization, resetsAt };
+}
+
+function normalizeExtraUsage(value) {
+  if (value == null) return { kind: 'extra-usage', value: null };
+  if (!isRecord(value) || typeof value.is_enabled !== 'boolean') {
+    return invalid('extra_usage must contain a boolean is_enabled value');
+  }
+  const nonNegativeNumberOrNull = (candidate) => candidate === null
+    || (typeof candidate === 'number' && Number.isFinite(candidate) && candidate >= 0);
+  if (!nonNegativeNumberOrNull(value.monthly_limit)
+    || !nonNegativeNumberOrNull(value.used_credits)) {
+    return invalid('extra_usage limits and credits must be non-negative numbers or null');
+  }
+  const utilization = value.utilization === null ? null : asUtilization(value.utilization);
+  if (value.utilization !== null && utilization == null) {
+    return invalid('extra_usage utilization must be between 0 and 100 or null');
+  }
+  if (value.currency !== undefined && value.currency !== null && typeof value.currency !== 'string') {
+    return invalid('extra_usage currency must be a string or null');
+  }
+  const extraUsage = {
+    isEnabled: value.is_enabled,
+    monthlyLimit: value.monthly_limit,
+    usedCredits: value.used_credits,
+    utilization,
+  };
+  if (value.currency !== undefined) extraUsage.currency = value.currency;
+  return { kind: 'extra-usage', value: extraUsage };
+}
+
+function modelScopedBucketId(displayName) {
+  return `model_scoped:${encodeURIComponent(displayName.trim().toLowerCase())}`;
+}
+
+// The provider method is explicitly experimental. Validate the complete slice
+// we consume before writing any of it; a half-valid response must not turn into
+// authoritative history merely because one nested value happened to parse.
+function normalizeUsagePayload(payload, observedAt) {
+  if (!isRecord(payload)) return invalid('usage response must be an object');
+  if (typeof payload.rate_limits_available !== 'boolean') return invalid('rate_limits_available must be boolean');
+  if (payload.subscription_type != null && typeof payload.subscription_type !== 'string') {
+    return invalid('subscription_type must be a string or null');
+  }
+  const planType = payload.subscription_type || null;
+  if (!payload.rate_limits_available || payload.rate_limits == null) {
+    return {
+      kind: 'unavailable', reason: 'plan-window-unavailable', planType, overall: [], extraUsage: null,
+    };
+  }
+  if (!isRecord(payload.rate_limits)) return invalid('rate_limits must be an object or null');
+
+  const normalizedExtraUsage = normalizeExtraUsage(payload.rate_limits.extra_usage);
+  if (normalizedExtraUsage.kind === 'invalid') return normalizedExtraUsage;
+  const extraUsage = normalizedExtraUsage.value;
+
+  const overall = [];
+  for (const descriptor of PROVIDER_WINDOW_DESCRIPTORS) {
+    const normalized = normalizeWindow(payload.rate_limits[descriptor.key], descriptor.key);
+    if (normalized.kind === 'invalid') return normalized;
+    if (normalized.kind === 'window') {
+      overall.push({
+        bucketId: descriptor.key,
+        bucketName: descriptor.bucketName,
+        windowMinutes: descriptor.windowMinutes,
+        scope: descriptor.scope,
+        utilization: normalized.utilization,
+        resetsAt: normalized.resetsAt,
+      });
+    }
+  }
+
+  const scoped = payload.rate_limits.model_scoped;
+  if (scoped === undefined) return {
+    kind: 'unavailable', reason: 'fable-window-unavailable', planType, overall, extraUsage,
+  };
+  if (!Array.isArray(scoped)) return invalid('model_scoped must be an array when present');
+
+  const fable = [];
+  const otherModels = new Map();
+  for (const entry of scoped) {
+    if (!isRecord(entry) || typeof entry.display_name !== 'string' || !entry.display_name.trim()) {
+      return invalid('every model_scoped entry must have a display name');
+    }
+    const displayName = entry.display_name.trim();
+    const normalized = normalizeWindow(entry, `model_scoped:${displayName}`);
+    if (normalized.kind === 'invalid') return normalized;
+    if (isFableLabel(entry.display_name)) {
+      fable.push({ displayName, ...normalized });
+    } else if (normalized.kind === 'window') {
+      const bucketId = modelScopedBucketId(displayName);
+      const existing = otherModels.get(bucketId);
+      if (existing
+        && (existing.utilization !== normalized.utilization || existing.resetsAt !== normalized.resetsAt)) {
+        return invalid(`conflicting ${displayName} model-scoped windows`);
+      }
+      if (!existing) {
+        const providerWindow = {
+          bucketId,
+          bucketName: `${displayName} weekly`,
+          windowMinutes: 10_080,
+          scope: 'model',
+          displayName,
+          utilization: normalized.utilization,
+          resetsAt: normalized.resetsAt,
+        };
+        otherModels.set(bucketId, providerWindow);
+        overall.push(providerWindow);
+      }
+    }
+  }
+  if (!fable.length) return {
+    kind: 'unavailable', reason: 'fable-window-unavailable', planType, overall, extraUsage,
+  };
+  if (fable.some((entry) => entry.kind !== 'window')) {
+    return {
+      kind: 'unavailable', reason: 'fable-window-incomplete', planType, overall, extraUsage,
+    };
+  }
+  const first = fable[0];
+  if (fable.some((entry) => entry.utilization !== first.utilization || entry.resetsAt !== first.resetsAt)) {
+    return invalid('conflicting Fable model-scoped windows');
+  }
+  if (Date.parse(first.resetsAt) <= Date.parse(observedAt)) {
+    return {
+      kind: 'unavailable', reason: 'fable-window-expired', planType, overall, extraUsage,
+    };
+  }
+  return {
+    kind: 'observed',
+    planType,
+    overall,
+    extraUsage,
+    fable: first,
+  };
+}
+
+function recordProviderWindows(store, normalized, observedAt) {
+  // UsageStore's writes are synchronous. A transaction makes validation plus
+  // persistence all-or-nothing without exposing transaction choreography to
+  // the tracker caller.
+  store.db.exec('BEGIN IMMEDIATE');
+  try {
+    let overallWindowsRecorded = 0;
+    for (const window of normalized.overall) {
+      if (Date.parse(window.resetsAt) <= Date.parse(observedAt)) continue;
+      const metadata = { scope: window.scope, source: 'claude-usage' };
+      if (window.displayName) metadata.displayName = window.displayName;
+      if (normalized.extraUsage) metadata.extraUsage = normalized.extraUsage;
+      store.recordObservation({
+        sourceId: 'claude',
+        bucketId: window.bucketId,
+        bucketName: window.bucketName,
+        observedAt,
+        usedPercent: window.utilization,
+        remainingPercent: 100 - window.utilization,
+        resetsAt: window.resetsAt,
+        windowMinutes: window.windowMinutes,
+        planType: normalized.planType,
+        provenance: 'official-claude-usage',
+        confidence: 1,
+        metadata,
+      });
+      overallWindowsRecorded += 1;
+    }
+    if (normalized.kind === 'observed') {
+      store.recordObservation({
+        sourceId: FABLE_SOURCE_ID,
+        bucketId: FABLE_BUCKET_ID,
+        bucketName: 'Fable 5 weekly',
+        observedAt,
+        usedPercent: normalized.fable.utilization,
+        remainingPercent: 100 - normalized.fable.utilization,
+        resetsAt: normalized.fable.resetsAt,
+        windowMinutes: 10_080,
+        planType: normalized.planType,
+        provenance: 'official-claude-usage',
+        confidence: 1,
+        metadata: {
+          scope: 'model',
+          source: 'claude-usage',
+          displayName: normalized.fable.displayName,
+          ...(normalized.extraUsage ? { extraUsage: normalized.extraUsage } : {}),
+        },
+      });
+    }
+    store.db.exec('COMMIT');
+    return overallWindowsRecorded;
+  } catch (error) {
+    try { store.db.exec('ROLLBACK'); } catch { /* Preserve the original write error. */ }
+    throw error;
+  }
+}
+
+function getLastCurrentOfficial(store, nowMs) {
+  const placeholders = OFFICIAL_PROVENANCES.map(() => '?').join(', ');
+  const row = store.db.prepare(`
+    SELECT * FROM quota_observations
+    WHERE source_id = ? AND bucket_id = ? AND provenance IN (${placeholders})
+      AND resets_at > ?
+    ORDER BY observed_at DESC LIMIT 1
+  `).get(FABLE_SOURCE_ID, FABLE_BUCKET_ID, ...OFFICIAL_PROVENANCES, new Date(nowMs).toISOString());
+  if (!row) return null;
+  return row;
+}
+
+function allowanceFromRow(row) {
+  return {
+    kind: 'official',
+    usedPercent: row.used_percent,
+    remainingPercent: row.remaining_percent,
+    resetsAt: row.resets_at,
+    observedAt: row.observed_at,
+    source: row.provenance === 'official-claude-usage'
+      ? 'claude-usage-model-scoped'
+      : row.provenance === 'official-statusline'
+        ? 'claude-statusline-model-scoped'
+        : 'manual-official',
+  };
+}
+
+function localFableActivity(store, nowMs, allowance) {
+  const resetMs = allowance?.kind === 'official' ? Date.parse(allowance.resetsAt) : Number.NaN;
+  const sinceMs = Number.isFinite(resetMs) ? resetMs - WEEK_MS : nowMs - WEEK_MS;
+  const since = new Date(sinceMs).toISOString();
+  const through = new Date(nowMs).toISOString();
+  const row = store.db.prepare(`
+    SELECT COUNT(*) AS requests,
+      COALESCE(SUM(input_tokens), 0) AS input_tokens,
+      COALESCE(SUM(cached_input_tokens), 0) AS cached_input_tokens,
+      COALESCE(SUM(cache_write_input_tokens), 0) AS cache_write_input_tokens,
+      COALESCE(SUM(cache_write_5m_input_tokens), 0) AS cache_write_5m_input_tokens,
+      COALESCE(SUM(cache_write_1h_input_tokens), 0) AS cache_write_1h_input_tokens,
+      COALESCE(SUM(output_tokens), 0) AS output_tokens,
+      COALESCE(SUM(reasoning_output_tokens), 0) AS reasoning_output_tokens
+    FROM usage_events
+    WHERE source_id = 'claude' AND occurred_at >= ? AND occurred_at <= ?
+      AND LOWER(COALESCE(model, '')) LIKE '%fable%'
+  `).get(since, through);
+  return {
+    scope: 'this-device',
+    since,
+    through,
+    requests: Number(row.requests || 0),
+    inputTokens: Number(row.input_tokens || 0),
+    cachedInputTokens: Number(row.cached_input_tokens || 0),
+    cacheWriteInputTokens: Number(row.cache_write_input_tokens || 0),
+    cacheWrite5mInputTokens: Number(row.cache_write_5m_input_tokens || 0),
+    cacheWrite1hInputTokens: Number(row.cache_write_1h_input_tokens || 0),
+    outputTokens: Number(row.output_tokens || 0),
+    reasoningOutputTokens: Number(row.reasoning_output_tokens || 0),
+  };
+}
+
+function previousActivitySuccess(store) {
+  try {
+    const row = store.db.prepare("SELECT metadata_json FROM sources WHERE id = 'claude-fable'").get();
+    const metadata = JSON.parse(row?.metadata_json || '{}');
+    const value = metadata?.automatic?.health?.activityLastSuccessfulAt;
+    return asIso(value);
+  } catch {
+    return null;
+  }
+}
+
+function createFableUsageTracker({ store, usagePort, activityReader, clock = () => new Date() }) {
+  if (!store?.db || typeof store.recordObservation !== 'function') throw new TypeError('A UsageStore is required.');
+  if (typeof usagePort?.read !== 'function') throw new TypeError('usagePort.read is required.');
+  if (typeof activityReader?.import !== 'function') throw new TypeError('activityReader.import is required.');
+  if (typeof clock !== 'function') throw new TypeError('clock must be a function.');
+
+  let inFlight = null;
+
+  async function performRefresh(options = {}) {
+    const now = clock();
+    const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
+    if (!Number.isFinite(nowMs)) throw new Error('The tracker clock returned an invalid time.');
+    const refreshedAt = new Date(nowMs).toISOString();
+    const fallbackObservedAt = options.fallbackObservedAt == null
+      ? null : asIso(options.fallbackObservedAt);
+    if (options.fallbackObservedAt != null && fallbackObservedAt == null) {
+      throw new TypeError('fallbackObservedAt must be a valid ISO date and time.');
+    }
+
+    // Wall-clock cost of each surface, for the diagnostics panel.
+    const timed = (run) => {
+      const startedAt = Date.now();
+      const promise = Promise.resolve().then(run);
+      return { promise, elapsed: () => Date.now() - startedAt };
+    };
+    const usageRead = timed(() => usagePort.read({ signal: options.signal }));
+    const activityRead = timed(() => activityReader.import({ signal: options.signal }));
+    const [usageResult, activityResult] = await Promise.allSettled([usageRead.promise, activityRead.promise]);
+    const usageDurationMs = usageRead.elapsed();
+    const activityDurationMs = activityRead.elapsed();
+
+    let normalized;
+    let providerFailure = null;
+    let overallWindowsRecorded = 0;
+    if (usageResult.status === 'fulfilled') normalized = normalizeUsagePayload(usageResult.value, refreshedAt);
+    else providerFailure = usageResult.reason instanceof Error
+      ? usageResult.reason : new Error(String(usageResult.reason || 'Unknown provider failure'));
+
+    if (!providerFailure && normalized.kind !== 'invalid'
+      && (normalized.kind === 'observed' || normalized.overall.length)) {
+      try {
+        overallWindowsRecorded = recordProviderWindows(store, normalized, refreshedAt);
+      } catch (error) {
+        providerFailure = error;
+      }
+    }
+
+    const cached = getLastCurrentOfficial(store, nowMs);
+    const freshStatuslineFallback = Boolean(cached
+      && fallbackObservedAt
+      && cached.provenance === 'official-statusline'
+      && cached.observed_at === fallbackObservedAt);
+    let allowance;
+    let officialSource;
+    let state;
+    const details = [];
+
+    if (!providerFailure && normalized.kind === 'observed') {
+      allowance = allowanceFromRow(getLastCurrentOfficial(store, nowMs));
+      officialSource = 'connected';
+      state = 'current';
+    } else if (cached) {
+      allowance = allowanceFromRow(cached);
+      officialSource = freshStatuslineFallback
+        ? 'connected'
+        : normalized?.kind === 'invalid' ? 'unsupported' : 'temporarily-unavailable';
+      state = freshStatuslineFallback ? 'current' : 'stale';
+    } else if (providerFailure) {
+      allowance = { kind: 'unavailable', reason: 'provider-error' };
+      officialSource = 'temporarily-unavailable';
+      state = 'degraded';
+    } else if (normalized.kind === 'invalid') {
+      allowance = { kind: 'unavailable', reason: 'invalid-provider-data' };
+      officialSource = 'unsupported';
+      state = 'degraded';
+    } else {
+      allowance = { kind: 'unavailable', reason: normalized.reason };
+      officialSource = 'temporarily-unavailable';
+      state = 'waiting';
+    }
+
+    if (providerFailure) details.push(providerFailure.message);
+    else if (normalized.kind === 'invalid') details.push(normalized.reason);
+    else if (normalized.kind === 'unavailable') details.push(normalized.reason);
+
+    const activity = localFableActivity(store, nowMs, allowance);
+    let activitySource = 'current';
+    let activityLastSuccessfulAt = previousActivitySuccess(store);
+    if (activityResult.status === 'rejected') {
+      activitySource = activity.requests ? 'stale' : 'temporarily-unavailable';
+      details.push(activityResult.reason?.message || String(activityResult.reason || 'Local activity import failed'));
+      if (state === 'current') state = 'degraded';
+    } else {
+      activityLastSuccessfulAt = refreshedAt;
+    }
+
+    return {
+      refreshedAt,
+      allowance,
+      activity,
+      provider: {
+        attemptSucceeded: usageResult.status === 'fulfilled',
+        kind: providerFailure ? 'failed' : normalized.kind,
+        overallWindowsRecorded,
+        extraUsage: normalized?.kind !== 'invalid' ? normalized?.extraUsage ?? null : null,
+        durationMs: usageDurationMs,
+        errorCode: providerFailure?.code || null,
+      },
+      health: {
+        state,
+        officialSource,
+        activitySource,
+        activityLastSuccessfulAt,
+        activityDurationMs,
+        detail: details.join(' '),
+      },
+      imports: activityResult.status === 'fulfilled' ? activityResult.value : null,
+    };
+  }
+
+  return {
+    refresh(options) {
+      if (inFlight) return inFlight;
+      inFlight = performRefresh(options).finally(() => { inFlight = null; });
+      return inFlight;
+    },
+  };
+}
+
+module.exports = { createFableUsageTracker, OFFICIAL_PROVENANCES };

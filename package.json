@@ -1,0 +1,88 @@
+{
+  "name": "ai-usage",
+  "version": "1.0.11",
+  "private": true,
+  "description": "Local-first AI subscription usage, runway forecasting, and API-equivalent cost dashboard.",
+  "main": "electron/main.cjs",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
+    "dev:web": "vite --host 127.0.0.1",
+    "build:web": "tsc -b && vite build",
+    "build": "npm run test && npm run build:web && electron-builder --win portable nsis && npm run release:audit",
+    "release:audit": "node tools/audit-release.cjs",
+    "pack": "npm run build:web && electron-builder --dir",
+    "test": "cross-env TZ=Europe/London node --test tests/*.test.cjs",
+    "lint": "oxlint",
+    "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\"",
+    "typecheck": "tsc -b",
+    "preview": "vite preview --host 127.0.0.1"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.251",
+    "electron-updater": "6.8.9"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.5",
+    "@vitejs/plugin-react": "6.1.1",
+    "concurrently": "10.0.5",
+    "cross-env": "10.1.0",
+    "electron": "44.0.0",
+    "electron-builder": "26.15.3",
+    "lucide-react": "1.37.0",
+    "oxlint": "1.81.0",
+    "prettier": "3.9.6",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "typescript": "7.0.2",
+    "vite": "8.2.2",
+    "wait-on": "9.1.0"
+  },
+  "build": {
+    "appId": "com.local.aiusage",
+    "productName": "AI Usage",
+    "asar": true,
+    "electronDist": "node_modules/electron/dist",
+    "files": [
+      "dist/**/*",
+      "!dist/**/*.map",
+      "!**/*.map",
+      "electron/**/*",
+      "build/icon.png",
+      "package.json",
+      "!node_modules/@anthropic-ai/claude-agent-sdk-win32-*/**"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "icon": "build/icon.png",
+      "target": [
+        "portable",
+        "nsis"
+      ]
+    },
+    "portable": {
+      "artifactName": "AI-Usage-Portable-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "artifactName": "AI-Usage-Setup-${version}-${arch}.${ext}"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "REPLACE_WITH_GITHUB_OWNER",
+      "repo": "ai-usage"
+    }
+  },
+  "allowScripts": {
+    "electron@44.0.0": true
+  }
+}

@@ -1,0 +1,9 @@
+node_modules/
+dist/
+release/
+release-*/
+Backups/
+*.tsbuildinfo
+package-lock.json
+CHANGELOG.md
+README.md
