@@ -399,16 +399,8 @@
   font-size: 19px;
 }
 
-@media (max-width: 1500px) {
-  .qc-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-@media (max-width: 980px) {
-  .qc-grid {
-    grid-template-columns: 1fr;
-  }
-}
+/* Column count comes from the auto-fit grid in fluid.css, which measures the
+   zoomed layout width rather than the raw window width. */
 @media (max-width: 1250px) {
   .verdict-chip {
     display: inline-flex;
