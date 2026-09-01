@@ -50,6 +50,8 @@ function createCollectorHost({ fork, modulePath, config, requestTimeoutMs = DEFA
       }, requestTimeoutMs);
       pending.set(id, { resolve, reject, timer });
       try {
+        // A UtilityProcess port, not a window: there is no target origin.
+        // oxlint-disable-next-line unicorn/require-post-message-target-origin
         target.postMessage({ id, type, payload });
       } catch (error) {
         pending.delete(id);
