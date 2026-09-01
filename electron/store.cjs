@@ -1,0 +1,1462 @@
+'use strict';
+
+const fs = require('node:fs');
+const path = require('node:path');
+const { DatabaseSync } = require('node:sqlite');
+const { buildDashboardVerdict } = require('./dashboard-decision.cjs');
+const { forecastQuota } = require('./forecast.cjs');
+
+const SOURCE_DEFINITIONS = [
+  ['codex', 'Codex', 'codex'],
+  ['claude', 'Claude', 'claude'],
+  ['claude-fable', 'Fable 5', 'fable'],
+];
+const KNOWN_SOURCE_IDS = new Set(SOURCE_DEFINITIONS.map(([id]) => id));
+const MAX_QUOTA_RESET_AHEAD_MS = 31 * 24 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+// The learners look back 28 days for weighting and 21 for Fable calibration;
+// 45 days of raw polls covers both with room for a reset cycle either side.
+const FORECAST_LOOKBACK_MS = 45 * DAY_MS;
+// Beyond this age, polling rows are compacted to the first and last reading of
+// each bucket per local day: enough to reconstruct any past window's shape.
+const COMPACT_AFTER_MS = 60 * DAY_MS;
+const GPT_56_LONG_CONTEXT_THRESHOLD = 272_000;
+const GPT_56_LONG_CONTEXT_MODELS = new Set(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
+
+const DEFAULT_SETTINGS = {
+  currency: 'GBP',
+  usdToCurrency: 0.736,
+  activeDays: [1, 2, 3, 4, 5, 6, 0],
+  activeStartHour: 8,
+  activeEndHour: 22,
+  forecastFallbackRate: 0.35,
+  paceRiskThreshold: 1.2,
+  hardLimitThreshold: 90,
+  reservePercent: 0,
+  notifyDesktop: true,
+  notifyResets: true,
+  notifyFallback: true,
+  notifyDigest: false,
+  digestHour: 9,
+  alertsSnoozedUntil: null,
+  launchAtLogin: false,
+  theme: 'system',
+  autoUpdate: true,
+  backupFrequency: 'daily',
+  backupRetentionCount: 30,
+  refreshIntervalMinutes: 15,
+};
+
+// Settings renamed between releases. Old exports and databases carry the old
+// key; both read paths map it forward instead of counting it as unusable.
+const SETTING_ALIASES = { notifyInApp: 'notifyDesktop' };
+
+function isIsoOrNull(value) {
+  return value === null || (typeof value === 'string' && Number.isFinite(Date.parse(value)));
+}
+
+const SETTING_VALIDATORS = {
+  currency: (value) => ['GBP', 'USD', 'EUR'].includes(value),
+  usdToCurrency: (value) => Number.isFinite(value) && value > 0 && value <= 10_000,
+  activeDays: (value) => Array.isArray(value)
+    && value.length > 0
+    && value.every((day) => Number.isInteger(day) && day >= 0 && day <= 6)
+    && new Set(value).size === value.length,
+  activeStartHour: (value) => Number.isInteger(value) && value >= 0 && value <= 23,
+  activeEndHour: (value) => Number.isInteger(value) && value >= 1 && value <= 24,
+  forecastFallbackRate: (value) => Number.isFinite(value) && value > 0 && value <= 100,
+  paceRiskThreshold: (value) => Number.isFinite(value) && value >= 0.1 && value <= 20,
+  hardLimitThreshold: (value) => Number.isFinite(value) && value >= 0 && value <= 100,
+  reservePercent: (value) => Number.isFinite(value) && value >= 0 && value <= 50,
+  notifyDesktop: (value) => typeof value === 'boolean',
+  notifyResets: (value) => typeof value === 'boolean',
+  notifyFallback: (value) => typeof value === 'boolean',
+  notifyDigest: (value) => typeof value === 'boolean',
+  digestHour: (value) => Number.isInteger(value) && value >= 0 && value <= 23,
+  alertsSnoozedUntil: isIsoOrNull,
+  launchAtLogin: (value) => typeof value === 'boolean',
+  theme: (value) => ['system', 'dark', 'light'].includes(value),
+  autoUpdate: (value) => typeof value === 'boolean',
+  backupFrequency: (value) => ['off', 'daily', 'weekly'].includes(value),
+  backupRetentionCount: (value) => Number.isInteger(value) && value >= 1 && value <= 365,
+  // Zero disables the background timer. The floor keeps a mistyped value from
+  // rescanning every local transcript once a second.
+  refreshIntervalMinutes: (value) => Number.isInteger(value) && (value === 0 || (value >= 5 && value <= 240)),
+};
+
+// model, input, five-minute cache write, one-hour cache write, cache read, output
+const PRICE_ROWS = [
+  ['gpt-5.6-sol', 4, 5, 5, 0.4, 20],
+  ['codex-auto-review', 4, 5, 5, 0.4, 20],
+  ['gpt-5.6-terra', 2, 2.5, 2.5, 0.2, 12],
+  ['gpt-5.6-luna', 0.2, 0.25, 0.25, 0.02, 1.2],
+  ['claude-fable-5', 10, 12.5, 20, 1, 50],
+  ['claude-opus-5', 5, 6.25, 10, 0.5, 25],
+  ['claude-opus-4-8', 5, 6.25, 10, 0.5, 25],
+  ['claude-sonnet-5', 2, 2.5, 4, 0.2, 10],
+  ['claude-haiku-4-5', 1, 1.25, 2, 0.1, 5],
+];
+
+function iso(value = Date.now()) {
+  return new Date(value).toISOString();
+}
+
+function validIso(value, label) {
+  if (value == null || value === '') throw new Error(`${label} must be a valid date and time.`);
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) throw new Error(`${label} must be a valid date and time.`);
+  if (date.getUTCFullYear() < 2020 || date.getUTCFullYear() > 2100) {
+    throw new Error(`${label} is outside the supported date range.`);
+  }
+  return date.toISOString();
+}
+
+function json(value, fallback = null) {
+  if (value == null) return fallback;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function round(value, digits = 2) {
+  const factor = 10 ** digits;
+  return Math.round((Number(value) + Number.EPSILON) * factor) / factor;
+}
+
+function dateKey(value, timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone) {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date(value));
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+class UsageStore {
+  constructor(databasePath, backupDirectory) {
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    fs.mkdirSync(backupDirectory, { recursive: true });
+    this.databasePath = databasePath;
+    this.backupDirectory = backupDirectory;
+    this.db = new DatabaseSync(databasePath);
+    this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
+    this.migrate();
+    this.seed();
+  }
+
+  migrate() {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS sources (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        status_detail TEXT,
+        last_observation_at TEXT,
+        last_attempt_at TEXT,
+        last_success_at TEXT,
+        metadata_json TEXT NOT NULL DEFAULT '{}'
+      );
+      CREATE TABLE IF NOT EXISTS quota_observations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        source_id TEXT NOT NULL,
+        bucket_id TEXT NOT NULL,
+        bucket_name TEXT,
+        observed_at TEXT NOT NULL,
+        used_percent REAL NOT NULL,
+        remaining_percent REAL NOT NULL,
+        resets_at TEXT NOT NULL,
+        window_minutes INTEGER,
+        plan_type TEXT,
+        provenance TEXT NOT NULL,
+        confidence REAL NOT NULL DEFAULT 1,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        UNIQUE(source_id, bucket_id, observed_at),
+        FOREIGN KEY(source_id) REFERENCES sources(id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_quota_source_bucket_time
+        ON quota_observations(source_id, bucket_id, observed_at);
+      CREATE TABLE IF NOT EXISTS usage_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_key TEXT NOT NULL UNIQUE,
+        source_id TEXT NOT NULL,
+        occurred_at TEXT NOT NULL,
+        session_id TEXT,
+        model TEXT,
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        cached_input_tokens INTEGER NOT NULL DEFAULT 0,
+        cache_write_input_tokens INTEGER NOT NULL DEFAULT 0,
+        cache_write_5m_input_tokens INTEGER NOT NULL DEFAULT 0,
+        cache_write_1h_input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        reasoning_output_tokens INTEGER NOT NULL DEFAULT 0,
+        reported_cost_usd REAL,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        FOREIGN KEY(source_id) REFERENCES sources(id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_usage_time ON usage_events(occurred_at);
+      CREATE INDEX IF NOT EXISTS idx_usage_source_model ON usage_events(source_id, model);
+      CREATE TABLE IF NOT EXISTS account_daily_usage (
+        source_id TEXT NOT NULL,
+        usage_date TEXT NOT NULL,
+        tokens INTEGER NOT NULL,
+        PRIMARY KEY(source_id, usage_date)
+      );
+      CREATE TABLE IF NOT EXISTS price_catalog (
+        model TEXT PRIMARY KEY,
+        input_usd_per_million REAL NOT NULL,
+        cache_write_usd_per_million REAL NOT NULL,
+        cache_write_1h_usd_per_million REAL NOT NULL DEFAULT 0,
+        cache_read_usd_per_million REAL NOT NULL,
+        output_usd_per_million REAL NOT NULL,
+        effective_from TEXT NOT NULL,
+        source_url TEXT
+      );
+      CREATE TABLE IF NOT EXISTS imported_files (
+        file_path TEXT PRIMARY KEY,
+        modified_ms REAL NOT NULL,
+        size_bytes INTEGER NOT NULL,
+        imported_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS backups (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at TEXT NOT NULL,
+        database_path TEXT NOT NULL,
+        export_path TEXT NOT NULL
+      );
+    `);
+    const sourceColumns = new Set(this.db.prepare('PRAGMA table_info(sources)').all().map((row) => row.name));
+    if (!sourceColumns.has('last_attempt_at')) this.db.exec('ALTER TABLE sources ADD COLUMN last_attempt_at TEXT;');
+    if (!sourceColumns.has('last_success_at')) this.db.exec('ALTER TABLE sources ADD COLUMN last_success_at TEXT;');
+    const usageColumns = new Set(this.db.prepare('PRAGMA table_info(usage_events)').all().map((row) => row.name));
+    const addedCacheBreakdown = !usageColumns.has('cache_write_5m_input_tokens') || !usageColumns.has('cache_write_1h_input_tokens');
+    if (!usageColumns.has('cache_write_5m_input_tokens')) this.db.exec('ALTER TABLE usage_events ADD COLUMN cache_write_5m_input_tokens INTEGER NOT NULL DEFAULT 0;');
+    if (!usageColumns.has('cache_write_1h_input_tokens')) this.db.exec('ALTER TABLE usage_events ADD COLUMN cache_write_1h_input_tokens INTEGER NOT NULL DEFAULT 0;');
+    if (!usageColumns.has('project')) this.db.exec('ALTER TABLE usage_events ADD COLUMN project TEXT;');
+    const importColumns = new Set(this.db.prepare('PRAGMA table_info(imported_files)').all().map((row) => row.name));
+    if (!importColumns.has('state_json')) this.db.exec('ALTER TABLE imported_files ADD COLUMN state_json TEXT;');
+    if (!usageColumns.has('project')) {
+      // Project attribution is read from the same local transcripts as the
+      // token counts. Rescanning them once fills the new column in place.
+      this.db.prepare("DELETE FROM imported_files WHERE lower(file_path) LIKE '%.claude%projects%.jsonl' OR lower(file_path) LIKE '%.codex%sessions%.jsonl'").run();
+    }
+    for (const [oldKey, newKey] of Object.entries(SETTING_ALIASES)) {
+      const legacy = this.db.prepare('SELECT value_json FROM settings WHERE key = ?').get(oldKey);
+      if (!legacy) continue;
+      this.db.prepare('INSERT INTO settings(key, value_json, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING')
+        .run(newKey, legacy.value_json, iso());
+      this.db.prepare('DELETE FROM settings WHERE key = ?').run(oldKey);
+    }
+    const priceColumns = new Set(this.db.prepare('PRAGMA table_info(price_catalog)').all().map((row) => row.name));
+    this.addedOneHourPriceColumn = !priceColumns.has('cache_write_1h_usd_per_million');
+    if (!priceColumns.has('cache_write_1h_usd_per_million')) this.db.exec('ALTER TABLE price_catalog ADD COLUMN cache_write_1h_usd_per_million REAL NOT NULL DEFAULT 0;');
+    if (addedCacheBreakdown) {
+      // Existing Claude transcript events did not retain cache TTL detail. Make
+      // the next refresh rebuild them from the local source of truth.
+      this.db.prepare("DELETE FROM imported_files WHERE lower(file_path) LIKE '%.claude%projects%.jsonl'").run();
+    }
+    this.db.exec(`
+      DELETE FROM quota_observations
+      WHERE resets_at IS NULL
+         OR julianday(resets_at) IS NULL
+         OR CAST(strftime('%Y', resets_at) AS INTEGER) < 2020;
+      UPDATE OR IGNORE quota_observations
+      SET bucket_id = 'seven_day', bucket_name = 'Weekly'
+      WHERE source_id = 'claude' AND bucket_id = 'manual-weekly';
+      DELETE FROM quota_observations
+      WHERE source_id = 'claude' AND bucket_id = 'manual-weekly';
+      UPDATE OR IGNORE quota_observations
+      SET bucket_id = 'fable_seven_day', bucket_name = 'Fable 5 weekly'
+      WHERE source_id = 'claude-fable' AND bucket_id = 'fable-weekly';
+      DELETE FROM quota_observations
+      WHERE source_id = 'claude-fable' AND bucket_id = 'fable-weekly';
+    `);
+    const fablePlanEvidenceMigration = 'migration.fable-plan-evidence-v1';
+    if (!this.db.prepare('SELECT 1 FROM settings WHERE key = ?').get(fablePlanEvidenceMigration)) {
+      // Claude's status-line payload has never contained a subscription/seat
+      // classification. Earlier builds stamped those rows as Max and could
+      // derive a half-pool Fable estimate from that invented fact. Keep the
+      // official percentages, remove the false plan claim, and discard only
+      // the reproducible derived cache so current evidence can rebuild it.
+      this.db.exec('BEGIN IMMEDIATE');
+      try {
+        this.db.prepare("UPDATE quota_observations SET plan_type = NULL WHERE provenance = 'official-statusline'").run();
+        this.db.prepare("DELETE FROM quota_observations WHERE provenance = 'derived-tokens'").run();
+        this.db.prepare('INSERT INTO settings(key, value_json, updated_at) VALUES (?, ?, ?)')
+          .run(fablePlanEvidenceMigration, 'true', iso());
+        this.db.exec('COMMIT');
+      } catch (error) {
+        try { this.db.exec('ROLLBACK'); } catch { /* Preserve the migration failure. */ }
+        throw error;
+      }
+    }
+    this.canonicaliseCodexManualRows();
+  }
+
+  canonicaliseCodexManualRows() {
+    const official = this.db.prepare(`
+      SELECT bucket_id FROM quota_observations
+      WHERE source_id = 'codex' AND bucket_id NOT IN ('manual-weekly', 'codex:weekly')
+        AND COALESCE(window_minutes, 0) >= 10000
+        AND json_valid(metadata_json) AND json_extract(metadata_json, '$.limitId') = 'codex'
+      ORDER BY observed_at DESC, bucket_id ASC LIMIT 1
+    `).get();
+    const target = official?.bucket_id || 'codex:weekly';
+    this.db.prepare(`UPDATE OR IGNORE quota_observations SET bucket_id = ?
+      WHERE source_id = 'codex' AND bucket_id = 'manual-weekly'`).run(target);
+    this.db.prepare(`DELETE FROM quota_observations
+      WHERE source_id = 'codex' AND bucket_id = 'manual-weekly'`).run();
+  }
+
+  seed() {
+    const insertSource = this.db.prepare(`
+      INSERT INTO sources(id, name, kind, status, metadata_json)
+      VALUES (?, ?, ?, 'pending', '{}')
+      ON CONFLICT(id) DO NOTHING
+    `);
+    for (const row of SOURCE_DEFINITIONS) insertSource.run(...row);
+
+    const insertSetting = this.db.prepare(`
+      INSERT INTO settings(key, value_json, updated_at) VALUES (?, ?, ?)
+      ON CONFLICT(key) DO NOTHING
+    `);
+    for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
+      insertSetting.run(key, JSON.stringify(value), iso());
+    }
+
+    const insertPrice = this.db.prepare(`
+      INSERT INTO price_catalog(
+        model, input_usd_per_million, cache_write_usd_per_million,
+        cache_write_1h_usd_per_million, cache_read_usd_per_million,
+        output_usd_per_million, effective_from, source_url
+      ) VALUES (?, ?, ?, ?, ?, ?, '2026-08-01', ?)
+      ON CONFLICT(model) DO NOTHING
+    `);
+    for (const row of PRICE_ROWS) {
+      const source = row[0].startsWith('claude')
+        ? 'https://platform.claude.com/docs/en/about-claude/pricing'
+        : 'https://developers.openai.com/api/docs/models/compare';
+      insertPrice.run(...row, source);
+    }
+    // Repair only the obsolete built-in Sonnet row. User-edited rows do not
+    // match this complete old vector and are left alone.
+    this.db.prepare(`UPDATE price_catalog SET input_usd_per_million = 2,
+      cache_write_usd_per_million = 2.5, cache_write_1h_usd_per_million = 4,
+      cache_read_usd_per_million = 0.2, output_usd_per_million = 10,
+      effective_from = '2026-08-01'
+      WHERE model = 'claude-sonnet-5' AND input_usd_per_million = 3
+        AND cache_write_usd_per_million = 3.75 AND cache_read_usd_per_million = 0.3
+        AND output_usd_per_million = 15`).run();
+    if (this.addedOneHourPriceColumn) {
+      const setOneHour = this.db.prepare(`UPDATE price_catalog
+        SET cache_write_1h_usd_per_million = ?
+        WHERE model = ? AND cache_write_1h_usd_per_million = 0`);
+      for (const [model, , , oneHour] of PRICE_ROWS) setOneHour.run(oneHour, model);
+    }
+    this.repairSettings();
+  }
+
+  repairSettings() {
+    const update = this.db.prepare('UPDATE settings SET value_json = ?, updated_at = ? WHERE key = ?');
+    const repaired = { ...DEFAULT_SETTINGS };
+    for (const row of this.db.prepare('SELECT key, value_json FROM settings').all()) {
+      if (!SETTING_VALIDATORS[row.key]) continue;
+      const value = json(row.value_json, undefined);
+      if (SETTING_VALIDATORS[row.key](value)) repaired[row.key] = value;
+      else update.run(JSON.stringify(DEFAULT_SETTINGS[row.key]), iso(), row.key);
+    }
+    if (repaired.activeStartHour >= repaired.activeEndHour) {
+      update.run(JSON.stringify(DEFAULT_SETTINGS.activeStartHour), iso(), 'activeStartHour');
+      update.run(JSON.stringify(DEFAULT_SETTINGS.activeEndHour), iso(), 'activeEndHour');
+    }
+    // USD is the canonical currency of the ledger. A stale GBP/EUR conversion
+    // rate paired with the USD label would make every displayed total wrong.
+    if (repaired.currency === 'USD' && repaired.usdToCurrency !== 1) {
+      update.run(JSON.stringify(1), iso(), 'usdToCurrency');
+    }
+  }
+
+  close() {
+    this.db.close();
+  }
+
+  getSettings() {
+    const result = { ...DEFAULT_SETTINGS };
+    for (const row of this.db.prepare('SELECT key, value_json FROM settings').all()) {
+      if (!Object.hasOwn(DEFAULT_SETTINGS, row.key)) continue;
+      result[row.key] = json(row.value_json, result[row.key]);
+    }
+    return result;
+  }
+
+  updateSettings(patch) {
+    const statement = this.db.prepare(`
+      INSERT INTO settings(key, value_json, updated_at) VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
+    `);
+    const current = this.getSettings();
+    const normalizedPatch = { ...patch };
+    const candidateCurrency = normalizedPatch.currency ?? current.currency;
+    if (candidateCurrency === 'USD') {
+      if (Object.hasOwn(normalizedPatch, 'usdToCurrency') && normalizedPatch.usdToCurrency !== 1) {
+        throw new Error('USD conversion rate must be 1.');
+      }
+      // Selecting USD is one coherent setting change, not a currency label
+      // followed by a separate rate edit the caller might forget to make.
+      normalizedPatch.usdToCurrency = 1;
+    }
+    const candidate = { ...current, ...normalizedPatch };
+    if (candidate.activeStartHour >= candidate.activeEndHour) {
+      throw new Error('Active day end must be later than its start.');
+    }
+    // Validate the complete patch before writing any part of it, so a rejected
+    // cross-field update cannot leave settings half changed.
+    for (const [key, value] of Object.entries(normalizedPatch)) {
+      const validate = SETTING_VALIDATORS[key];
+      if (!validate) throw new Error(`Unknown setting: ${key}`);
+      if (!validate(value)) throw new Error(`Invalid value for ${key}.`);
+    }
+    for (const [key, value] of Object.entries(normalizedPatch)) {
+      statement.run(key, JSON.stringify(value), iso());
+    }
+    return this.getSettings();
+  }
+
+  // Omitting metadata keeps whatever the source already had. A failure path
+  // reporting only a status must not erase facts it never gathered — the
+  // Enable/Disable helper control reads one of them.
+  setSourceStatus(id, status, detail, metadata, options = {}) {
+    if (!KNOWN_SOURCE_IDS.has(id)) throw new Error(`Unknown source: ${id || 'missing'}.`);
+    if (typeof status !== 'string' || !status.trim()) throw new Error('Source status is required.');
+    const attemptedAt = iso();
+    // The display status is not a reliable proxy for scan success: a provider
+    // can be stale while a cached allowance remains visible, and a current
+    // official limit can be retained despite an optional-history warning.
+    const scanSucceeded = options.scanSucceeded
+      ?? !['error', 'stale', 'degraded'].includes(status);
+    const successfulAt = scanSucceeded ? attemptedAt : null;
+    if (metadata === undefined) {
+      this.db.prepare(`UPDATE sources SET status = ?, status_detail = ?,
+        last_attempt_at = ?, last_success_at = COALESCE(?, last_success_at)
+        WHERE id = ?`)
+        .run(status, detail || null, attemptedAt, successfulAt, id);
+      return;
+    }
+    this.db.prepare(`
+      UPDATE sources
+      SET status = ?, status_detail = ?, metadata_json = ?,
+        last_attempt_at = ?, last_success_at = COALESCE(?, last_success_at)
+      WHERE id = ?
+    `).run(status, detail || null, JSON.stringify(metadata), attemptedAt, successfulAt, id);
+  }
+
+  recordObservation(observation) {
+    if (!KNOWN_SOURCE_IDS.has(observation.sourceId)) throw new Error(`Unknown source: ${observation.sourceId || 'missing'}.`);
+    if (typeof observation.bucketId !== 'string' || !observation.bucketId.trim()) {
+      throw new Error('Observation bucket is required.');
+    }
+    if (observation.windowMinutes != null) {
+      const windowMinutes = Number(observation.windowMinutes);
+      if (!Number.isSafeInteger(windowMinutes) || windowMinutes < 0 || windowMinutes > 31 * 24 * 60) {
+        throw new Error('Observation window must be a non-negative whole number no longer than 31 days.');
+      }
+    }
+    const confidence = Number(observation.confidence ?? 1);
+    if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+      throw new Error('Observation confidence must be between 0 and 1.');
+    }
+    const observedAt = validIso(observation.observedAt || Date.now(), 'Observation time');
+    const resetsAt = validIso(observation.resetsAt, 'Reset time');
+    const resetDistanceMs = new Date(resetsAt).getTime() - new Date(observedAt).getTime();
+    if (resetDistanceMs < -5 * 60_000) {
+      throw new Error('Reset time must not be earlier than the observation.');
+    }
+    if (resetDistanceMs > MAX_QUOTA_RESET_AHEAD_MS) {
+      throw new Error('Reset time must not be more than 31 days after the observation.');
+    }
+    const usedPercent = Number(observation.usedPercent);
+    const remainingPercent = Number(observation.remainingPercent ?? 100 - usedPercent);
+    if (!Number.isFinite(usedPercent) || usedPercent < 0 || usedPercent > 100) {
+      throw new Error('Usage percentage must be between 0 and 100.');
+    }
+    if (!Number.isFinite(remainingPercent) || remainingPercent < 0 || remainingPercent > 100) {
+      throw new Error('Remaining percentage must be between 0 and 100.');
+    }
+    if (Math.abs(usedPercent + remainingPercent - 100) > 0.1) {
+      throw new Error('Usage and remaining percentages must sum to 100.');
+    }
+    if (observation.sourceId === 'codex' && observation.bucketId !== 'codex:weekly'
+      && Number(observation.windowMinutes || 0) >= 10_000
+      && observation.metadata?.limitId === 'codex'
+      && observation.provenance !== 'manual-official') {
+      this.db.prepare(`UPDATE OR IGNORE quota_observations SET bucket_id = ?
+        WHERE source_id = 'codex' AND bucket_id IN ('manual-weekly', 'codex:weekly')`).run(observation.bucketId);
+      this.db.prepare(`DELETE FROM quota_observations
+        WHERE source_id = 'codex' AND bucket_id IN ('manual-weekly', 'codex:weekly')`).run();
+    }
+    this.db.prepare(`
+      INSERT INTO quota_observations(
+        source_id, bucket_id, bucket_name, observed_at, used_percent, remaining_percent,
+        resets_at, window_minutes, plan_type, provenance, confidence, metadata_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(source_id, bucket_id, observed_at) DO UPDATE SET
+        used_percent = excluded.used_percent,
+        remaining_percent = excluded.remaining_percent,
+        resets_at = excluded.resets_at,
+        metadata_json = excluded.metadata_json
+    `).run(
+      observation.sourceId,
+      observation.bucketId,
+      observation.bucketName || null,
+      observedAt,
+      usedPercent,
+      remainingPercent,
+      resetsAt,
+      observation.windowMinutes || null,
+      observation.planType || null,
+      observation.provenance || 'official',
+      confidence,
+      JSON.stringify(observation.metadata || {}),
+    );
+    this.db.prepare('UPDATE sources SET last_observation_at = ? WHERE id = ?').run(observedAt, observation.sourceId);
+  }
+
+  recordUsageEvent(event) {
+    if (!KNOWN_SOURCE_IDS.has(event.sourceId)) throw new Error(`Unknown source: ${event.sourceId || 'missing'}.`);
+    if (typeof event.eventKey !== 'string' || !event.eventKey.trim()) throw new Error('Usage event key is required.');
+    const occurredAt = validIso(event.occurredAt, 'Event time');
+    const token = (value) => {
+      if (value == null) return 0;
+      const parsed = Number(value);
+      if (!Number.isSafeInteger(parsed) || parsed < 0) {
+        throw new Error('Usage event token counts must be non-negative whole numbers.');
+      }
+      return parsed;
+    };
+    const inputTokens = token(event.inputTokens);
+    const cachedInputTokens = token(event.cachedInputTokens);
+    const cacheWriteInputTokens = token(event.cacheWriteInputTokens);
+    const cacheWrite5mInputTokens = token(event.cacheWrite5mInputTokens ?? event.cacheWriteInputTokens);
+    const cacheWrite1hInputTokens = token(event.cacheWrite1hInputTokens);
+    const outputTokens = token(event.outputTokens);
+    const reasoningOutputTokens = token(event.reasoningOutputTokens);
+    if (reasoningOutputTokens > outputTokens) {
+      throw new Error('Usage event reasoning tokens must be a subset of output tokens.');
+    }
+    const reportedCostUsd = event.reportedCostUsd == null ? null : Number(event.reportedCostUsd);
+    if (reportedCostUsd != null && (!Number.isFinite(reportedCostUsd) || reportedCostUsd < 0)) {
+      throw new Error('Usage event reported cost must be zero or greater.');
+    }
+    const project = typeof event.project === 'string' && event.project.trim() ? event.project.trim() : null;
+    const result = this.db.prepare(`
+      INSERT INTO usage_events(
+        event_key, source_id, occurred_at, session_id, model, project, input_tokens,
+        cached_input_tokens, cache_write_input_tokens, cache_write_5m_input_tokens,
+        cache_write_1h_input_tokens, output_tokens,
+        reasoning_output_tokens, reported_cost_usd, metadata_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(event_key) DO UPDATE SET
+        occurred_at = excluded.occurred_at,
+        session_id = excluded.session_id,
+        model = excluded.model,
+        project = COALESCE(excluded.project, usage_events.project),
+        input_tokens = excluded.input_tokens,
+        cached_input_tokens = excluded.cached_input_tokens,
+        cache_write_input_tokens = excluded.cache_write_input_tokens,
+        cache_write_5m_input_tokens = excluded.cache_write_5m_input_tokens,
+        cache_write_1h_input_tokens = excluded.cache_write_1h_input_tokens,
+        output_tokens = excluded.output_tokens,
+        reasoning_output_tokens = excluded.reasoning_output_tokens,
+        reported_cost_usd = excluded.reported_cost_usd,
+        metadata_json = excluded.metadata_json
+    `).run(
+      event.eventKey,
+      event.sourceId,
+      occurredAt,
+      event.sessionId || null,
+      event.model || null,
+      project,
+      inputTokens,
+      cachedInputTokens,
+      cacheWriteInputTokens,
+      cacheWrite5mInputTokens,
+      cacheWrite1hInputTokens,
+      outputTokens,
+      reasoningOutputTokens,
+      reportedCostUsd,
+      JSON.stringify(event.metadata || {}),
+    );
+    return result.changes;
+  }
+
+  getManualBucketId(sourceId) {
+    if (sourceId === 'claude') return 'seven_day';
+    if (sourceId === 'claude-fable') return 'fable_seven_day';
+    if (sourceId !== 'codex') return 'manual-weekly';
+    const row = this.db.prepare(`SELECT bucket_id FROM quota_observations
+      WHERE source_id = 'codex' AND COALESCE(window_minutes, 0) >= 10000
+        AND bucket_id NOT IN ('manual-weekly', 'codex:weekly')
+        AND json_valid(metadata_json) AND json_extract(metadata_json, '$.limitId') = 'codex'
+      ORDER BY observed_at DESC, bucket_id ASC LIMIT 1`).get();
+    return row?.bucket_id || 'codex:weekly';
+  }
+
+  getRecentQuotaObservations(sourceId, bucketId, provenances = null, limit = 2) {
+    const filter = provenances?.length ? ` AND provenance IN (${provenances.map(() => '?').join(', ')})` : '';
+    return this.db.prepare(`
+      SELECT * FROM quota_observations WHERE source_id = ? AND bucket_id = ?${filter}
+      ORDER BY observed_at DESC LIMIT ?
+    `).all(sourceId, bucketId, ...(provenances || []), limit);
+  }
+
+  // Official readings for one bucket, oldest first, from `sinceIso` onward.
+  getOfficialObservations(sourceId, bucketId, provenances, sinceIso) {
+    return this.db.prepare(`
+      SELECT * FROM quota_observations
+      WHERE source_id = ? AND bucket_id = ? AND observed_at >= ?
+        AND provenance IN (${provenances.map(() => '?').join(', ')})
+      ORDER BY observed_at ASC
+    `).all(sourceId, bucketId, sinceIso, ...provenances);
+  }
+
+  upsertDailyUsage(sourceId, usageDate, tokens) {
+    this.db.prepare(`
+      INSERT INTO account_daily_usage(source_id, usage_date, tokens) VALUES (?, ?, ?)
+      ON CONFLICT(source_id, usage_date) DO UPDATE SET tokens = excluded.tokens
+    `).run(sourceId, usageDate, Number(tokens || 0));
+  }
+
+  // `size_bytes` is the byte cursor: how much of the file has been consumed.
+  // `state` carries whatever an incremental reader needs to resume mid-file
+  // (the Codex reader's current model, for instance), so a growing transcript
+  // is parsed once, not once per refresh.
+  getImportedFile(filePath) {
+    const row = this.db.prepare('SELECT * FROM imported_files WHERE file_path = ?').get(filePath);
+    if (!row) return null;
+    return { ...row, state: json(row.state_json, null) };
+  }
+
+  markImportedFile(filePath, modifiedMs, sizeBytes, state = null) {
+    this.db.prepare(`
+      INSERT INTO imported_files(file_path, modified_ms, size_bytes, imported_at, state_json)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(file_path) DO UPDATE SET
+        modified_ms = excluded.modified_ms,
+        size_bytes = excluded.size_bytes,
+        imported_at = excluded.imported_at,
+        state_json = excluded.state_json
+    `).run(filePath, modifiedMs, sizeBytes, iso(), state == null ? null : JSON.stringify(state));
+  }
+
+  forgetImportedFile(filePath) {
+    this.db.prepare('DELETE FROM imported_files WHERE file_path = ?').run(filePath);
+  }
+
+  // Forecasting reads a bounded window of recent polls, plus each bucket's
+  // latest row so a dormant bucket still surfaces as expired rather than
+  // vanishing. The full history stays in the table for cycle history and
+  // backups; it is simply not re-forecast on every snapshot.
+  getQuota(sourceId, settings = this.getSettings(), nowMs = Date.now()) {
+    const rows = this.db.prepare(`
+      SELECT * FROM quota_observations
+      WHERE source_id = ?
+        AND (observed_at >= ? OR id IN (
+          SELECT MAX(id) FROM quota_observations WHERE source_id = ? GROUP BY bucket_id
+        ))
+      ORDER BY observed_at ASC
+    `).all(sourceId, iso(nowMs - FORECAST_LOOKBACK_MS), sourceId);
+    if (!rows.length) return null;
+
+    const grouped = new Map();
+    for (const row of rows) {
+      if (!grouped.has(row.bucket_id)) grouped.set(row.bucket_id, []);
+      grouped.get(row.bucket_id).push(row);
+    }
+    const schedule = {
+      activeDays: settings.activeDays,
+      startHour: settings.activeStartHour,
+      endHour: settings.activeEndHour,
+    };
+    const windows = [...grouped.entries()].map(([bucketId, observations]) => {
+      const latest = observations.at(-1);
+      const forecast = forecastQuota(observations, {
+        now: nowMs,
+        schedule,
+        fallbackRate: settings.forecastFallbackRate,
+        paceRiskThreshold: settings.paceRiskThreshold,
+        hardLimitThreshold: settings.hardLimitThreshold,
+        reservePercent: settings.reservePercent,
+      });
+      return {
+        bucketId,
+        bucketName: latest.bucket_name || bucketId,
+        observedAt: latest.observed_at,
+        usedPercent: latest.used_percent,
+        remainingPercent: latest.remaining_percent,
+        resetsAt: latest.resets_at,
+        windowMinutes: latest.window_minutes,
+        planType: latest.plan_type,
+        provenance: latest.provenance,
+        metadata: json(latest.metadata_json, {}),
+        forecast,
+      };
+    });
+    const now = nowMs;
+    const overall = (window) => sourceId !== 'codex' || window.metadata?.limitId === 'codex' || window.bucketId === 'codex:weekly';
+    const official = (window) => String(window.provenance || '').startsWith('official') || window.provenance === 'local-official';
+    windows.sort((a, b) => {
+      const aExpired = new Date(a.resetsAt).getTime() <= now;
+      const bExpired = new Date(b.resetsAt).getTime() <= now;
+      return Number(aExpired) - Number(bExpired)
+        || Number(overall(b)) - Number(overall(a))
+        || (b.windowMinutes || 0) - (a.windowMinutes || 0)
+        || Number(official(b)) - Number(official(a))
+        || new Date(b.observedAt).getTime() - new Date(a.observedAt).getTime()
+        || a.bucketId.localeCompare(b.bucketId);
+    });
+    const primary = windows[0];
+    return { ...primary, windows };
+  }
+
+  // Analytics runs resolve the same handful of model names thousands of times.
+  // Inside `withPriceCache` every lookup after the first is a Map hit and the
+  // catalogue is read once; outside it, each call reads the live table.
+  withPriceCache(run) {
+    if (this.priceCache) return run();
+    this.priceCache = { byModel: new Map(), rows: null };
+    try {
+      return run();
+    } finally {
+      this.priceCache = null;
+    }
+  }
+
+  resolvePrice(model) {
+    if (!model) return null;
+    const cache = this.priceCache;
+    if (cache?.byModel.has(model)) return cache.byModel.get(model);
+    const resolved = this.lookupPrice(model, cache);
+    if (cache) cache.byModel.set(model, resolved);
+    return resolved;
+  }
+
+  lookupPrice(model, cache) {
+    const direct = this.db.prepare('SELECT * FROM price_catalog WHERE model = ?').get(model);
+    if (direct) return direct;
+    const normalized = model.toLowerCase().trim();
+    const rows = cache
+      ? (cache.rows ??= this.db.prepare('SELECT * FROM price_catalog').all())
+      : this.db.prepare('SELECT * FROM price_catalog').all();
+    const exactInsensitive = rows.find((row) => row.model.toLowerCase() === normalized);
+    if (exactInsensitive) return exactInsensitive;
+    const versionSuffix = /^(?:\d{8}|\d{4}(?:-\d{2}){0,2}|v?\d+(?:[.-]\d+)*)$/;
+    const candidates = rows
+      .filter((row) => {
+        const priceModel = row.model.toLowerCase();
+        if (!normalized.startsWith(`${priceModel}-`)) return false;
+        return versionSuffix.test(normalized.slice(priceModel.length + 1));
+      })
+      .sort((a, b) => b.model.length - a.model.length || a.model.localeCompare(b.model));
+    return candidates[0] || null;
+  }
+
+  getPriceCatalog() {
+    return this.db.prepare(`
+      SELECT model, input_usd_per_million, cache_write_usd_per_million,
+        cache_write_1h_usd_per_million, cache_read_usd_per_million,
+        output_usd_per_million, effective_from, source_url
+      FROM price_catalog ORDER BY CASE WHEN model LIKE 'claude-%' THEN 2 ELSE 1 END, model
+    `).all();
+  }
+
+  updatePrice(row) {
+    const values = ['inputUsdPerMillion', 'cacheWriteUsdPerMillion', 'cacheWrite1hUsdPerMillion', 'cacheReadUsdPerMillion', 'outputUsdPerMillion']
+      .map((key) => Number(row[key]));
+    if (!row.model || values.some((value) => !Number.isFinite(value) || value < 0)) throw new Error('Every model price must be zero or greater.');
+    this.db.prepare(`
+      INSERT INTO price_catalog(model, input_usd_per_million, cache_write_usd_per_million,
+        cache_write_1h_usd_per_million, cache_read_usd_per_million,
+        output_usd_per_million, effective_from, source_url)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(model) DO UPDATE SET
+        input_usd_per_million = excluded.input_usd_per_million,
+        cache_write_usd_per_million = excluded.cache_write_usd_per_million,
+        cache_write_1h_usd_per_million = excluded.cache_write_1h_usd_per_million,
+        cache_read_usd_per_million = excluded.cache_read_usd_per_million,
+        output_usd_per_million = excluded.output_usd_per_million,
+        effective_from = excluded.effective_from,
+        source_url = excluded.source_url
+    `).run(row.model, ...values, row.effectiveFrom || iso().slice(0, 10), row.sourceUrl || null);
+    return this.getPriceCatalog();
+  }
+
+  calculateCost(row) {
+    // This dashboard answers the counterfactual "what would these tokens cost
+    // at today's API catalogue?" A legacy/imported reported charge is useful
+    // source metadata, but substituting it here would silently mix historical
+    // invoices with current-catalogue estimates in the same total.
+    const price = this.resolvePrice(row.model);
+    if (!price) return { actualUsd: 0, withoutCacheUsd: 0, covered: false, longContext: false };
+    const million = 1_000_000;
+    // Reasoning tokens are a subset of output_tokens in provider usage schemas.
+    const output = Number(row.output_tokens || 0);
+    // OpenAI input totals include the cache-read subset. Claude's status-line
+    // fields are mutually exclusive categories, so only Codex needs removal.
+    const regularInput = row.source_id === 'codex'
+      ? Math.max(0, Number(row.input_tokens || 0) - Number(row.cached_input_tokens || 0))
+      : Number(row.input_tokens || 0);
+    const cacheWriteTotal = Number(row.cache_write_input_tokens || 0);
+    let cacheWrite5m = Number(row.cache_write_5m_input_tokens || 0);
+    let cacheWrite1h = Number(row.cache_write_1h_input_tokens || 0);
+    if (cacheWrite5m + cacheWrite1h === 0 && cacheWriteTotal > 0) cacheWrite5m = cacheWriteTotal;
+    // Long-context pricing is a per-request rule. Collectors currently persist
+    // each provider message/last_token_usage record as one usage event, so this
+    // treats a row as one request. OpenAI input_tokens includes its cached-input
+    // subset, and eligibility is based on the full prompt rather than only the
+    // uncached portion. If collectors ever write aggregates, they must carry
+    // an explicit request-context field instead of applying this rule to totals.
+    // Resolve through the catalogue row so dated GPT-5.6 model suffixes inherit
+    // the rule, while similarly priced models such as codex-auto-review do not.
+    const requestInput = Number(row.input_tokens || 0) + cacheWriteTotal;
+    const longContext = GPT_56_LONG_CONTEXT_MODELS.has(price.model)
+      && requestInput > GPT_56_LONG_CONTEXT_THRESHOLD;
+    const inputMultiplier = longContext ? 2 : 1;
+    const outputMultiplier = longContext ? 1.5 : 1;
+    const actualUsd = (
+      regularInput * price.input_usd_per_million * inputMultiplier
+      + cacheWrite5m * price.cache_write_usd_per_million * inputMultiplier
+      + cacheWrite1h * price.cache_write_1h_usd_per_million * inputMultiplier
+      + Number(row.cached_input_tokens || 0) * price.cache_read_usd_per_million * inputMultiplier
+      + output * price.output_usd_per_million * outputMultiplier
+    ) / million;
+    const allInputWithoutCache = row.source_id === 'codex'
+      ? Number(row.input_tokens || 0) + cacheWriteTotal
+      : Number(row.input_tokens || 0) + cacheWriteTotal + Number(row.cached_input_tokens || 0);
+    const withoutCacheUsd = (
+      allInputWithoutCache * price.input_usd_per_million * inputMultiplier
+      + output * price.output_usd_per_million * outputMultiplier
+    ) / million;
+    return { actualUsd, withoutCacheUsd, covered: true, longContext };
+  }
+
+  getCostAnalytics(days = 30, settings = this.getSettings(), nowMs = Date.now()) {
+    return this.withPriceCache(() => this.buildCostAnalytics(days, settings, nowMs));
+  }
+
+  buildCostAnalytics(days, settings, nowMs) {
+    const since = iso(nowMs - days * DAY_MS);
+    const events = this.db.prepare('SELECT * FROM usage_events WHERE occurred_at >= ? ORDER BY occurred_at ASC').all(since);
+    const byModelMap = new Map();
+    const unpricedModelsMap = new Map();
+    const byDayMap = new Map();
+    const byProjectMap = new Map();
+    const sessionMap = new Map();
+    let actualUsd = 0;
+    let withoutCacheUsd = 0;
+    let coveredTokens = 0;
+    let totalTokens = 0;
+
+    for (const event of events) {
+      const cost = this.calculateCost(event);
+      const eventTokens = event.source_id === 'codex'
+        ? Number(event.input_tokens) + Number(event.cache_write_input_tokens) + Number(event.output_tokens)
+        : Number(event.input_tokens) + Number(event.cached_input_tokens)
+          + Number(event.cache_write_input_tokens) + Number(event.output_tokens);
+      totalTokens += eventTokens;
+      if (cost.covered) coveredTokens += eventTokens;
+      else if (eventTokens > 0) {
+        const unpricedKey = `${event.source_id}|${event.model || 'Unknown'}`;
+        const unpriced = unpricedModelsMap.get(unpricedKey) || {
+          sourceId: event.source_id,
+          model: event.model || 'Unknown',
+          tokens: 0,
+        };
+        unpriced.tokens += eventTokens;
+        unpricedModelsMap.set(unpricedKey, unpriced);
+      }
+      actualUsd += cost.actualUsd;
+      withoutCacheUsd += cost.withoutCacheUsd;
+      const key = `${event.source_id}|${event.model || 'Unknown'}`;
+      const model = byModelMap.get(key) || {
+        sourceId: event.source_id,
+        model: event.model || 'Unknown',
+        inputTokens: 0,
+        cachedInputTokens: 0,
+        cacheWriteInputTokens: 0,
+        cacheWrite5mInputTokens: 0,
+        cacheWrite1hInputTokens: 0,
+        outputTokens: 0,
+        reasoningOutputTokens: 0,
+        costUsd: 0,
+        coveredTokens: 0,
+        totalTokens: 0,
+      };
+      model.inputTokens += Number(event.input_tokens);
+      model.cachedInputTokens += Number(event.cached_input_tokens);
+      model.cacheWriteInputTokens += Number(event.cache_write_input_tokens);
+      model.cacheWrite5mInputTokens += Number(event.cache_write_5m_input_tokens);
+      model.cacheWrite1hInputTokens += Number(event.cache_write_1h_input_tokens);
+      model.outputTokens += Number(event.output_tokens);
+      model.reasoningOutputTokens += Number(event.reasoning_output_tokens);
+      model.costUsd += cost.actualUsd;
+      model.totalTokens += eventTokens;
+      if (cost.covered) model.coveredTokens += eventTokens;
+      byModelMap.set(key, model);
+
+      const day = dateKey(event.occurred_at);
+      const dayRow = byDayMap.get(day) || { date: day, codexUsd: 0, claudeUsd: 0 };
+      if (event.source_id === 'codex') dayRow.codexUsd += cost.actualUsd;
+      else dayRow.claudeUsd += cost.actualUsd;
+      byDayMap.set(day, dayRow);
+
+      const projectKey = event.project || '';
+      const projectRow = byProjectMap.get(projectKey) || {
+        project: event.project || null,
+        costUsd: 0,
+        totalTokens: 0,
+        coveredTokens: 0,
+        sessions: new Set(),
+        sources: new Set(),
+        lastActivity: event.occurred_at,
+      };
+      projectRow.costUsd += cost.actualUsd;
+      projectRow.totalTokens += eventTokens;
+      if (cost.covered) projectRow.coveredTokens += eventTokens;
+      projectRow.sessions.add(`${event.source_id}|${event.session_id || event.event_key}`);
+      projectRow.sources.add(event.source_id);
+      if (event.occurred_at > projectRow.lastActivity) projectRow.lastActivity = event.occurred_at;
+      byProjectMap.set(projectKey, projectRow);
+
+      const sessionKey = `${event.source_id}|${event.session_id || event.event_key}|${event.model || 'Unknown'}`;
+      const session = sessionMap.get(sessionKey) || {
+        sourceId: event.source_id,
+        sessionId: event.session_id || 'local-event',
+        model: event.model || 'Unknown',
+        project: event.project || null,
+        occurredAt: event.occurred_at,
+        totalTokens: 0,
+        costUsd: 0,
+        coveredTokens: 0,
+      };
+      session.totalTokens += eventTokens;
+      session.costUsd += cost.actualUsd;
+      if (cost.covered) session.coveredTokens += eventTokens;
+      if (event.occurred_at > session.occurredAt) session.occurredAt = event.occurred_at;
+      if (!session.project && event.project) session.project = event.project;
+      sessionMap.set(sessionKey, session);
+    }
+
+    const rate = Number(settings.usdToCurrency || 1);
+    const toCurrency = (value) => round(value * rate, 2);
+    const byModel = [...byModelMap.values()].map((row) => ({
+      ...row,
+      totalTokens: row.totalTokens,
+      cost: toCurrency(row.costUsd),
+      coverage: row.totalTokens ? row.coveredTokens / row.totalTokens : 0,
+    })).sort((a, b) => b.cost - a.cost);
+    const chart = [...byDayMap.values()].map((row) => ({
+      date: row.date,
+      codex: toCurrency(row.codexUsd),
+      claude: toCurrency(row.claudeUsd),
+    }));
+    const sessions = [...sessionMap.values()]
+      .sort((a, b) => b.costUsd - a.costUsd)
+      .slice(0, 8)
+      .map((row) => ({ ...row, cost: toCurrency(row.costUsd), coverage: row.totalTokens ? row.coveredTokens / row.totalTokens : 0 }));
+    const byProject = [...byProjectMap.values()]
+      .sort((a, b) => b.costUsd - a.costUsd)
+      .map((row) => ({
+        project: row.project,
+        cost: toCurrency(row.costUsd),
+        totalTokens: row.totalTokens,
+        coverage: row.totalTokens ? row.coveredTokens / row.totalTokens : 0,
+        sessionCount: row.sessions.size,
+        sources: [...row.sources].sort(),
+        lastActivity: row.lastActivity,
+      }));
+    const unpricedModels = [...unpricedModelsMap.values()]
+      .sort((a, b) => a.sourceId.localeCompare(b.sourceId) || a.model.localeCompare(b.model));
+    const isComplete = coveredTokens === totalTokens;
+
+    return {
+      periodDays: days,
+      currency: settings.currency,
+      actual: toCurrency(actualUsd),
+      withoutCache: toCurrency(withoutCacheUsd),
+      cacheSavings: toCurrency(Math.max(0, withoutCacheUsd - actualUsd)),
+      cacheSavingsPercent: withoutCacheUsd > 0 ? Math.max(0, (withoutCacheUsd - actualUsd) / withoutCacheUsd) : 0,
+      totalTokens,
+      coverage: totalTokens ? coveredTokens / totalTokens : 0,
+      isComplete,
+      isLowerBound: !isComplete,
+      unpricedModels,
+      requestCount: events.length,
+      byModel,
+      byProject,
+      chart,
+      sessions,
+    };
+  }
+
+  // One row per past allowance window of a source's primary bucket: when it
+  // ran, how much of it was used, and what that window's tracked tokens would
+  // have cost at the current catalogue. Windows are keyed by their reset time.
+  getCycleHistory(sourceId, quota, settings = this.getSettings(), limit = 8, nowMs = Date.now()) {
+    if (!quota) return [];
+    const bucketId = quota.bucketId;
+    const rows = this.db.prepare(`
+      SELECT resets_at, window_minutes, MAX(used_percent) AS peak_used,
+        MIN(observed_at) AS first_observed_at, MAX(observed_at) AS last_observed_at,
+        COUNT(*) AS readings
+      FROM quota_observations
+      WHERE source_id = ? AND bucket_id = ?
+      GROUP BY resets_at
+      ORDER BY resets_at DESC
+      LIMIT ?
+    `).all(sourceId, bucketId, limit + 8);
+    // Rounding jitter in reset timestamps splits one window into neighbours a
+    // few seconds apart; merge anything within a minute of the previous row.
+    const merged = [];
+    for (const row of rows) {
+      const previous = merged.at(-1);
+      const resetMs = new Date(row.resets_at).getTime();
+      if (previous && Math.abs(new Date(previous.resets_at).getTime() - resetMs) <= 60_000) {
+        previous.peak_used = Math.max(previous.peak_used, row.peak_used);
+        previous.first_observed_at = row.first_observed_at < previous.first_observed_at ? row.first_observed_at : previous.first_observed_at;
+        previous.last_observed_at = row.last_observed_at > previous.last_observed_at ? row.last_observed_at : previous.last_observed_at;
+        previous.readings += row.readings;
+        continue;
+      }
+      merged.push({ ...row });
+    }
+    const rate = Number(settings.usdToCurrency || 1);
+    const eventSource = sourceId === 'codex' ? 'codex' : 'claude';
+    const modelFilter = sourceId === 'claude-fable' ? "AND LOWER(COALESCE(model, '')) LIKE '%fable%'" : '';
+    const costStatement = this.db.prepare(`
+      SELECT * FROM usage_events
+      WHERE source_id = ? AND occurred_at >= ? AND occurred_at < ? ${modelFilter}
+    `);
+    return this.withPriceCache(() => merged.slice(0, limit).map((row) => {
+      const resetMs = new Date(row.resets_at).getTime();
+      const windowMinutes = Number(row.window_minutes) > 0 ? Number(row.window_minutes) : 10_080;
+      const startMs = resetMs - windowMinutes * 60_000;
+      let usd = 0;
+      let tokens = 0;
+      for (const event of costStatement.all(eventSource, iso(startMs), iso(Math.min(resetMs, nowMs)))) {
+        usd += this.calculateCost(event).actualUsd;
+        tokens += Number(event.input_tokens) + Number(event.cached_input_tokens)
+          + Number(event.cache_write_input_tokens) + Number(event.output_tokens);
+      }
+      return {
+        resetsAt: row.resets_at,
+        startsAt: iso(startMs),
+        windowMinutes,
+        peakUsedPercent: round(Number(row.peak_used), 1),
+        readings: Number(row.readings),
+        firstObservedAt: row.first_observed_at,
+        lastObservedAt: row.last_observed_at,
+        current: resetMs > nowMs,
+        cost: round(usd * rate, 2),
+        tokens,
+      };
+    }));
+  }
+
+  // Everything the Details ledger shows, as one CSV a spreadsheet can open.
+  // Token counts and the current-catalogue equivalent in USD; no prompts.
+  exportLedgerCsv(days = 90, nowMs = Date.now()) {
+    const since = iso(nowMs - days * DAY_MS);
+    const events = this.db.prepare('SELECT * FROM usage_events WHERE occurred_at >= ? ORDER BY occurred_at ASC').all(since);
+    const escape = (value) => {
+      const text = value == null ? '' : String(value);
+      return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+    };
+    const header = ['occurred_at', 'source', 'model', 'project', 'session_id', 'input_tokens', 'cached_input_tokens',
+      'cache_write_5m_input_tokens', 'cache_write_1h_input_tokens', 'output_tokens', 'reasoning_output_tokens',
+      'api_equivalent_usd', 'priced'];
+    const lines = [header.join(',')];
+    this.withPriceCache(() => {
+      for (const event of events) {
+        const cost = this.calculateCost(event);
+        let cacheWrite5m = Number(event.cache_write_5m_input_tokens || 0);
+        const cacheWrite1h = Number(event.cache_write_1h_input_tokens || 0);
+        if (cacheWrite5m + cacheWrite1h === 0) cacheWrite5m = Number(event.cache_write_input_tokens || 0);
+        lines.push([
+          event.occurred_at, event.source_id, event.model, event.project, event.session_id,
+          event.input_tokens, event.cached_input_tokens, cacheWrite5m, cacheWrite1h,
+          event.output_tokens, event.reasoning_output_tokens,
+          round(cost.actualUsd, 6), cost.covered ? 'yes' : 'no',
+        ].map(escape).join(','));
+      }
+    });
+    return { csv: `${lines.join('\r\n')}\r\n`, rows: events.length, since };
+  }
+
+  // Housekeeping after a refresh: compact old polling rows so the table stops
+  // growing with the refresh interval. Manual readings are never touched.
+  compactObservations(nowMs = Date.now()) {
+    const cutoff = iso(nowMs - COMPACT_AFTER_MS);
+    const result = this.db.prepare(`
+      DELETE FROM quota_observations
+      WHERE observed_at < ? AND provenance != 'manual-official' AND id NOT IN (
+        SELECT MIN(id) FROM quota_observations WHERE observed_at < ?
+          GROUP BY source_id, bucket_id, resets_at, date(observed_at, 'localtime')
+        UNION
+        SELECT MAX(id) FROM quota_observations WHERE observed_at < ?
+          GROUP BY source_id, bucket_id, resets_at, date(observed_at, 'localtime')
+      )
+    `).run(cutoff, cutoff, cutoff);
+    return { removed: Number(result.changes || 0), cutoff };
+  }
+
+  getDailyUsage(days = 90) {
+    const since = dateKey(Date.now() - days * 24 * 60 * 60 * 1000);
+    return this.db.prepare(`
+      SELECT source_id AS sourceId, usage_date AS date, tokens
+      FROM account_daily_usage
+      WHERE usage_date >= ?
+      ORDER BY usage_date ASC, source_id ASC
+    `).all(since);
+  }
+
+  getDashboardSnapshot(days = 30, nowMs = Date.now()) {
+    const settings = this.getSettings();
+    const sources = this.db.prepare('SELECT * FROM sources ORDER BY CASE id WHEN \'codex\' THEN 1 WHEN \'claude\' THEN 2 ELSE 3 END').all()
+      .map((row) => ({ ...row, metadata: json(row.metadata_json, {}) }));
+    const quotas = {
+      codex: this.getQuota('codex', settings, nowMs),
+      claude: this.getQuota('claude', settings, nowMs),
+      fable: this.getQuota('claude-fable', settings, nowMs),
+    };
+    const resetCredits = quotas.codex?.metadata?.resetCredits ?? 0;
+    return {
+      generatedAt: iso(nowMs),
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      settings,
+      sources,
+      quotas,
+      dashboardVerdict: buildDashboardVerdict({ quotas, sources }),
+      resetCredits,
+      priceCatalog: this.getPriceCatalog(),
+      costs: this.getCostAnalytics(days, settings, nowMs),
+      cycles: {
+        codex: this.getCycleHistory('codex', quotas.codex, settings, 8, nowMs),
+        claude: this.getCycleHistory('claude', quotas.claude, settings, 8, nowMs),
+        fable: this.getCycleHistory('claude-fable', quotas.fable, settings, 8, nowMs),
+      },
+      dailyUsage: this.getDailyUsage(Math.max(days, 90)),
+      storage: {
+        databasePath: this.databasePath,
+        backupDirectory: this.backupDirectory,
+        databaseSize: fs.existsSync(this.databasePath) ? fs.statSync(this.databasePath).size : 0,
+      },
+    };
+  }
+
+  // `keep` names a backup file this run must not prune — the one the caller is
+  // about to restore from. Opening a restore point should never delete it.
+  createBackup(options = {}) {
+    const stamp = new Date().toISOString().replaceAll(':', '-').replaceAll('.', '-');
+    const databasePath = path.join(this.backupDirectory, `ai-usage-${stamp}.sqlite`);
+    const exportPath = path.join(this.backupDirectory, `ai-usage-${stamp}.aiusage.json`);
+    const escaped = databasePath.replaceAll("'", "''");
+    this.db.exec(`VACUUM INTO '${escaped}'`);
+    const payload = {
+      schemaVersion: 1,
+      exportedAt: iso(),
+      settings: this.getSettings(),
+      sources: this.db.prepare('SELECT * FROM sources').all(),
+      observations: this.db.prepare('SELECT * FROM quota_observations').all(),
+      usageEvents: this.db.prepare('SELECT * FROM usage_events').all(),
+      dailyUsage: this.db.prepare('SELECT * FROM account_daily_usage').all(),
+      prices: this.db.prepare('SELECT * FROM price_catalog').all(),
+    };
+    fs.writeFileSync(exportPath, JSON.stringify(payload, null, 2), 'utf8');
+    this.db.prepare('INSERT INTO backups(created_at, database_path, export_path) VALUES (?, ?, ?)')
+      .run(iso(), databasePath, exportPath);
+    this.pruneBackups(this.getSettings().backupRetentionCount, options.keep);
+    return { databasePath, exportPath };
+  }
+
+  // Reading is a separate step so a caller can load the export into memory
+  // before taking its own backup: creating one prunes old sets, and the file
+  // the user chose from the backup folder can be among them.
+  readExport(filePath) {
+    if (!filePath || !fs.existsSync(filePath)) throw new Error('That backup file could not be found.');
+    try {
+      return JSON.parse(fs.readFileSync(filePath, 'utf8').replace(/^﻿/, ''));
+    } catch {
+      throw new Error('That file is not a readable AI Usage export.');
+    }
+  }
+
+  restoreFromBackup(filePath) {
+    return this.restoreFromExport(this.readExport(filePath));
+  }
+
+  // A backup nothing can read back is not a backup. Restore merges an export
+  // into the live database rather than replacing it: for every table of
+  // records, rows already present win, so restoring onto a partly collected
+  // database can neither double count nor overwrite newer data. Settings are
+  // the exception — they are replaced, and reported separately so the caller
+  // can say so. Records the export cannot supply validly are skipped and
+  // counted, never guessed, and one bad row never costs the others.
+  restoreFromExport(payload) {
+    const unreadable = () => new Error('That file is not a readable AI Usage export.');
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw unreadable();
+    const schemaVersion = Number(payload.schemaVersion);
+    if (!Number.isFinite(schemaVersion) || schemaVersion < 1) throw unreadable();
+    if (schemaVersion > 1) throw new Error(`This backup was written by a newer version of AI Usage (schema ${schemaVersion}).`);
+    const list = (value) => (Array.isArray(value) ? value : []);
+    const knownSources = new Set(SOURCE_DEFINITIONS.map(([id]) => id));
+    const counts = { settings: 0, observations: 0, usageEvents: 0, dailyUsage: 0, prices: 0, skipped: 0 };
+
+    const insertObservation = this.db.prepare(`
+      INSERT OR IGNORE INTO quota_observations(
+        source_id, bucket_id, bucket_name, observed_at, used_percent, remaining_percent,
+        resets_at, window_minutes, plan_type, provenance, confidence, metadata_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const insertEvent = this.db.prepare(`
+      INSERT INTO usage_events(
+        event_key, source_id, occurred_at, session_id, model, project, input_tokens,
+        cached_input_tokens, cache_write_input_tokens, cache_write_5m_input_tokens,
+        cache_write_1h_input_tokens, output_tokens, reasoning_output_tokens,
+        reported_cost_usd, metadata_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(event_key) DO NOTHING
+    `);
+    // Both of these are DO NOTHING, unlike their live-collection counterparts
+    // `upsertDailyUsage` and `updatePrice`. Last-writer-wins is right for a
+    // collector and wrong for a merge: an old export must not roll back a
+    // newer daily total or discard a price the user edited by hand.
+    const insertDailyUsage = this.db.prepare(`
+      INSERT INTO account_daily_usage(source_id, usage_date, tokens) VALUES (?, ?, ?)
+      ON CONFLICT(source_id, usage_date) DO NOTHING
+    `);
+    const insertPrice = this.db.prepare(`
+      INSERT INTO price_catalog(model, input_usd_per_million, cache_write_usd_per_million,
+        cache_write_1h_usd_per_million, cache_read_usd_per_million,
+        output_usd_per_million, effective_from, source_url)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(model) DO NOTHING
+    `);
+    const setSetting = this.db.prepare(`
+      INSERT INTO settings(key, value_json, updated_at) VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
+    `);
+    const finiteNumber = (value) => {
+      // Number(null), Number(''), Number(false) and Number([]) are all 0, so
+      // coercing first would accept those as a legitimate zero.
+      if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+      if (typeof value !== 'string' || !value.trim()) return null;
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : null;
+    };
+
+    try {
+      this.db.exec('BEGIN IMMEDIATE');
+    } catch (error) {
+      throw new Error(`The database was busy and the restore did not start: ${error.message}`);
+    }
+    try {
+      const exported = payload.settings && typeof payload.settings === 'object' ? payload.settings : {};
+      // Validate every key first, then check the cross-field schedule rule
+      // against what would actually be written. Testing it against the raw
+      // export let a rejected end hour vouch for a start hour that then
+      // outlived it, leaving a start-after-end schedule updateSettings refuses.
+      const accepted = {};
+      for (const [exportedKey, value] of Object.entries(exported)) {
+        const key = SETTING_ALIASES[exportedKey] || exportedKey;
+        const validate = SETTING_VALIDATORS[key];
+        if (!validate || !validate(value)) {
+          counts.skipped += 1;
+          continue;
+        }
+        accepted[key] = value;
+      }
+      const merged = { ...this.getSettings(), ...accepted };
+      if (merged.activeStartHour >= merged.activeEndHour) {
+        for (const key of ['activeStartHour', 'activeEndHour']) {
+          if (Object.hasOwn(accepted, key)) {
+            delete accepted[key];
+            counts.skipped += 1;
+          }
+        }
+      }
+      for (const [key, value] of Object.entries(accepted)) {
+        setSetting.run(key, JSON.stringify(value), iso());
+        counts.settings += 1;
+      }
+
+      for (const row of list(payload.observations)) {
+        try {
+          if (!knownSources.has(row.source_id) || typeof row.bucket_id !== 'string' || !row.bucket_id) throw unreadable();
+          // Derived estimates are reproducible local cache, not source
+          // evidence. In particular, old versions could derive them from an
+          // unverified Max-plan assumption, so backups must not resurrect them.
+          if (row.provenance === 'derived-tokens') throw unreadable();
+          const usedPercent = finiteNumber(row.used_percent);
+          if (usedPercent == null || usedPercent < 0 || usedPercent > 100) throw unreadable();
+          const remainingPercent = row.remaining_percent == null ? 100 - usedPercent : finiteNumber(row.remaining_percent);
+          // The same invariants recordObservation enforces on live readings: an
+          // out-of-range remainder reaches the quota card unclamped, and a reset
+          // before its observation makes the forecast permanently "expired".
+          if (remainingPercent == null || remainingPercent < 0 || remainingPercent > 100) throw unreadable();
+          if (Math.abs(usedPercent + remainingPercent - 100) > 0.1) throw unreadable();
+          const observedAt = validIso(row.observed_at, 'Observation time');
+          const resetsAt = validIso(row.resets_at, 'Reset time');
+          const resetDistanceMs = new Date(resetsAt).getTime() - new Date(observedAt).getTime();
+          if (resetDistanceMs < -5 * 60_000 || resetDistanceMs > MAX_QUOTA_RESET_AHEAD_MS) throw unreadable();
+          const windowMinutes = row.window_minutes == null ? null : finiteNumber(row.window_minutes);
+          const confidence = row.confidence == null ? 1 : finiteNumber(row.confidence);
+          if (windowMinutes != null && (!Number.isSafeInteger(windowMinutes) || windowMinutes < 0 || windowMinutes > 31 * 24 * 60)) throw unreadable();
+          if (confidence == null || confidence < 0 || confidence > 1) throw unreadable();
+          const provenance = typeof row.provenance === 'string' && row.provenance ? row.provenance : 'official';
+          // Older status-line helpers guessed the subscription label from local
+          // configuration. It is not provider evidence and must not regain the
+          // authority to enable Max-only shared-pool arithmetic after restore.
+          const planType = provenance === 'official-statusline'
+            ? null : typeof row.plan_type === 'string' ? row.plan_type : null;
+          counts.observations += insertObservation.run(
+            row.source_id, row.bucket_id, typeof row.bucket_name === 'string' ? row.bucket_name : null,
+            observedAt, usedPercent, remainingPercent, resetsAt,
+            windowMinutes, planType, provenance, confidence,
+            typeof row.metadata_json === 'string' ? row.metadata_json : JSON.stringify(row.metadata_json ?? {}),
+          ).changes;
+        } catch {
+          counts.skipped += 1;
+        }
+      }
+
+      for (const row of list(payload.usageEvents)) {
+        try {
+          if (!knownSources.has(row.source_id) || typeof row.event_key !== 'string' || !row.event_key) throw unreadable();
+          const tokens = (value) => {
+            const parsed = value == null ? 0 : finiteNumber(value);
+            if (!Number.isSafeInteger(parsed) || parsed < 0) throw unreadable();
+            return parsed;
+          };
+          const cacheWriteTotal = tokens(row.cache_write_input_tokens);
+          const cacheWrite1h = tokens(row.cache_write_1h_input_tokens);
+          // Exports written before cache TTL was recorded carry only the total,
+          // and the same "no detail means five-minute" rule the collectors and
+          // calculateCost use has to hold here or the split stops adding up.
+          const cacheWrite5m = row.cache_write_5m_input_tokens == null
+            ? Math.max(0, cacheWriteTotal - cacheWrite1h)
+            : tokens(row.cache_write_5m_input_tokens);
+          const reportedCost = row.reported_cost_usd == null ? null : finiteNumber(row.reported_cost_usd);
+          const outputTokens = tokens(row.output_tokens);
+          const reasoningTokens = tokens(row.reasoning_output_tokens);
+          if (reasoningTokens > outputTokens
+            || (row.reported_cost_usd != null && (reportedCost == null || reportedCost < 0))) throw unreadable();
+          counts.usageEvents += insertEvent.run(
+            row.event_key, row.source_id, validIso(row.occurred_at, 'Event time'),
+            typeof row.session_id === 'string' ? row.session_id : null,
+            typeof row.model === 'string' ? row.model : null,
+            typeof row.project === 'string' && row.project.trim() ? row.project.trim() : null,
+            tokens(row.input_tokens), tokens(row.cached_input_tokens),
+            cacheWriteTotal, cacheWrite5m, cacheWrite1h,
+            outputTokens, reasoningTokens,
+            reportedCost,
+            typeof row.metadata_json === 'string' ? row.metadata_json : JSON.stringify(row.metadata_json ?? {}),
+          ).changes;
+        } catch {
+          counts.skipped += 1;
+        }
+      }
+
+      for (const row of list(payload.dailyUsage)) {
+        try {
+          const tokens = finiteNumber(row.tokens);
+          if (!knownSources.has(row.source_id) || typeof row.usage_date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(row.usage_date)
+            || !Number.isSafeInteger(tokens) || tokens < 0) throw unreadable();
+          counts.dailyUsage += insertDailyUsage.run(row.source_id, row.usage_date, tokens).changes;
+        } catch {
+          counts.skipped += 1;
+        }
+      }
+
+      for (const row of list(payload.prices)) {
+        try {
+          const values = [row.input_usd_per_million, row.cache_write_usd_per_million,
+            row.cache_write_1h_usd_per_million ?? 0, row.cache_read_usd_per_million,
+            row.output_usd_per_million].map(finiteNumber);
+          const effectiveFrom = typeof row.effective_from === 'string' && row.effective_from ? row.effective_from : iso().slice(0, 10);
+          const sourceUrl = typeof row.source_url === 'string' ? row.source_url : null;
+          if (typeof row.model !== 'string' || !row.model || values.some((value) => value == null || value < 0)) throw unreadable();
+          counts.prices += insertPrice.run(row.model, ...values, effectiveFrom, sourceUrl).changes;
+        } catch {
+          counts.skipped += 1;
+        }
+      }
+
+      this.db.exec(`
+        UPDATE sources SET last_observation_at = (
+          SELECT MAX(observed_at) FROM quota_observations WHERE source_id = sources.id
+        ) WHERE EXISTS (SELECT 1 FROM quota_observations WHERE source_id = sources.id)
+      `);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      // SQLite rolls back by itself on errors like SQLITE_FULL and SQLITE_IOERR,
+      // after which an explicit ROLLBACK throws "no transaction is active" and
+      // would replace the real failure with a meaningless one.
+      try {
+        this.db.exec('ROLLBACK');
+      } catch { /* Already rolled back; the original error is the useful one. */ }
+      throw error;
+    }
+    // Restored settings went in through the validators, but a corrupt row that
+    // predates a validator still gets one last reconciliation, as on startup.
+    this.repairSettings();
+    return counts;
+  }
+
+  pruneBackups(retentionCount = DEFAULT_SETTINGS.backupRetentionCount, keepPath = null) {
+    const keep = Math.max(1, Math.min(365, Number(retentionCount) || DEFAULT_SETTINGS.backupRetentionCount));
+    const protectedPath = keepPath ? path.resolve(keepPath) : null;
+    const rows = this.db.prepare('SELECT * FROM backups ORDER BY created_at DESC, id DESC').all();
+    const root = path.resolve(this.backupDirectory);
+    const removeFile = (filePath) => {
+      if (!filePath) return true;
+      const target = path.resolve(filePath);
+      const relative = path.relative(root, target);
+      if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return false;
+      try {
+        if (fs.existsSync(target)) fs.unlinkSync(target);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    let removed = 0;
+    for (const row of rows.slice(keep)) {
+      if (protectedPath && [row.database_path, row.export_path].some((value) => value && path.resolve(value) === protectedPath)) continue;
+      const databaseRemoved = removeFile(row.database_path);
+      const exportRemoved = removeFile(row.export_path);
+      if (databaseRemoved && exportRemoved) {
+        this.db.prepare('DELETE FROM backups WHERE id = ?').run(row.id);
+        removed += 1;
+      }
+    }
+    return removed;
+  }
+
+  maybeCreateScheduledBackup() {
+    const frequency = this.getSettings().backupFrequency;
+    if (!frequency || frequency === 'off') return null;
+    const intervals = { daily: 24 * 60 * 60 * 1000, weekly: 7 * 24 * 60 * 60 * 1000 };
+    const interval = intervals[frequency] || intervals.daily;
+    const latest = this.db.prepare('SELECT created_at FROM backups ORDER BY created_at DESC LIMIT 1').get();
+    if (latest && Date.now() - new Date(latest.created_at).getTime() < interval) return null;
+    return this.createBackup();
+  }
+}
+
+module.exports = { UsageStore, DEFAULT_SETTINGS };

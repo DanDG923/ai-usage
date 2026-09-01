@@ -1,0 +1,265 @@
+export type Point = { at: number; remaining: number };
+
+export type ForecastState = 'safe' | 'watch' | 'risk' | 'critical' | 'unknown';
+
+export type Forecast = {
+  state: ForecastState;
+  expectedRemaining: number | null;
+  heavyRemaining: number | null;
+  confidence: number;
+  learnedSamples: number;
+  learnedDays: number;
+  activeHoursLeft: number;
+  safePace: number;
+  recentPace: number;
+  workingPace: number;
+  windowPace: number | null;
+  paceRatio: number;
+  expired?: boolean;
+  staleHours?: number;
+  estimatedCurrentRemaining?: number | null;
+  currentIsEstimated?: boolean;
+  /** When the expected projection first reaches zero, if it does before reset. */
+  exhaustsAt?: string | null;
+  /** When the heavier projection first reaches zero, if it does before reset. */
+  heavyExhaustsAt?: string | null;
+  reservePercent?: number;
+  series: { observed: Point[]; expected: Point[]; heavy: Point[] };
+};
+
+export type QuotaWindow = {
+  bucketId: string;
+  bucketName: string;
+  observedAt: string;
+  usedPercent: number;
+  remainingPercent: number;
+  resetsAt: string;
+  windowMinutes: number | null;
+  planType: string | null;
+  provenance: string;
+  metadata: Record<string, unknown>;
+  forecast: Forecast;
+};
+
+export type Quota = QuotaWindow & { windows: QuotaWindow[] };
+
+export type DashboardVerdict = {
+  state: ForecastState;
+  label: string;
+  windowsChecked: number;
+  affected: string[];
+};
+
+export type SourceId = 'codex' | 'claude' | 'claude-fable';
+
+export type Source = {
+  id: SourceId;
+  name: string;
+  kind: string;
+  status: string;
+  status_detail: string | null;
+  last_observation_at: string | null;
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+  metadata: Record<string, unknown>;
+};
+
+export type ModelCost = {
+  sourceId: string;
+  model: string;
+  inputTokens: number;
+  cachedInputTokens: number;
+  cacheWriteInputTokens: number;
+  cacheWrite5mInputTokens: number;
+  cacheWrite1hInputTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+  totalTokens: number;
+  cost: number;
+  coverage: number;
+};
+
+export type ProjectCost = {
+  project: string | null;
+  cost: number;
+  totalTokens: number;
+  coverage: number;
+  sessionCount: number;
+  sources: string[];
+  lastActivity: string;
+};
+
+export type SessionCost = {
+  sourceId: string;
+  sessionId: string;
+  model: string;
+  project: string | null;
+  occurredAt: string;
+  totalTokens: number;
+  cost: number;
+  coverage: number;
+};
+
+export type CostAnalytics = {
+  periodDays: number;
+  currency: string;
+  actual: number;
+  withoutCache: number;
+  cacheSavings: number;
+  cacheSavingsPercent: number;
+  totalTokens: number;
+  coverage: number;
+  isComplete: boolean;
+  isLowerBound: boolean;
+  unpricedModels: { sourceId: string; model: string; tokens: number }[];
+  requestCount: number;
+  byModel: ModelCost[];
+  byProject: ProjectCost[];
+  chart: { date: string; codex: number; claude: number }[];
+  sessions: SessionCost[];
+};
+
+export type CycleRow = {
+  resetsAt: string;
+  startsAt: string;
+  windowMinutes: number;
+  peakUsedPercent: number;
+  readings: number;
+  firstObservedAt: string;
+  lastObservedAt: string;
+  current: boolean;
+  cost: number;
+  tokens: number;
+};
+
+export type DailyUsage = { sourceId: string; date: string; tokens: number };
+
+export type Theme = 'system' | 'dark' | 'light';
+
+export type Settings = {
+  currency: string;
+  usdToCurrency: number;
+  activeDays: number[];
+  activeStartHour: number;
+  activeEndHour: number;
+  forecastFallbackRate: number;
+  paceRiskThreshold: number;
+  hardLimitThreshold: number;
+  reservePercent: number;
+  notifyDesktop: boolean;
+  notifyResets: boolean;
+  notifyFallback: boolean;
+  notifyDigest: boolean;
+  digestHour: number;
+  alertsSnoozedUntil: string | null;
+  launchAtLogin: boolean;
+  theme: Theme;
+  autoUpdate: boolean;
+  backupFrequency: string;
+  backupRetentionCount: number;
+  refreshIntervalMinutes: number;
+};
+
+export type RestoreCounts = {
+  settings: number;
+  observations: number;
+  usageEvents: number;
+  dailyUsage: number;
+  prices: number;
+  skipped: number;
+};
+
+export type PriceRow = {
+  model: string;
+  input_usd_per_million: number;
+  cache_write_usd_per_million: number;
+  cache_write_1h_usd_per_million: number;
+  cache_read_usd_per_million: number;
+  output_usd_per_million: number;
+  effective_from: string;
+  source_url: string | null;
+};
+
+export type Snapshot = {
+  generatedAt: string;
+  timezone: string;
+  settings: Settings;
+  sources: Source[];
+  quotas: { codex: Quota | null; claude: Quota | null; fable: Quota | null };
+  dashboardVerdict: DashboardVerdict;
+  resetCredits: number;
+  priceCatalog: PriceRow[];
+  costs: CostAnalytics;
+  cycles: { codex: CycleRow[]; claude: CycleRow[]; fable: CycleRow[] };
+  dailyUsage: DailyUsage[];
+  storage: { databasePath: string; backupDirectory: string; databaseSize: number };
+  isPreview?: boolean;
+};
+
+export type ManualObservation = {
+  sourceId: SourceId;
+  usedPercent: number;
+  resetsAt: string;
+  observedAt?: string;
+  note?: string;
+};
+
+export type UpdateStatus = {
+  status: 'idle' | 'checking' | 'available' | 'up-to-date' | 'error' | 'unavailable';
+  available: boolean;
+  checkedAt?: string | null;
+  version?: string | null;
+  error?: string | null;
+};
+
+export type Bridge = {
+  getSnapshot(days?: number): Promise<Snapshot>;
+  refresh(): Promise<{
+    snapshot: Snapshot;
+    backupError?: string | null;
+    collectors: Record<string, { error?: string; warning?: string }>;
+  }>;
+  updateSettings(patch: Partial<Settings>): Promise<{ snapshot: Snapshot }>;
+  updatePrice(price: {
+    model: string;
+    inputUsdPerMillion: number;
+    cacheWriteUsdPerMillion: number;
+    cacheWrite1hUsdPerMillion: number;
+    cacheReadUsdPerMillion: number;
+    outputUsdPerMillion: number;
+    effectiveFrom?: string;
+    sourceUrl?: string | null;
+  }): Promise<{ snapshot: Snapshot }>;
+  addManualObservation(observation: ManualObservation): Promise<Snapshot>;
+  installClaudeHelper(): Promise<{ snapshot: Snapshot }>;
+  uninstallClaudeHelper(): Promise<{
+    snapshot: Snapshot;
+    result: {
+      managed: boolean;
+      restoredPreviousStatusLine: boolean;
+      statusLineRemoved: boolean;
+      helperScriptRemoved: boolean;
+    };
+  }>;
+  createBackup(): Promise<{ snapshot: Snapshot; result: { databasePath: string; exportPath: string } }>;
+  restoreBackup(): Promise<{
+    cancelled: boolean;
+    snapshot: Snapshot;
+    result?: RestoreCounts;
+    safetyBackup?: { databasePath: string; exportPath: string };
+  }>;
+  openBackupDirectory(): Promise<void>;
+  exportCsv(days: number): Promise<{ cancelled: boolean; filePath?: string; rows?: number; days?: number }>;
+  copySummary(): Promise<{ text: string }>;
+  snoozeAlerts(hours: number): Promise<{ snapshot: Snapshot }>;
+  getVersion(): Promise<string>;
+  checkForUpdates(): Promise<UpdateStatus>;
+  getUpdateStatus(): Promise<UpdateStatus>;
+  onUpdated?(callback: (snapshot: Snapshot) => void): () => void;
+};
+
+declare global {
+  interface Window {
+    aiUsage?: Bridge;
+  }
+}

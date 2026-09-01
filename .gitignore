@@ -1,0 +1,25 @@
+node_modules/
+dist/
+release/
+release-*/
+release-final/
+release-ready/
+*.log
+.vite/
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+Microsoft/
+
+# Local AI Usage databases and portable exports can contain private activity.
+/-
+/--wal
+/--shm
+/*.sqlite
+/*.sqlite-wal
+/*.sqlite-shm
+/Backups/
+*.aiusage.json
+
+# Local diagnostics are deliberately not source or release inputs.
+/tools/fable-probe.jsonl
