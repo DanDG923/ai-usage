@@ -38,7 +38,7 @@ function readCompleteLines(filePath, startOffset, size) {
   const finalNewline = buffer.lastIndexOf(0x0a);
   if (finalNewline < 0) return { lines: [], consumedBytes: 0 };
   const consumedBytes = finalNewline + 1;
-  const text = buffer.subarray(0, consumedBytes).toString('utf8').replace(/^﻿/, '');
+  const text = buffer.subarray(0, consumedBytes).toString('utf8').replace(/^\uFEFF/, '');
   return { lines: text.split(/\r?\n/).filter(Boolean), consumedBytes };
 }
 

@@ -6,6 +6,8 @@ type CycleKey = keyof Snapshot['cycles'];
 const LABELS: Record<CycleKey, string> = { codex: 'Codex', claude: 'Claude', fable: 'Fable 5' };
 
 function CycleBars({ rows }: { rows: CycleRow[] }) {
+  // Copy first; toReversed needs the ES2023 lib the renderer does not target.
+  // oxlint-disable-next-line unicorn/no-array-reverse
   const ordered = [...rows].reverse();
   return (
     <div className="cycle-bars" role="img" aria-label="Peak allowance used per reset cycle">
