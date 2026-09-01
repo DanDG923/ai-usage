@@ -5,6 +5,7 @@ import { Header, type Tab } from './components/Header';
 import { Overview } from './components/Overview';
 import { Settings, type SettingsActions } from './components/Settings';
 import { demoSnapshot } from './data/demo';
+import { watchViewportScale } from './scale';
 import type { ManualObservation, PriceRow, Settings as SettingsType, Snapshot, Theme } from './types';
 
 function applyThemeAttribute(theme: Theme | undefined) {
@@ -33,6 +34,10 @@ export default function App() {
   useEffect(() => {
     applyThemeAttribute(snapshot?.settings.theme);
   }, [snapshot?.settings.theme]);
+
+  // The page zooms to the window (see fluid.css); the factor is kept on the
+  // root element so CSS can read it without a re-render.
+  useEffect(() => watchViewportScale(), []);
 
   const load = useCallback(
     async (period: number) => {

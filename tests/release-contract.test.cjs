@@ -8,20 +8,6 @@ const test = require('node:test');
 const root = path.join(__dirname, '..');
 const readJson = (name) => JSON.parse(fs.readFileSync(path.join(root, name), 'utf8'));
 const readText = (name) => fs.readFileSync(path.join(root, name), 'utf8');
-const readCssBlock = (source, header) => {
-  const headerIndex = source.indexOf(header);
-  assert.notEqual(headerIndex, -1, `missing CSS block: ${header}`);
-  const openingBrace = source.indexOf('{', headerIndex);
-  assert.notEqual(openingBrace, -1, `missing opening brace for CSS block: ${header}`);
-  let depth = 0;
-  for (let index = openingBrace; index < source.length; index += 1) {
-    if (source[index] === '{') depth += 1;
-    if (source[index] !== '}') continue;
-    depth -= 1;
-    if (depth === 0) return source.slice(openingBrace + 1, index);
-  }
-  assert.fail(`missing closing brace for CSS block: ${header}`);
-};
 
 test('release metadata, dependency pin, package exclusions, and docs agree', () => {
   const pkg = readJson('package.json');
@@ -29,7 +15,7 @@ test('release metadata, dependency pin, package exclusions, and docs agree', () 
   const readme = readText('README.md');
   const changelog = readText('CHANGELOG.md');
 
-  assert.equal(pkg.version, '1.0.11');
+  assert.equal(pkg.version, '1.0.12');
   assert.equal(lock.version, pkg.version);
   assert.equal(lock.packages[''].version, pkg.version);
   assert.equal(pkg.dependencies['@anthropic-ai/claude-agent-sdk'], '0.3.251');
@@ -53,10 +39,10 @@ test('release metadata, dependency pin, package exclusions, and docs agree', () 
   assert.match(releaseAudit, /SHA256SUMS\.txt/);
   assert.match(releaseAudit, /source map/i);
   assert.match(releaseAudit, /private local data/i);
-  assert.match(readme, /AI-Usage-Setup-1\.0\.11-x64\.exe/);
+  assert.match(readme, /AI-Usage-Setup-1.0.12-x64\.exe/);
   assert.match(readme, /actual local Fable token activity/i);
   assert.match(readme, /experimental/i);
-  assert.match(changelog, /^# Changelog\s+## 1\.0\.11/m);
+  assert.match(changelog, /^# Changelog\s+## 1.0.12/m);
 });
 
 test('the desktop window integrates native controls into the app header', () => {
@@ -84,10 +70,12 @@ test('the desktop window integrates native controls into the app header', () => 
   assert.match(overviewStyles, /@media\s*\(max-width:\s*1250px\)\s*\{\s*\.verdict-chip\s*\{[^}]*flex:\s*1 0 100%/s);
 });
 
-test('the renderer fluidly scales focal content without globally zooming the UI', () => {
+test('the renderer scales the page to the window and fills the overview height', () => {
   const entry = readText('src/main.tsx');
   const fluid = readText('src/fluid.css');
-  const veryWide = readCssBlock(fluid, '@media (min-width: 1920px)');
+  const scale = readText('src/scale.ts');
+  const app = readText('src/App.tsx');
+  const charts = readText('src/components/Charts.tsx');
   const rendererStyles = [
     'src/styles.css',
     'src/overview.css',
@@ -97,6 +85,20 @@ test('the renderer fluidly scales focal content without globally zooming the UI'
   ].map(readText).join('\n');
 
   assert.match(entry, /import ['"]\.\/pricing\.css['"];\s*import ['"]\.\/fluid\.css['"];/);
+  // The scale is derived from both window dimensions, bounded, and applied as
+  // CSS zoom to the page (never the header, whose safe areas are in real px).
+  assert.match(scale, /DESIGN_WIDTH = 1600/);
+  assert.match(scale, /DESIGN_HEIGHT = 1000/);
+  assert.match(scale, /MIN_SCALE = 0\.7/);
+  assert.match(scale, /MAX_SCALE = 1\.6/);
+  assert.match(scale, /setProperty\('--ui-scale'/);
+  assert.match(scale, /setProperty\('--header-height'/);
+  assert.match(app, /watchViewportScale\(\)/);
+  assert.match(fluid, /\.page,\s*\.app-footer,\s*\.toast,\s*\.saving-toast\s*\{\s*zoom:\s*var\(--ui-scale\);\s*\}/s);
+  assert.match(fluid, /\.app-header > \*\s*\{\s*zoom:\s*var\(--ui-header-scale\);\s*\}/s);
+  assert.doesNotMatch(fluid, /\.app-header\s*\{[^}]*zoom:/s);
+  assert.match(fluid, /--rvw:\s*calc\(1vw \/ var\(--ui-scale\)\)/);
+  assert.match(fluid, /--sticky-header-offset:\s*calc\(\(var\(--header-height\) \+ 26px\) \/ var\(--ui-scale\)\)/);
   assert.match(fluid, /--content-max:\s*1800px/);
   assert.match(fluid, /--page-gutter:\s*clamp\(/);
   assert.match(fluid, /\.page,\s*\.app-footer\s*\{[^}]*var\(--content-max\)[^}]*var\(--page-gutter\)/s);
@@ -106,15 +108,17 @@ test('the renderer fluidly scales focal content without globally zooming the UI'
   assert.match(fluid, /\.qc-hero\s*\{[^}]*grid-template-columns:\s*var\(--gauge-size\)/s);
   assert.match(fluid, /\.gauge,\s*\.gauge svg\s*\{[^}]*width:\s*var\(--gauge-size\)[^}]*height:\s*var\(--gauge-size\)/s);
   assert.match(fluid, /\.qc-grid\s*\{[^}]*minmax\(min\(100%,\s*440px\),\s*1fr\)/s);
-  assert.match(veryWide, /--content-max:\s*clamp\(1800px,\s*calc\(100vw - 120px\),\s*2280px\)/s);
-  assert.match(veryWide, /\.forecast-wrap\s*\{[^}]*max-width:\s*clamp\(820px,\s*calc\(34\.375vw \+ 160px\),\s*1040px\)/s);
-  assert.match(veryWide, /\.cost-chart\s*\{[^}]*max-width:\s*1440px/s);
-  assert.match(veryWide, /\.daily-usage-chart\s*\{[^}]*max-width:\s*1920px/s);
+  // Vertical fill: the overview takes the height under the header and the
+  // forecast plot absorbs the spare height of its card.
+  assert.match(fluid, /\.overview-page\s*\{[^}]*min-height:\s*calc\(\(100vh - var\(--header-height\)\) \/ var\(--ui-scale\)/s);
+  assert.match(fluid, /\.forecast-plot\s*\{[^}]*flex:\s*1 1 auto/s);
+  assert.match(fluid, /\.forecast-plot > svg\s*\{[^}]*position:\s*absolute[^}]*height:\s*100%/s);
+  assert.match(charts, /new ResizeObserver\(/);
+  assert.match(charts, /PLOT_MAX_HEIGHT = 520/);
   assert.match(fluid, /\.cost-chart,\s*\.daily-usage-chart\s*\{[^}]*height:\s*auto/s);
   assert.match(fluid, /\.settings-nav\s*\{[^}]*top:\s*var\(--sticky-header-offset\)/s);
   assert.match(fluid, /\.settings-section\s*\{[^}]*scroll-margin-top:\s*var\(--sticky-header-offset\)/s);
   assert.match(fluid, /@media\s*\(min-width:\s*1251px\)[^{]*\{\s*\.app-header\s*\{[^}]*titlebar-area-x[^}]*titlebar-area-width/s);
-  assert.match(fluid, /@media\s*\(max-width:\s*1250px\)[^{]*\{[^}]*titlebar-area-height/s);
   const summaryStart = fluid.indexOf('@media (max-width: 1500px)');
   const compactStart = fluid.indexOf('@media (max-width: 1000px)');
   const compactEnd = fluid.indexOf('@media (max-width: 800px)', compactStart);
@@ -127,7 +131,12 @@ test('the renderer fluidly scales focal content without globally zooming the UI'
   assert.match(compact, /\.source-row\s*\{[^}]*grid-template-columns:\s*43px minmax\(0,\s*1fr\) auto/s);
   assert.match(compact, /\.source-row > button\s*\{[^}]*grid-column:\s*2 \/ -1/s);
   assert.match(fluid, /\.forecast-tip\s*\{[^}]*width:\s*min\(190px[^}]*white-space:\s*normal/s);
-  assert.doesNotMatch(rendererStyles, /\bzoom\s*:|transform:\s*scale\(/);
+  // Scaling is CSS zoom driven by the custom properties above and nothing else:
+  // no transform scaling (blurry, no reflow) and no zoom with a literal factor.
+  assert.doesNotMatch(rendererStyles, /transform:\s*scale\(/);
+  for (const match of rendererStyles.matchAll(/\bzoom\s*:\s*([^;]+);/g)) {
+    assert.match(match[1], /^var\(--ui-(?:header-)?scale\)$/, `zoom must come from the scale properties, got ${match[1]}`);
+  }
 });
 
 test('renderer contracts keep desktop failures honest and estimates visibly approximate', () => {

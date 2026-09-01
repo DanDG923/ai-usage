@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import type { CostAnalytics, DailyUsage, Forecast, Point } from '../types';
 import { compactNumber, money } from '../lib';
 
@@ -49,11 +49,41 @@ function valueAt(points: Point[], at: number): number | null {
   return points.at(-1)!.remaining;
 }
 
-const PLOT = { width: 660, height: 196, left: 36, right: 12, top: 16, bottom: 26 };
+const PLOT_BASE = { width: 660, height: 196, left: 36, right: 12, top: 16, bottom: 26 };
+const PLOT_MIN_HEIGHT = 150;
+const PLOT_MAX_HEIGHT = 520;
+
+/**
+ * The forecast plot fills whatever height its card gives it. The viewBox
+ * height follows the box's aspect ratio so the drawing stretches to the box
+ * instead of letterboxing, while text and strokes keep their width-relative
+ * size.
+ */
+function usePlotHeight() {
+  const ref = useRef<HTMLDivElement>(null);
+  const [height, setHeight] = useState(PLOT_BASE.height);
+  useEffect(() => {
+    const element = ref.current;
+    if (!element || typeof ResizeObserver !== 'function') return undefined;
+    const observer = new ResizeObserver((entries) => {
+      const box = entries[0]?.contentRect;
+      if (!box || box.width < 1 || box.height < 1) return;
+      const next = Math.round(
+        Math.max(PLOT_MIN_HEIGHT, Math.min(PLOT_MAX_HEIGHT, (PLOT_BASE.width * box.height) / box.width)),
+      );
+      setHeight((current) => (Math.abs(current - next) < 2 ? current : next));
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  return [ref, height] as const;
+}
 
 export function ForecastChart({ forecast }: { forecast: Forecast }) {
   const [hoverAt, setHoverAt] = useState<number | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
+  const [plotRef, plotHeight] = usePlotHeight();
+  const PLOT = { ...PLOT_BASE, height: plotHeight };
   // Two cards render this chart on one page; gradient ids must not collide.
   const gradientId = useId();
   const all = [...forecast.series.observed, ...forecast.series.expected, ...forecast.series.heavy];
@@ -112,58 +142,60 @@ export function ForecastChart({ forecast }: { forecast: Forecast }) {
 
   return (
     <div className="forecast-wrap">
-      <svg
-        ref={svgRef}
-        className="forecast-chart"
-        viewBox={`0 0 ${PLOT.width} ${PLOT.height}`}
-        role="img"
-        aria-label="Learned remaining allowance forecast"
-        onMouseMove={moveHover}
-        onMouseLeave={() => setHoverAt(null)}
-      >
-        <defs>
-          <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-            <stop className="forecast-fill-stop" stopOpacity=".18" />
-            <stop className="forecast-fill-stop" offset="1" stopOpacity="0" />
-          </linearGradient>
-        </defs>
-        {[0, 50, 100].map((value) => (
-          <g key={value}>
-            <line x1={PLOT.left} x2={PLOT.width - PLOT.right} y1={y(value)} y2={y(value)} className="grid-line" />
-            <text x="5" y={y(value) + 4}>
-              {value}%
+      <div className="forecast-plot" ref={plotRef}>
+        <svg
+          ref={svgRef}
+          className="forecast-chart"
+          viewBox={`0 0 ${PLOT.width} ${PLOT.height}`}
+          role="img"
+          aria-label="Learned remaining allowance forecast"
+          onMouseMove={moveHover}
+          onMouseLeave={() => setHoverAt(null)}
+        >
+          <defs>
+            <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+              <stop className="forecast-fill-stop" stopOpacity=".18" />
+              <stop className="forecast-fill-stop" offset="1" stopOpacity="0" />
+            </linearGradient>
+          </defs>
+          {[0, 50, 100].map((value) => (
+            <g key={value}>
+              <line x1={PLOT.left} x2={PLOT.width - PLOT.right} y1={y(value)} y2={y(value)} className="grid-line" />
+              <text x="5" y={y(value) + 4}>
+                {value}%
+              </text>
+            </g>
+          ))}
+          {ticks.map((tick) => (
+            <text key={tick.at} x={x(tick.at)} y={PLOT.height - 8} textAnchor="middle">
+              {tick.label}
             </text>
-          </g>
-        ))}
-        {ticks.map((tick) => (
-          <text key={tick.at} x={x(tick.at)} y={PLOT.height - 8} textAnchor="middle">
-            {tick.label}
+          ))}
+          <line x1={x(nowAt)} x2={x(nowAt)} y1={PLOT.top - 2} y2={baseline} className="now-line" />
+          <text x={x(nowAt)} y={PLOT.height - 8} textAnchor="middle" className="now-label">
+            NOW
           </text>
-        ))}
-        <line x1={x(nowAt)} x2={x(nowAt)} y1={PLOT.top - 2} y2={baseline} className="now-line" />
-        <text x={x(nowAt)} y={PLOT.height - 8} textAnchor="middle" className="now-label">
-          NOW
-        </text>
-        {area && <path d={area} fill={`url(#${gradientId})`} />}
-        <path d={linePath(observed)} className="observed-line" />
-        <path d={linePath(expected)} className="expected-line" />
-        <path d={linePath(heavy)} className="heavy-line" />
-        {expected.length > 0 && (
-          <circle cx={expected.at(-1)!.x} cy={expected.at(-1)!.y} r="3.5" className="expected-dot" />
-        )}
-        {heavy.length > 0 && <circle cx={heavy.at(-1)!.x} cy={heavy.at(-1)!.y} r="3.5" className="heavy-dot" />}
-        {exhaustAt != null && exhaustAt >= minAt && exhaustAt <= maxAt && (
-          <g className="exhaust-marker">
-            <line x1={x(exhaustAt)} x2={x(exhaustAt)} y1={PLOT.top} y2={baseline} />
-            <text x={x(exhaustAt)} y={PLOT.top - 4} textAnchor="middle">
-              runs out
-            </text>
-          </g>
-        )}
-        {hoverAt != null && (
-          <line className="forecast-hover" x1={x(hoverAt)} x2={x(hoverAt)} y1={PLOT.top} y2={baseline} />
-        )}
-      </svg>
+          {area && <path d={area} fill={`url(#${gradientId})`} />}
+          <path d={linePath(observed)} className="observed-line" />
+          <path d={linePath(expected)} className="expected-line" />
+          <path d={linePath(heavy)} className="heavy-line" />
+          {expected.length > 0 && (
+            <circle cx={expected.at(-1)!.x} cy={expected.at(-1)!.y} r="3.5" className="expected-dot" />
+          )}
+          {heavy.length > 0 && <circle cx={heavy.at(-1)!.x} cy={heavy.at(-1)!.y} r="3.5" className="heavy-dot" />}
+          {exhaustAt != null && exhaustAt >= minAt && exhaustAt <= maxAt && (
+            <g className="exhaust-marker">
+              <line x1={x(exhaustAt)} x2={x(exhaustAt)} y1={PLOT.top} y2={baseline} />
+              <text x={x(exhaustAt)} y={PLOT.top - 4} textAnchor="middle">
+                runs out
+              </text>
+            </g>
+          )}
+          {hoverAt != null && (
+            <line className="forecast-hover" x1={x(hoverAt)} x2={x(hoverAt)} y1={PLOT.top} y2={baseline} />
+          )}
+        </svg>
+      </div>
       {hoverAt != null && (
         <div className="forecast-tip" style={{ left: tipLeft }}>
           {hoverObserved != null

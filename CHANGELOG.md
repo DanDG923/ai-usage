@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.0.12 — 1 September 2026
+
+This is an in-place layout update. Running the 1.0.12 setup program upgrades an existing AI Usage installation and preserves its local database, settings, observations, imported cost history, and backups.
+
+### Window-filling scale
+
+- The dashboard now scales to the window. The design is anchored at a 1600-by-1000 window; a larger window zooms the page up so a maximised or fullscreen display is filled, and a smaller window zooms it down so the three allowance cards still fit side by side. The factor follows the smaller of the width and height ratios and is bounded between 0.7 and 1.6, so nothing overflows in either direction and text never becomes unreadable.
+- Scaling is CSS zoom, not a transform: layout reflows at the scaled size, text stays crisp, and the card grid decides its column count from the scaled width. The header scales only halfway, because it shares the window with the native caption buttons, whose safe areas are measured in real pixels.
+- The Overview also fills the window vertically. The card row takes the height left under the header, the cards stretch to the row, and each forecast plot absorbs the spare height of its card, redrawing at the box's aspect ratio rather than letterboxing.
+- Replaces the previous second growth tier for very wide windows, which is no longer needed.
+
+### Verification
+
+- The release contract now checks that zoom comes only from the scale properties and never from a literal factor or a transform, that the header itself is never zoomed, and that the overview fill and plot sizing rules are present.
+- Verified in the browser preview at 1280 by 720, 2000 by 1125, and 2560 by 1440 with no horizontal overflow; the overview fills each window height.
+
 ## 1.0.11 — 1 September 2026
 
 This is an in-place feature and reliability update. Running the 1.0.11 setup program upgrades an existing AI Usage installation and preserves its local database, settings, observations, imported cost history, and backups. On first launch it rescans local transcripts once to fill the new project column.
