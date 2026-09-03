@@ -30,7 +30,7 @@ function apply() {
   root.style.setProperty('--ui-scale', String(scale));
   root.style.setProperty('--ui-header-scale', String(headerScale(scale)));
   const header = document.querySelector<HTMLElement>('.app-header');
-  root.style.setProperty('--header-height', `${Math.round(header?.getBoundingClientRect().height ?? 88)}px`);
+  root.style.setProperty('--header-height', `${Math.round(header?.getBoundingClientRect().height ?? 64)}px`);
 }
 
 /** Keep the scale custom properties in step with the window. Returns a disposer. */
@@ -44,12 +44,25 @@ export function watchViewportScale() {
   window.addEventListener('resize', schedule);
   // The header wraps at narrow widths, so its height can change without a
   // window resize event that we would otherwise miss.
+  // The loading header is replaced by the dashboard header once a snapshot
+  // arrives, so the observed element is re-resolved whenever the DOM changes.
   const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(schedule) : null;
-  const header = document.querySelector('.app-header');
-  if (observer && header) observer.observe(header);
+  let observed: Element | null = null;
+  const follow = () => {
+    const header = document.querySelector('.app-header');
+    if (!observer || header === observed) return;
+    if (observed) observer.unobserve(observed);
+    observed = header;
+    if (header) observer.observe(header);
+    schedule();
+  };
+  follow();
+  const mutations = typeof MutationObserver === 'function' ? new MutationObserver(follow) : null;
+  mutations?.observe(document.body, { childList: true, subtree: true });
   return () => {
     cancelAnimationFrame(frame);
     window.removeEventListener('resize', schedule);
     observer?.disconnect();
+    mutations?.disconnect();
   };
 }

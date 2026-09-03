@@ -1,4 +1,4 @@
-import { Download, Save } from 'lucide-react';
+import { Save } from 'lucide-react';
 import { FormEvent, useState } from 'react';
 import type { ManualObservation } from '../../types';
 import { SectionHeading } from './fields';
@@ -22,10 +22,8 @@ export function ManualSection({ onManual }: { onManual: (observation: ManualObse
   return (
     <section id="manual" className="panel settings-section">
       <SectionHeading
-        eyebrow="Official fallback"
-        title="Add a quota observation"
-        description="Automatic sources are checked on every refresh. Use this optional fallback only when a provider allowance is unavailable or when you want to re-anchor a local Fable estimate."
-        icon={Download}
+        title="Manual observation"
+        description="Automatic sources are checked on every refresh. Record a provider percentage by hand only when an allowance is unavailable or to re-anchor a local Fable estimate."
       />
       <form className="manual-form" onSubmit={submit}>
         <label>

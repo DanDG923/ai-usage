@@ -27,7 +27,7 @@ export function Gauge({
   const fill = Math.max(0, Math.min(100, remaining)) / 100;
   const tick = expected == null ? null : Math.max(0, Math.min(100, expected)) / 100;
   const [ox, oy] = tick == null ? [0, 0] : pointOnArc(tick, RADIUS + 5);
-  const [ix, iy] = tick == null ? [0, 0] : pointOnArc(tick, RADIUS - 8);
+  const [ix, iy] = tick == null ? [0, 0] : pointOnArc(tick, RADIUS - 7);
   return (
     <div className={`gauge ${state}`}>
       <svg
@@ -42,18 +42,8 @@ export function Gauge({
             cy={CENTER}
             r={RADIUS}
             fill="none"
-            strokeWidth="9"
+            strokeWidth="8"
             strokeDasharray={`${ARC} ${CIRCUMFERENCE}`}
-            strokeLinecap="round"
-          />
-          <circle
-            className="gauge-low"
-            cx={CENTER}
-            cy={CENTER}
-            r={RADIUS}
-            fill="none"
-            strokeWidth="9"
-            strokeDasharray={`${ARC * 0.15} ${CIRCUMFERENCE}`}
             strokeLinecap="round"
           />
           {fill > 0.01 && (
@@ -63,7 +53,7 @@ export function Gauge({
               cy={CENTER}
               r={RADIUS}
               fill="none"
-              strokeWidth="9"
+              strokeWidth="8"
               strokeDasharray={`${ARC * fill} ${CIRCUMFERENCE}`}
               strokeLinecap="round"
             />
@@ -77,7 +67,7 @@ export function Gauge({
             {estimated ? '~' : ''}
             {Math.round(remaining)}%
           </b>
-          <span>{estimated ? 'estimated left' : 'left'}</span>
+          <span>{estimated ? 'est. left' : 'left'}</span>
         </div>
       </div>
     </div>
@@ -110,25 +100,6 @@ export function PaceBullet({ forecast }: { forecast: Forecast }) {
         <div className={`pb-fill ${tone}`} style={{ width: `${width}%` }} />
         <div className="pb-thresh" style={{ left: `${(1 / span) * 100}%` }} />
       </div>
-    </div>
-  );
-}
-
-export function MeterBar({
-  fillPercent,
-  tickPercent,
-  label,
-}: {
-  fillPercent: number;
-  tickPercent: number | null;
-  label: string;
-}) {
-  return (
-    <div className="pb-track" role="img" aria-label={label}>
-      <div className="pb-fill" style={{ width: `${Math.max(2, Math.min(100, fillPercent))}%` }} />
-      {tickPercent != null && (
-        <div className="pb-thresh" style={{ left: `${Math.max(0, Math.min(100, tickPercent))}%` }} />
-      )}
     </div>
   );
 }

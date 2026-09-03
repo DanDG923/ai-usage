@@ -1,5 +1,5 @@
+import type { ReactNode } from 'react';
 import { useState } from 'react';
-import type { LucideIcon } from 'lucide-react';
 
 export function NumericSetting({
   label,
@@ -95,24 +95,22 @@ export function ToggleRow({
 }
 
 export function SectionHeading({
-  eyebrow,
   title,
   description,
-  icon: Icon,
+  aside,
 }: {
-  eyebrow: string;
   title: string;
   description?: string;
-  icon: LucideIcon;
+  /** Optional right-hand content, e.g. a note or a control. */
+  aside?: ReactNode;
 }) {
   return (
     <div className="panel-heading">
       <div>
-        <span className="eyebrow">{eyebrow}</span>
         <h2>{title}</h2>
         {description && <p>{description}</p>}
       </div>
-      <Icon aria-hidden="true" />
+      {aside && <div className="panel-aside">{aside}</div>}
     </div>
   );
 }

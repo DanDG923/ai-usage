@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Activity } from 'lucide-react';
 import { Details } from './components/Details';
-import { Header, type Tab } from './components/Header';
+import { Header, TABS, type Tab } from './components/Header';
 import { Overview } from './components/Overview';
 import { Settings, type SettingsActions } from './components/Settings';
 import { demoSnapshot } from './data/demo';
@@ -119,6 +119,27 @@ export default function App() {
       setRefreshing(false);
     }
   };
+
+  // Keyboard shortcuts: 1/2/3 switch sections, R refreshes. Typing fields
+  // and modifier chords are left alone.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target && (target.closest('input, select, textarea, [contenteditable="true"]') || target.isContentEditable))
+        return;
+      const index = ['1', '2', '3'].indexOf(event.key);
+      if (index >= 0) {
+        setTab(TABS[index].id);
+        return;
+      }
+      if (event.key === 'r' || event.key === 'R') {
+        if (window.aiUsage && !refreshing) void refresh();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
 
   const changeDays = (period: number) => {
     if (!window.aiUsage) return;
@@ -330,8 +351,7 @@ export default function App() {
           </div>
         </header>
         <main className="page">
-          <section className="panel" role={loadError ? 'alert' : 'status'} aria-live="polite">
-            <span className="eyebrow">Local dashboard</span>
+          <section className="panel status-panel" role={loadError ? 'alert' : 'status'} aria-live="polite">
             <h1>{loadError ? 'Your local usage could not be loaded' : 'Loading your local usage…'}</h1>
             <p>{loadError || 'Reading the on-device usage database and allowance history.'}</p>
             {loadError && (

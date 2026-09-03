@@ -1,7 +1,10 @@
-import { Clock3, PlugZap } from 'lucide-react';
 import { shortDate } from '../../lib';
 import type { Settings, Snapshot } from '../../types';
 import { SectionHeading } from './fields';
+
+export function sourceMark(id: string) {
+  return id === 'codex' ? 'Cx' : id === 'claude-fable' ? 'F5' : 'Cl';
+}
 
 export function SourcesSection({
   snapshot,
@@ -17,15 +20,15 @@ export function SourcesSection({
   return (
     <section id="sources" className="panel settings-section">
       <SectionHeading
-        eyebrow="Collectors"
-        title="Local data sources"
-        description="The app reads files and official local usage surfaces already on this PC."
-        icon={PlugZap}
+        title="Sources"
+        description="Local files and official usage surfaces already on this PC. Nothing is fetched from the web."
       />
       <div className="source-list">
         {snapshot.sources.map((source) => (
           <div className="source-row" key={source.id}>
-            <span className={`source-mark ${source.id}`}>{source.name.slice(0, 1)}</span>
+            <span className={`source-mark ${source.id}`} aria-hidden="true">
+              {sourceMark(source.id)}
+            </span>
             <div>
               <strong>{source.name}</strong>
               <span>{source.status_detail || 'Waiting for a refresh.'}</span>
@@ -69,7 +72,6 @@ export function SourcesSection({
         </label>
       </div>
       <div className="learning-note">
-        <Clock3 aria-hidden="true" />
         <span>
           <strong>Background collection</strong>
           Alerts, scheduled backups, and the forecast are only as current as the last collection. While this is on, the

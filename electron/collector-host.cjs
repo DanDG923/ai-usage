@@ -11,12 +11,16 @@ function createCollectorHost({ fork, modulePath, config, requestTimeoutMs = DEFA
   let nextId = 1;
   const pending = new Map();
 
-  function failAll(error) {
-    for (const entry of pending.values()) {
+  // Fail the in-flight requests of one child (or of every child when no
+  // owner is given). A recycled child's late exit event must not reject a
+  // request that was already registered against its replacement.
+  function failAll(error, owner = null) {
+    for (const [id, entry] of pending) {
+      if (owner && entry.child !== owner) continue;
       clearTimeout(entry.timer);
+      pending.delete(id);
       entry.reject(error);
     }
-    pending.clear();
   }
 
   function spawn() {
@@ -32,7 +36,7 @@ function createCollectorHost({ fork, modulePath, config, requestTimeoutMs = DEFA
     spawned.on('exit', (code) => {
       if (child === spawned) child = null;
       onLog(`Collector process exited with code ${code}.`);
-      failAll(new Error(`The collector process stopped unexpectedly (code ${code}).`));
+      failAll(new Error(`The collector process stopped unexpectedly (code ${code}).`), spawned);
     });
     child = spawned;
   }
@@ -48,7 +52,7 @@ function createCollectorHost({ fork, modulePath, config, requestTimeoutMs = DEFA
         // A request that never answers is a stuck child; recycle it.
         if (child === target) stop();
       }, requestTimeoutMs);
-      pending.set(id, { resolve, reject, timer });
+      pending.set(id, { resolve, reject, timer, child: target });
       try {
         // A UtilityProcess port, not a window: there is no target origin.
         // oxlint-disable-next-line unicorn/require-post-message-target-origin
@@ -66,7 +70,7 @@ function createCollectorHost({ fork, modulePath, config, requestTimeoutMs = DEFA
     child = null;
     if (!current) return;
     try { current.kill(); } catch { /* Already gone. */ }
-    failAll(new Error('The collector process was stopped.'));
+    failAll(new Error('The collector process was stopped.'), current);
   }
 
   return {

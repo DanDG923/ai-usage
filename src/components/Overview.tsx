@@ -1,4 +1,3 @@
-import { ArrowDownRight } from 'lucide-react';
 import { compactNumber, money, percent, primaryWindow, shortDate } from '../lib';
 import type { Snapshot } from '../types';
 import { API_EQUIVALENT_EXPLAINER, InfoTip } from './InfoTip';
@@ -77,9 +76,23 @@ function fableCardProps(snapshot: Snapshot) {
   };
 }
 
+/**
+ * API-equivalent value against what the subscriptions cost for the same
+ * period. Fees are monthly USD figures from settings, converted with the
+ * display rate and scaled to the period; null when no fee is configured.
+ */
+export function subscriptionValue(snapshot: Snapshot) {
+  const { settings, costs } = snapshot;
+  const monthlyUsd = (settings.codexPlanUsdPerMonth || 0) + (settings.claudePlanUsdPerMonth || 0);
+  if (!(monthlyUsd > 0)) return null;
+  const fees = monthlyUsd * (settings.usdToCurrency || 1) * (costs.periodDays / 30.4375);
+  return { fees, ratio: fees > 0 ? costs.actual / fees : 0 };
+}
+
 export function Overview({ snapshot }: { snapshot: Snapshot }) {
   const unpricedModels = snapshot.costs.unpricedModels.map((entry) => entry.model).join(', ');
   const fable = fableCardProps(snapshot);
+  const value = subscriptionValue(snapshot);
   const nowMs = Date.parse(snapshot.generatedAt);
   return (
     <main className="page overview-page" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
@@ -107,11 +120,22 @@ export function Overview({ snapshot }: { snapshot: Snapshot }) {
           </strong>
           {snapshot.costs.isLowerBound && <small>lower bound: some models are unpriced</small>}
         </div>
-        <ArrowDownRight aria-hidden="true" />
-        <div>
-          <span>Without cache</span>
-          <strong>{money(snapshot.costs.withoutCache, snapshot.costs.currency)}</strong>
-        </div>
+        {value ? (
+          <div>
+            <span>Subscription value</span>
+            <strong>{value.ratio >= 10 ? `${Math.round(value.ratio)}×` : `${value.ratio.toFixed(1)}×`}</strong>
+            <small>
+              {money(snapshot.costs.actual, snapshot.costs.currency)} of API value for{' '}
+              {money(value.fees, snapshot.costs.currency)} in fees
+            </small>
+          </div>
+        ) : (
+          <div>
+            <span>Without cache</span>
+            <strong>{money(snapshot.costs.withoutCache, snapshot.costs.currency)}</strong>
+            <small>set plan fees under API pricing to see the value ratio</small>
+          </div>
+        )}
         <div className="savings">
           <span>Cache discount</span>
           <strong>{money(snapshot.costs.cacheSavings, snapshot.costs.currency)}</strong>
@@ -120,7 +144,7 @@ export function Overview({ snapshot }: { snapshot: Snapshot }) {
         <div className="coverage">
           <span>Price coverage</span>
           <strong>{percent(snapshot.costs.coverage * 100)}</strong>
-          <small>
+          <small title={snapshot.costs.isLowerBound ? `Unpriced: ${unpricedModels || 'unknown models'}` : undefined}>
             {snapshot.costs.isLowerBound
               ? `Unpriced: ${unpricedModels || 'unknown models'}`
               : 'All tracked token categories priced'}

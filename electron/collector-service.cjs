@@ -30,17 +30,28 @@ function createCollectorService({
   let store = null;
   const getStore = () => (store ??= openStore(databasePath, backupDirectory));
 
+  // Requests arrive concurrently (a scheduled refresh-all can overlap a manual
+  // observation's refresh-claude), but each source's collector must not run
+  // against itself: two SDK control queries and two transcript scans over the
+  // same files at once waste work and race on the cursor. Work is queued per
+  // source; a queued run still starts after the earlier one settles.
+  const queues = { codex: Promise.resolve(), claude: Promise.resolve() };
+  function queued(source, run) {
+    const next = queues[source].then(run, run);
+    queues[source] = next.then(() => undefined, () => undefined);
+    return next;
+  }
+  const runCodex = () => queued('codex', () => collectors.codex(getStore()));
+  const runClaude = () => queued('claude', () => collectors.claude(getStore(), inboxPath));
+
   async function handle(request) {
     switch (request?.type) {
       case 'refresh-all': {
-        const outcomes = await runCollectors({
-          codex: () => collectors.codex(getStore()),
-          claude: () => collectors.claude(getStore(), inboxPath),
-        });
+        const outcomes = await runCollectors({ codex: runCodex, claude: runClaude });
         return { codex: serializeSettled(outcomes.codex), claude: serializeSettled(outcomes.claude) };
       }
       case 'refresh-claude': {
-        const outcomes = await runCollectors({ claude: () => collectors.claude(getStore(), inboxPath) });
+        const outcomes = await runCollectors({ claude: runClaude });
         return { claude: serializeSettled(outcomes.claude) };
       }
       case 'ping':

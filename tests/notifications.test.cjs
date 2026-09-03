@@ -125,3 +125,17 @@ test('the summary text and tray tooltip share the same headline numbers', () => 
   const tooltip = buildTrayTooltip(current, NOW);
   assert.match(tooltip, /^All allowances on track\nCodex 60% · Claude 90% · Fable 5 —\n/);
 });
+
+test('the tray tooltip headlines the worst active window, matching the dashboard header', () => {
+  const weekly = window();
+  const fiveHour = window({
+    bucketId: 'five_hour',
+    bucketName: '5-hour',
+    usedPercent: 95,
+    remainingPercent: 5,
+    resetsAt: '2026-09-01T13:00:00.000Z',
+    forecast: { state: 'risk', expectedRemaining: 0, currentIsEstimated: false, exhaustsAt: '2026-09-01T12:00:00.000Z', expired: false },
+  });
+  const current = snapshot({ quotas: { codex: { ...weekly, windows: [weekly, fiveHour] }, claude: null, fable: null } });
+  assert.match(buildTrayTooltip(current, NOW), /^All allowances on track\nCodex 5% · Claude — · Fable 5 —\n/);
+});

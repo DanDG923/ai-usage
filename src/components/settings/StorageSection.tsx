@@ -1,4 +1,4 @@
-import { ClipboardCopy, ExternalLink, FileSpreadsheet, HardDrive, RotateCcw, Save } from 'lucide-react';
+import { ClipboardCopy, ExternalLink, FileSpreadsheet, RotateCcw, Save } from 'lucide-react';
 import { useState } from 'react';
 import type { Settings, Snapshot } from '../../types';
 import { NumericSetting, SectionHeading } from './fields';
@@ -24,10 +24,8 @@ export function StorageSection({
   return (
     <section id="storage" className="panel settings-section">
       <SectionHeading
-        eyebrow="Portable history"
-        title="Storage, backups & export"
-        description="Scheduled backups preserve both the database and a readable .aiusage.json export, with automatic retention."
-        icon={HardDrive}
+        title="Storage & export"
+        description="Scheduled backups write both the database and a readable .aiusage.json export, with automatic retention."
       />
       <div className="settings-fields storage-fields">
         <label>

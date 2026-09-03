@@ -108,12 +108,15 @@ export function ForecastChart({ forecast }: { forecast: Forecast }) {
   const spanDays = (maxAt - minAt) / dayMs;
   const step = Math.max(1, Math.ceil(spanDays / 6));
   const ticks: { at: number; label: string }[] = [];
-  const first = new Date(minAt);
-  first.setHours(0, 0, 0, 0);
-  for (let time = first.getTime(); time <= maxAt; time += step * dayMs) {
+  // Step by calendar day rather than by 24 hours so a DST change does not
+  // shift every later tick to 23:00 of the previous day.
+  const cursor = new Date(minAt);
+  cursor.setHours(0, 0, 0, 0);
+  for (; cursor.getTime() <= maxAt; cursor.setDate(cursor.getDate() + step)) {
+    const time = cursor.getTime();
     if (time < minAt) continue;
-    if (Math.abs(time - nowAt) < (step * dayMs) / 2) continue; // leave room for the NOW label
-    ticks.push({ at: time, label: new Intl.DateTimeFormat('en-GB', { weekday: 'short' }).format(new Date(time)) });
+    if (Math.abs(time - nowAt) < (step * dayMs) / 2) continue; // leave room for the Now label
+    ticks.push({ at: time, label: new Intl.DateTimeFormat('en-GB', { weekday: 'short' }).format(cursor) });
   }
 
   const moveHover = (event: React.MouseEvent<SVGSVGElement>) => {
@@ -173,7 +176,7 @@ export function ForecastChart({ forecast }: { forecast: Forecast }) {
           ))}
           <line x1={x(nowAt)} x2={x(nowAt)} y1={PLOT.top - 2} y2={baseline} className="now-line" />
           <text x={x(nowAt)} y={PLOT.height - 8} textAnchor="middle" className="now-label">
-            NOW
+            Now
           </text>
           {area && <path d={area} fill={`url(#${gradientId})`} />}
           <path d={linePath(observed)} className="observed-line" />
@@ -357,7 +360,9 @@ export function CostChart({ costs }: { costs: CostAnalytics }) {
   );
 }
 
-const DAILY = { width: 880, height: 220, left: 56, right: 44, top: 14, bottom: 36 };
+// Wider than the cost chart because it spans the full page; the viewBox keeps
+// its text at a sensible on-screen size once scaled to the panel.
+const DAILY = { width: 1320, height: 300, left: 64, right: 40, top: 14, bottom: 40 };
 
 export function DailyUsageChart({ rows, days }: { rows: DailyUsage[]; days: number }) {
   const [hover, setHover] = useState<number | null>(null);
@@ -408,11 +413,7 @@ export function DailyUsageChart({ rows, days }: { rows: DailyUsage[]; days: numb
               rx="2"
               className={`daily-usage-bar${hover === index ? ' hovered' : ''}`}
               onMouseEnter={() => setHover(index)}
-            >
-              <title>
-                {point.date}: {point.tokens.toLocaleString()} tokens
-              </title>
-            </rect>
+            />
           );
         })}
         {ticks.map((index) => (

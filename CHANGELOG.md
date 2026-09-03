@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.0.13 — 3 September 2026
+
+This is an in-place design, feature, and reliability update. Running the 1.0.13 setup program upgrades an existing AI Usage installation and preserves its local database, settings, observations, imported cost history, and backups.
+
+### Redesigned interface
+
+- Replaces the glowing navy theme with a quiet, flat system: one neutral surface scale, a single accent for actions and selection, and green, amber, and red reserved for allowance state. Provider colours appear only where series need telling apart. Both palettes were redrawn and the native window chrome follows them.
+- Uses the system typeface throughout with tabular figures for every number; the monospace face is now used only for paths and session identifiers. Uppercase eyebrow labels, decorative panel icons, gradient buttons, glow shadows, and the large corner radii are gone.
+- Shrinks the header to a 64-pixel strip with underlined section tabs, and rewrites headings and descriptions in plain sentence case ("Costs", "By model", "Reset cycles", "Settings") in place of the previous slogans.
+- Presents each allowance card with the provider name and plan as its title, a dot-and-word state instead of a filled badge, a thinner gauge and pace bar, and a lighter forecast chart with a neutral observed line.
+- Turns the cost summary and the Details ribbon into bordered stat rows, replaces the cache donut with a with-cache versus without-cache bar comparison, right-aligns every numeric table column, and gives the Details page a plain title with the period control beside it.
+
+### New in Details and the Overview
+
+- **Subscription value**: with monthly fees for Codex and Claude entered under API pricing, the Overview shows how many times over the period's API-equivalent value covers the fees for the same number of days.
+- **Cache hit rate**: the share of prompt tokens read from cache, alongside the cache discount.
+- **Recent totals**: today, the last seven days with the change against the seven before, month to date, and a straight-line projection for the month.
+- **When the work happens**: an hour-by-weekday heatmap of API-equivalent cost over the selected period, with the busiest slot named. The backend now supplies this grid with every snapshot.
+- Keyboard shortcuts: 1, 2, and 3 switch sections and R refreshes.
+
+### Corrections from review
+
+- A collector process recycled after a timeout could, on its late exit, reject a request that had already been sent to its replacement; requests are now failed only by the child that owned them.
+- Two Claude collections could run at once when a manual observation or helper change overlapped a scheduled refresh; each source's collector is now queued so one run completes before the next starts.
+- One malformed transcript or session-log row used to stop the whole file and, because the cursor never advanced, fail again on every refresh. Rows are now rejected individually, counted in Diagnostics, and the file continues.
+- When every Claude window was recorded in one scan, the tray, digest, and cycle history could headline a model-scoped bucket instead of the shared weekly. The tray and digest also now use the same worst-active-window rule as the header chip.
+- Reset-cycle token totals no longer add Codex cached input a second time.
+- Quitting during a refresh no longer records both sources as failed for the next launch.
+- The manual-observation channel accepts only the fields the form sends; bucket, window, plan, and observation time are fixed by the app.
+- The packaged renderer's content-security policy no longer allows connections to loopback ports; the development server adds that exception itself.
+- "1 days 24h" style labels, weekday ticks drifting after a daylight-saving change, a header height observer left on the loading header, a hidden chart tooltip, and the section tabs' keyboard handling are fixed. A date formatter is now cached instead of built once per token record.
+
 ## 1.0.12 — 1 September 2026
 
 This is an in-place layout update. Running the 1.0.12 setup program upgrades an existing AI Usage installation and preserves its local database, settings, observations, imported cost history, and backups.

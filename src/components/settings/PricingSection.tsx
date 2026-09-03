@@ -1,4 +1,4 @@
-import { CircleDollarSign, Save } from 'lucide-react';
+import { Save } from 'lucide-react';
 import { useState } from 'react';
 import type { PriceRow, Settings, Snapshot } from '../../types';
 import { API_EQUIVALENT_EXPLAINER, InfoTip } from '../InfoTip';
@@ -155,10 +155,8 @@ export function PricingSection({
   return (
     <section id="pricing" className="panel settings-section">
       <SectionHeading
-        eyebrow="API pricing"
-        title="Pricing catalogue"
-        description="USD per million tracked tokens. Five-minute and one-hour cache writes are priced separately; detected unpriced models appear first so you can complete the estimate without editing the database."
-        icon={CircleDollarSign}
+        title="API pricing"
+        description="USD per million tokens. Five-minute and one-hour cache writes are priced separately. Detected models without a price appear first so the estimate can be completed here."
       />
       <div className="currency-row">
         <label>
@@ -186,8 +184,32 @@ export function PricingSection({
           onCommit={(value) => update({ usdToCurrency: value })}
         />
       </div>
+      <div className="settings-fields plan-fields">
+        <NumericSetting
+          label="Codex subscription (USD per month)"
+          value={settings.codexPlanUsdPerMonth}
+          min={0}
+          max={100_000}
+          step={1}
+          onCommit={(value) => update({ codexPlanUsdPerMonth: value })}
+        />
+        <NumericSetting
+          label="Claude subscription (USD per month)"
+          value={settings.claudePlanUsdPerMonth}
+          min={0}
+          max={100_000}
+          step={1}
+          onCommit={(value) => update({ claudePlanUsdPerMonth: value })}
+        />
+      </div>
+      <div className="learning-note">
+        <span>
+          <strong>Subscription value</strong>
+          With a monthly fee set, the Overview compares the API-equivalent value of the period with the fees for the
+          same number of days. Leave a fee at zero to hide the ratio. Fees are compared, not charged.
+        </span>
+      </div>
       <div className="pricing-disclosure">
-        <CircleDollarSign aria-hidden="true" />
         <span>
           <strong>
             Current catalogue, not historical tariffs{' '}

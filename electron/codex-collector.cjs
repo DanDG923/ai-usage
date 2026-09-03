@@ -255,6 +255,8 @@ function importLocalSessions(store, days = 120) {
   let importedFiles = 0;
   let events = 0;
   let observations = 0;
+  let rejected = 0;
+  let lastRejection = null;
 
   for (const { fullPath, stat } of files) {
     const previous = store.getImportedFile(fullPath);
@@ -289,23 +291,29 @@ function importLocalSessions(store, days = 120) {
       const sessionId = state.sessionId;
       const currentModel = state.model;
       if (usage) {
-        store.recordUsageEvent({
-          eventKey: `codex:${sessionId}:${entry.timestamp}`,
-          sourceId: 'codex',
-          occurredAt: entry.timestamp,
-          sessionId,
-          model: currentModel,
-          project: state.project,
-          inputTokens: usage.input_tokens,
-          cachedInputTokens: usage.cached_input_tokens,
-          cacheWriteInputTokens: usage.cache_write_input_tokens,
-          cacheWrite5mInputTokens: usage.cache_write_input_tokens,
-          cacheWrite1hInputTokens: 0,
-          outputTokens: usage.output_tokens,
-          reasoningOutputTokens: usage.reasoning_output_tokens,
-          metadata: { source: 'codex-session-log' },
-        });
-        events += 1;
+        // One malformed event must not stop the file; see the Claude importer.
+        try {
+          store.recordUsageEvent({
+            eventKey: `codex:${sessionId}:${entry.timestamp}`,
+            sourceId: 'codex',
+            occurredAt: entry.timestamp,
+            sessionId,
+            model: currentModel,
+            project: state.project,
+            inputTokens: usage.input_tokens,
+            cachedInputTokens: usage.cached_input_tokens,
+            cacheWriteInputTokens: usage.cache_write_input_tokens,
+            cacheWrite5mInputTokens: usage.cache_write_input_tokens,
+            cacheWrite1hInputTokens: 0,
+            outputTokens: usage.output_tokens,
+            reasoningOutputTokens: usage.reasoning_output_tokens,
+            metadata: { source: 'codex-session-log' },
+          });
+          events += 1;
+        } catch (error) {
+          rejected += 1;
+          lastRejection = error instanceof Error ? error.message : String(error);
+        }
       }
       if (entry.payload?.rate_limits) {
         observations += recordRateLimit(store, entry.payload.rate_limits, entry.timestamp, 'local-official');
@@ -314,7 +322,7 @@ function importLocalSessions(store, days = 120) {
     store.markImportedFile(fullPath, stat.mtimeMs, startOffset + chunk.consumedBytes, state);
     importedFiles += 1;
   }
-  return { importedFiles, events, observations };
+  return { importedFiles, events, observations, rejected, lastRejection };
 }
 
 async function refreshCodex(store, {

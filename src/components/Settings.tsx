@@ -1,14 +1,4 @@
-import {
-  BellRing,
-  CircleDollarSign,
-  Clock3,
-  Download,
-  HardDrive,
-  Palette,
-  PlugZap,
-  ShieldCheck,
-  Stethoscope,
-} from 'lucide-react';
+import { BellRing, CircleDollarSign, Clock3, Download, HardDrive, Palette, PlugZap, Stethoscope } from 'lucide-react';
 import { useState } from 'react';
 import type { ManualObservation, PriceRow, Settings as SettingsType, Snapshot, UpdateStatus } from '../types';
 import { AlertsSection } from './settings/AlertsSection';
@@ -37,7 +27,7 @@ export type SettingsActions = {
 
 const NAV = [
   ['sources', PlugZap, 'Sources'],
-  ['schedule', Clock3, 'Learned forecast'],
+  ['schedule', Clock3, 'Forecast'],
   ['alerts', BellRing, 'Alerts'],
   ['appearance', Palette, 'Appearance & updates'],
   ['pricing', CircleDollarSign, 'API pricing'],
@@ -59,20 +49,14 @@ export function Settings({ snapshot, actions }: { snapshot: Snapshot; actions: S
   return (
     <main className="page settings-page" id="panel-settings" role="tabpanel" aria-labelledby="tab-settings">
       <aside className="settings-nav">
-        <span className="eyebrow">Data &amp; settings</span>
-        <h1>Local control room</h1>
-        <p>Nothing is sent to a remote dashboard.</p>
+        <h1>Settings</h1>
+        <p>Everything stays on this PC. Nothing is uploaded.</p>
         {NAV.map(([id, Icon, label]) => (
           <a key={id} href={`#${id}`}>
             <Icon aria-hidden="true" />
             {label}
           </a>
         ))}
-        <div className="privacy-seal">
-          <ShieldCheck aria-hidden="true" />
-          <strong>Local-first</strong>
-          <span>SQLite database and export files stay on this PC.</span>
-        </div>
       </aside>
       <div className="settings-content">
         <SourcesSection

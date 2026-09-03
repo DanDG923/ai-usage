@@ -50,8 +50,8 @@ const TRAY_SIZE = 32;
 // Window chrome follows the theme the renderer paints, so the native caption
 // buttons never sit on a strip of the other palette.
 const CHROME = {
-  dark: { background: '#07101e', symbol: '#cbd6e8' },
-  light: { background: '#f4f6fb', symbol: '#2b3548' },
+  dark: { background: '#0e1116', symbol: '#c3c9d4' },
+  light: { background: '#f5f6f8', symbol: '#343a44' },
 };
 
 const appIconPath = path.join(__dirname, '..', 'build', 'icon.png');
@@ -377,6 +377,9 @@ async function refreshAll() {
         claude: { status: 'rejected', reason: { message: detail } },
       };
     }
+    // Quitting stops the collectors, which rejects the in-flight run; that is
+    // not a source failure and must not be written as one for the next launch.
+    if (isQuitting) return { snapshot: previousSnapshot, backupError: null, collectors: {} };
     const { codex, claude } = outcomes;
     if (codex?.status === 'rejected') store.setSourceStatus('codex', 'error', `Codex refresh failed: ${codex.reason?.message || 'Unknown local error.'}`);
     if (claude?.status === 'rejected') {
@@ -451,24 +454,22 @@ function registerIpc() {
     if (!['codex', 'claude', 'claude-fable'].includes(sourceId)) throw new Error('Unknown source.');
     if (!Number.isFinite(usedPercent) || usedPercent < 0 || usedPercent > 100) throw new Error('Usage percentage must be between 0 and 100.');
     if (!Number.isFinite(resetsAt.getTime()) || resetsAt.getTime() <= Date.now()) throw new Error('Reset time must be a valid time in the future.');
+    // Only the fields the renderer's form sends are accepted; bucket, window,
+    // plan, and observation time are fixed here rather than taken from IPC.
+    const note = typeof observation.note === 'string' ? observation.note.slice(0, 500) : null;
     store.recordObservation({
       sourceId,
-      bucketId: observation.bucketId || store.getManualBucketId(sourceId),
+      bucketId: store.getManualBucketId(sourceId),
       bucketName: sourceId === 'claude-fable' ? 'Fable 5 weekly' : 'Weekly',
-      observedAt: observation.observedAt || new Date().toISOString(),
+      observedAt: new Date().toISOString(),
       usedPercent,
       remainingPercent: 100 - usedPercent,
-      resetsAt: observation.resetsAt,
-      windowMinutes: observation.windowMinutes || 10_080,
-      planType: observation.planType || null,
+      resetsAt: resetsAt.toISOString(),
+      windowMinutes: 10_080,
+      planType: null,
       provenance: 'manual-official',
       confidence: 0.98,
-      metadata: {
-        note: observation.note || null,
-        sharedWithOverall: sourceId === 'claude-fable'
-          ? String(observation.planType || '').trim().toLowerCase() === 'max'
-          : false,
-      },
+      metadata: { note, sharedWithOverall: false },
     });
     invalidateSnapshot();
     return refreshClaudeOnly();

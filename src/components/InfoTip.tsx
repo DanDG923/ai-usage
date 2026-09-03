@@ -19,6 +19,9 @@ export function InfoTip({ label, children }: { label: string; children: React.Re
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
         onBlur={() => setOpen(false)}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') setOpen(false);
+        }}
       >
         <Info />
       </button>

@@ -9,9 +9,9 @@ It imports local usage evidence, learns your real burn pattern, evaluates every 
 
 ## Install
 
-Use `AI-Usage-Setup-1.0.12-x64.exe` for a normal Windows installation. Running it over an existing installation upgrades in place and preserves the local database, settings, observations, and backups. Uninstalling first is neither required nor recommended.
+Use `AI-Usage-Setup-1.0.13-x64.exe` for a normal Windows installation. Running it over an existing installation upgrades in place and preserves the local database, settings, observations, and backups. Uninstalling first is neither required nor recommended.
 
-Use `AI-Usage-Portable-1.0.12-x64.exe` for a single executable that does not install the app. Windows SmartScreen may show an unknown-publisher warning because this personal build is not backed by a commercial code-signing certificate; verify the supplied SHA-256 hash before running it.
+Use `AI-Usage-Portable-1.0.13-x64.exe` for a single executable that does not install the app. Windows SmartScreen may show an unknown-publisher warning because this personal build is not backed by a commercial code-signing certificate; verify the supplied SHA-256 hash before running it.
 
 ## First run
 
@@ -74,6 +74,10 @@ OpenAI GPT-5.6 Sol, Terra, and Luna requests over the published 272,000-input-to
 These values are token-only comparisons, not provider invoices. They do not claim to include untracked tool charges, web-search charges, storage, taxes, subscription fees, or usage performed on another device that did not reach the local ledger. USD is the ledger currency; GBP and EUR use the manually saved display conversion rate and are not updated from a live foreign-exchange feed.
 
 The Details screen also groups the ledger **by project**, using the working directory each Codex or Claude session ran in, and shows **reset cycles**: the peak percentage each past allowance window reached and what that window's tokens are worth today. **Export CSV…** writes the ledger for the last 30, 90, or 365 days with the per-record API-equivalent, and **Copy summary** puts a plain-text version of every allowance on the clipboard.
+
+Details also shows the **cache hit rate** (the share of prompt tokens read from cache), **recent totals** (today, the last seven days against the seven before, month to date, and a straight-line projection for the month), and **when the work happens**, an hour-by-weekday heatmap of API-equivalent cost. With monthly subscription fees entered under **API pricing**, the Overview adds a **subscription value** figure: how many times over the period's API-equivalent value covers the fees for the same number of days. It compares; it never charges.
+
+Keyboard shortcuts: **1**, **2**, and **3** switch sections and **R** refreshes.
 
 ## Source health and privacy
 

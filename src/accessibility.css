@@ -13,21 +13,21 @@
 }
 
 .toggle-row:focus-within {
-  outline: 2px solid var(--mint-bright);
+  outline: 2px solid var(--focus);
   outline-offset: 3px;
-  border-radius: 8px;
+  border-radius: 6px;
 }
 
 .toggle-row input:focus-visible + i {
-  outline: 2px solid var(--mint-bright);
-  outline-offset: 4px;
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
 }
 
 button:focus-visible,
 select:focus-visible,
 input:focus-visible,
 a:focus-visible {
-  outline: 2px solid var(--mint-bright);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
 
@@ -44,13 +44,13 @@ a:focus-visible {
   border: 0;
   background: transparent;
   color: var(--text-2);
-  font-size: 22px;
+  font-size: 20px;
   line-height: 1;
   cursor: pointer;
-  border-radius: 6px;
+  border-radius: 4px;
 }
 .toast button:focus-visible {
-  outline: 2px solid var(--mint-bright);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
 
@@ -58,6 +58,7 @@ a:focus-visible {
   .spin {
     animation-duration: 2s;
   }
+  .toggle-row i,
   .toggle-row i:after {
     transition: none;
   }

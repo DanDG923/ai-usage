@@ -117,6 +117,8 @@ export type CostAnalytics = {
   byProject: ProjectCost[];
   chart: { date: string; codex: number; claude: number }[];
   sessions: SessionCost[];
+  /** Seven rows (Sunday first) of 24 hourly API-equivalent values in the display currency. */
+  activityGrid?: number[][];
 };
 
 export type CycleRow = {
@@ -146,6 +148,9 @@ export type Settings = {
   paceRiskThreshold: number;
   hardLimitThreshold: number;
   reservePercent: number;
+  /** Monthly subscription fees in USD; zero means not set. */
+  codexPlanUsdPerMonth: number;
+  claudePlanUsdPerMonth: number;
   notifyDesktop: boolean;
   notifyResets: boolean;
   notifyFallback: boolean;

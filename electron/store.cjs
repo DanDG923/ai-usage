@@ -33,6 +33,8 @@ const DEFAULT_SETTINGS = {
   paceRiskThreshold: 1.2,
   hardLimitThreshold: 90,
   reservePercent: 0,
+  codexPlanUsdPerMonth: 0,
+  claudePlanUsdPerMonth: 0,
   notifyDesktop: true,
   notifyResets: true,
   notifyFallback: true,
@@ -68,6 +70,8 @@ const SETTING_VALIDATORS = {
   paceRiskThreshold: (value) => Number.isFinite(value) && value >= 0.1 && value <= 20,
   hardLimitThreshold: (value) => Number.isFinite(value) && value >= 0 && value <= 100,
   reservePercent: (value) => Number.isFinite(value) && value >= 0 && value <= 50,
+  codexPlanUsdPerMonth: (value) => Number.isFinite(value) && value >= 0 && value <= 100_000,
+  claudePlanUsdPerMonth: (value) => Number.isFinite(value) && value >= 0 && value <= 100_000,
   notifyDesktop: (value) => typeof value === 'boolean',
   notifyResets: (value) => typeof value === 'boolean',
   notifyFallback: (value) => typeof value === 'boolean',
@@ -125,12 +129,30 @@ function round(value, digits = 2) {
   return Math.round((Number(value) + Number.EPSILON) * factor) / factor;
 }
 
-function dateKey(value, timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone) {
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
-  }).formatToParts(new Date(value));
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+// Analytics call these once per usage event; constructing an Intl formatter
+// each time was the dominant cost of a snapshot, so they are cached per zone.
+const dateFormatters = new Map();
+function localParts(value, timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone) {
+  let formatter = dateFormatters.get(timeZone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat('en-GB', {
+      timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', weekday: 'short', hourCycle: 'h23',
+    });
+    dateFormatters.set(timeZone, formatter);
+  }
+  return Object.fromEntries(formatter.formatToParts(new Date(value)).map((part) => [part.type, part.value]));
+}
+
+function dateKey(value, timeZone) {
+  const values = localParts(value, timeZone);
   return `${values.year}-${values.month}-${values.day}`;
+}
+
+const WEEKDAY_INDEX = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+/** Local weekday (Sunday = 0) and hour of an instant, for the activity grid. */
+function localSlot(value, timeZone) {
+  const values = localParts(value, timeZone);
+  return { weekday: WEEKDAY_INDEX[values.weekday] ?? 0, hour: Number(values.hour) % 24 };
 }
 
 class UsageStore {
@@ -708,7 +730,18 @@ class UsageStore {
       };
     });
     const now = nowMs;
-    const overall = (window) => sourceId !== 'codex' || window.metadata?.limitId === 'codex' || window.bucketId === 'codex:weekly';
+    // Codex: the account-wide limit; Claude: the shared pool rather than a
+    // model-scoped or OAuth-app bucket, so the tray and cycle history follow
+    // the overall weekly even when every window was recorded in one scan.
+    const overall = (window) => {
+      if (sourceId === 'codex') return window.metadata?.limitId === 'codex' || window.bucketId === 'codex:weekly';
+      if (sourceId === 'claude') {
+        const scope = window.metadata?.scope;
+        if (scope) return scope === 'overall';
+        return !String(window.bucketId).startsWith('model_scoped') && !/_(opus|sonnet|oauth_apps)$/.test(String(window.bucketId));
+      }
+      return true;
+    };
     const official = (window) => String(window.provenance || '').startsWith('official') || window.provenance === 'local-official';
     windows.sort((a, b) => {
       const aExpired = new Date(a.resetsAt).getTime() <= now;
@@ -857,6 +890,7 @@ class UsageStore {
     const byDayMap = new Map();
     const byProjectMap = new Map();
     const sessionMap = new Map();
+    const activityUsd = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0));
     let actualUsd = 0;
     let withoutCacheUsd = 0;
     let coveredTokens = 0;
@@ -914,6 +948,8 @@ class UsageStore {
       if (event.source_id === 'codex') dayRow.codexUsd += cost.actualUsd;
       else dayRow.claudeUsd += cost.actualUsd;
       byDayMap.set(day, dayRow);
+      const slot = localSlot(event.occurred_at);
+      activityUsd[slot.weekday][slot.hour] += cost.actualUsd;
 
       const projectKey = event.project || '';
       const projectRow = byProjectMap.get(projectKey) || {
@@ -1001,6 +1037,7 @@ class UsageStore {
       byProject,
       chart,
       sessions,
+      activityGrid: activityUsd.map((row) => row.map((value) => toCurrency(value))),
     };
   }
 
@@ -1050,8 +1087,12 @@ class UsageStore {
       let tokens = 0;
       for (const event of costStatement.all(eventSource, iso(startMs), iso(Math.min(resetMs, nowMs)))) {
         usd += this.calculateCost(event).actualUsd;
-        tokens += Number(event.input_tokens) + Number(event.cached_input_tokens)
-          + Number(event.cache_write_input_tokens) + Number(event.output_tokens);
+        // Codex reports cached input as a subset of input; Claude reports it
+        // separately. Same rule as buildCostAnalytics so the two tables agree.
+        tokens += event.source_id === 'codex'
+          ? Number(event.input_tokens) + Number(event.cache_write_input_tokens) + Number(event.output_tokens)
+          : Number(event.input_tokens) + Number(event.cached_input_tokens)
+            + Number(event.cache_write_input_tokens) + Number(event.output_tokens);
       }
       return {
         resetsAt: row.resets_at,

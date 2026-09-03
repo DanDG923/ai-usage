@@ -15,18 +15,18 @@
 :root {
   --ui-scale: 1;
   --ui-header-scale: 1;
-  --header-height: 88px;
+  --header-height: 64px;
   --rvw: calc(1vw / var(--ui-scale));
   --rvh: calc(1vh / var(--ui-scale));
   --content-max: 1800px;
   --page-gutter: clamp(16px, calc(2 * var(--rvw)), 52px);
   --shell-inset: max(clamp(16px, 2vw, 52px), calc((100% - var(--content-max) * var(--ui-scale)) / 2));
-  --panel-padding: clamp(18px, calc(1.5625 * var(--rvw)), 30px);
-  --overview-pad-block: clamp(16px, calc(1.25 * var(--rvw)), 24px);
-  --overview-pad-inline: clamp(18px, calc(1.375 * var(--rvw)), 28px);
-  --overview-gap: clamp(14px, calc(1.125 * var(--rvw)), 22px);
-  --layout-gap: clamp(16px, calc(1.5 * var(--rvw)), 28px);
-  --gauge-size: clamp(106px, calc(7.375 * var(--rvw)), 132px);
+  --panel-padding: clamp(16px, calc(1.375 * var(--rvw)), 24px);
+  --overview-pad-block: clamp(14px, calc(1.125 * var(--rvw)), 20px);
+  --overview-pad-inline: clamp(16px, calc(1.25 * var(--rvw)), 22px);
+  --overview-gap: clamp(12px, calc(1 * var(--rvw)), 18px);
+  --layout-gap: clamp(14px, calc(1.125 * var(--rvw)), 20px);
+  --gauge-size: clamp(104px, calc(7 * var(--rvw)), 124px);
   /* Sticky offsets live inside the zoomed page, so real header pixels are divided by the zoom. */
   --sticky-header-offset: calc((var(--header-height) + 26px) / var(--ui-scale));
 }
@@ -44,7 +44,7 @@
 
 .app-header {
   height: auto;
-  min-height: 88px;
+  min-height: 64px;
 }
 
 .page,
@@ -78,23 +78,14 @@
 }
 
 .qc {
-  padding: var(--overview-pad-block) var(--overview-pad-inline) clamp(16px, calc(1 * var(--rvw)), 20px);
-  border-radius: clamp(16px, calc(1.125 * var(--rvw)), 22px);
+  padding: var(--overview-pad-block) var(--overview-pad-inline) clamp(12px, calc(0.875 * var(--rvw)), 16px);
+  border-radius: 10px;
   min-height: 0;
 }
 
 .qc-head {
   gap: clamp(10px, calc(0.75 * var(--rvw)), 13px);
   margin-bottom: clamp(12px, calc(0.875 * var(--rvw)), 17px);
-}
-
-.provider-icon {
-  width: clamp(46px, calc(3.25 * var(--rvw)), 58px);
-  height: clamp(46px, calc(3.25 * var(--rvw)), 58px);
-}
-
-.provider-icon svg {
-  width: clamp(23px, calc(1.625 * var(--rvw)), 29px);
 }
 
 .qc-hero {
@@ -109,15 +100,15 @@
 }
 
 .gauge-value b {
-  font-size: clamp(22px, calc(1.5 * var(--rvw)), 28px);
+  font-size: clamp(20px, calc(1.375 * var(--rvw)), 24px);
 }
 
 .qc-answer .answer {
-  font-size: clamp(14px, calc(0.9375 * var(--rvw)), 17px);
+  font-size: clamp(13px, calc(0.875 * var(--rvw)), 15px);
 }
 
 .qc-facts b {
-  font-size: clamp(16px, calc(1.0625 * var(--rvw)), 19px);
+  font-size: clamp(14px, calc(0.9375 * var(--rvw)), 16px);
 }
 
 /*
@@ -165,21 +156,19 @@
 }
 
 .overview-page .value-strip {
-  gap: var(--overview-gap);
-  padding: var(--overview-pad-block) var(--overview-pad-inline);
   flex: 0 0 auto;
 }
 
-.overview-page .value-strip {
-  flex-wrap: wrap;
+.overview-page .value-strip > div {
+  padding: clamp(12px, calc(0.875 * var(--rvw)), 16px) var(--overview-pad-inline);
 }
 
 .overview-page .value-strip strong {
-  font-size: clamp(18px, calc(1.1875 * var(--rvw)), 23px);
+  font-size: clamp(18px, calc(1.1875 * var(--rvw)), 22px);
 }
 
 .page-lead h1 {
-  font-size: clamp(28px, calc(2.05 * var(--rvw)), 38px);
+  font-size: clamp(20px, calc(1.375 * var(--rvw)), 24px);
 }
 
 .metric-ribbon > div {
@@ -187,21 +176,12 @@
 }
 
 .metric-ribbon strong {
-  font-size: clamp(23px, calc(1.625 * var(--rvw)), 30px);
+  font-size: clamp(20px, calc(1.375 * var(--rvw)), 24px);
 }
 
 .details-grid,
 .settings-page {
   gap: var(--layout-gap);
-}
-
-.savings-panel > h2 {
-  font-size: clamp(27px, calc(1.8125 * var(--rvw)), 34px);
-}
-
-.saving-ring {
-  width: clamp(150px, calc(10.625 * var(--rvw)), 194px);
-  height: clamp(150px, calc(10.625 * var(--rvw)), 194px);
 }
 
 /* These SVGs already expose responsive view boxes; let those ratios drive them. */
@@ -232,12 +212,16 @@
     min-width: 0;
   }
 
-  .overview-page .value-strip > svg {
-    display: none;
+  .overview-page .value-strip > div:nth-child(3) {
+    border-left: 0;
   }
 
-  .overview-page .value-strip .savings {
-    margin-left: 0;
+  .overview-page .value-strip > div:nth-child(n + 3) {
+    border-top: 1px solid var(--line);
+  }
+
+  .overview-page .value-strip > svg {
+    display: none;
   }
 }
 
@@ -251,8 +235,7 @@
     position: static;
   }
 
-  .settings-nav > a,
-  .privacy-seal {
+  .settings-nav > a {
     display: none;
   }
 

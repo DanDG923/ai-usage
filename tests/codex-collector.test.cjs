@@ -7,6 +7,7 @@ const test = require('node:test');
 
 const {
   collectFromAppServer,
+  importLocalSessions,
   JsonLineClient,
   readSessionLines,
   recordRateLimit,
@@ -196,4 +197,40 @@ test('an app-server failure does not mark the current scan successful', async ()
 
   assert.equal(statuses[0][1], 'observing');
   assert.deepEqual(statuses[0][4], { scanSucceeded: false });
+});
+
+test('one malformed Codex token count is rejected without stopping the session log or freezing its cursor', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { UsageStore } = require('../electron/store.cjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-codex-'));
+  const oldProfile = process.env.USERPROFILE;
+  process.env.USERPROFILE = root;
+  const sessions = path.join(root, '.codex', 'sessions', '2026', '08');
+  fs.mkdirSync(sessions, { recursive: true });
+  const tokenCount = (timestamp, usage) => ({
+    type: 'event_msg', timestamp, payload: { type: 'token_count', info: { last_token_usage: usage } },
+  });
+  const lines = [
+    { type: 'session_meta', timestamp: '2026-08-29T09:00:00Z', payload: { id: 'session-1', cwd: 'C:/work/demo' } },
+    { type: 'turn_context', timestamp: '2026-08-29T09:00:01Z', payload: { model: 'gpt-5.6-sol' } },
+    tokenCount('2026-08-29T09:01:00Z', { input_tokens: 100, cached_input_tokens: 0, output_tokens: 10, reasoning_output_tokens: 0 }),
+    tokenCount('2026-08-29T09:02:00Z', { input_tokens: 100, cached_input_tokens: 0, output_tokens: 10, reasoning_output_tokens: 99 }),
+    tokenCount('2026-08-29T09:03:00Z', { input_tokens: 100, cached_input_tokens: 0, output_tokens: 10, reasoning_output_tokens: 0 }),
+  ];
+  fs.writeFileSync(path.join(sessions, 'rollout.jsonl'), `${lines.map(JSON.stringify).join('\n')}\n`);
+  const store = new UsageStore(path.join(root, 'test.sqlite'), path.join(root, 'Backups'));
+  try {
+    const first = importLocalSessions(store);
+    assert.equal(first.events, 2);
+    assert.equal(first.rejected, 1);
+    assert.match(first.lastRejection, /reasoning/i);
+    assert.equal(store.db.prepare('SELECT COUNT(*) AS count FROM usage_events').get().count, 2);
+    const again = importLocalSessions(store);
+    assert.equal(again.events, 0, 'the cursor advanced past the bad row');
+  } finally {
+    store.close();
+    process.env.USERPROFILE = oldProfile;
+  }
 });

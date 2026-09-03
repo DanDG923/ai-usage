@@ -1,4 +1,3 @@
-import { History } from 'lucide-react';
 import { compactNumber, dayDate, money, percent } from '../../lib';
 import type { CycleRow, Snapshot } from '../../types';
 
@@ -30,14 +29,12 @@ export function CycleHistory({ cycles, currency }: { cycles: Snapshot['cycles'];
     <section className="panel table-panel cycle-panel">
       <div className="panel-heading">
         <div>
-          <span className="eyebrow">Reset cycles</span>
-          <h2>Week over week</h2>
+          <h2>Reset cycles</h2>
           <p>
-            Each past allowance window of the primary bucket: the peak percentage the provider reported and what that
-            window's tracked tokens are worth at the current catalogue. The open window is marked as current.
+            Each past window of the primary bucket: the peak percentage the provider reported and what that window's
+            tokens are worth at the current catalogue. The open window is marked as current.
           </p>
         </div>
-        <History aria-hidden="true" />
       </div>
       {keys.length === 0 ? (
         <div className="empty-chart">Reset history appears once a window has been observed through to its reset.</div>
@@ -46,7 +43,10 @@ export function CycleHistory({ cycles, currency }: { cycles: Snapshot['cycles'];
           {keys.map((key) => (
             <article key={key} className="cycle-card">
               <header>
-                <strong>{LABELS[key]}</strong>
+                <strong>
+                  <span className={`swatch ${key}`} aria-hidden="true" />
+                  {LABELS[key]}
+                </strong>
                 <span>
                   {cycles[key].length} window{cycles[key].length === 1 ? '' : 's'}
                 </span>
@@ -57,10 +57,10 @@ export function CycleHistory({ cycles, currency }: { cycles: Snapshot['cycles'];
                   <thead>
                     <tr>
                       <th>Window ends</th>
-                      <th>Peak used</th>
-                      <th>Readings</th>
-                      <th>Tokens</th>
-                      <th>API-equivalent</th>
+                      <th className="num">Peak used</th>
+                      <th className="num">Readings</th>
+                      <th className="num">Tokens</th>
+                      <th className="num">API-equivalent</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -70,10 +70,10 @@ export function CycleHistory({ cycles, currency }: { cycles: Snapshot['cycles'];
                           {dayDate(row.resetsAt)}
                           {row.current ? <small> current</small> : null}
                         </td>
-                        <td>{percent(row.peakUsedPercent)}</td>
-                        <td>{row.readings}</td>
-                        <td>{compactNumber(row.tokens)}</td>
-                        <td>{money(row.cost, currency)}</td>
+                        <td className="num">{percent(row.peakUsedPercent)}</td>
+                        <td className="num">{row.readings}</td>
+                        <td className="num">{compactNumber(row.tokens)}</td>
+                        <td className="num">{money(row.cost, currency)}</td>
                       </tr>
                     ))}
                   </tbody>

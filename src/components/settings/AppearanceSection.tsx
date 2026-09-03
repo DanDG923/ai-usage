@@ -1,4 +1,3 @@
-import { Download, Palette } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { shortDate } from '../../lib';
 import type { Settings, Snapshot, Theme, UpdateStatus } from '../../types';
@@ -63,7 +62,7 @@ export function AppearanceSection({
   };
   return (
     <section id="appearance" className="panel settings-section">
-      <SectionHeading eyebrow="Appearance & updates" title="Theme and updates" icon={Palette} />
+      <SectionHeading title="Appearance & updates" />
       <div className="settings-fields">
         <label>
           <span>Theme</span>
@@ -81,9 +80,8 @@ export function AppearanceSection({
         onChange={(checked) => update({ autoUpdate: checked })}
       />
       <div className="snooze-row">
-        <Download aria-hidden="true" />
         <span>
-          <strong>{updateLabel(status, version || snapshot.isPreview ? version || 'preview' : version)}</strong>
+          <strong>{updateLabel(status, version || (snapshot.isPreview ? 'preview' : ''))}</strong>
           <small>Updates install through the standard setup program and keep the local database.</small>
         </span>
         <div className="action-row compact">
