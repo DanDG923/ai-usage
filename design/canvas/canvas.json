@@ -1,0 +1,99 @@
+{
+  "pages": [
+    {
+      "id": "page-1",
+      "name": "Direction D"
+    },
+    {
+      "id": "page-2",
+      "name": "Earlier directions"
+    }
+  ],
+  "artboards": [
+    {
+      "file": "Main.dc.html",
+      "title": "D \u00b7 Refined, dark",
+      "x": 0,
+      "y": 0,
+      "w": 1600,
+      "h": 1000,
+      "page": "page-1"
+    },
+    {
+      "file": "MainLight.dc.html",
+      "title": "D \u00b7 Refined, light",
+      "x": 1700,
+      "y": 0,
+      "w": 1600,
+      "h": 1000,
+      "page": "page-1"
+    },
+    {
+      "file": "OverviewA.dc.html",
+      "title": "A \u00b7 Quiet product (1.0.13)",
+      "x": 0,
+      "y": 0,
+      "w": 1600,
+      "h": 1000,
+      "page": "page-2"
+    },
+    {
+      "file": "OverviewDense.dc.html",
+      "title": "B \u00b7 Dense console",
+      "x": 1700,
+      "y": 0,
+      "w": 1600,
+      "h": 1000,
+      "page": "page-2"
+    },
+    {
+      "file": "OverviewEditorial.dc.html",
+      "title": "C \u00b7 Editorial",
+      "x": 3400,
+      "y": 0,
+      "w": 1600,
+      "h": 1000,
+      "page": "page-2"
+    },
+    {
+      "file": "Details.dc.html",
+      "title": "Details (direction A)",
+      "x": 0,
+      "y": 1180,
+      "w": 1600,
+      "h": 3120,
+      "page": "page-2"
+    },
+    {
+      "file": "Settings.dc.html",
+      "title": "Data & settings (direction A)",
+      "x": 1700,
+      "y": 1180,
+      "w": 1600,
+      "h": 3220,
+      "page": "page-2"
+    }
+  ],
+  "annotations": [
+    {
+      "id": "dir-d",
+      "x": 0,
+      "y": -300,
+      "w": 560,
+      "page": "page-1",
+      "text": "D - Refined A\n\nKeeps A's forecast charts. Replaces the rest of the kit:\n- one status line at the top instead of a verdict chip and a sentence per card\n- one panel with three hairline-divided columns instead of three cards\n- a horizontal allowance bar (used / expected before reset / spare, with a heavier-week marker) instead of an arc gauge\n- label-left, value-right rows for resets, expected, run-out and pace\n- neutral near-black or off-white ground, 6px radii, no shadows, no filled blue button, one quiet mark\n- telemetry reduced to one faint line per column"
+    },
+    {
+      "id": "brief",
+      "x": 0,
+      "y": -260,
+      "w": 520,
+      "page": "page-2",
+      "text": "Earlier directions, kept for reference. A is what 1.0.13 ships; B and C were the alternatives."
+    }
+  ],
+  "launch": {
+    "view": "canvas",
+    "page": "page-1"
+  }
+}

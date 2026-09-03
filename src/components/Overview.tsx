@@ -1,4 +1,13 @@
-import { compactNumber, money, percent, primaryWindow, shortDate } from '../lib';
+import {
+  compactNumber,
+  displayedRemaining,
+  isEstimated,
+  money,
+  percent,
+  primaryWindow,
+  shortDate,
+  verdictSentence,
+} from '../lib';
 import type { Snapshot } from '../types';
 import { API_EQUIVALENT_EXPLAINER, InfoTip } from './InfoTip';
 import { QuotaCard } from './QuotaCard';
@@ -72,7 +81,7 @@ function fableCardProps(snapshot: Snapshot) {
   return {
     measurement,
     notes,
-    emptyText: `Automatic collection has not exposed a current Fable allowance yet. This device: ${activitySummary}. A manual observation remains an optional fallback in Data & settings.`,
+    emptyText: `Automatic collection has not exposed a current Fable allowance yet. This device: ${activitySummary}. A manual observation remains an optional fallback in Settings.`,
   };
 }
 
@@ -89,13 +98,42 @@ export function subscriptionValue(snapshot: Snapshot) {
   return { fees, ratio: fees > 0 ? costs.actual / fees : 0 };
 }
 
+function headlineNumbers(snapshot: Snapshot) {
+  const entries: { label: string; quota: Snapshot['quotas'][keyof Snapshot['quotas']] }[] = [
+    { label: 'Codex', quota: snapshot.quotas.codex },
+    { label: 'Claude', quota: snapshot.quotas.claude },
+    { label: 'Fable 5', quota: snapshot.quotas.fable },
+  ];
+  return entries
+    .map(({ label, quota }) => {
+      const window = primaryWindow(quota);
+      if (!window || window.forecast.expired) return `${label} —`;
+      return `${label} ${isEstimated(window) ? '~' : ''}${Math.round(displayedRemaining(window))}%`;
+    })
+    .join(' · ');
+}
+
 export function Overview({ snapshot }: { snapshot: Snapshot }) {
   const unpricedModels = snapshot.costs.unpricedModels.map((entry) => entry.model).join(', ');
   const fable = fableCardProps(snapshot);
   const value = subscriptionValue(snapshot);
   const nowMs = Date.parse(snapshot.generatedAt);
+  const verdict = verdictSentence(snapshot.dashboardVerdict, snapshot.quotas);
   return (
     <main className="page overview-page" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
+      <section
+        className={`status-line ${snapshot.dashboardVerdict.state}`}
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        <div className="status-text">
+          <span className="status-dot" aria-hidden="true" />
+          <h1>{verdict.headline}</h1>
+          {verdict.secondary && <span className="status-secondary">{verdict.secondary}</span>}
+        </div>
+        <span className="status-numbers">{headlineNumbers(snapshot)} left</span>
+      </section>
       <section className="qc-grid">
         <QuotaCard kind="codex" quota={snapshot.quotas.codex} nowMs={nowMs} resetCredits={snapshot.resetCredits} />
         <QuotaCard kind="claude" quota={snapshot.quotas.claude} nowMs={nowMs} />

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Activity } from 'lucide-react';
 import { Details } from './components/Details';
-import { Header, TABS, type Tab } from './components/Header';
+import { BrandMark, Header, TABS, type Tab } from './components/Header';
 import { Overview } from './components/Overview';
 import { Settings, type SettingsActions } from './components/Settings';
 import { demoSnapshot } from './data/demo';
@@ -344,9 +343,7 @@ export default function App() {
       <div className="app-shell">
         <header className="app-header app-header-status">
           <div className="brand status-brand" aria-label="AI Usage">
-            <span className="brand-orbit" aria-hidden="true">
-              <Activity />
-            </span>
+            <BrandMark />
             <span>AI Usage</span>
           </div>
         </header>
@@ -378,10 +375,10 @@ export default function App() {
       {tab === 'details' && <Details snapshot={snapshot} days={days} onDays={changeDays} />}
       {tab === 'settings' && <Settings snapshot={snapshot} actions={actions} />}
       <footer className="app-footer">
+        <span>Local data only. Forecasts are estimates from your own history, not provider guarantees.</span>
         <span>
           Snapshot {new Date(snapshot.generatedAt).toLocaleString('en-GB')} · {snapshot.timezone}
         </span>
-        <span>Local records only · Learned forecasts are estimates, not provider guarantees</span>
       </footer>
       {notice && (
         <div className="toast" role="status" aria-live="polite">

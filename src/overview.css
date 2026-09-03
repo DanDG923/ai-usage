@@ -1,4 +1,8 @@
-/* Overview — answer-first allowance cards with a gauge, a pace bar, and a forecast. */
+/*
+ * Overview: one status line, one panel of hairline-divided provider columns,
+ * and a stat strip. Each column reads top to bottom: name and plan, the big
+ * remaining figure, the allowance bar, four definition rows, the forecast.
+ */
 
 @media (prefers-reduced-motion: reduce) {
   html {
@@ -6,298 +10,293 @@
   }
 }
 
-/* Header verdict: a dot, the verdict, and the three headline numbers. */
-.verdict-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  border-radius: 6px;
-  padding: 5px 10px;
-  font-size: 12.5px;
-  font-weight: 500;
-  white-space: nowrap;
-  min-width: 0;
-  border: 1px solid var(--line);
-  background: var(--surface);
-  color: var(--text-2);
+/* Status line */
+.status-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 16px;
 }
-.verdict-chip::before {
-  content: '';
-  width: 7px;
-  height: 7px;
+.status-line .status-text {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+.status-line .status-dot {
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: var(--text-faint);
-  flex: none;
+  position: relative;
+  top: -1px;
+  flex: 0 0 auto;
 }
-.verdict-chip .verdict-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.verdict-chip .verdict-numbers {
-  color: var(--text-muted);
-  padding-left: 8px;
-  border-left: 1px solid var(--line-strong);
-}
-.verdict-chip.safe::before {
+.status-line.safe .status-dot {
   background: var(--ok);
 }
-.verdict-chip.watch::before {
+.status-line.watch .status-dot {
   background: var(--warn);
 }
-.verdict-chip.risk::before,
-.verdict-chip.critical::before {
+.status-line.risk .status-dot,
+.status-line.critical .status-dot {
   background: var(--bad);
 }
-.verdict-chip.risk,
-.verdict-chip.critical {
-  color: var(--bad-text);
+.status-line h1 {
+  font-size: 17px;
+  line-height: 1.3;
 }
-.verdict-chip.watch {
-  color: var(--warn-text);
+.status-line .status-secondary {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.status-line .status-numbers {
+  color: var(--text-muted);
+  font-size: 12.5px;
+  white-space: nowrap;
 }
 
-/* Card grid — three providers side by side while there is room. */
+/* Provider columns */
 .qc-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 16px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
 }
 
 .qc {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 18px 20px 14px;
+  padding: 20px 24px 18px;
+  border-left: 1px solid var(--line);
   min-width: 0;
   display: flex;
   flex-direction: column;
+  gap: 14px;
+}
+.qc:first-child {
+  border-left: 0;
 }
 .qc-head {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 14px;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
 }
 .qc-title {
   min-width: 0;
   display: flex;
-  flex-direction: column;
-  gap: 1px;
+  align-items: baseline;
+  gap: 8px;
+  overflow: hidden;
 }
 .qc-title h2 {
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.25;
+  white-space: nowrap;
 }
 .qc-title span {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: 12.5px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.qc-head .state-pill {
-  margin-left: auto;
-}
 
-.qc-hero {
-  display: grid;
-  grid-template-columns: 118px minmax(0, 1fr);
-  gap: 18px;
-  align-items: center;
+.qc-figure {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
 }
-.qc-answer .answer {
-  margin: 0 0 12px;
-  font-size: 13.5px;
-  font-weight: 500;
-  line-height: 1.45;
-  color: var(--text);
-}
-.qc-answer .answer em {
-  font-style: normal;
+.qc-figure b {
+  font-family: 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif;
+  font-size: 38px;
   font-weight: 600;
-  color: var(--ok-text);
+  letter-spacing: -0.03em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
 }
-.qc.watch .qc-answer .answer em {
-  color: var(--warn-text);
-}
-.qc.risk .qc-answer .answer em,
-.qc.critical .qc-answer .answer em {
-  color: var(--bad-text);
-}
-.qc-answer .answer span {
+.qc-figure span {
   color: var(--text-muted);
-  font-weight: 400;
-}
-
-.qc-facts {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px 14px;
-}
-.qc-facts > div {
-  min-width: 0;
-}
-.qc-facts span {
-  display: block;
-  color: var(--text-muted);
-  font-size: 12px;
-  font-weight: 500;
-  margin-bottom: 2px;
-}
-.qc-facts b {
-  display: block;
-  font-size: 15px;
-  font-weight: 600;
-  line-height: 1.2;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.qc-facts small {
-  display: block;
-  color: var(--text-muted);
-  font-size: 11.5px;
-  margin-top: 2px;
-  line-height: 1.35;
-}
-.qc-facts .runout.hot b {
-  color: var(--bad-text);
-}
-.qc-facts .runout.warm b {
-  color: var(--warn-text);
-}
-
-.qc-empty-title {
-  margin: 8px 0 6px;
-  font-size: 15px;
-}
-.qc-empty-text {
-  margin: 0;
-  color: var(--text-muted);
-  line-height: 1.5;
   font-size: 13px;
 }
-.qc-note {
-  color: var(--text-muted);
-  font-size: 12px;
-  line-height: 1.45;
-}
-.qc > .qc-note {
-  margin-top: 12px;
-}
-.note-warm {
-  color: var(--warn-text);
-}
 
-/* Arc gauge */
-.gauge {
+/* Allowance bar: used, expected before reset, spare; a marker for the heavier week. */
+.allowance-bar {
+  display: flex;
+  height: 10px;
+  border-radius: 2px;
+  overflow: hidden;
+  gap: 2px;
   position: relative;
-  width: 118px;
-  height: 118px;
 }
-.gauge svg {
-  width: 118px;
-  height: 118px;
-  display: block;
+.allowance-bar .ab-used {
+  background: var(--used);
 }
-.gauge-track {
-  stroke: var(--gauge-track);
+.allowance-bar .ab-expected {
+  background: var(--ok-dim);
 }
-.gauge-low {
-  display: none;
+.allowance-bar .ab-spare {
+  flex: 1;
+  background: var(--ok);
 }
-.gauge-fill {
-  stroke: var(--ok);
+.qc.watch .allowance-bar .ab-expected {
+  background: var(--warn-dim);
 }
-.gauge.watch .gauge-fill {
-  stroke: var(--warn);
+.qc.watch .allowance-bar .ab-spare {
+  background: var(--warn);
 }
-.gauge.risk .gauge-fill,
-.gauge.critical .gauge-fill {
-  stroke: var(--bad);
+.qc.risk .allowance-bar .ab-expected,
+.qc.critical .allowance-bar .ab-expected {
+  background: var(--bad-dim);
 }
-.gauge.unknown .gauge-fill {
-  stroke: var(--text-faint);
+.qc.risk .allowance-bar .ab-spare,
+.qc.critical .allowance-bar .ab-spare {
+  background: var(--bad);
 }
-.gauge-tick {
-  stroke: var(--text-2);
+.qc.unknown .allowance-bar .ab-spare {
+  background: var(--text-faint);
 }
-.gauge-value {
+.allowance-bar .ab-heavy {
   position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  text-align: center;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  background: var(--text);
 }
-.gauge-value b {
-  display: block;
-  font-size: 22px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  line-height: 1;
-}
-.gauge-value span {
-  display: block;
-  font-size: 11px;
+.allowance-key {
+  display: flex;
+  gap: 14px;
+  margin-top: 8px;
+  font-size: 11.5px;
   color: var(--text-muted);
-  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+  flex-wrap: wrap;
+}
+.allowance-key i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin-right: 6px;
+  vertical-align: -1px;
+}
+.allowance-key .k-used i {
+  background: var(--used);
+}
+.allowance-key .k-expected i {
+  background: var(--ok-dim);
+}
+.allowance-key .k-spare i {
+  background: var(--ok);
+}
+.qc.watch .allowance-key .k-expected i {
+  background: var(--warn-dim);
+}
+.qc.watch .allowance-key .k-spare i {
+  background: var(--warn);
+}
+.qc.risk .allowance-key .k-expected i,
+.qc.critical .allowance-key .k-expected i {
+  background: var(--bad-dim);
+}
+.qc.risk .allowance-key .k-spare i,
+.qc.critical .allowance-key .k-spare i {
+  background: var(--bad);
+}
+.allowance-key .k-heavy {
+  margin-left: auto;
+}
+.allowance-key .k-heavy i {
+  width: 2px;
+  height: 10px;
+  border-radius: 0;
+  background: var(--text);
 }
 
-/* Pace bar — recent burn rate against the safe threshold */
-.pace-bullet {
-  margin: 14px 0 2px;
+/* Definition rows */
+.qc-rows {
+  border-bottom: 1px solid var(--line);
 }
-.pace-bullet .pb-labels {
+.qc-rows > div {
   display: flex;
   justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 9px 0;
+  border-top: 1px solid var(--line);
+}
+.qc-rows dt {
+  color: var(--text-muted);
+  font-size: 12.5px;
+  margin: 0;
+}
+.qc-rows dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+}
+.qc-rows dd b {
+  font-weight: 600;
+}
+.qc-rows dd small {
+  color: var(--text-faint);
+  font-size: 12px;
+  margin-left: 8px;
+}
+.qc-rows dd.warm b {
+  color: var(--warn-text);
+}
+.qc-rows dd.hot b {
+  color: var(--bad-text);
+}
+
+/* Forecast */
+.qc-chart {
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+}
+.qc-chart-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.qc-chart-head > span {
+  color: var(--text-2);
+  font-weight: 500;
+}
+.chart-key {
+  display: flex;
   gap: 12px;
   font-size: 12px;
   color: var(--text-muted);
-  margin-bottom: 6px;
 }
-.pace-bullet .pb-labels b {
-  color: var(--text-2);
-  font-weight: 500;
-  white-space: nowrap;
+.chart-key i {
+  display: inline-block;
+  width: 12px;
+  height: 2px;
+  margin-right: 5px;
+  vertical-align: 3px;
 }
-.pace-bullet .pb-labels span {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-variant-numeric: tabular-nums;
+.chart-key .k-observed i {
+  background: var(--observed);
 }
-.pb-track {
-  position: relative;
-  height: 6px;
-  border-radius: 3px;
-  background: var(--gauge-track);
-}
-.pb-fill {
-  position: absolute;
-  inset: 0 auto 0 0;
-  border-radius: 3px;
+.chart-key .k-expected i {
   background: var(--ok);
-  min-width: 4px;
 }
-.pb-fill.warm {
-  background: var(--warn);
-}
-.pb-fill.hot {
-  background: var(--bad);
-}
-.pb-thresh {
-  position: absolute;
-  top: -3px;
-  bottom: -3px;
-  width: 2px;
-  border-radius: 1px;
-  background: var(--text-muted);
+.chart-key .k-heavy i {
+  height: 0;
+  border-top: 2px dashed var(--warn);
 }
 
-/* Interactive forecast chart */
 .forecast-wrap {
   position: relative;
-  margin-top: 12px;
 }
 .forecast-wrap .forecast-chart {
   height: auto;
@@ -337,7 +336,7 @@
   pointer-events: none;
   background: var(--surface);
   border: 1px solid var(--line-strong);
-  border-radius: 6px;
+  border-radius: 5px;
   padding: 6px 9px;
   font-size: 12px;
   font-weight: 500;
@@ -347,69 +346,55 @@
   z-index: 5;
   font-variant-numeric: tabular-nums;
 }
-.chart-key {
-  display: flex;
-  gap: 14px;
-  font-size: 12px;
-  color: var(--text-muted);
-  margin-top: 6px;
-}
-.chart-key i {
-  display: inline-block;
-  width: 10px;
-  height: 2px;
-  border-radius: 1px;
-  margin-right: 6px;
-  vertical-align: 3px;
-}
-.chart-key .k-observed i {
-  background: var(--observed);
-}
-.chart-key .k-expected i {
-  background: var(--ok);
-}
-.chart-key .k-heavy i {
-  background: var(--warn);
-}
 
+/* Faint footer lines */
 .qc-foot {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin-top: auto;
-  padding-top: 12px;
-  border-top: 1px solid var(--line);
+  gap: 3px;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.qc-foot .qc-learn {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.qc-foot .credit {
+  color: var(--text-muted);
+}
+.note-warm {
+  color: var(--warn-text);
+}
+
+/* Empty column */
+.qc-empty-title {
+  font-size: 14px;
+}
+.qc-empty-text {
+  color: var(--text-muted);
+  line-height: 1.5;
+  font-size: 13px;
+}
+.qc-note {
   color: var(--text-muted);
   font-size: 12px;
   line-height: 1.45;
 }
-.qc-foot .credit {
-  color: var(--text-2);
-}
 
-/* Value strip below the cards */
+/* Value strip below the panel */
 .overview-page .value-strip {
   margin-top: 16px;
 }
 
-/* Column count comes from the auto-fit grid in fluid.css, which measures the
-   zoomed layout width rather than the raw window width. */
+/* The status line wraps before the columns stack. */
 @media (max-width: 1250px) {
-  .verdict-chip {
-    display: inline-flex;
-    order: 4;
-    flex: 1 0 100%;
-    justify-content: center;
-    min-width: 0;
-    white-space: normal;
-    text-align: center;
+  .status-line {
     flex-wrap: wrap;
   }
-}
-
-/* The run-out fact carries a short sentence, so it may wrap where the other facts stay on one line. */
-.qc-facts .runout b {
-  white-space: normal;
-  font-size: 14px;
-  line-height: 1.25;
+  .status-line .status-text {
+    flex: 1 0 100%;
+    flex-wrap: wrap;
+  }
 }

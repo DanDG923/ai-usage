@@ -206,20 +206,6 @@ export function ForecastChart({ forecast }: { forecast: Forecast }) {
             : `${hoverLabel} · expected ${hoverExpected == null ? '—' : `${Math.round(hoverExpected)}%`} · heavier ${hoverHeavy == null ? '—' : `${Math.round(hoverHeavy)}%`}`}
         </div>
       )}
-      <div className="chart-key">
-        <span className="k-observed">
-          <i />
-          Observed
-        </span>
-        <span className="k-expected">
-          <i />
-          Expected
-        </span>
-        <span className="k-heavy">
-          <i />
-          Heavier
-        </span>
-      </div>
     </div>
   );
 }
