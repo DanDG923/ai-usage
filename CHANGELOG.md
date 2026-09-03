@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.0.16 — 3 September 2026
+
+This is an in-place performance and maintenance update with no visible interface change. Running the 1.0.16 setup program upgrades an existing AI Usage installation and preserves its local database, settings, observations, imported cost history, and backups.
+
+### Faster collection and snapshots
+
+- Caches prepared SQL statements in the local store instead of re-parsing every statement on each call, and adds a source-and-time index on usage events for the queries that filter by both.
+- Imports each Codex session log and Claude transcript in one transaction, so a first import no longer pays a write-ahead-log sync per message.
+- Builds cycle history from one range query per provider, costing each usage event once, instead of one query and a full re-costing per reset window.
+- Resolves the local time zone once per cost analysis rather than twice per usage event, and memoises the allowance-pressure model profiles.
+- Partitions forecast learning samples once per projected series and remembers each weekday-and-hour rate, producing identical numbers with far fewer passes over the sample set.
+- Rebuilds the tray menu only when the snooze state changes.
+
+### Leaner renderer
+
+- Memoises the runway, cost, and daily-usage chart geometry so hovering no longer rebuilds every series path, and builds date and number formatters once instead of once per label or table cell.
+- Caches the derived provider rows per snapshot and registers the keyboard shortcuts once rather than on every render.
+- Removes the six modules orphaned by the 1.0.15 redesign (the previous allowance card, Details page, per-card forecast chart, viewport scaling, and their stylesheet) and roughly 430 lines of stylesheet rules that styled only them. The shipped stylesheet shrinks from 54.8 KB to 45.0 KB.
+
+### Verification
+
+- Release contracts now assert the estimate-visibility rules against the live provider view and summary card.
+- Computed-style comparison of all four screens before and after the stylesheet pruning showed no layout or style change.
+- Full automated suite: 225 tests passed; oxlint, Prettier, strict TypeScript, and the Vite production build passed.
+
 ## 1.0.15 — 3 September 2026
 
 This is an in-place interface and forecast-communication update. Running the 1.0.15 setup program upgrades an existing AI Usage installation and preserves its local database, settings, observations, imported cost history, and backups.

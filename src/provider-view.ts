@@ -101,7 +101,21 @@ function providerNotes(id: ProviderId, current: QuotaWindow | null, source: Sour
   return notes;
 }
 
+// Each snapshot arrives as one immutable object over IPC, and several views
+// derive the same provider rows from it on every render. The rows are built
+// once per snapshot so their identity is stable for the memoised charts.
+const viewCache = new WeakMap<Snapshot, ProviderView[]>();
+
 export function providerViews(snapshot: Snapshot): ProviderView[] {
+  let views = viewCache.get(snapshot);
+  if (!views) {
+    views = buildProviderViews(snapshot);
+    viewCache.set(snapshot, views);
+  }
+  return views;
+}
+
+function buildProviderViews(snapshot: Snapshot): ProviderView[] {
   return PROVIDERS.map(({ id, name, sourceId }) => {
     const quota = snapshot.quotas[id];
     const current = primaryWindow(quota);

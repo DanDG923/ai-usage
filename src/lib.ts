@@ -1,31 +1,54 @@
 import type { DashboardVerdict, ForecastState, Quota, QuotaWindow, Snapshot } from './types';
 
+// Intl formatters are expensive to construct and these run once per table
+// cell, so each shape is built once and reused.
+const COMPACT = new Intl.NumberFormat('en-GB', { notation: 'compact', maximumFractionDigits: 1 });
+const SHORT_DATE = new Intl.DateTimeFormat('en-GB', {
+  day: 'numeric',
+  month: 'short',
+  hour: '2-digit',
+  minute: '2-digit',
+});
+const DAY_DATE = new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+const WEEKDAY_TIME = new Intl.DateTimeFormat('en-GB', { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+const DATE_TIME = new Intl.DateTimeFormat('en-GB', {
+  weekday: 'short',
+  day: 'numeric',
+  month: 'short',
+  hour: '2-digit',
+  minute: '2-digit',
+});
+const TIME = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit' });
+const moneyFormats = new Map<string, Intl.NumberFormat>();
+
 export function money(value: number, currency = 'GBP') {
-  return new Intl.NumberFormat('en-GB', {
-    style: 'currency',
-    currency,
-    minimumFractionDigits: value >= 100 ? 0 : 2,
-    maximumFractionDigits: 2,
-  }).format(value);
+  const minimumFractionDigits = value >= 100 ? 0 : 2;
+  const key = `${currency}|${minimumFractionDigits}`;
+  let format = moneyFormats.get(key);
+  if (!format) {
+    format = new Intl.NumberFormat('en-GB', {
+      style: 'currency',
+      currency,
+      minimumFractionDigits,
+      maximumFractionDigits: 2,
+    });
+    moneyFormats.set(key, format);
+  }
+  return format.format(value);
 }
 
 export function compactNumber(value: number) {
-  return new Intl.NumberFormat('en-GB', { notation: 'compact', maximumFractionDigits: 1 }).format(value);
+  return COMPACT.format(value);
 }
 
 export function shortDate(value?: string | number | null) {
   if (!value) return 'Not observed yet';
-  return new Intl.DateTimeFormat('en-GB', {
-    day: 'numeric',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(new Date(value));
+  return SHORT_DATE.format(new Date(value));
 }
 
 export function dayDate(value?: string | number | null) {
   if (!value) return '—';
-  return new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }).format(new Date(value));
+  return DAY_DATE.format(new Date(value));
 }
 
 /** "Thu 14:00" for something inside the coming week, otherwise a dated form. */
@@ -33,12 +56,7 @@ export function whenLabel(value?: string | number | null, nowMs = Date.now()) {
   if (!value) return '—';
   const date = new Date(value);
   const withinWeek = Math.abs(date.getTime() - nowMs) < 7 * 86_400_000;
-  return new Intl.DateTimeFormat(
-    'en-GB',
-    withinWeek
-      ? { weekday: 'short', hour: '2-digit', minute: '2-digit' }
-      : { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' },
-  ).format(date);
+  return (withinWeek ? WEEKDAY_TIME : SHORT_DATE).format(date);
 }
 
 export function resetDistance(value?: string | null) {
@@ -54,13 +72,7 @@ export function resetDistance(value?: string | null) {
 /** "Wed 10 Sept, 03:21": a reset or run-out instant in full. */
 export function dateTimeLabel(value?: string | number | null) {
   if (!value) return '—';
-  return new Intl.DateTimeFormat('en-GB', {
-    weekday: 'short',
-    day: 'numeric',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(new Date(value));
+  return DATE_TIME.format(new Date(value));
 }
 
 /** "20:05" for an instant on the same local day as `nowMs`, otherwise a dated form. */
@@ -70,9 +82,7 @@ export function timeLabel(value?: string | number | null, nowMs = Date.now()) {
   const now = new Date(nowMs);
   const sameDay =
     date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
-  return sameDay
-    ? new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit' }).format(date)
-    : shortDate(value);
+  return sameDay ? TIME.format(date) : shortDate(value);
 }
 
 /** Distance between two instants as "2d 5h" or "3h", for run-out timing. */

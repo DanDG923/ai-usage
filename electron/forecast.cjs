@@ -262,13 +262,36 @@ function deriveLearningSamples(observations, schedule, nowMs) {
   return samples;
 }
 
-function learnedRateForHour(samples, date, fallbackRate, phase) {
-  const phaseSamples = samples.filter((sample) => sample.phase === phase && sample.rateEligible !== false);
-  const exact = phaseSamples.filter((sample) => sample.weekday === date.getDay() && Math.abs(sample.hour - date.getHours()) <= 1);
-  const sameHour = phaseSamples.filter((sample) => Math.abs(sample.hour - date.getHours()) <= 1);
-  const candidates = exact.length >= 2 ? exact : sameHour.length >= 3 ? sameHour : phaseSamples;
-  if (!candidates.length) return fallbackRate;
-  return weightedMean(candidates.map((sample) => ({ value: sample.rate, weight: sample.weight * sample.coveredHours })));
+// A projection asks for the same (phase, weekday, hour) many times across a
+// week, and each ask used to filter the whole sample set three times. The
+// per-phase partition is built once and every answer is remembered, with the
+// candidate order unchanged so the weighted means are bit-for-bit the same.
+function createRateLookup(samples) {
+  const partitions = new Map();
+  const answers = new Map();
+  const partition = (phase) => {
+    let rows = partitions.get(phase);
+    if (!rows) {
+      rows = samples.filter((sample) => sample.phase === phase && sample.rateEligible !== false);
+      partitions.set(phase, rows);
+    }
+    return rows;
+  };
+  return (date, fallbackRate, phase) => {
+    const weekday = date.getDay();
+    const hour = date.getHours();
+    const key = `${phase}|${weekday}|${hour}|${fallbackRate}`;
+    if (answers.has(key)) return answers.get(key);
+    const phaseSamples = partition(phase);
+    const exact = phaseSamples.filter((sample) => sample.weekday === weekday && Math.abs(sample.hour - hour) <= 1);
+    const sameHour = phaseSamples.filter((sample) => Math.abs(sample.hour - hour) <= 1);
+    const candidates = exact.length >= 2 ? exact : sameHour.length >= 3 ? sameHour : phaseSamples;
+    const rate = candidates.length
+      ? weightedMean(candidates.map((sample) => ({ value: sample.rate, weight: sample.weight * sample.coveredHours })))
+      : fallbackRate;
+    answers.set(key, rate);
+    return rate;
+  };
 }
 
 function recentRate(samples, nowMs, phase) {
@@ -283,6 +306,8 @@ function recentRate(samples, nowMs, phase) {
 function buildSeries(expectedStart, heavyStart, startMs, endMs, schedule, samples, rates) {
   const expected = [{ at: startMs, remaining: clamp(expectedStart, 0, 100) }];
   const heavy = [{ at: startMs, remaining: clamp(heavyStart, 0, 100) }];
+  const learnedRate = createRateLookup(samples);
+  const hasOffScheduleSamples = samples.some((sample) => sample.phase === 'off-schedule');
   let expectedRemaining = expectedStart;
   let heavyRemaining = heavyStart;
   let cursor = startMs;
@@ -292,11 +317,11 @@ function buildSeries(expectedStart, heavyStart, startMs, endMs, schedule, sample
     const phase = isActiveHour(midpoint, schedule) ? 'active' : 'off-schedule';
     const phaseRates = phase === 'active' ? rates.active : rates.offSchedule;
     const hasPhaseEvidence = phase === 'active'
-      || samples.some((sample) => sample.phase === phase)
+      || hasOffScheduleSamples
       || (Number.isFinite(phaseRates.sustainable) && phaseRates.sustainable > 0);
     if (hasPhaseEvidence) {
       const duration = (next - cursor) / HOUR_MS;
-      const learned = learnedRateForHour(samples, midpoint, phaseRates.fallback, phase);
+      const learned = learnedRate(midpoint, phaseRates.fallback, phase);
       const conditional = learned * (1 - phaseRates.blend.weight) + phaseRates.blend.rate * phaseRates.blend.weight;
       // Conditional rates describe pace while in use; the window anchor keeps
       // the projection tied to how much of the allowance is really being spent

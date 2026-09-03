@@ -116,7 +116,13 @@ export default function App() {
   };
 
   // Keyboard shortcuts: 1/2/3/4 switch sections, R refreshes. Typing fields
-  // and modifier chords are left alone.
+  // and modifier chords are left alone. The listener is registered once and
+  // reads the current refresh state through a ref instead of being removed
+  // and re-added on every render.
+  const shortcutState = useRef({ refresh, refreshing });
+  useEffect(() => {
+    shortcutState.current = { refresh, refreshing };
+  });
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.ctrlKey || event.metaKey || event.altKey) return;
@@ -129,12 +135,13 @@ export default function App() {
         return;
       }
       if (event.key === 'r' || event.key === 'R') {
-        if (window.aiUsage && !refreshing) void refresh();
+        const { refresh: run, refreshing: busy } = shortcutState.current;
+        if (window.aiUsage && !busy) void run();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  });
+  }, []);
 
   useEffect(() => {
     document.getElementById(`panel-${tab}`)?.focus({ preventScroll: true });

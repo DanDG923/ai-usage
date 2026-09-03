@@ -129,8 +129,13 @@ function round(value, digits = 2) {
   return Math.round((Number(value) + Number.EPSILON) * factor) / factor;
 }
 
+// A catalogue model name followed by a date or version suffix, e.g. "-20260901".
+const VERSION_SUFFIX = /^(?:\d{8}|\d{4}(?:-\d{2}){0,2}|v?\d+(?:[.-]\d+)*)$/;
+
 // Analytics call these once per usage event; constructing an Intl formatter
 // each time was the dominant cost of a snapshot, so they are cached per zone.
+// Callers on a hot path resolve the zone once and pass it in: the default
+// argument below is itself an Intl construction.
 const dateFormatters = new Map();
 function localParts(value, timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone) {
   let formatter = dateFormatters.get(timeZone);
@@ -161,6 +166,8 @@ class UsageStore {
     fs.mkdirSync(backupDirectory, { recursive: true });
     this.databasePath = databasePath;
     this.backupDirectory = backupDirectory;
+    this.statements = new Map();
+    this.transactionDepth = 0;
     this.db = new DatabaseSync(databasePath);
     this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
     this.migrate();
@@ -224,6 +231,7 @@ class UsageStore {
       );
       CREATE INDEX IF NOT EXISTS idx_usage_time ON usage_events(occurred_at);
       CREATE INDEX IF NOT EXISTS idx_usage_source_model ON usage_events(source_id, model);
+      CREATE INDEX IF NOT EXISTS idx_usage_source_time ON usage_events(source_id, occurred_at);
       CREATE TABLE IF NOT EXISTS account_daily_usage (
         source_id TEXT NOT NULL,
         usage_date TEXT NOT NULL,
@@ -253,35 +261,35 @@ class UsageStore {
         export_path TEXT NOT NULL
       );
     `);
-    const sourceColumns = new Set(this.db.prepare('PRAGMA table_info(sources)').all().map((row) => row.name));
+    const sourceColumns = new Set(this.prepare('PRAGMA table_info(sources)').all().map((row) => row.name));
     if (!sourceColumns.has('last_attempt_at')) this.db.exec('ALTER TABLE sources ADD COLUMN last_attempt_at TEXT;');
     if (!sourceColumns.has('last_success_at')) this.db.exec('ALTER TABLE sources ADD COLUMN last_success_at TEXT;');
-    const usageColumns = new Set(this.db.prepare('PRAGMA table_info(usage_events)').all().map((row) => row.name));
+    const usageColumns = new Set(this.prepare('PRAGMA table_info(usage_events)').all().map((row) => row.name));
     const addedCacheBreakdown = !usageColumns.has('cache_write_5m_input_tokens') || !usageColumns.has('cache_write_1h_input_tokens');
     if (!usageColumns.has('cache_write_5m_input_tokens')) this.db.exec('ALTER TABLE usage_events ADD COLUMN cache_write_5m_input_tokens INTEGER NOT NULL DEFAULT 0;');
     if (!usageColumns.has('cache_write_1h_input_tokens')) this.db.exec('ALTER TABLE usage_events ADD COLUMN cache_write_1h_input_tokens INTEGER NOT NULL DEFAULT 0;');
     if (!usageColumns.has('project')) this.db.exec('ALTER TABLE usage_events ADD COLUMN project TEXT;');
-    const importColumns = new Set(this.db.prepare('PRAGMA table_info(imported_files)').all().map((row) => row.name));
+    const importColumns = new Set(this.prepare('PRAGMA table_info(imported_files)').all().map((row) => row.name));
     if (!importColumns.has('state_json')) this.db.exec('ALTER TABLE imported_files ADD COLUMN state_json TEXT;');
     if (!usageColumns.has('project')) {
       // Project attribution is read from the same local transcripts as the
       // token counts. Rescanning them once fills the new column in place.
-      this.db.prepare("DELETE FROM imported_files WHERE lower(file_path) LIKE '%.claude%projects%.jsonl' OR lower(file_path) LIKE '%.codex%sessions%.jsonl'").run();
+      this.prepare("DELETE FROM imported_files WHERE lower(file_path) LIKE '%.claude%projects%.jsonl' OR lower(file_path) LIKE '%.codex%sessions%.jsonl'").run();
     }
     for (const [oldKey, newKey] of Object.entries(SETTING_ALIASES)) {
-      const legacy = this.db.prepare('SELECT value_json FROM settings WHERE key = ?').get(oldKey);
+      const legacy = this.prepare('SELECT value_json FROM settings WHERE key = ?').get(oldKey);
       if (!legacy) continue;
-      this.db.prepare('INSERT INTO settings(key, value_json, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING')
+      this.prepare('INSERT INTO settings(key, value_json, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING')
         .run(newKey, legacy.value_json, iso());
-      this.db.prepare('DELETE FROM settings WHERE key = ?').run(oldKey);
+      this.prepare('DELETE FROM settings WHERE key = ?').run(oldKey);
     }
-    const priceColumns = new Set(this.db.prepare('PRAGMA table_info(price_catalog)').all().map((row) => row.name));
+    const priceColumns = new Set(this.prepare('PRAGMA table_info(price_catalog)').all().map((row) => row.name));
     this.addedOneHourPriceColumn = !priceColumns.has('cache_write_1h_usd_per_million');
     if (!priceColumns.has('cache_write_1h_usd_per_million')) this.db.exec('ALTER TABLE price_catalog ADD COLUMN cache_write_1h_usd_per_million REAL NOT NULL DEFAULT 0;');
     if (addedCacheBreakdown) {
       // Existing Claude transcript events did not retain cache TTL detail. Make
       // the next refresh rebuild them from the local source of truth.
-      this.db.prepare("DELETE FROM imported_files WHERE lower(file_path) LIKE '%.claude%projects%.jsonl'").run();
+      this.prepare("DELETE FROM imported_files WHERE lower(file_path) LIKE '%.claude%projects%.jsonl'").run();
     }
     this.db.exec(`
       DELETE FROM quota_observations
@@ -300,7 +308,7 @@ class UsageStore {
       WHERE source_id = 'claude-fable' AND bucket_id = 'fable-weekly';
     `);
     const fablePlanEvidenceMigration = 'migration.fable-plan-evidence-v1';
-    if (!this.db.prepare('SELECT 1 FROM settings WHERE key = ?').get(fablePlanEvidenceMigration)) {
+    if (!this.prepare('SELECT 1 FROM settings WHERE key = ?').get(fablePlanEvidenceMigration)) {
       // Claude's status-line payload has never contained a subscription/seat
       // classification. Earlier builds stamped those rows as Max and could
       // derive a half-pool Fable estimate from that invented fact. Keep the
@@ -308,9 +316,9 @@ class UsageStore {
       // the reproducible derived cache so current evidence can rebuild it.
       this.db.exec('BEGIN IMMEDIATE');
       try {
-        this.db.prepare("UPDATE quota_observations SET plan_type = NULL WHERE provenance = 'official-statusline'").run();
-        this.db.prepare("DELETE FROM quota_observations WHERE provenance = 'derived-tokens'").run();
-        this.db.prepare('INSERT INTO settings(key, value_json, updated_at) VALUES (?, ?, ?)')
+        this.prepare("UPDATE quota_observations SET plan_type = NULL WHERE provenance = 'official-statusline'").run();
+        this.prepare("DELETE FROM quota_observations WHERE provenance = 'derived-tokens'").run();
+        this.prepare('INSERT INTO settings(key, value_json, updated_at) VALUES (?, ?, ?)')
           .run(fablePlanEvidenceMigration, 'true', iso());
         this.db.exec('COMMIT');
       } catch (error) {
@@ -322,7 +330,7 @@ class UsageStore {
   }
 
   canonicaliseCodexManualRows() {
-    const official = this.db.prepare(`
+    const official = this.prepare(`
       SELECT bucket_id FROM quota_observations
       WHERE source_id = 'codex' AND bucket_id NOT IN ('manual-weekly', 'codex:weekly')
         AND COALESCE(window_minutes, 0) >= 10000
@@ -330,21 +338,21 @@ class UsageStore {
       ORDER BY observed_at DESC, bucket_id ASC LIMIT 1
     `).get();
     const target = official?.bucket_id || 'codex:weekly';
-    this.db.prepare(`UPDATE OR IGNORE quota_observations SET bucket_id = ?
+    this.prepare(`UPDATE OR IGNORE quota_observations SET bucket_id = ?
       WHERE source_id = 'codex' AND bucket_id = 'manual-weekly'`).run(target);
-    this.db.prepare(`DELETE FROM quota_observations
+    this.prepare(`DELETE FROM quota_observations
       WHERE source_id = 'codex' AND bucket_id = 'manual-weekly'`).run();
   }
 
   seed() {
-    const insertSource = this.db.prepare(`
+    const insertSource = this.prepare(`
       INSERT INTO sources(id, name, kind, status, metadata_json)
       VALUES (?, ?, ?, 'pending', '{}')
       ON CONFLICT(id) DO NOTHING
     `);
     for (const row of SOURCE_DEFINITIONS) insertSource.run(...row);
 
-    const insertSetting = this.db.prepare(`
+    const insertSetting = this.prepare(`
       INSERT INTO settings(key, value_json, updated_at) VALUES (?, ?, ?)
       ON CONFLICT(key) DO NOTHING
     `);
@@ -352,7 +360,7 @@ class UsageStore {
       insertSetting.run(key, JSON.stringify(value), iso());
     }
 
-    const insertPrice = this.db.prepare(`
+    const insertPrice = this.prepare(`
       INSERT INTO price_catalog(
         model, input_usd_per_million, cache_write_usd_per_million,
         cache_write_1h_usd_per_million, cache_read_usd_per_million,
@@ -368,7 +376,7 @@ class UsageStore {
     }
     // Repair only the obsolete built-in Sonnet row. User-edited rows do not
     // match this complete old vector and are left alone.
-    this.db.prepare(`UPDATE price_catalog SET input_usd_per_million = 2,
+    this.prepare(`UPDATE price_catalog SET input_usd_per_million = 2,
       cache_write_usd_per_million = 2.5, cache_write_1h_usd_per_million = 4,
       cache_read_usd_per_million = 0.2, output_usd_per_million = 10,
       effective_from = '2026-08-01'
@@ -376,7 +384,7 @@ class UsageStore {
         AND cache_write_usd_per_million = 3.75 AND cache_read_usd_per_million = 0.3
         AND output_usd_per_million = 15`).run();
     if (this.addedOneHourPriceColumn) {
-      const setOneHour = this.db.prepare(`UPDATE price_catalog
+      const setOneHour = this.prepare(`UPDATE price_catalog
         SET cache_write_1h_usd_per_million = ?
         WHERE model = ? AND cache_write_1h_usd_per_million = 0`);
       for (const [model, , , oneHour] of PRICE_ROWS) setOneHour.run(oneHour, model);
@@ -385,9 +393,9 @@ class UsageStore {
   }
 
   repairSettings() {
-    const update = this.db.prepare('UPDATE settings SET value_json = ?, updated_at = ? WHERE key = ?');
+    const update = this.prepare('UPDATE settings SET value_json = ?, updated_at = ? WHERE key = ?');
     const repaired = { ...DEFAULT_SETTINGS };
-    for (const row of this.db.prepare('SELECT key, value_json FROM settings').all()) {
+    for (const row of this.prepare('SELECT key, value_json FROM settings').all()) {
       if (!SETTING_VALIDATORS[row.key]) continue;
       const value = json(row.value_json, undefined);
       if (SETTING_VALIDATORS[row.key](value)) repaired[row.key] = value;
@@ -404,13 +412,44 @@ class UsageStore {
     }
   }
 
+  // node:sqlite does not cache prepared statements, so every call re-parsed
+  // its SQL; a first import calls recordUsageEvent thousands of times.
+  prepare(sql) {
+    let statement = this.statements.get(sql);
+    if (!statement) {
+      statement = this.db.prepare(sql);
+      this.statements.set(sql, statement);
+    }
+    return statement;
+  }
+
+  // Bulk importers commit once per file rather than once per row: every
+  // autocommit write is its own WAL sync. A nested call joins the outer
+  // transaction; a throw rolls the whole unit back and is re-thrown.
+  transaction(run) {
+    if (this.transactionDepth > 0) return run();
+    this.db.exec('BEGIN IMMEDIATE');
+    this.transactionDepth += 1;
+    try {
+      const result = run();
+      this.db.exec('COMMIT');
+      return result;
+    } catch (error) {
+      try { this.db.exec('ROLLBACK'); } catch { /* Preserve the original error. */ }
+      throw error;
+    } finally {
+      this.transactionDepth -= 1;
+    }
+  }
+
   close() {
+    this.statements.clear();
     this.db.close();
   }
 
   getSettings() {
     const result = { ...DEFAULT_SETTINGS };
-    for (const row of this.db.prepare('SELECT key, value_json FROM settings').all()) {
+    for (const row of this.prepare('SELECT key, value_json FROM settings').all()) {
       if (!Object.hasOwn(DEFAULT_SETTINGS, row.key)) continue;
       result[row.key] = json(row.value_json, result[row.key]);
     }
@@ -418,7 +457,7 @@ class UsageStore {
   }
 
   updateSettings(patch) {
-    const statement = this.db.prepare(`
+    const statement = this.prepare(`
       INSERT INTO settings(key, value_json, updated_at) VALUES (?, ?, ?)
       ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
     `);
@@ -464,13 +503,13 @@ class UsageStore {
       ?? !['error', 'stale', 'degraded'].includes(status);
     const successfulAt = scanSucceeded ? attemptedAt : null;
     if (metadata === undefined) {
-      this.db.prepare(`UPDATE sources SET status = ?, status_detail = ?,
+      this.prepare(`UPDATE sources SET status = ?, status_detail = ?,
         last_attempt_at = ?, last_success_at = COALESCE(?, last_success_at)
         WHERE id = ?`)
         .run(status, detail || null, attemptedAt, successfulAt, id);
       return;
     }
-    this.db.prepare(`
+    this.prepare(`
       UPDATE sources
       SET status = ?, status_detail = ?, metadata_json = ?,
         last_attempt_at = ?, last_success_at = COALESCE(?, last_success_at)
@@ -517,12 +556,12 @@ class UsageStore {
       && Number(observation.windowMinutes || 0) >= 10_000
       && observation.metadata?.limitId === 'codex'
       && observation.provenance !== 'manual-official') {
-      this.db.prepare(`UPDATE OR IGNORE quota_observations SET bucket_id = ?
+      this.prepare(`UPDATE OR IGNORE quota_observations SET bucket_id = ?
         WHERE source_id = 'codex' AND bucket_id IN ('manual-weekly', 'codex:weekly')`).run(observation.bucketId);
-      this.db.prepare(`DELETE FROM quota_observations
+      this.prepare(`DELETE FROM quota_observations
         WHERE source_id = 'codex' AND bucket_id IN ('manual-weekly', 'codex:weekly')`).run();
     }
-    this.db.prepare(`
+    this.prepare(`
       INSERT INTO quota_observations(
         source_id, bucket_id, bucket_name, observed_at, used_percent, remaining_percent,
         resets_at, window_minutes, plan_type, provenance, confidence, metadata_json
@@ -546,7 +585,7 @@ class UsageStore {
       confidence,
       JSON.stringify(observation.metadata || {}),
     );
-    this.db.prepare('UPDATE sources SET last_observation_at = ? WHERE id = ?').run(observedAt, observation.sourceId);
+    this.prepare('UPDATE sources SET last_observation_at = ? WHERE id = ?').run(observedAt, observation.sourceId);
   }
 
   recordUsageEvent(event) {
@@ -576,7 +615,7 @@ class UsageStore {
       throw new Error('Usage event reported cost must be zero or greater.');
     }
     const project = typeof event.project === 'string' && event.project.trim() ? event.project.trim() : null;
-    const result = this.db.prepare(`
+    const result = this.prepare(`
       INSERT INTO usage_events(
         event_key, source_id, occurred_at, session_id, model, project, input_tokens,
         cached_input_tokens, cache_write_input_tokens, cache_write_5m_input_tokens,
@@ -621,7 +660,7 @@ class UsageStore {
     if (sourceId === 'claude') return 'seven_day';
     if (sourceId === 'claude-fable') return 'fable_seven_day';
     if (sourceId !== 'codex') return 'manual-weekly';
-    const row = this.db.prepare(`SELECT bucket_id FROM quota_observations
+    const row = this.prepare(`SELECT bucket_id FROM quota_observations
       WHERE source_id = 'codex' AND COALESCE(window_minutes, 0) >= 10000
         AND bucket_id NOT IN ('manual-weekly', 'codex:weekly')
         AND json_valid(metadata_json) AND json_extract(metadata_json, '$.limitId') = 'codex'
@@ -631,7 +670,7 @@ class UsageStore {
 
   getRecentQuotaObservations(sourceId, bucketId, provenances = null, limit = 2) {
     const filter = provenances?.length ? ` AND provenance IN (${provenances.map(() => '?').join(', ')})` : '';
-    return this.db.prepare(`
+    return this.prepare(`
       SELECT * FROM quota_observations WHERE source_id = ? AND bucket_id = ?${filter}
       ORDER BY observed_at DESC LIMIT ?
     `).all(sourceId, bucketId, ...(provenances || []), limit);
@@ -639,7 +678,7 @@ class UsageStore {
 
   // Official readings for one bucket, oldest first, from `sinceIso` onward.
   getOfficialObservations(sourceId, bucketId, provenances, sinceIso) {
-    return this.db.prepare(`
+    return this.prepare(`
       SELECT * FROM quota_observations
       WHERE source_id = ? AND bucket_id = ? AND observed_at >= ?
         AND provenance IN (${provenances.map(() => '?').join(', ')})
@@ -648,7 +687,7 @@ class UsageStore {
   }
 
   upsertDailyUsage(sourceId, usageDate, tokens) {
-    this.db.prepare(`
+    this.prepare(`
       INSERT INTO account_daily_usage(source_id, usage_date, tokens) VALUES (?, ?, ?)
       ON CONFLICT(source_id, usage_date) DO UPDATE SET tokens = excluded.tokens
     `).run(sourceId, usageDate, Number(tokens || 0));
@@ -659,13 +698,13 @@ class UsageStore {
   // (the Codex reader's current model, for instance), so a growing transcript
   // is parsed once, not once per refresh.
   getImportedFile(filePath) {
-    const row = this.db.prepare('SELECT * FROM imported_files WHERE file_path = ?').get(filePath);
+    const row = this.prepare('SELECT * FROM imported_files WHERE file_path = ?').get(filePath);
     if (!row) return null;
     return { ...row, state: json(row.state_json, null) };
   }
 
   markImportedFile(filePath, modifiedMs, sizeBytes, state = null) {
-    this.db.prepare(`
+    this.prepare(`
       INSERT INTO imported_files(file_path, modified_ms, size_bytes, imported_at, state_json)
       VALUES (?, ?, ?, ?, ?)
       ON CONFLICT(file_path) DO UPDATE SET
@@ -677,7 +716,7 @@ class UsageStore {
   }
 
   forgetImportedFile(filePath) {
-    this.db.prepare('DELETE FROM imported_files WHERE file_path = ?').run(filePath);
+    this.prepare('DELETE FROM imported_files WHERE file_path = ?').run(filePath);
   }
 
   // Forecasting reads a bounded window of recent polls, plus each bucket's
@@ -685,7 +724,7 @@ class UsageStore {
   // vanishing. The full history stays in the table for cycle history and
   // backups; it is simply not re-forecast on every snapshot.
   getQuota(sourceId, settings = this.getSettings(), nowMs = Date.now()) {
-    const rows = this.db.prepare(`
+    const rows = this.prepare(`
       SELECT * FROM quota_observations
       WHERE source_id = ?
         AND (observed_at >= ? OR id IN (
@@ -780,27 +819,26 @@ class UsageStore {
   }
 
   lookupPrice(model, cache) {
-    const direct = this.db.prepare('SELECT * FROM price_catalog WHERE model = ?').get(model);
+    const direct = this.prepare('SELECT * FROM price_catalog WHERE model = ?').get(model);
     if (direct) return direct;
     const normalized = model.toLowerCase().trim();
     const rows = cache
-      ? (cache.rows ??= this.db.prepare('SELECT * FROM price_catalog').all())
-      : this.db.prepare('SELECT * FROM price_catalog').all();
+      ? (cache.rows ??= this.prepare('SELECT * FROM price_catalog').all())
+      : this.prepare('SELECT * FROM price_catalog').all();
     const exactInsensitive = rows.find((row) => row.model.toLowerCase() === normalized);
     if (exactInsensitive) return exactInsensitive;
-    const versionSuffix = /^(?:\d{8}|\d{4}(?:-\d{2}){0,2}|v?\d+(?:[.-]\d+)*)$/;
     const candidates = rows
       .filter((row) => {
         const priceModel = row.model.toLowerCase();
         if (!normalized.startsWith(`${priceModel}-`)) return false;
-        return versionSuffix.test(normalized.slice(priceModel.length + 1));
+        return VERSION_SUFFIX.test(normalized.slice(priceModel.length + 1));
       })
       .sort((a, b) => b.model.length - a.model.length || a.model.localeCompare(b.model));
     return candidates[0] || null;
   }
 
   getPriceCatalog() {
-    return this.db.prepare(`
+    return this.prepare(`
       SELECT model, input_usd_per_million, cache_write_usd_per_million,
         cache_write_1h_usd_per_million, cache_read_usd_per_million,
         output_usd_per_million, effective_from, source_url
@@ -812,7 +850,7 @@ class UsageStore {
     const values = ['inputUsdPerMillion', 'cacheWriteUsdPerMillion', 'cacheWrite1hUsdPerMillion', 'cacheReadUsdPerMillion', 'outputUsdPerMillion']
       .map((key) => Number(row[key]));
     if (!row.model || values.some((value) => !Number.isFinite(value) || value < 0)) throw new Error('Every model price must be zero or greater.');
-    this.db.prepare(`
+    this.prepare(`
       INSERT INTO price_catalog(model, input_usd_per_million, cache_write_usd_per_million,
         cache_write_1h_usd_per_million, cache_read_usd_per_million,
         output_usd_per_million, effective_from, source_url)
@@ -884,7 +922,8 @@ class UsageStore {
 
   buildCostAnalytics(days, settings, nowMs) {
     const since = iso(nowMs - days * DAY_MS);
-    const events = this.db.prepare('SELECT * FROM usage_events WHERE occurred_at >= ? ORDER BY occurred_at ASC').all(since);
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const events = this.prepare('SELECT * FROM usage_events WHERE occurred_at >= ? ORDER BY occurred_at ASC').all(since);
     const byModelMap = new Map();
     const unpricedModelsMap = new Map();
     const byDayMap = new Map();
@@ -943,12 +982,12 @@ class UsageStore {
       if (cost.covered) model.coveredTokens += eventTokens;
       byModelMap.set(key, model);
 
-      const day = dateKey(event.occurred_at);
+      const day = dateKey(event.occurred_at, timeZone);
       const dayRow = byDayMap.get(day) || { date: day, codexUsd: 0, claudeUsd: 0 };
       if (event.source_id === 'codex') dayRow.codexUsd += cost.actualUsd;
       else dayRow.claudeUsd += cost.actualUsd;
       byDayMap.set(day, dayRow);
-      const slot = localSlot(event.occurred_at);
+      const slot = localSlot(event.occurred_at, timeZone);
       activityUsd[slot.weekday][slot.hour] += cost.actualUsd;
 
       const projectKey = event.project || '';
@@ -1047,7 +1086,7 @@ class UsageStore {
   getCycleHistory(sourceId, quota, settings = this.getSettings(), limit = 8, nowMs = Date.now()) {
     if (!quota) return [];
     const bucketId = quota.bucketId;
-    const rows = this.db.prepare(`
+    const rows = this.prepare(`
       SELECT resets_at, window_minutes, MAX(used_percent) AS peak_used,
         MIN(observed_at) AS first_observed_at, MAX(observed_at) AS last_observed_at,
         COUNT(*) AS readings
@@ -1075,37 +1114,61 @@ class UsageStore {
     const rate = Number(settings.usdToCurrency || 1);
     const eventSource = sourceId === 'codex' ? 'codex' : 'claude';
     const modelFilter = sourceId === 'claude-fable' ? "AND LOWER(COALESCE(model, '')) LIKE '%fable%'" : '';
-    const costStatement = this.db.prepare(`
-      SELECT * FROM usage_events
-      WHERE source_id = ? AND occurred_at >= ? AND occurred_at < ? ${modelFilter}
-    `);
-    return this.withPriceCache(() => merged.slice(0, limit).map((row) => {
+    const windows = merged.slice(0, limit).map((row) => {
       const resetMs = new Date(row.resets_at).getTime();
       const windowMinutes = Number(row.window_minutes) > 0 ? Number(row.window_minutes) : 10_080;
       const startMs = resetMs - windowMinutes * 60_000;
-      let usd = 0;
-      let tokens = 0;
-      for (const event of costStatement.all(eventSource, iso(startMs), iso(Math.min(resetMs, nowMs)))) {
-        usd += this.calculateCost(event).actualUsd;
-        // Codex reports cached input as a subset of input; Claude reports it
-        // separately. Same rule as buildCostAnalytics so the two tables agree.
-        tokens += event.source_id === 'codex'
-          ? Number(event.input_tokens) + Number(event.cache_write_input_tokens) + Number(event.output_tokens)
-          : Number(event.input_tokens) + Number(event.cached_input_tokens)
-            + Number(event.cache_write_input_tokens) + Number(event.output_tokens);
-      }
       return {
-        resetsAt: row.resets_at,
-        startsAt: iso(startMs),
+        row,
+        resetMs,
         windowMinutes,
-        peakUsedPercent: round(Number(row.peak_used), 1),
-        readings: Number(row.readings),
-        firstObservedAt: row.first_observed_at,
-        lastObservedAt: row.last_observed_at,
-        current: resetMs > nowMs,
-        cost: round(usd * rate, 2),
-        tokens,
+        startIso: iso(startMs),
+        endIso: iso(Math.min(resetMs, nowMs)),
+        usd: 0,
+        tokens: 0,
       };
+    });
+    // One range query covers every window, and each event is costed once and
+    // credited to the windows that contain it, instead of one query and a
+    // full re-costing per window. Timestamps are normalised ISO strings, so
+    // the comparison is the same text comparison the query used.
+    if (windows.length) {
+      const events = this.prepare(`
+        SELECT * FROM usage_events
+        WHERE source_id = ? AND occurred_at >= ? AND occurred_at < ? ${modelFilter}
+      `).all(
+        eventSource,
+        windows.reduce((min, window) => (window.startIso < min ? window.startIso : min), windows[0].startIso),
+        windows.reduce((max, window) => (window.endIso > max ? window.endIso : max), windows[0].endIso),
+      );
+      this.withPriceCache(() => {
+        for (const event of events) {
+          let usd = null;
+          for (const window of windows) {
+            if (event.occurred_at < window.startIso || event.occurred_at >= window.endIso) continue;
+            usd ??= this.calculateCost(event).actualUsd;
+            window.usd += usd;
+            // Codex reports cached input as a subset of input; Claude reports it
+            // separately. Same rule as buildCostAnalytics so the two tables agree.
+            window.tokens += event.source_id === 'codex'
+              ? Number(event.input_tokens) + Number(event.cache_write_input_tokens) + Number(event.output_tokens)
+              : Number(event.input_tokens) + Number(event.cached_input_tokens)
+                + Number(event.cache_write_input_tokens) + Number(event.output_tokens);
+          }
+        }
+      });
+    }
+    return windows.map(({ row, resetMs, windowMinutes, startIso, usd, tokens }) => ({
+      resetsAt: row.resets_at,
+      startsAt: startIso,
+      windowMinutes,
+      peakUsedPercent: round(Number(row.peak_used), 1),
+      readings: Number(row.readings),
+      firstObservedAt: row.first_observed_at,
+      lastObservedAt: row.last_observed_at,
+      current: resetMs > nowMs,
+      cost: round(usd * rate, 2),
+      tokens,
     }));
   }
 
@@ -1113,7 +1176,7 @@ class UsageStore {
   // Token counts and the current-catalogue equivalent in USD; no prompts.
   exportLedgerCsv(days = 90, nowMs = Date.now()) {
     const since = iso(nowMs - days * DAY_MS);
-    const events = this.db.prepare('SELECT * FROM usage_events WHERE occurred_at >= ? ORDER BY occurred_at ASC').all(since);
+    const events = this.prepare('SELECT * FROM usage_events WHERE occurred_at >= ? ORDER BY occurred_at ASC').all(since);
     const escape = (value) => {
       const text = value == null ? '' : String(value);
       return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
@@ -1143,7 +1206,7 @@ class UsageStore {
   // growing with the refresh interval. Manual readings are never touched.
   compactObservations(nowMs = Date.now()) {
     const cutoff = iso(nowMs - COMPACT_AFTER_MS);
-    const result = this.db.prepare(`
+    const result = this.prepare(`
       DELETE FROM quota_observations
       WHERE observed_at < ? AND provenance != 'manual-official' AND id NOT IN (
         SELECT MIN(id) FROM quota_observations WHERE observed_at < ?
@@ -1158,7 +1221,7 @@ class UsageStore {
 
   getDailyUsage(days = 90) {
     const since = dateKey(Date.now() - days * 24 * 60 * 60 * 1000);
-    return this.db.prepare(`
+    return this.prepare(`
       SELECT source_id AS sourceId, usage_date AS date, tokens
       FROM account_daily_usage
       WHERE usage_date >= ?
@@ -1168,7 +1231,7 @@ class UsageStore {
 
   getDashboardSnapshot(days = 30, nowMs = Date.now()) {
     const settings = this.getSettings();
-    const sources = this.db.prepare('SELECT * FROM sources ORDER BY CASE id WHEN \'codex\' THEN 1 WHEN \'claude\' THEN 2 ELSE 3 END').all()
+    const sources = this.prepare('SELECT * FROM sources ORDER BY CASE id WHEN \'codex\' THEN 1 WHEN \'claude\' THEN 2 ELSE 3 END').all()
       .map((row) => ({ ...row, metadata: json(row.metadata_json, {}) }));
     const quotas = {
       codex: this.getQuota('codex', settings, nowMs),
@@ -1212,14 +1275,14 @@ class UsageStore {
       schemaVersion: 1,
       exportedAt: iso(),
       settings: this.getSettings(),
-      sources: this.db.prepare('SELECT * FROM sources').all(),
-      observations: this.db.prepare('SELECT * FROM quota_observations').all(),
-      usageEvents: this.db.prepare('SELECT * FROM usage_events').all(),
-      dailyUsage: this.db.prepare('SELECT * FROM account_daily_usage').all(),
-      prices: this.db.prepare('SELECT * FROM price_catalog').all(),
+      sources: this.prepare('SELECT * FROM sources').all(),
+      observations: this.prepare('SELECT * FROM quota_observations').all(),
+      usageEvents: this.prepare('SELECT * FROM usage_events').all(),
+      dailyUsage: this.prepare('SELECT * FROM account_daily_usage').all(),
+      prices: this.prepare('SELECT * FROM price_catalog').all(),
     };
     fs.writeFileSync(exportPath, JSON.stringify(payload, null, 2), 'utf8');
-    this.db.prepare('INSERT INTO backups(created_at, database_path, export_path) VALUES (?, ?, ?)')
+    this.prepare('INSERT INTO backups(created_at, database_path, export_path) VALUES (?, ?, ?)')
       .run(iso(), databasePath, exportPath);
     this.pruneBackups(this.getSettings().backupRetentionCount, options.keep);
     return { databasePath, exportPath };
@@ -1258,13 +1321,13 @@ class UsageStore {
     const knownSources = new Set(SOURCE_DEFINITIONS.map(([id]) => id));
     const counts = { settings: 0, observations: 0, usageEvents: 0, dailyUsage: 0, prices: 0, skipped: 0 };
 
-    const insertObservation = this.db.prepare(`
+    const insertObservation = this.prepare(`
       INSERT OR IGNORE INTO quota_observations(
         source_id, bucket_id, bucket_name, observed_at, used_percent, remaining_percent,
         resets_at, window_minutes, plan_type, provenance, confidence, metadata_json
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    const insertEvent = this.db.prepare(`
+    const insertEvent = this.prepare(`
       INSERT INTO usage_events(
         event_key, source_id, occurred_at, session_id, model, project, input_tokens,
         cached_input_tokens, cache_write_input_tokens, cache_write_5m_input_tokens,
@@ -1277,18 +1340,18 @@ class UsageStore {
     // `upsertDailyUsage` and `updatePrice`. Last-writer-wins is right for a
     // collector and wrong for a merge: an old export must not roll back a
     // newer daily total or discard a price the user edited by hand.
-    const insertDailyUsage = this.db.prepare(`
+    const insertDailyUsage = this.prepare(`
       INSERT INTO account_daily_usage(source_id, usage_date, tokens) VALUES (?, ?, ?)
       ON CONFLICT(source_id, usage_date) DO NOTHING
     `);
-    const insertPrice = this.db.prepare(`
+    const insertPrice = this.prepare(`
       INSERT INTO price_catalog(model, input_usd_per_million, cache_write_usd_per_million,
         cache_write_1h_usd_per_million, cache_read_usd_per_million,
         output_usd_per_million, effective_from, source_url)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(model) DO NOTHING
     `);
-    const setSetting = this.db.prepare(`
+    const setSetting = this.prepare(`
       INSERT INTO settings(key, value_json, updated_at) VALUES (?, ?, ?)
       ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
     `);
@@ -1462,7 +1525,7 @@ class UsageStore {
   pruneBackups(retentionCount = DEFAULT_SETTINGS.backupRetentionCount, keepPath = null) {
     const keep = Math.max(1, Math.min(365, Number(retentionCount) || DEFAULT_SETTINGS.backupRetentionCount));
     const protectedPath = keepPath ? path.resolve(keepPath) : null;
-    const rows = this.db.prepare('SELECT * FROM backups ORDER BY created_at DESC, id DESC').all();
+    const rows = this.prepare('SELECT * FROM backups ORDER BY created_at DESC, id DESC').all();
     const root = path.resolve(this.backupDirectory);
     const removeFile = (filePath) => {
       if (!filePath) return true;
@@ -1482,7 +1545,7 @@ class UsageStore {
       const databaseRemoved = removeFile(row.database_path);
       const exportRemoved = removeFile(row.export_path);
       if (databaseRemoved && exportRemoved) {
-        this.db.prepare('DELETE FROM backups WHERE id = ?').run(row.id);
+        this.prepare('DELETE FROM backups WHERE id = ?').run(row.id);
         removed += 1;
       }
     }
@@ -1494,7 +1557,7 @@ class UsageStore {
     if (!frequency || frequency === 'off') return null;
     const intervals = { daily: 24 * 60 * 60 * 1000, weekly: 7 * 24 * 60 * 60 * 1000 };
     const interval = intervals[frequency] || intervals.daily;
-    const latest = this.db.prepare('SELECT created_at FROM backups ORDER BY created_at DESC LIMIT 1').get();
+    const latest = this.prepare('SELECT created_at FROM backups ORDER BY created_at DESC LIMIT 1').get();
     if (latest && Date.now() - new Date(latest.created_at).getTime() < interval) return null;
     return this.createBackup();
   }

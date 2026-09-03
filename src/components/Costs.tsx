@@ -4,8 +4,7 @@ import { compactNumber, money, percent, sourceLabel } from '../lib';
 import type { Snapshot } from '../types';
 import { CostChart } from './Charts';
 import { API_EQUIVALENT_EXPLAINER, InfoTip } from './InfoTip';
-import { cacheHitRate } from './details/MetricRibbon';
-import { rollups } from './details/RecentRollups';
+import { cacheHitRate, rollups } from './details/cost-math';
 import { ModelTable, ProjectTable, SessionTable } from './details/Tables';
 
 export function Costs({
