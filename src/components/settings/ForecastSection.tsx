@@ -15,7 +15,7 @@ export function ForecastSection({
     <section id="schedule" className="panel settings-section">
       <SectionHeading
         title="Forecast"
-        description="History is weighted by recency, hour, weekday, and current momentum. Active hours define when future use is likely, not a flat burn rate."
+        description="Tell AI Usage when you normally work and how much allowance you prefer to keep back."
       />
       <div className="settings-fields">
         <label>
@@ -36,15 +36,6 @@ export function ForecastSection({
             {hourOptions(1, 24)}
           </select>
         </label>
-        <NumericSetting
-          label="New-source fallback"
-          value={settings.forecastFallbackRate}
-          min={0.05}
-          max={100}
-          step={0.05}
-          suffix="% / hour"
-          onCommit={(value) => update({ forecastFallbackRate: value })}
-        />
       </div>
       <div className="day-picker" role="group" aria-label="Active days">
         {DAY_NAMES.map((day, index) => {
@@ -76,21 +67,24 @@ export function ForecastSection({
           onCommit={(value) => update({ reservePercent: Math.round(value) })}
         />
       </div>
-      <div className="learning-note">
-        <span>
-          <strong>Budget mode</strong>
-          The reserve is the share of each allowance you want untouched at reset, for example to keep the weekend free.
-          The safe pace spends only what is above it, and a projection that would eat into it is shown as a watch state.
-          The forecast itself still reports what will actually happen.
-        </span>
-      </div>
-      <div className="learning-note">
-        <span>
-          <strong>Three independent learners</strong>
-          Codex, overall Claude, and Fable 5 build their own history. The heavier forecast uses the busy end of each
-          source's real observed pattern.
-        </span>
-      </div>
+      <details className="inline-advanced">
+        <summary>Forecast model defaults</summary>
+        <div className="inline-advanced-body">
+          <NumericSetting
+            label="New-source fallback"
+            value={settings.forecastFallbackRate}
+            min={0.05}
+            max={100}
+            step={0.05}
+            suffix="% / hour"
+            onCommit={(value) => update({ forecastFallbackRate: value })}
+          />
+          <p>
+            History is weighted by recency, hour, weekday, and current momentum. Codex, Claude, and Fable 5 learn
+            independently; the heavier case uses the busy end of each source’s observed pattern.
+          </p>
+        </div>
+      </details>
     </section>
   );
 }

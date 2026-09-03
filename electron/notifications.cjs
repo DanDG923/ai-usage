@@ -120,7 +120,7 @@ function decideNotifications({ previous, current, state = emptyState(), nowMs = 
     next.lastRiskSignature = '';
   } else if (settings.notifyDesktop && !snoozed) {
     const affected = Array.isArray(verdict.affected) ? verdict.affected : [];
-    const signature = `${verdict.state}|${affected.join('|')}`;
+    const signature = `${verdict.state}|${verdict.reason || 'unspecified'}|${affected.join('|')}`;
     const escalated = verdict.state === 'critical' && !next.lastRiskSignature.startsWith('critical|');
     const repeated = !escalated && signature === next.lastRiskSignature;
     const coolingDown = !escalated && nowMs - next.lastRiskNotifiedAt < RISK_COOLDOWN_MS;
@@ -136,10 +136,25 @@ function decideNotifications({ previous, current, state = emptyState(), nowMs = 
       const when = runsOut
         ? ` At the current pace the earliest run-out is ${new Date(runsOut).toLocaleString('en-GB', { weekday: 'short', hour: '2-digit', minute: '2-digit' })}.`
         : '';
+      const subject = affected.join(', ') || 'An allowance window';
+      const title = verdict.state === 'critical'
+        ? 'An allowance is projected to run out'
+        : verdict.reason === 'heavy-exhaustion'
+          ? 'An allowance could run out under heavier usage'
+          : verdict.reason === 'mixed'
+            ? 'Multiple allowances need attention'
+            : 'AI usage pace needs attention';
+      const body = verdict.state === 'critical'
+        ? `${subject} is projected to exhaust its allowance before reset.${when}`
+        : verdict.reason === 'heavy-exhaustion'
+          ? `${subject} remains above zero in the expected forecast, but could exhaust under heavier usage before reset.`
+          : verdict.reason === 'mixed'
+            ? `${subject} need attention for different forecast reasons. Open AI Usage for the provider-level detail.${when}`
+            : `${subject} is above the configured safe pace.${when}`;
       notifications.push({
         kind: 'risk',
-        title: verdict.state === 'critical' ? 'An allowance is projected to run out' : 'AI usage pace needs attention',
-        body: `${affected.join(', ') || 'An allowance window'} is projected to approach or exhaust its allowance before reset.${when}`,
+        title,
+        body,
       });
     }
   }

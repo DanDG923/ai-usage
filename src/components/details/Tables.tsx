@@ -19,8 +19,18 @@ export function EquivalentValue({ cost, coverage, currency }: { cost: number; co
   return <strong>{money(cost, currency)}</strong>;
 }
 
-export function ProjectTable({ costs }: { costs: CostAnalytics }) {
-  const rows = costs.byProject;
+function matchesQuery(query: string | undefined, values: unknown[]) {
+  const needle = query?.trim().toLocaleLowerCase();
+  if (!needle) return true;
+  return values.some((value) =>
+    String(value ?? '')
+      .toLocaleLowerCase()
+      .includes(needle),
+  );
+}
+
+export function ProjectTable({ costs, query }: { costs: CostAnalytics; query?: string }) {
+  const rows = costs.byProject.filter((row) => matchesQuery(query, [row.project, ...row.sources]));
   return (
     <section className="panel table-panel">
       <div className="panel-heading">
@@ -78,7 +88,8 @@ export function ProjectTable({ costs }: { costs: CostAnalytics }) {
   );
 }
 
-export function ModelTable({ costs }: { costs: CostAnalytics }) {
+export function ModelTable({ costs, query }: { costs: CostAnalytics; query?: string }) {
+  const rows = costs.byModel.filter((row) => matchesQuery(query, [row.sourceId, row.model]));
   return (
     <section className="panel table-panel">
       <div className="panel-heading">
@@ -102,8 +113,8 @@ export function ModelTable({ costs }: { costs: CostAnalytics }) {
             </tr>
           </thead>
           <tbody>
-            {costs.byModel.length ? (
-              costs.byModel.map((row) => (
+            {rows.length ? (
+              rows.map((row) => (
                 <tr key={`${row.sourceId}-${row.model}`}>
                   <td>
                     <span className={`table-provider ${row.sourceId}`}>{sourceLabel(row.sourceId)}</span>
@@ -137,7 +148,10 @@ export function ModelTable({ costs }: { costs: CostAnalytics }) {
   );
 }
 
-export function SessionTable({ costs }: { costs: CostAnalytics }) {
+export function SessionTable({ costs, query }: { costs: CostAnalytics; query?: string }) {
+  const rows = costs.sessions.filter((row) =>
+    matchesQuery(query, [row.sourceId, row.project, row.sessionId, row.model]),
+  );
   return (
     <section className="panel table-panel session-panel">
       <div className="panel-heading">
@@ -159,8 +173,8 @@ export function SessionTable({ costs }: { costs: CostAnalytics }) {
             </tr>
           </thead>
           <tbody>
-            {costs.sessions.length ? (
-              costs.sessions.map((row) => (
+            {rows.length ? (
+              rows.map((row) => (
                 <tr key={`${row.sourceId}-${row.sessionId}-${row.model}`}>
                   <td>
                     <span className={`source-dot ${row.sourceId}`} />

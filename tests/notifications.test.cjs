@@ -55,6 +55,28 @@ test('risk fires once per episode and includes the earliest run-out time', () =>
   assert.equal(second.notifications.length, 0);
 });
 
+test('heavy-only risk uses conditional wording rather than pace wording', () => {
+  const fable = window({
+    bucketId: 'fable_seven_day',
+    forecast: {
+      state: 'risk', expectedRemaining: 41, heavyRemaining: 0, exhaustsAt: null,
+      heavyExhaustsAt: '2026-09-04T14:00:00.000Z', currentIsEstimated: false,
+    },
+  });
+  const current = snapshot({
+    dashboardVerdict: {
+      state: 'risk', reason: 'heavy-exhaustion',
+      label: 'Fable 5 could reach its limit under heavier usage', affected: ['Fable 5 · Weekly'],
+    },
+    quotas: { codex: null, claude: null, fable: { ...fable, windows: [fable] } },
+  });
+
+  const result = decideNotifications({ previous: null, current, state: emptyState(), nowMs: NOW });
+  assert.equal(result.notifications[0].title, 'An allowance could run out under heavier usage');
+  assert.doesNotMatch(result.notifications[0].body, /current pace/i);
+  assert.match(result.notifications[0].body, /expected forecast/i);
+});
+
 test('escalation to critical always notifies even inside the cooldown', () => {
   const risk = snapshot({ dashboardVerdict: { state: 'risk', label: 'Codex may hit the limit', affected: ['Codex · Weekly'] } });
   const first = decideNotifications({ previous: null, current: risk, state: emptyState(), nowMs: NOW });

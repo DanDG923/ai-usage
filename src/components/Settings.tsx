@@ -1,4 +1,4 @@
-import { BellRing, CircleDollarSign, Clock3, Download, HardDrive, Palette, PlugZap, Stethoscope } from 'lucide-react';
+import { ChevronDown, Database, ShieldCheck, SlidersHorizontal, Wrench } from 'lucide-react';
 import { useState } from 'react';
 import type { ManualObservation, PriceRow, Settings as SettingsType, Snapshot, UpdateStatus } from '../types';
 import { AlertsSection } from './settings/AlertsSection';
@@ -25,17 +25,6 @@ export type SettingsActions = {
   onCheckUpdates: () => Promise<UpdateStatus | null>;
 };
 
-const NAV = [
-  ['sources', PlugZap, 'Sources'],
-  ['schedule', Clock3, 'Forecast'],
-  ['alerts', BellRing, 'Alerts'],
-  ['appearance', Palette, 'Appearance & updates'],
-  ['pricing', CircleDollarSign, 'API pricing'],
-  ['storage', HardDrive, 'Storage & export'],
-  ['manual', Download, 'Manual observation'],
-  ['diagnostics', Stethoscope, 'Diagnostics'],
-] as const;
-
 export function Settings({ snapshot, actions }: { snapshot: Snapshot; actions: SettingsActions }) {
   const [saving, setSaving] = useState(false);
   const update = async (patch: Partial<SettingsType>) => {
@@ -46,40 +35,111 @@ export function Settings({ snapshot, actions }: { snapshot: Snapshot; actions: S
       setSaving(false);
     }
   };
+
   return (
-    <main className="page settings-page" id="panel-settings" role="tabpanel" aria-labelledby="tab-settings">
-      <aside className="settings-nav">
-        <h1>Settings</h1>
-        <p>Everything stays on this PC. Nothing is uploaded.</p>
-        {NAV.map(([id, Icon, label]) => (
-          <a key={id} href={`#${id}`}>
-            <Icon aria-hidden="true" />
-            {label}
-          </a>
-        ))}
-      </aside>
+    <main
+      className="page settings-page"
+      id="panel-settings"
+      role="tabpanel"
+      aria-labelledby="tab-settings"
+      tabIndex={-1}
+    >
+      <section className="page-lead product-lead settings-lead">
+        <div>
+          <h1>Settings</h1>
+          <p>
+            Common preferences stay visible. Pricing, data-management, and diagnostic controls are available when
+            needed.
+          </p>
+        </div>
+        <div className="page-fact safe">
+          <ShieldCheck aria-hidden="true" />
+          <span>Everything stays on this PC</span>
+        </div>
+      </section>
+
       <div className="settings-content">
-        <SourcesSection
-          snapshot={snapshot}
-          update={update}
-          onInstallClaude={actions.onInstallClaude}
-          onUninstallClaude={actions.onUninstallClaude}
-        />
-        <ForecastSection snapshot={snapshot} update={update} />
-        <AlertsSection snapshot={snapshot} update={update} onSnooze={actions.onSnooze} />
-        <AppearanceSection snapshot={snapshot} update={update} onCheckUpdates={actions.onCheckUpdates} />
-        <PricingSection snapshot={snapshot} update={update} onPrice={actions.onPrice} />
-        <StorageSection
-          snapshot={snapshot}
-          update={update}
-          onBackup={actions.onBackup}
-          onRestore={actions.onRestore}
-          onOpenBackups={actions.onOpenBackups}
-          onExportCsv={actions.onExportCsv}
-          onCopySummary={actions.onCopySummary}
-        />
-        <ManualSection onManual={actions.onManual} />
-        <DiagnosticsSection snapshot={snapshot} />
+        <section className="settings-group" aria-labelledby="data-collection-heading">
+          <div className="settings-group-heading">
+            <Database aria-hidden="true" />
+            <div>
+              <h2 id="data-collection-heading">Data and collection</h2>
+              <p>Choose which local sources contribute to your allowance view.</p>
+            </div>
+          </div>
+          <SourcesSection
+            snapshot={snapshot}
+            update={update}
+            onInstallClaude={actions.onInstallClaude}
+            onUninstallClaude={actions.onUninstallClaude}
+          />
+        </section>
+
+        <section className="settings-group" aria-labelledby="forecast-alerts-heading">
+          <div className="settings-group-heading">
+            <SlidersHorizontal aria-hidden="true" />
+            <div>
+              <h2 id="forecast-alerts-heading">Forecast and alerts</h2>
+              <p>Set your normal schedule, reserve, and notification preferences.</p>
+            </div>
+          </div>
+          <ForecastSection snapshot={snapshot} update={update} />
+          <AlertsSection snapshot={snapshot} update={update} onSnooze={actions.onSnooze} />
+        </section>
+
+        <section className="settings-group" aria-labelledby="appearance-heading">
+          <div className="settings-group-heading">
+            <SlidersHorizontal aria-hidden="true" />
+            <div>
+              <h2 id="appearance-heading">Appearance and updates</h2>
+              <p>Match Windows or choose a fixed theme, and control application updates.</p>
+            </div>
+          </div>
+          <AppearanceSection snapshot={snapshot} update={update} onCheckUpdates={actions.onCheckUpdates} />
+        </section>
+
+        <details className="settings-disclosure">
+          <summary>
+            <span>
+              <Database aria-hidden="true" />
+              <span>
+                <strong>Pricing and data management</strong>
+                <small>API catalogue, backups, exports, and storage</small>
+              </span>
+            </span>
+            <ChevronDown aria-hidden="true" />
+          </summary>
+          <div className="settings-disclosure-body">
+            <PricingSection snapshot={snapshot} update={update} onPrice={actions.onPrice} />
+            <StorageSection
+              snapshot={snapshot}
+              update={update}
+              onBackup={actions.onBackup}
+              onRestore={actions.onRestore}
+              onOpenBackups={actions.onOpenBackups}
+              onExportCsv={actions.onExportCsv}
+              onCopySummary={actions.onCopySummary}
+            />
+          </div>
+        </details>
+
+        <details className="settings-disclosure advanced-disclosure">
+          <summary>
+            <span>
+              <Wrench aria-hidden="true" />
+              <span>
+                <strong>Advanced</strong>
+                <small>Manual observations and diagnostics</small>
+              </span>
+            </span>
+            <ChevronDown aria-hidden="true" />
+          </summary>
+          <div className="settings-disclosure-body">
+            <ManualSection onManual={actions.onManual} />
+            <DiagnosticsSection snapshot={snapshot} />
+          </div>
+        </details>
+
         {saving && (
           <span className="saving-toast" role="status">
             Saving locally…

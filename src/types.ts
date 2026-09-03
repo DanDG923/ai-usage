@@ -43,11 +43,29 @@ export type QuotaWindow = {
 
 export type Quota = QuotaWindow & { windows: QuotaWindow[] };
 
+export type ForecastReason = 'expected-exhaustion' | 'heavy-exhaustion' | 'pace' | 'watch';
+
+export type DashboardVerdictDetail = {
+  sourceId: 'codex' | 'claude' | 'fable';
+  sourceLabel: string;
+  bucketId: string;
+  bucketName: string;
+  state: ForecastState;
+  reasons: ForecastReason[];
+  expectedRemaining: number | null;
+  heavyRemaining: number | null;
+  exhaustsAt: string | null;
+  heavyExhaustsAt: string | null;
+  paceRatio: number;
+};
+
 export type DashboardVerdict = {
   state: ForecastState;
+  reason: ForecastReason | 'mixed' | null;
   label: string;
   windowsChecked: number;
   affected: string[];
+  details: DashboardVerdictDetail[];
 };
 
 export type SourceId = 'codex' | 'claude' | 'claude-fable';

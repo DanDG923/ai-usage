@@ -148,17 +148,10 @@ export function verdictSentence(verdict: DashboardVerdict, quotas: Snapshot['quo
     .filter((entry) => primaryWindow(entry.quota)?.forecast.state === 'safe')
     .map((entry) => entry.name);
   const secondary = others.length ? `${join(others)} ${others.length === 1 ? 'is' : 'are'} on track.` : '';
-  if (verdict.state === 'safe') return { headline: 'All allowances on track', secondary: '' };
-  if (verdict.state === 'unknown') return { headline: verdict.label, secondary };
-  const plural = affectedNames.length > 1;
-  const windowWord = verdict.affected.some((entry) => /weekly|seven_day/i.test(entry)) ? 'weekly limit' : 'limit';
-  const headline =
-    verdict.state === 'watch'
-      ? `${join(affectedNames)} ${plural ? 'are' : 'is'} running warm`
-      : verdict.state === 'critical'
-        ? `${join(affectedNames)} ${plural ? 'have' : 'has'} run out or will before reset`
-        : `${join(affectedNames)} ${plural ? 'are' : 'is'} likely to reach ${plural ? 'their' : 'its'} ${windowWord} before reset`;
-  return { headline, secondary };
+  return {
+    headline: verdict.state === 'safe' ? 'All allowances on track' : verdict.label,
+    secondary: verdict.state === 'safe' ? '' : secondary,
+  };
 }
 
 export function windowLabel(minutes: number | null) {
