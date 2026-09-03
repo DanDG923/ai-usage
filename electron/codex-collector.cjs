@@ -274,52 +274,56 @@ function importLocalSessions(store, days = 120) {
     } catch {
       continue;
     }
-    for (const line of chunk.lines) {
-      let entry;
-      try {
-        entry = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (entry.type === 'session_meta') {
-        if (entry.payload?.id) state.sessionId = entry.payload.id;
-        if (typeof entry.payload?.cwd === 'string' && entry.payload.cwd.trim()) state.project = entry.payload.cwd.trim();
-      }
-      if (entry.type === 'turn_context') state.model = entry.payload?.model || state.model;
-      if (entry.type !== 'event_msg' || entry.payload?.type !== 'token_count') continue;
-      const usage = entry.payload?.info?.last_token_usage;
-      const sessionId = state.sessionId;
-      const currentModel = state.model;
-      if (usage) {
-        // One malformed event must not stop the file; see the Claude importer.
+    // One commit per file: the rows and the cursor that says they were read
+    // land together, and a first import no longer pays a WAL sync per event.
+    store.transaction(() => {
+      for (const line of chunk.lines) {
+        let entry;
         try {
-          store.recordUsageEvent({
-            eventKey: `codex:${sessionId}:${entry.timestamp}`,
-            sourceId: 'codex',
-            occurredAt: entry.timestamp,
-            sessionId,
-            model: currentModel,
-            project: state.project,
-            inputTokens: usage.input_tokens,
-            cachedInputTokens: usage.cached_input_tokens,
-            cacheWriteInputTokens: usage.cache_write_input_tokens,
-            cacheWrite5mInputTokens: usage.cache_write_input_tokens,
-            cacheWrite1hInputTokens: 0,
-            outputTokens: usage.output_tokens,
-            reasoningOutputTokens: usage.reasoning_output_tokens,
-            metadata: { source: 'codex-session-log' },
-          });
-          events += 1;
-        } catch (error) {
-          rejected += 1;
-          lastRejection = error instanceof Error ? error.message : String(error);
+          entry = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (entry.type === 'session_meta') {
+          if (entry.payload?.id) state.sessionId = entry.payload.id;
+          if (typeof entry.payload?.cwd === 'string' && entry.payload.cwd.trim()) state.project = entry.payload.cwd.trim();
+        }
+        if (entry.type === 'turn_context') state.model = entry.payload?.model || state.model;
+        if (entry.type !== 'event_msg' || entry.payload?.type !== 'token_count') continue;
+        const usage = entry.payload?.info?.last_token_usage;
+        const sessionId = state.sessionId;
+        const currentModel = state.model;
+        if (usage) {
+          // One malformed event must not stop the file; see the Claude importer.
+          try {
+            store.recordUsageEvent({
+              eventKey: `codex:${sessionId}:${entry.timestamp}`,
+              sourceId: 'codex',
+              occurredAt: entry.timestamp,
+              sessionId,
+              model: currentModel,
+              project: state.project,
+              inputTokens: usage.input_tokens,
+              cachedInputTokens: usage.cached_input_tokens,
+              cacheWriteInputTokens: usage.cache_write_input_tokens,
+              cacheWrite5mInputTokens: usage.cache_write_input_tokens,
+              cacheWrite1hInputTokens: 0,
+              outputTokens: usage.output_tokens,
+              reasoningOutputTokens: usage.reasoning_output_tokens,
+              metadata: { source: 'codex-session-log' },
+            });
+            events += 1;
+          } catch (error) {
+            rejected += 1;
+            lastRejection = error instanceof Error ? error.message : String(error);
+          }
+        }
+        if (entry.payload?.rate_limits) {
+          observations += recordRateLimit(store, entry.payload.rate_limits, entry.timestamp, 'local-official');
         }
       }
-      if (entry.payload?.rate_limits) {
-        observations += recordRateLimit(store, entry.payload.rate_limits, entry.timestamp, 'local-official');
-      }
-    }
-    store.markImportedFile(fullPath, stat.mtimeMs, startOffset + chunk.consumedBytes, state);
+      store.markImportedFile(fullPath, stat.mtimeMs, startOffset + chunk.consumedBytes, state);
+    });
     importedFiles += 1;
   }
   return { importedFiles, events, observations, rejected, lastRejection };

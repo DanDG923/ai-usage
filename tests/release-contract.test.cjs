@@ -15,7 +15,7 @@ test('release metadata, dependency pin, package exclusions, and docs agree', () 
   const readme = readText('README.md');
   const changelog = readText('CHANGELOG.md');
 
-  assert.equal(pkg.version, '1.0.15');
+  assert.equal(pkg.version, '1.0.16');
   assert.equal(lock.version, pkg.version);
   assert.equal(lock.packages[''].version, pkg.version);
   assert.equal(pkg.dependencies['@anthropic-ai/claude-agent-sdk'], '0.3.251');
@@ -39,17 +39,16 @@ test('release metadata, dependency pin, package exclusions, and docs agree', () 
   assert.match(releaseAudit, /SHA256SUMS\.txt/);
   assert.match(releaseAudit, /source map/i);
   assert.match(releaseAudit, /private local data/i);
-  assert.match(readme, /AI-Usage-Setup-1.0.15-x64\.exe/);
+  assert.match(readme, /AI-Usage-Setup-1.0.16-x64\.exe/);
   assert.match(readme, /actual local Fable token activity/i);
   assert.match(readme, /experimental/i);
-  assert.match(changelog, /^# Changelog\s+## 1.0.15/m);
+  assert.match(changelog, /^# Changelog\s+## 1.0.16/m);
 });
 
 test('the desktop window integrates native controls into the app header', () => {
   const main = readText('electron/main.cjs');
   const app = readText('src/App.tsx');
   const styles = readText('src/styles.css');
-  const overviewStyles = readText('src/overview.css');
 
   // Window chrome follows the theme: both palettes are declared once and the
   // overlay is re-applied whenever the effective theme changes.
@@ -67,14 +66,12 @@ test('the desktop window integrates native controls into the app header', () => 
   assert.match(app, /if\s*\(!snapshot\)\s*\{[\s\S]*?<header className="app-header app-header-status">/s);
   assert.match(styles, /@media\s*\(max-width:\s*1250px\)\s*\{\s*\.app-header\s*\{[^}]*titlebar-area-height/s);
   assert.match(styles, /@media\s*\(max-width:\s*760px\)\s*\{\s*\.app-header\s*\{[^}]*padding-left:\s*max\(14px/s);
-  assert.match(overviewStyles, /@media\s*\(max-width:\s*1250px\)\s*\{\s*\.status-line\s*\{[^}]*flex-wrap:\s*wrap/s);
 });
 
 test('the renderer reflows to the window without scaling the interface', () => {
   const entry = readText('src/main.tsx');
   const professional = readText('src/professional.css');
   const app = readText('src/App.tsx');
-  const charts = readText('src/components/Charts.tsx');
 
   assert.match(entry, /import ['"]\.\/pricing\.css['"];\s*import ['"]\.\/professional\.css['"];/);
   assert.doesNotMatch(entry, /fluid\.css/);
@@ -87,8 +84,6 @@ test('the renderer reflows to the window without scaling the interface', () => {
   assert.match(professional, /\.app-shell\s*\{[^}]*padding-left:\s*var\(--rail-width\)/s);
   assert.match(professional, /\.page\s*\{[^}]*width:\s*min\(var\(--content-max\)/s);
   assert.match(professional, /\.overview-workspace\s*\{[^}]*grid-template-columns:/s);
-  assert.match(charts, /new ResizeObserver\(/);
-  assert.match(charts, /PLOT_MAX_HEIGHT = 520/);
 
   const medium = professional.slice(
     professional.indexOf('@media (max-width: 1260px)'),
@@ -115,7 +110,8 @@ test('the renderer reflows to the window without scaling the interface', () => {
 
 test('renderer contracts keep desktop failures honest and estimates visibly approximate', () => {
   const app = readText('src/App.tsx');
-  const quotaCard = readText('src/components/QuotaCard.tsx');
+  const providerView = readText('src/provider-view.ts');
+  const providerSummary = readText('src/components/ProviderSummary.tsx');
   const styles = readText('src/styles.css');
   const accessibility = readText('src/accessibility.css');
 
@@ -123,11 +119,10 @@ test('renderer contracts keep desktop failures honest and estimates visibly appr
   assert.match(app, /isBrowserPreview\s*\?\s*demoSnapshot\s*:\s*null/);
   assert.match(app, /secure desktop bridge/i);
   assert.match(app, /if\s*\(!window\.aiUsage\)\s*return;/);
-  assert.match(quotaCard, /displayedRemaining\(entry\)/);
-  assert.match(quotaCard, /const estimated = Boolean\(f\.currentIsEstimated && f\.estimatedCurrentRemaining != null\)/);
-  assert.match(quotaCard, /approximately.*of the allowance left/);
-  assert.match(quotaCard, /\{estimated\s*\?\s*'~'\s*:\s*''\}/);
-  assert.match(quotaCard, /f\.safePace\s*>\s*0\s*\?\s*f\.recentPace\s*\/\s*f\.safePace/);
+  assert.match(providerView, /displayedRemaining\(current\)/);
+  assert.match(providerView, /estimated: current \? isEstimated\(current\) : false/);
+  assert.match(providerSummary, /\{view\.estimated\s*\?\s*'~'\s*:\s*''\}/);
+  assert.match(providerSummary, /view\.estimated \? 'Estimated balance' : 'Current balance'/);
   assert.match(styles, /\.settings-content[^}]*min-width\s*:\s*0/s);
   assert.match(styles, /\.settings-page\s*\{\s*grid-template-columns\s*:\s*minmax\(0,\s*1fr\)/s);
   assert.match(styles, /\.app-header nav[^}]*flex\s*:\s*0 0 auto/s);

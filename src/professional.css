@@ -525,10 +525,6 @@ body {
   flex: 0 0 auto;
 }
 
-.runway-list {
-  margin: 0 -24px;
-}
-
 .combined-runway-wrap {
   position: relative;
   margin: 4px 0 0;
@@ -548,11 +544,6 @@ body {
     'Segoe UI',
     sans-serif;
   font-variant-numeric: tabular-nums;
-}
-
-.combined-runway-chart .now-label {
-  fill: var(--text-muted);
-  font-weight: 600;
 }
 
 .combined-series {
@@ -652,122 +643,6 @@ body {
 
 .runway-heading .chart-key .k-heavy i {
   border-top-color: var(--text-2);
-}
-
-.runway-row {
-  --series: var(--text-2);
-  padding: 14px 24px 10px;
-  border-top: 1px solid var(--line);
-}
-
-.runway-row.codex {
-  --series: var(--codex);
-}
-.runway-row.claude {
-  --series: var(--claude);
-}
-.runway-row.fable {
-  --series: var(--fable);
-}
-
-.runway-row > header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-  margin-bottom: 4px;
-}
-
-.runway-name {
-  min-width: 0;
-  display: flex;
-  align-items: baseline;
-  gap: 7px;
-}
-
-.runway-name > span:last-child {
-  color: var(--text-muted);
-  font-size: 11.5px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.runway-values {
-  margin: 0;
-  display: flex;
-  gap: 20px;
-}
-
-.runway-values > div {
-  display: flex;
-  align-items: baseline;
-  gap: 5px;
-  white-space: nowrap;
-}
-
-.runway-values dt {
-  color: var(--text-faint);
-  font-size: 11px;
-}
-
-.runway-values dd {
-  margin: 0;
-  color: var(--text-2);
-  font-size: 11.5px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-.runway-row .forecast-wrap,
-.runway-row .forecast-plot {
-  min-height: 124px;
-  height: 124px;
-}
-
-.runway-row .forecast-plot {
-  position: relative;
-}
-
-.runway-row .forecast-plot > svg {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-}
-
-.forecast-tone-codex,
-.forecast-tone-claude,
-.forecast-tone-fable {
-  --forecast-series: var(--series);
-}
-
-.forecast-tone-codex .expected-line,
-.forecast-tone-claude .expected-line,
-.forecast-tone-fable .expected-line {
-  stroke: var(--forecast-series);
-}
-.forecast-tone-codex .heavy-line,
-.forecast-tone-claude .heavy-line,
-.forecast-tone-fable .heavy-line {
-  stroke: var(--forecast-series);
-  opacity: 0.65;
-}
-.forecast-tone-codex .expected-dot,
-.forecast-tone-claude .expected-dot,
-.forecast-tone-fable .expected-dot {
-  fill: var(--forecast-series);
-}
-.forecast-tone-codex .heavy-dot,
-.forecast-tone-claude .heavy-dot,
-.forecast-tone-fable .heavy-dot {
-  fill: var(--forecast-series);
-  opacity: 0.68;
-}
-.forecast-tone-codex .forecast-fill-stop,
-.forecast-tone-claude .forecast-fill-stop,
-.forecast-tone-fable .forecast-fill-stop {
-  stop-color: var(--forecast-series);
 }
 
 .overview-insights {
@@ -1429,28 +1304,6 @@ tbody tr:hover td {
   }
   .provider-primary small {
     max-width: 42%;
-  }
-  .runway-list {
-    margin-inline: -18px;
-  }
-  .runway-row {
-    padding-inline: 18px;
-  }
-  .runway-row > header {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 6px;
-  }
-  .runway-values {
-    width: 100%;
-    justify-content: space-between;
-    gap: 8px;
-  }
-  .runway-values > div {
-    display: block;
-  }
-  .runway-values dd {
-    margin-top: 1px;
   }
   .overview-insights {
     grid-template-columns: 1fr;

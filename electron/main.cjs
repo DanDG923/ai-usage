@@ -254,6 +254,7 @@ function createTray() {
 }
 
 let trayState = '';
+let trayMenuSnoozed = null;
 
 function updateTray(current) {
   if (!tray) return;
@@ -263,7 +264,13 @@ function updateTray(current) {
     tray.setImage(trayIconFor(state));
   }
   tray.setToolTip(buildTrayTooltip(current));
-  tray.setContextMenu(buildTrayMenu());
+  // Only the snooze entry ever changes, so the native menu is rebuilt when
+  // that flips rather than on every publish.
+  const snoozed = alertsSnoozed();
+  if (snoozed !== trayMenuSnoozed) {
+    trayMenuSnoozed = snoozed;
+    tray.setContextMenu(buildTrayMenu());
+  }
 }
 
 function setSnooze(hours) {

@@ -1,5 +1,17 @@
-import { money } from '../../lib';
 import type { CostAnalytics } from '../../types';
+
+/** Share of prompt-side tokens served from cache, across every priced or unpriced model. */
+export function cacheHitRate(costs: CostAnalytics) {
+  let cached = 0;
+  let prompt = 0;
+  for (const row of costs.byModel) {
+    cached += row.cachedInputTokens;
+    prompt += row.inputTokens + row.cacheWriteInputTokens;
+    // Codex reports cached input as a subset of input; Claude reports it separately.
+    if (row.sourceId !== 'codex') prompt += row.cachedInputTokens;
+  }
+  return prompt > 0 ? cached / prompt : null;
+}
 
 function localDateKey(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
@@ -54,53 +66,4 @@ export function rollups(costs: CostAnalytics, now = new Date()): Rollups {
     monthDaysElapsed,
     monthDays,
   };
-}
-
-function Delta({ current, previous }: { current: number; previous: number | null }) {
-  if (previous == null) return <small>previous 7 days outside the period</small>;
-  if (previous <= 0) return <small>nothing in the previous 7 days</small>;
-  const change = (current - previous) / previous;
-  const tone = change > 0.05 ? 'up' : change < -0.05 ? 'down' : '';
-  const sign = change > 0 ? '+' : '';
-  return (
-    <small>
-      <span className={`delta ${tone}`}>
-        {sign}
-        {Math.round(change * 100)}%
-      </span>{' '}
-      vs previous 7 days
-    </small>
-  );
-}
-
-export function RecentRollups({ costs }: { costs: CostAnalytics }) {
-  const r = rollups(costs);
-  const monthLabel = new Intl.DateTimeFormat('en-GB', { month: 'long' }).format(new Date());
-  return (
-    <section className="stat-row rollup-row" aria-label="Recent totals">
-      <div>
-        <span>Today</span>
-        <strong>{money(r.today, costs.currency)}</strong>
-        <small>API-equivalent so far today</small>
-      </div>
-      <div>
-        <span>Last 7 days</span>
-        <strong>{money(r.week, costs.currency)}</strong>
-        <Delta current={r.week} previous={r.previousWeek} />
-      </div>
-      <div>
-        <span>{monthLabel} to date</span>
-        <strong>{money(r.monthToDate, costs.currency)}</strong>
-        <small>
-          {r.monthDaysElapsed} of {r.monthDays} days
-          {costs.periodDays < r.monthDaysElapsed ? ` · only the last ${costs.periodDays} are in view` : ''}
-        </small>
-      </div>
-      <div>
-        <span>Projected for {monthLabel}</span>
-        <strong>{money(r.monthProjection, costs.currency)}</strong>
-        <small>at the month-to-date daily average</small>
-      </div>
-    </section>
-  );
 }

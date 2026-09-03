@@ -262,48 +262,52 @@ function importClaudeTranscripts(store, days = 120) {
       latestByMessage.set(messageId, row);
     }
 
-    for (const [messageId, row] of latestByMessage) {
-      const usage = row.message.usage;
-      const model = row.message.model || 'claude-unknown';
-      const cacheCreation = usage.cache_creation || {};
-      let cacheWrite5m = Number(cacheCreation.ephemeral_5m_input_tokens || 0);
-      const cacheWrite1h = Number(cacheCreation.ephemeral_1h_input_tokens || 0);
-      const cacheWriteTotal = Number(usage.cache_creation_input_tokens || cacheWrite5m + cacheWrite1h);
-      if (cacheWrite5m + cacheWrite1h === 0 && cacheWriteTotal > 0) cacheWrite5m = cacheWriteTotal;
-      // One malformed message must not stop the file: the cursor still
-      // advances, the row is counted as rejected, and the rest is imported.
-      try {
-        store.recordUsageEvent({
-          eventKey: `claude-transcript:${row.sessionId || 'unknown-session'}:${messageId}`,
-          sourceId: 'claude',
-          occurredAt: row.timestamp,
-          sessionId: row.sessionId || null,
-          model,
-          project: typeof row.cwd === 'string' && row.cwd.trim() ? row.cwd.trim() : null,
-          inputTokens: usage.input_tokens,
-          cachedInputTokens: usage.cache_read_input_tokens,
-          cacheWriteInputTokens: cacheWriteTotal,
-          cacheWrite5mInputTokens: cacheWrite5m,
-          cacheWrite1hInputTokens: cacheWrite1h,
-          outputTokens: usage.output_tokens,
-          reasoningOutputTokens: usage.output_tokens_details?.reasoning_tokens || 0,
-          metadata: {
-            source: 'claude-transcript',
-            requestId: row.requestId || null,
-            entrypoint: row.entrypoint || null,
-            sidechain: Boolean(row.isSidechain),
-            effort: row.effort || null,
-          },
-        });
-      } catch (error) {
-        rejectedRows += 1;
-        lastRejection = error instanceof Error ? error.message : String(error);
-        continue;
+    // One commit per file: the rows and the cursor that says they were read
+    // land together, and a first import no longer pays a WAL sync per message.
+    store.transaction(() => {
+      for (const [messageId, row] of latestByMessage) {
+        const usage = row.message.usage;
+        const model = row.message.model || 'claude-unknown';
+        const cacheCreation = usage.cache_creation || {};
+        let cacheWrite5m = Number(cacheCreation.ephemeral_5m_input_tokens || 0);
+        const cacheWrite1h = Number(cacheCreation.ephemeral_1h_input_tokens || 0);
+        const cacheWriteTotal = Number(usage.cache_creation_input_tokens || cacheWrite5m + cacheWrite1h);
+        if (cacheWrite5m + cacheWrite1h === 0 && cacheWriteTotal > 0) cacheWrite5m = cacheWriteTotal;
+        // One malformed message must not stop the file: the cursor still
+        // advances, the row is counted as rejected, and the rest is imported.
+        try {
+          store.recordUsageEvent({
+            eventKey: `claude-transcript:${row.sessionId || 'unknown-session'}:${messageId}`,
+            sourceId: 'claude',
+            occurredAt: row.timestamp,
+            sessionId: row.sessionId || null,
+            model,
+            project: typeof row.cwd === 'string' && row.cwd.trim() ? row.cwd.trim() : null,
+            inputTokens: usage.input_tokens,
+            cachedInputTokens: usage.cache_read_input_tokens,
+            cacheWriteInputTokens: cacheWriteTotal,
+            cacheWrite5mInputTokens: cacheWrite5m,
+            cacheWrite1hInputTokens: cacheWrite1h,
+            outputTokens: usage.output_tokens,
+            reasoningOutputTokens: usage.output_tokens_details?.reasoning_tokens || 0,
+            metadata: {
+              source: 'claude-transcript',
+              requestId: row.requestId || null,
+              entrypoint: row.entrypoint || null,
+              sidechain: Boolean(row.isSidechain),
+              effort: row.effort || null,
+            },
+          });
+        } catch (error) {
+          rejectedRows += 1;
+          lastRejection = error instanceof Error ? error.message : String(error);
+          continue;
+        }
+        usageEvents += 1;
+        if (String(model).toLowerCase().includes('fable')) fableEvents += 1;
       }
-      usageEvents += 1;
-      if (String(model).toLowerCase().includes('fable')) fableEvents += 1;
-    }
-    store.markImportedFile(fullPath, stat.mtimeMs, plan.startOffset + chunk.consumedBytes);
+      store.markImportedFile(fullPath, stat.mtimeMs, plan.startOffset + chunk.consumedBytes);
+    });
     importedFiles += 1;
   }
   return { importedFiles, usageEvents, fableEvents, filesFound: files.length, rejectedRows, lastRejection };
@@ -329,12 +333,22 @@ const ALLOWANCE_PRESSURE_V1 = [
   ['claude-haiku-4-5', 1, 1.25, 2, 0.1, 5],
 ];
 
+// Longest name first so a dated variant matches its exact family, not a
+// shorter prefix. Built once; the per-model answer is remembered because the
+// pressure scan asks for it once per usage event.
+const ALLOWANCE_PROFILES = ALLOWANCE_PRESSURE_V1
+  .map(([name, input, write5m, write1h, read, output]) => ({ name, input, write5m, write1h, read, output }))
+  .sort((a, b) => b.name.length - a.name.length);
+const allowanceProfiles = new Map();
+
 function allowanceProfile(model) {
   const normalized = String(model || '').toLowerCase().trim();
-  return ALLOWANCE_PRESSURE_V1
-    .map(([name, input, write5m, write1h, read, output]) => ({ name, input, write5m, write1h, read, output }))
-    .sort((a, b) => b.name.length - a.name.length)
-    .find((profile) => normalized === profile.name || normalized.startsWith(`${profile.name}-`)) || null;
+  let profile = allowanceProfiles.get(normalized);
+  if (profile === undefined) {
+    profile = ALLOWANCE_PROFILES.find((entry) => normalized === entry.name || normalized.startsWith(`${entry.name}-`)) || null;
+    allowanceProfiles.set(normalized, profile);
+  }
+  return profile;
 }
 
 function allowancePressure(store, modelLike, sinceIso, untilIso) {
