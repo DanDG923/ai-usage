@@ -50,8 +50,8 @@ const TRAY_SIZE = 32;
 // Window chrome follows the theme the renderer paints, so the native caption
 // buttons never sit on a strip of the other palette.
 const CHROME = {
-  dark: { background: '#0e1116', symbol: '#c3c9d4' },
-  light: { background: '#f5f6f8', symbol: '#343a44' },
+  dark: { background: '#0f1113', symbol: '#c8cbd0' },
+  light: { background: '#f5f5f6', symbol: '#3a3d43' },
 };
 
 const appIconPath = path.join(__dirname, '..', 'build', 'icon.png');

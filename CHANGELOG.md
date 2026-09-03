@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.0.14 — 3 September 2026
+
+This is an in-place design update. Running the 1.0.14 setup program upgrades an existing AI Usage installation and preserves its local database, settings, observations, imported cost history, and backups.
+
+### A quieter, more deliberate interface
+
+The screens were redrawn as a design canvas first and then carried into the app. The forecast charts stay; the kit around them changes.
+
+- **Overview**: one status line at the top of the page ("Fable 5 is likely to reach its weekly limit before reset", with the providers that are on track and the three headline percentages), in place of the header chip and the sentence inside every card.
+- The three cards become **one panel of hairline-divided columns**. Each column reads top to bottom: provider and plan, the remaining figure as a large numeral, an **allowance bar** showing used, expected before reset, and spare with a marker for the heavier case, four label-left value-right rows (Resets, Expected at reset, Runs out, Recent pace), and the forecast with its legend in the title row. The arc gauge and the pace bar are gone.
+- **Chrome**: a 48-pixel header with a monochrome mark, text tabs underlined in the text colour, "Updated 20:08 · refreshes every 15 min" and a plain bordered Refresh button. The section is now called **Settings**.
+- **Surfaces**: a near-neutral ground with hairline borders at low alpha, 5 and 6 pixel radii, no shadows and no filled accent buttons. The accent colour is kept for interactive states only (switches, selection, focus). Light and dark palettes were both redrawn and the window chrome follows them.
+- Telemetry is reduced to one faint line per column: how many days the learner has seen and its confidence, and when the reading was taken and how (official, manual, or local estimate).
+- Details and Settings pick up the same tokens, radii, and header; their structure is unchanged from 1.0.13.
+
+### Verification
+
+- The release contract now checks the status line, the allowance-bar accessibility label, and the new window chrome colours.
+
 ## 1.0.13 — 3 September 2026
 
 This is an in-place design, feature, and reliability update. Running the 1.0.13 setup program upgrades an existing AI Usage installation and preserves its local database, settings, observations, imported cost history, and backups.

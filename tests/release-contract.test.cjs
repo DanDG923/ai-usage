@@ -15,7 +15,7 @@ test('release metadata, dependency pin, package exclusions, and docs agree', () 
   const readme = readText('README.md');
   const changelog = readText('CHANGELOG.md');
 
-  assert.equal(pkg.version, '1.0.13');
+  assert.equal(pkg.version, '1.0.14');
   assert.equal(lock.version, pkg.version);
   assert.equal(lock.packages[''].version, pkg.version);
   assert.equal(pkg.dependencies['@anthropic-ai/claude-agent-sdk'], '0.3.251');
@@ -39,10 +39,10 @@ test('release metadata, dependency pin, package exclusions, and docs agree', () 
   assert.match(releaseAudit, /SHA256SUMS\.txt/);
   assert.match(releaseAudit, /source map/i);
   assert.match(releaseAudit, /private local data/i);
-  assert.match(readme, /AI-Usage-Setup-1.0.13-x64\.exe/);
+  assert.match(readme, /AI-Usage-Setup-1.0.14-x64\.exe/);
   assert.match(readme, /actual local Fable token activity/i);
   assert.match(readme, /experimental/i);
-  assert.match(changelog, /^# Changelog\s+## 1.0.13/m);
+  assert.match(changelog, /^# Changelog\s+## 1.0.14/m);
 });
 
 test('the desktop window integrates native controls into the app header', () => {
@@ -53,8 +53,8 @@ test('the desktop window integrates native controls into the app header', () => 
 
   // Window chrome follows the theme: both palettes are declared once and the
   // overlay is re-applied whenever the effective theme changes.
-  assert.match(main, /dark:\s*\{\s*background:\s*'#0e1116',\s*symbol:\s*'#c3c9d4'\s*\}/);
-  assert.match(main, /light:\s*\{\s*background:\s*'#f5f6f8',\s*symbol:\s*'#343a44'\s*\}/);
+  assert.match(main, /dark:\s*\{\s*background:\s*'#0f1113',\s*symbol:\s*'#c8cbd0'\s*\}/);
+  assert.match(main, /light:\s*\{\s*background:\s*'#f5f5f6',\s*symbol:\s*'#3a3d43'\s*\}/);
   assert.match(main, /backgroundColor:\s*chrome\.background/);
   assert.match(main, /titleBarStyle:\s*'hidden'/);
   assert.match(main, /titleBarOverlay:\s*\{[^}]*color:\s*chrome\.background/s);
@@ -67,7 +67,7 @@ test('the desktop window integrates native controls into the app header', () => 
   assert.match(app, /if\s*\(!snapshot\)\s*\{[\s\S]*?<header className="app-header app-header-status">/s);
   assert.match(styles, /@media\s*\(max-width:\s*1250px\)\s*\{\s*\.app-header\s*\{[^}]*titlebar-area-height/s);
   assert.match(styles, /@media\s*\(max-width:\s*760px\)\s*\{\s*\.app-header\s*\{[^}]*padding-left:\s*max\(14px/s);
-  assert.match(overviewStyles, /@media\s*\(max-width:\s*1250px\)\s*\{\s*\.verdict-chip\s*\{[^}]*flex:\s*1 0 100%/s);
+  assert.match(overviewStyles, /@media\s*\(max-width:\s*1250px\)\s*\{\s*\.status-line\s*\{[^}]*flex-wrap:\s*wrap/s);
 });
 
 test('the renderer scales the page to the window and fills the overview height', () => {
@@ -104,9 +104,7 @@ test('the renderer scales the page to the window and fills the overview height',
   assert.match(fluid, /\.page,\s*\.app-footer\s*\{[^}]*var\(--content-max\)[^}]*var\(--page-gutter\)/s);
   assert.match(fluid, /\.panel\s*\{[^}]*var\(--panel-padding\)/s);
   assert.match(fluid, /\.page-lead h1\s*\{[^}]*font-size:\s*clamp\(/s);
-  assert.match(fluid, /--gauge-size:\s*clamp\(/);
-  assert.match(fluid, /\.qc-hero\s*\{[^}]*grid-template-columns:\s*var\(--gauge-size\)/s);
-  assert.match(fluid, /\.gauge,\s*\.gauge svg\s*\{[^}]*width:\s*var\(--gauge-size\)[^}]*height:\s*var\(--gauge-size\)/s);
+  assert.match(fluid, /\.qc-figure b\s*\{[^}]*font-size:\s*clamp\(/s);
   assert.match(fluid, /\.qc-grid\s*\{[^}]*minmax\(min\(100%,\s*440px\),\s*1fr\)/s);
   // Vertical fill: the overview takes the height under the header and the
   // forecast plot absorbs the spare height of its card.
@@ -142,7 +140,6 @@ test('the renderer scales the page to the window and fills the overview height',
 test('renderer contracts keep desktop failures honest and estimates visibly approximate', () => {
   const app = readText('src/App.tsx');
   const quotaCard = readText('src/components/QuotaCard.tsx');
-  const gauge = readText('src/components/Gauge.tsx');
   const styles = readText('src/styles.css');
   const accessibility = readText('src/accessibility.css');
 
@@ -151,10 +148,10 @@ test('renderer contracts keep desktop failures honest and estimates visibly appr
   assert.match(app, /secure desktop bridge/i);
   assert.match(app, /if\s*\(!window\.aiUsage\)\s*return;/);
   assert.match(quotaCard, /displayedRemaining\(entry\)/);
-  assert.match(quotaCard, /estimated=\{Boolean\(f\.currentIsEstimated/);
-  assert.match(gauge, /approximately.*allowance left/);
-  assert.match(gauge, /\{estimated\s*\?\s*'~'\s*:\s*''\}/);
-  assert.match(gauge, /safePace\s*>\s*0\s*\?\s*recentPace\s*\/\s*safePace\s*:\s*recentPace\s*>\s*0\s*\?\s*span\s*:\s*0/);
+  assert.match(quotaCard, /const estimated = Boolean\(f\.currentIsEstimated && f\.estimatedCurrentRemaining != null\)/);
+  assert.match(quotaCard, /approximately.*of the allowance left/);
+  assert.match(quotaCard, /\{estimated\s*\?\s*'~'\s*:\s*''\}/);
+  assert.match(quotaCard, /f\.safePace\s*>\s*0\s*\?\s*f\.recentPace\s*\/\s*f\.safePace/);
   assert.match(styles, /\.settings-content[^}]*min-width\s*:\s*0/s);
   assert.match(styles, /\.settings-page\s*\{\s*grid-template-columns\s*:\s*minmax\(0,\s*1fr\)/s);
   assert.match(styles, /\.app-header nav[^}]*flex\s*:\s*0 0 auto/s);

@@ -9,14 +9,14 @@ It imports local usage evidence, learns your real burn pattern, evaluates every 
 
 ## Install
 
-Use `AI-Usage-Setup-1.0.13-x64.exe` for a normal Windows installation. Running it over an existing installation upgrades in place and preserves the local database, settings, observations, and backups. Uninstalling first is neither required nor recommended.
+Use `AI-Usage-Setup-1.0.14-x64.exe` for a normal Windows installation. Running it over an existing installation upgrades in place and preserves the local database, settings, observations, and backups. Uninstalling first is neither required nor recommended.
 
-Use `AI-Usage-Portable-1.0.13-x64.exe` for a single executable that does not install the app. Windows SmartScreen may show an unknown-publisher warning because this personal build is not backed by a commercial code-signing certificate; verify the supplied SHA-256 hash before running it.
+Use `AI-Usage-Portable-1.0.14-x64.exe` for a single executable that does not install the app. Windows SmartScreen may show an unknown-publisher warning because this personal build is not backed by a commercial code-signing certificate; verify the supplied SHA-256 hash before running it.
 
 ## First run
 
 1. Open AI Usage and choose **Refresh**. Local Codex and Claude token records are imported automatically.
-2. In **Data & settings → Sources**, choose a background interval. The app refreshes while its tray process is running; **Only when I refresh** disables scheduled, reopen, and wake-triggered scans after the initial launch scan.
+2. In **Settings → Sources**, choose a background interval. The app refreshes while its tray process is running; **Only when I refresh** disables scheduled, reopen, and wake-triggered scans after the initial launch scan.
 3. Set your normal active hours and days. They shape when future use is expected, while the burn rate itself comes from observed history.
 4. Review **API pricing**. Detected models without prices are highlighted and keep the total visibly marked as a lower bound until all of their token categories have prices.
 
@@ -59,7 +59,7 @@ The header verdict is built in the backend from every active primary, secondary,
 
 Each card also answers **Runs out**: the moment the expected projection first reaches zero, or the heavier projection's moment when only that one does. The same time is included in pace notifications.
 
-**Budget mode** (Data & settings → Learned forecast → *Keep in reserve*) sets a share of each allowance you want untouched at reset. The safe pace only spends what sits above the reserve, and a projection that would eat into it is shown as a watch state; the forecast itself still reports what will actually happen.
+**Budget mode** (Settings → Forecast → *Keep in reserve*) sets a share of each allowance you want untouched at reset. The safe pace only spends what sits above the reserve, and a projection that would eat into it is shown as a watch state; the forecast itself still reports what will actually happen.
 
 ## Notifications
 
@@ -91,7 +91,7 @@ This keeps a failed refresh from pretending old evidence is current, without del
 
 Claude prompts and responses are never copied into the dashboard. The ledger retains token counts, timestamps, model names, session/request identifiers, the session's working directory path (for the project breakdown), and limited source metadata needed for deduplication and provenance. Dashboard data is not uploaded by AI Usage.
 
-Collection runs in a separate utility process with its own connection to the same database, so a slow transcript scan or a stalled provider call never freezes the window, the tray, or the settings screen. Transcripts and session logs are read incrementally from a byte cursor rather than re-parsed in full on every refresh, and polling rows older than sixty days are compacted to the first and last reading of each window per day. **Diagnostics** at the bottom of Data & settings shows what each collector last saw, including latency and the reason for any fallback.
+Collection runs in a separate utility process with its own connection to the same database, so a slow transcript scan or a stalled provider call never freezes the window, the tray, or the settings screen. Transcripts and session logs are read incrementally from a byte cursor rather than re-parsed in full on every refresh, and polling rows older than sixty days are compacted to the first and last reading of each window per day. **Diagnostics** at the bottom of Settings shows what each collector last saw, including latency and the reason for any fallback.
 
 Update checks are opt-out and only run in a packaged build once a release feed is configured under `build.publish` in `package.json`; until then the setting reports that checks are off. A check fetches a version manifest and nothing else.
 

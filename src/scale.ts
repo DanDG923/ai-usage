@@ -30,7 +30,7 @@ function apply() {
   root.style.setProperty('--ui-scale', String(scale));
   root.style.setProperty('--ui-header-scale', String(headerScale(scale)));
   const header = document.querySelector<HTMLElement>('.app-header');
-  root.style.setProperty('--header-height', `${Math.round(header?.getBoundingClientRect().height ?? 64)}px`);
+  root.style.setProperty('--header-height', `${Math.round(header?.getBoundingClientRect().height ?? 48)}px`);
 }
 
 /** Keep the scale custom properties in step with the window. Returns a disposer. */

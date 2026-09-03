@@ -85,7 +85,7 @@ export function ModelTable({ costs }: { costs: CostAnalytics }) {
         <div>
           <h2>By model</h2>
         </div>
-        <span className="table-note">Prices are editable under Data &amp; settings</span>
+        <span className="table-note">Prices are editable under Settings</span>
       </div>
       <div className="table-scroll">
         <table>

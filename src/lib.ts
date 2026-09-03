@@ -1,4 +1,4 @@
-import type { ForecastState, Quota, QuotaWindow } from './types';
+import type { DashboardVerdict, ForecastState, Quota, QuotaWindow, Snapshot } from './types';
 
 export function money(value: number, currency = 'GBP') {
   return new Intl.NumberFormat('en-GB', {
@@ -49,6 +49,30 @@ export function resetDistance(value?: string | null) {
   const whole = Math.round(hours);
   const days = Math.floor(whole / 24);
   return `${days} day${days === 1 ? '' : 's'} ${whole % 24}h`;
+}
+
+/** "Wed 10 Sept, 03:21": a reset or run-out instant in full. */
+export function dateTimeLabel(value?: string | number | null) {
+  if (!value) return '—';
+  return new Intl.DateTimeFormat('en-GB', {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(value));
+}
+
+/** "20:05" for an instant on the same local day as `nowMs`, otherwise a dated form. */
+export function timeLabel(value?: string | number | null, nowMs = Date.now()) {
+  if (!value) return '—';
+  const date = new Date(value);
+  const now = new Date(nowMs);
+  const sameDay =
+    date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
+  return sameDay
+    ? new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit' }).format(date)
+    : shortDate(value);
 }
 
 /** Distance between two instants as "2d 5h" or "3h", for run-out timing. */
@@ -103,6 +127,38 @@ export function displayedRemaining(entry: QuotaWindow) {
 
 export function isEstimated(entry: QuotaWindow) {
   return Boolean(entry.forecast.currentIsEstimated && entry.forecast.estimatedCurrentRemaining != null);
+}
+
+/**
+ * The Overview's status line, written as a sentence from the backend verdict.
+ * The verdict's affected entries look like "Fable 5 · Fable 5 weekly"; the
+ * provider name is the part before the separator.
+ */
+export function verdictSentence(verdict: DashboardVerdict, quotas: Snapshot['quotas']) {
+  const providers: { name: string; quota: Quota | null }[] = [
+    { name: 'Codex', quota: quotas.codex },
+    { name: 'Claude', quota: quotas.claude },
+    { name: 'Fable 5', quota: quotas.fable },
+  ];
+  const affectedNames = [...new Set(verdict.affected.map((entry) => entry.split(' · ')[0].trim()))];
+  const join = (names: string[]) =>
+    names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+  const others = providers
+    .filter((entry) => !affectedNames.includes(entry.name))
+    .filter((entry) => primaryWindow(entry.quota)?.forecast.state === 'safe')
+    .map((entry) => entry.name);
+  const secondary = others.length ? `${join(others)} ${others.length === 1 ? 'is' : 'are'} on track.` : '';
+  if (verdict.state === 'safe') return { headline: 'All allowances on track', secondary: '' };
+  if (verdict.state === 'unknown') return { headline: verdict.label, secondary };
+  const plural = affectedNames.length > 1;
+  const windowWord = verdict.affected.some((entry) => /weekly|seven_day/i.test(entry)) ? 'weekly limit' : 'limit';
+  const headline =
+    verdict.state === 'watch'
+      ? `${join(affectedNames)} ${plural ? 'are' : 'is'} running warm`
+      : verdict.state === 'critical'
+        ? `${join(affectedNames)} ${plural ? 'have' : 'has'} run out or will before reset`
+        : `${join(affectedNames)} ${plural ? 'are' : 'is'} likely to reach ${plural ? 'their' : 'its'} ${windowWord} before reset`;
+  return { headline, secondary };
 }
 
 export function windowLabel(minutes: number | null) {
