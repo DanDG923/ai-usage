@@ -15,7 +15,7 @@ test('release metadata, dependency pin, package exclusions, and docs agree', () 
   const readme = readText('README.md');
   const changelog = readText('CHANGELOG.md');
 
-  assert.equal(pkg.version, '1.0.12');
+  assert.equal(pkg.version, '1.0.13');
   assert.equal(lock.version, pkg.version);
   assert.equal(lock.packages[''].version, pkg.version);
   assert.equal(pkg.dependencies['@anthropic-ai/claude-agent-sdk'], '0.3.251');
@@ -39,10 +39,10 @@ test('release metadata, dependency pin, package exclusions, and docs agree', () 
   assert.match(releaseAudit, /SHA256SUMS\.txt/);
   assert.match(releaseAudit, /source map/i);
   assert.match(releaseAudit, /private local data/i);
-  assert.match(readme, /AI-Usage-Setup-1.0.12-x64\.exe/);
+  assert.match(readme, /AI-Usage-Setup-1.0.13-x64\.exe/);
   assert.match(readme, /actual local Fable token activity/i);
   assert.match(readme, /experimental/i);
-  assert.match(changelog, /^# Changelog\s+## 1.0.12/m);
+  assert.match(changelog, /^# Changelog\s+## 1.0.13/m);
 });
 
 test('the desktop window integrates native controls into the app header', () => {
@@ -53,8 +53,8 @@ test('the desktop window integrates native controls into the app header', () => 
 
   // Window chrome follows the theme: both palettes are declared once and the
   // overlay is re-applied whenever the effective theme changes.
-  assert.match(main, /dark:\s*\{\s*background:\s*'#07101e',\s*symbol:\s*'#cbd6e8'\s*\}/);
-  assert.match(main, /light:\s*\{\s*background:\s*'#f4f6fb',\s*symbol:\s*'#2b3548'\s*\}/);
+  assert.match(main, /dark:\s*\{\s*background:\s*'#0e1116',\s*symbol:\s*'#c3c9d4'\s*\}/);
+  assert.match(main, /light:\s*\{\s*background:\s*'#f5f6f8',\s*symbol:\s*'#343a44'\s*\}/);
   assert.match(main, /backgroundColor:\s*chrome\.background/);
   assert.match(main, /titleBarStyle:\s*'hidden'/);
   assert.match(main, /titleBarOverlay:\s*\{[^}]*color:\s*chrome\.background/s);

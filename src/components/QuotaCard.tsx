@@ -1,4 +1,3 @@
-import { BrainCircuit, Hexagon, ShieldCheck, Sparkles, TriangleAlert } from 'lucide-react';
 import type { ReactNode } from 'react';
 import {
   displayedRemaining,
@@ -24,7 +23,7 @@ type Props = {
   /** The snapshot clock; keeps run-out labels deterministic for a render. */
   nowMs: number;
   resetCredits?: number;
-  /** Replaces the plan label in the eyebrow, e.g. Fable's measurement source. */
+  /** Replaces the plan label in the subtitle, e.g. Fable's measurement source. */
   measurement?: string;
   /** Extra footer lines, e.g. Fable's local-activity and staleness notes. */
   notes?: ReactNode[];
@@ -33,7 +32,6 @@ type Props = {
 };
 
 const NAMES: Record<QuotaKind, string> = { codex: 'Codex', claude: 'Claude', fable: 'Fable 5' };
-const ICONS: Record<QuotaKind, typeof Hexagon> = { codex: Hexagon, claude: BrainCircuit, fable: Sparkles };
 
 function planLabel(planType: string | null) {
   const trimmed = planType?.trim();
@@ -42,20 +40,24 @@ function planLabel(planType: string | null) {
   return lower === 'pro' ? 'ChatGPT Pro' : lower === 'max' ? 'Claude Max' : trimmed;
 }
 
+function sentence(text: string) {
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : text;
+}
+
 export function QuotaCard({ kind, quota, nowMs, resetCredits = 0, measurement, notes = [], emptyText }: Props) {
   const name = NAMES[kind];
-  const Icon = ICONS[kind];
   const current = primaryWindow(quota);
   if (!quota || !current) {
     return (
       <article className="qc unknown" aria-label={`${name} allowance`}>
         <div className="qc-head">
-          <span className={`provider-icon ${kind}`}>
-            <Icon aria-hidden="true" />
-          </span>
-          <span className="eyebrow">{name} · Allowance</span>
+          <span className={`swatch ${kind}`} aria-hidden="true" />
+          <div className="qc-title">
+            <h2>{name}</h2>
+            <span>Allowance</span>
+          </div>
         </div>
-        <h2 className="qc-empty-title">Waiting for a first observation</h2>
+        <h3 className="qc-empty-title">Waiting for a first observation</h3>
         <p className="qc-empty-text">
           {emptyText ||
             'Refresh the automatic sources. If the provider still exposes no allowance, an official percentage can be added as an optional fallback in Data & settings.'}
@@ -102,20 +104,16 @@ export function QuotaCard({ kind, quota, nowMs, resetCredits = 0, measurement, n
       : f.expectedRemaining == null
         ? { label: '—', detail: 'learning', tone: '' }
         : { label: 'After reset', detail: 'on both projections', tone: '' };
+  const subtitle = `${sentence(measurement || planLabel(current.planType))} · ${sentence(windowLabel(current.windowMinutes))}`;
   return (
     <article className={`qc ${f.state}`} aria-label={`${name} allowance`}>
       <div className="qc-head">
-        <span className={`provider-icon ${kind}`}>
-          <Icon aria-hidden="true" />
-        </span>
-        <span className="eyebrow">
-          {name} · {measurement || planLabel(current.planType)} ·{' '}
-          {current.bucketName || windowLabel(current.windowMinutes)}
-        </span>
-        <span className={`state-pill ${f.state}`}>
-          {risky ? <TriangleAlert aria-hidden="true" /> : <ShieldCheck aria-hidden="true" />}
-          {f.state === 'unknown' ? 'Learning' : f.state}
-        </span>
+        <span className={`swatch ${kind}`} aria-hidden="true" />
+        <div className="qc-title">
+          <h2>{name}</h2>
+          <span title={subtitle}>{subtitle}</span>
+        </div>
+        <span className={`state-pill ${f.state}`}>{f.state === 'unknown' ? 'Learning' : f.state}</span>
       </div>
       <div className="qc-hero">
         <Gauge

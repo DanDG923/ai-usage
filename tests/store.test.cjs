@@ -590,3 +590,51 @@ test('official daily account usage is exposed in dashboard snapshots', () => wit
   assert.equal(snapshot.dailyUsage[0].date, '2026-08-29');
   assert.equal(snapshot.dailyUsage[0].tokens, 123456);
 }));
+
+test('the Claude primary window is the shared weekly pool, not a model-scoped bucket recorded in the same scan', () => withStore((store) => {
+  const observedAt = new Date().toISOString();
+  const weeklyReset = new Date(Date.now() + 5 * 86_400_000).toISOString();
+  const shortReset = new Date(Date.now() + 3 * 3_600_000).toISOString();
+  const record = (bucketId, bucketName, windowMinutes, resetsAt, scope, usedPercent) => store.recordObservation({
+    sourceId: 'claude', bucketId, bucketName, observedAt, usedPercent, resetsAt, windowMinutes,
+    provenance: 'official-claude-usage', metadata: { scope, source: 'claude-usage' },
+  });
+  record('model_scoped:fable%205', 'Fable 5 weekly', 10_080, weeklyReset, 'model', 70);
+  record('seven_day_opus', 'Opus weekly', 10_080, weeklyReset, 'model', 55);
+  record('seven_day', 'Weekly', 10_080, weeklyReset, 'overall', 20);
+  record('five_hour', '5-hour', 300, shortReset, 'overall', 10);
+  const quota = store.getQuota('claude');
+  assert.equal(quota.bucketId, 'seven_day');
+  assert.deepEqual(quota.windows.slice(0, 2).map((window) => window.bucketId), ['seven_day', 'five_hour']);
+}));
+
+test('reset-cycle token totals use the same per-source rule as the cost ledger', () => withStore((store) => {
+  const observedAt = new Date().toISOString();
+  const resetsAt = new Date(Date.now() + 2 * 86_400_000).toISOString();
+  store.recordObservation({ sourceId: 'codex', bucketId: 'codex:secondary', bucketName: 'Codex weekly', observedAt, usedPercent: 30, resetsAt, windowMinutes: 10_080, provenance: 'official', metadata: { limitId: 'codex' } });
+  store.recordUsageEvent({ eventKey: 'codex-1', sourceId: 'codex', occurredAt: observedAt, model: 'gpt-5.6-sol', inputTokens: 1_000, cachedInputTokens: 400, outputTokens: 100 });
+  const [cycle] = store.getCycleHistory('codex', store.getQuota('codex'));
+  assert.equal(cycle.current, true);
+  // Codex reports cached input as a subset of input, so 400 is not added again.
+  assert.equal(cycle.tokens, 1_100);
+  assert.equal(store.getCostAnalytics(1).totalTokens, 1_100);
+}));
+
+test('cost analytics carry a local hour-by-weekday activity grid', () => withStore((store) => {
+  // 23:30 UTC on Friday 28 August 2026 is 00:30 BST on Saturday in Europe/London.
+  store.recordUsageEvent({ eventKey: 'bst-saturday', sourceId: 'claude', occurredAt: '2026-08-28T23:30:00Z', model: 'claude-opus-5', inputTokens: 1_000_000 });
+  const costs = store.getCostAnalytics(2, store.getSettings(), Date.parse('2026-08-30T12:00:00Z'));
+  assert.equal(costs.activityGrid.length, 7);
+  assert.ok(costs.activityGrid.every((row) => row.length === 24));
+  assert.ok(costs.activityGrid[6][0] > 0, 'Saturday 00:00 local carries the cost');
+  assert.equal(costs.activityGrid[5][23], 0, 'nothing lands in the UTC slot');
+  const total = costs.activityGrid.flat().reduce((sum, value) => sum + value, 0);
+  assert.equal(total, costs.actual);
+}));
+
+test('subscription fee settings are validated like every other numeric setting', () => withStore((store) => {
+  store.updateSettings({ codexPlanUsdPerMonth: 200, claudePlanUsdPerMonth: 100 });
+  assert.equal(store.getSettings().codexPlanUsdPerMonth, 200);
+  assert.throws(() => store.updateSettings({ codexPlanUsdPerMonth: -1 }), /codexPlanUsdPerMonth/);
+  assert.throws(() => store.updateSettings({ claudePlanUsdPerMonth: 'free' }), /claudePlanUsdPerMonth/);
+}));

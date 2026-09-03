@@ -45,8 +45,10 @@ export function resetDistance(value?: string | null) {
   if (!value) return 'Reset unknown';
   const hours = Math.max(0, (new Date(value).getTime() - Date.now()) / 3_600_000);
   if (hours < 24) return `${Math.ceil(hours)} hours`;
-  const days = Math.floor(hours / 24);
-  return `${days} day${days === 1 ? '' : 's'} ${Math.round(hours % 24)}h`;
+  // Round the total first so 47.6h reads "1 day 24h" never; it is "2 days 0h".
+  const whole = Math.round(hours);
+  const days = Math.floor(whole / 24);
+  return `${days} day${days === 1 ? '' : 's'} ${whole % 24}h`;
 }
 
 /** Distance between two instants as "2d 5h" or "3h", for run-out timing. */
@@ -54,7 +56,8 @@ export function durationLabel(fromMs: number, toMs: number) {
   const hours = Math.max(0, (toMs - fromMs) / 3_600_000);
   if (hours < 1) return 'under an hour';
   if (hours < 24) return `${Math.round(hours)}h`;
-  return `${Math.floor(hours / 24)}d ${Math.round(hours % 24)}h`;
+  const whole = Math.round(hours);
+  return `${Math.floor(whole / 24)}d ${whole % 24}h`;
 }
 
 export function percent(value: number | null | undefined, digits = 0) {

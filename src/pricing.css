@@ -2,35 +2,15 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(180px, 300px));
   gap: 14px;
-  margin-top: 20px;
-}
-
-.currency-row label > span {
-  display: block;
-  color: var(--text-dim);
-  font-size: 12px;
-  font-weight: 700;
-  margin-bottom: 7px;
-}
-
-.currency-row input,
-.currency-row select,
-.price-table input,
-.copy-prices {
-  width: 100%;
-  height: 39px;
-  border-radius: 9px;
-  border: 1px solid var(--input-border);
-  background: var(--input-bg);
-  color: var(--text);
-  padding: 0 10px;
+  margin-top: 16px;
 }
 
 .price-table table {
   min-width: 780px;
 }
 .price-table td {
-  padding: 9px 7px;
+  padding: 8px 6px;
+  vertical-align: middle;
 }
 .price-table input {
   min-width: 92px;
@@ -38,14 +18,14 @@
 .price-table td:first-child small {
   display: block;
   max-width: 230px;
-  margin-top: 5px;
-  color: var(--text-dim);
-  font-size: 11px;
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 11.5px;
   line-height: 1.4;
 }
 .copy-prices {
   margin-top: 8px;
-  height: 34px;
+  height: 28px;
   font-size: 12px;
   max-width: 230px;
 }
@@ -53,27 +33,26 @@
 .pricing-disclosure {
   display: flex;
   gap: 12px;
-  margin: 18px 0 8px;
-  padding: 14px 16px;
-  border: 1px solid color-mix(in srgb, var(--blue-bright) 22%, transparent);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--blue-bright) 6%, transparent);
+  margin: 16px 0 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
   color: var(--text-muted);
   font-size: 12.5px;
   line-height: 1.55;
 }
 
 .pricing-disclosure > svg {
-  width: 18px;
-  flex: 0 0 auto;
-  color: var(--blue-bright);
+  display: none;
 }
 
 .pricing-disclosure strong {
-  color: var(--text-2);
+  color: var(--text);
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  font-weight: 600;
 }
 .pricing-disclosure > span {
   display: block;
@@ -83,98 +62,129 @@
   display: flex;
   min-width: 145px;
   flex-direction: column;
-  gap: 3px;
+  gap: 2px;
+  align-items: flex-end;
 }
 
 .unpriced-cost strong {
-  color: var(--amber-text);
+  color: var(--warn-text);
 }
 .unpriced-cost small {
-  color: var(--text-dim);
-  font-size: 11px;
+  color: var(--text-muted);
+  font-size: 11.5px;
 }
 
 .price-save {
-  width: 38px;
-  height: 38px;
+  width: 32px;
+  height: 32px;
   display: grid;
   place-items: center;
-  border-radius: 9px;
-  border: 1px solid var(--button-border);
-  background: var(--button-bg);
-  color: var(--mint-text);
+  border-radius: 6px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--accent-text);
   cursor: pointer;
 }
 
 .price-save svg {
-  width: 16px;
+  width: 15px;
 }
 .price-save:disabled {
   cursor: not-allowed;
   opacity: 0.35;
 }
 
-.connection.cost-tracking {
-  background: color-mix(in srgb, var(--mint-bright) 12%, transparent);
-  border-color: color-mix(in srgb, var(--mint-bright) 25%, transparent);
-  color: var(--mint-text) !important;
-}
-
-.connection.estimating,
-.connection.activity-only {
-  background: color-mix(in srgb, var(--blue-bright) 12%, transparent);
-  border-color: color-mix(in srgb, var(--blue-bright) 25%, transparent);
-  color: var(--blue-bright) !important;
-}
-
-.connection.degraded,
-.connection.stale,
-.connection.waiting {
-  color: var(--amber-text) !important;
-  background: color-mix(in srgb, var(--amber) 13%, transparent);
-  border-color: color-mix(in srgb, var(--amber) 35%, transparent);
-}
-
-.connection.error {
-  color: var(--red-text) !important;
-  background: color-mix(in srgb, var(--red) 13%, transparent);
-}
-
 .daily-usage-chart {
   width: 100%;
   height: 235px;
-  margin-top: 10px;
+  margin-top: 6px;
 }
 
 .daily-usage-bar {
-  fill: var(--blue);
-  opacity: 0.78;
+  fill: var(--codex);
+  opacity: 0.8;
 }
 
 .daily-usage-bar:hover,
 .daily-usage-bar.hovered {
   opacity: 1;
 }
-.daily-usage-panel .panel-heading p {
-  max-width: 720px;
-}
 .alert-fields,
-.storage-fields {
+.storage-fields,
+.plan-fields {
   grid-template-columns: repeat(2, minmax(180px, 300px));
 }
 
-.unpriced-price-row {
-  background: color-mix(in srgb, var(--amber) 6%, transparent);
+.unpriced-price-row td {
+  background: color-mix(in srgb, var(--warn) 7%, transparent);
 }
 
 .unpriced-price-row td:first-child small {
   display: block;
-  margin-top: 5px;
-  color: var(--amber-text);
-  font-size: 11px;
+  margin-top: 3px;
+  color: var(--warn-text);
+  font-size: 11.5px;
   line-height: 1.35;
 }
 
 .unpriced-price-row input {
-  border-color: color-mix(in srgb, var(--amber) 45%, transparent);
+  border-color: color-mix(in srgb, var(--warn) 55%, transparent);
+}
+
+/* Hour-by-weekday heatmap (details) */
+.heatmap {
+  display: grid;
+  grid-template-columns: 34px repeat(24, minmax(0, 1fr));
+  gap: 3px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.heatmap .hm-row-label {
+  align-self: center;
+  padding-right: 6px;
+  text-align: right;
+}
+.heatmap .hm-col-label {
+  text-align: center;
+  padding-top: 2px;
+}
+.heatmap .hm-cell {
+  aspect-ratio: 1.6 / 1;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) calc(var(--level, 0) * 1%), var(--surface-3));
+  min-height: 12px;
+}
+.heatmap-legend {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+.heatmap-legend i {
+  width: 14px;
+  height: 9px;
+  border-radius: 2px;
+  display: inline-block;
+  background: color-mix(in srgb, var(--accent) calc(var(--level, 0) * 1%), var(--surface-3));
+}
+
+/* Recent rollups (details) */
+.rollup-row {
+  margin-top: 18px;
+}
+.rollup-row .delta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.rollup-row .delta.up {
+  color: var(--warn-text);
+}
+.rollup-row .delta.down {
+  color: var(--ok-text);
 }

@@ -1,7 +1,7 @@
-import { Stethoscope } from 'lucide-react';
 import { shortDate } from '../../lib';
 import type { Snapshot, Source } from '../../types';
 import { SectionHeading } from './fields';
+import { sourceMark } from './SourcesSection';
 
 type Fact = { label: string; value: string };
 
@@ -42,7 +42,7 @@ function sourceFacts(source: Source): Fact[] {
       {
         label: 'Session logs',
         value: local
-          ? `${text(local.importedFiles)} files scanned · ${text(local.events)} token records · ${text(local.observations)} allowance rows`
+          ? `${text(local.importedFiles)} files scanned · ${text(local.events)} token records · ${text(local.observations)} allowance rows${Number(local.rejected) > 0 ? ` · ${text(local.rejected)} rejected (${text(local.lastRejection)})` : ''}`
           : '—',
       },
       { label: 'Local warning', value: text(metadata.localWarning, 'none') },
@@ -63,7 +63,7 @@ function sourceFacts(source: Source): Fact[] {
       {
         label: 'Transcripts',
         value: transcripts
-          ? `${text(transcripts.filesFound)} files found · ${text(transcripts.importedFiles)} changed · ${text(transcripts.usageEvents)} messages · ${text(transcripts.fableEvents)} Fable`
+          ? `${text(transcripts.filesFound)} files found · ${text(transcripts.importedFiles)} changed · ${text(transcripts.usageEvents)} messages · ${text(transcripts.fableEvents)} Fable${Number(transcripts.rejectedRows) > 0 ? ` · ${text(transcripts.rejectedRows)} rejected (${text(transcripts.lastRejection)})` : ''}`
           : '—',
       },
       {
@@ -116,16 +116,16 @@ export function DiagnosticsSection({ snapshot }: { snapshot: Snapshot }) {
   return (
     <section id="diagnostics" className="panel settings-section">
       <SectionHeading
-        eyebrow="Diagnostics"
-        title="What each collector last saw"
-        description="The raw outcome of the most recent collection, per source: latency, counters, and the reason for any fallback. Nothing here is uploaded."
-        icon={Stethoscope}
+        title="Diagnostics"
+        description="The raw outcome of the most recent collection, per source: latency, counters, and the reason for any fallback."
       />
       <div className="diagnostics-grid">
         {snapshot.sources.map((source) => (
           <article key={source.id} className="diagnostics-card">
             <header>
-              <span className={`source-mark ${source.id}`}>{source.name.slice(0, 1)}</span>
+              <span className={`source-mark ${source.id}`} aria-hidden="true">
+                {sourceMark(source.id)}
+              </span>
               <strong>{source.name}</strong>
             </header>
             <dl>

@@ -121,3 +121,70 @@ test('the inline host exposes the same surface over an in-process service', asyn
   host.stop();
   assert.equal(closed, true);
 });
+
+test('a recycled child exiting late cannot fail a request already registered against its replacement', async () => {
+  const children = [];
+  const host = createCollectorHost({
+    fork: () => {
+      const child = fakeChild();
+      // Real processes exit asynchronously after kill(); this child only
+      // announces its exit when the test says so.
+      child.kill = () => { child.killed = true; };
+      children.push(child);
+      return child;
+    },
+    modulePath: 'x',
+    config: {},
+    requestTimeoutMs: 1000,
+  });
+  const first = host.refreshAll();
+  host.stop();
+  await assert.rejects(first, /was stopped/);
+  const second = host.refreshAll();
+  assert.equal(children.length, 2);
+  children[0].emit('exit', 0);
+  children[1].emit('message', { id: children[1].sent[0].id, ok: true, result: { ok: true } });
+  assert.deepEqual(await second, { ok: true });
+  assert.equal(host.running, true);
+});
+
+test('overlapping requests never run one source\'s collector concurrently', async () => {
+  let running = 0;
+  let peak = 0;
+  const order = [];
+  const slow = (name) => async () => {
+    running += 1;
+    peak = Math.max(peak, running);
+    order.push(`${name}:start`);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    running -= 1;
+    order.push(`${name}:end`);
+    return { name };
+  };
+  const service = createCollectorService({
+    databasePath: 'db', backupDirectory: 'backups', inboxPath: 'inbox',
+    openStore: () => fakeStore(),
+    collectors: { codex: async () => ({}), claude: slow('claude') },
+  });
+  const [all, only] = await Promise.all([service.handle({ type: 'refresh-all' }), service.handle({ type: 'refresh-claude' })]);
+  assert.equal(peak, 1, 'the Claude collector ran against itself');
+  assert.deepEqual(order, ['claude:start', 'claude:end', 'claude:start', 'claude:end']);
+  assert.equal(all.claude.status, 'fulfilled');
+  assert.equal(only.claude.status, 'fulfilled');
+});
+
+test('a failed queued run does not block the next one for that source', async () => {
+  let calls = 0;
+  const service = createCollectorService({
+    databasePath: 'db', backupDirectory: 'backups', inboxPath: 'inbox',
+    openStore: () => fakeStore(),
+    collectors: {
+      codex: async () => ({}),
+      claude: async () => { calls += 1; if (calls === 1) throw new Error('first fails'); return { calls }; },
+    },
+  });
+  const first = await service.handle({ type: 'refresh-claude' });
+  assert.equal(first.claude.status, 'rejected');
+  const second = await service.handle({ type: 'refresh-claude' });
+  assert.deepEqual(second.claude, { status: 'fulfilled', value: { calls: 2 } });
+});

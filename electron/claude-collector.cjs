@@ -231,6 +231,8 @@ function importClaudeTranscripts(store, days = 120) {
   let importedFiles = 0;
   let usageEvents = 0;
   let fableEvents = 0;
+  let rejectedRows = 0;
+  let lastRejection = null;
 
   for (const { fullPath, stat } of files) {
     const previous = store.getImportedFile(fullPath);
@@ -268,35 +270,43 @@ function importClaudeTranscripts(store, days = 120) {
       const cacheWrite1h = Number(cacheCreation.ephemeral_1h_input_tokens || 0);
       const cacheWriteTotal = Number(usage.cache_creation_input_tokens || cacheWrite5m + cacheWrite1h);
       if (cacheWrite5m + cacheWrite1h === 0 && cacheWriteTotal > 0) cacheWrite5m = cacheWriteTotal;
-      store.recordUsageEvent({
-        eventKey: `claude-transcript:${row.sessionId || 'unknown-session'}:${messageId}`,
-        sourceId: 'claude',
-        occurredAt: row.timestamp,
-        sessionId: row.sessionId || null,
-        model,
-        project: typeof row.cwd === 'string' && row.cwd.trim() ? row.cwd.trim() : null,
-        inputTokens: usage.input_tokens,
-        cachedInputTokens: usage.cache_read_input_tokens,
-        cacheWriteInputTokens: cacheWriteTotal,
-        cacheWrite5mInputTokens: cacheWrite5m,
-        cacheWrite1hInputTokens: cacheWrite1h,
-        outputTokens: usage.output_tokens,
-        reasoningOutputTokens: usage.output_tokens_details?.reasoning_tokens || 0,
-        metadata: {
-          source: 'claude-transcript',
-          requestId: row.requestId || null,
-          entrypoint: row.entrypoint || null,
-          sidechain: Boolean(row.isSidechain),
-          effort: row.effort || null,
-        },
-      });
+      // One malformed message must not stop the file: the cursor still
+      // advances, the row is counted as rejected, and the rest is imported.
+      try {
+        store.recordUsageEvent({
+          eventKey: `claude-transcript:${row.sessionId || 'unknown-session'}:${messageId}`,
+          sourceId: 'claude',
+          occurredAt: row.timestamp,
+          sessionId: row.sessionId || null,
+          model,
+          project: typeof row.cwd === 'string' && row.cwd.trim() ? row.cwd.trim() : null,
+          inputTokens: usage.input_tokens,
+          cachedInputTokens: usage.cache_read_input_tokens,
+          cacheWriteInputTokens: cacheWriteTotal,
+          cacheWrite5mInputTokens: cacheWrite5m,
+          cacheWrite1hInputTokens: cacheWrite1h,
+          outputTokens: usage.output_tokens,
+          reasoningOutputTokens: usage.output_tokens_details?.reasoning_tokens || 0,
+          metadata: {
+            source: 'claude-transcript',
+            requestId: row.requestId || null,
+            entrypoint: row.entrypoint || null,
+            sidechain: Boolean(row.isSidechain),
+            effort: row.effort || null,
+          },
+        });
+      } catch (error) {
+        rejectedRows += 1;
+        lastRejection = error instanceof Error ? error.message : String(error);
+        continue;
+      }
       usageEvents += 1;
       if (String(model).toLowerCase().includes('fable')) fableEvents += 1;
     }
     store.markImportedFile(fullPath, stat.mtimeMs, plan.startOffset + chunk.consumedBytes);
     importedFiles += 1;
   }
-  return { importedFiles, usageEvents, fableEvents, filesFound: files.length };
+  return { importedFiles, usageEvents, fableEvents, filesFound: files.length, rejectedRows, lastRejection };
 }
 
 const FABLE_BUCKET = 'fable_seven_day';

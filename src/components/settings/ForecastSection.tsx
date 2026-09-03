@@ -1,4 +1,3 @@
-import { Clock3, Database, PiggyBank } from 'lucide-react';
 import type { Settings, Snapshot } from '../../types';
 import { NumericSetting, SectionHeading, hourOptions } from './fields';
 
@@ -15,10 +14,8 @@ export function ForecastSection({
   return (
     <section id="schedule" className="panel settings-section">
       <SectionHeading
-        eyebrow="Behaviour model"
-        title="Learned forecast"
+        title="Forecast"
         description="History is weighted by recency, hour, weekday, and current momentum. Active hours define when future use is likely, not a flat burn rate."
-        icon={Clock3}
       />
       <div className="settings-fields">
         <label>
@@ -80,7 +77,6 @@ export function ForecastSection({
         />
       </div>
       <div className="learning-note">
-        <PiggyBank aria-hidden="true" />
         <span>
           <strong>Budget mode</strong>
           The reserve is the share of each allowance you want untouched at reset, for example to keep the weekend free.
@@ -89,7 +85,6 @@ export function ForecastSection({
         </span>
       </div>
       <div className="learning-note">
-        <Database aria-hidden="true" />
         <span>
           <strong>Three independent learners</strong>
           Codex, overall Claude, and Fable 5 build their own history. The heavier forecast uses the busy end of each

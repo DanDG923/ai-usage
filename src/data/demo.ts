@@ -147,6 +147,8 @@ export const demoSnapshot: Snapshot = {
     paceRiskThreshold: 1.2,
     hardLimitThreshold: 90,
     reservePercent: 0,
+    codexPlanUsdPerMonth: 200,
+    claudePlanUsdPerMonth: 200,
     notifyDesktop: true,
     notifyResets: true,
     notifyFallback: true,
@@ -266,6 +268,13 @@ export const demoSnapshot: Snapshot = {
     unpricedModels: [{ sourceId: 'codex', model: 'preview-unpriced-model', tokens: 11_456_000 }],
     requestCount: 1842,
     chart,
+    activityGrid: Array.from({ length: 7 }, (_, weekday) =>
+      Array.from({ length: 24 }, (__, hour) => {
+        const working = hour >= 8 && hour < 22 && weekday !== 0;
+        const peak = Math.exp(-((hour - 15) ** 2) / 18) * (weekday === 6 ? 0.5 : 1);
+        return working ? Math.round(peak * 14 * 100) / 100 : 0;
+      }),
+    ),
     byModel: [
       {
         sourceId: 'codex',

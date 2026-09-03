@@ -1,4 +1,3 @@
-import { FolderKanban } from 'lucide-react';
 import { compactNumber, money, percent, projectName, shortDate, sourceLabel } from '../../lib';
 import type { CostAnalytics } from '../../types';
 
@@ -26,13 +25,9 @@ export function ProjectTable({ costs }: { costs: CostAnalytics }) {
     <section className="panel table-panel">
       <div className="panel-heading">
         <div>
-          <span className="eyebrow">By project</span>
-          <h2>Where the work happened</h2>
-          <p>
-            Grouped by the working directory each session ran in. Only the folder path is recorded, never the prompts.
-          </p>
+          <h2>By project</h2>
+          <p>Grouped by the working directory each session ran in. Only the folder path is recorded, never prompts.</p>
         </div>
-        <FolderKanban aria-hidden="true" />
       </div>
       <div className="table-scroll">
         <table>
@@ -40,11 +35,11 @@ export function ProjectTable({ costs }: { costs: CostAnalytics }) {
             <tr>
               <th>Project</th>
               <th>Sources</th>
-              <th>Sessions</th>
+              <th className="num">Sessions</th>
               <th>Last activity</th>
-              <th>Tokens</th>
-              <th>Coverage</th>
-              <th>API-equivalent</th>
+              <th className="num">Tokens</th>
+              <th className="num">Coverage</th>
+              <th className="num">API-equivalent</th>
             </tr>
           </thead>
           <tbody>
@@ -60,11 +55,11 @@ export function ProjectTable({ costs }: { costs: CostAnalytics }) {
                     )}
                   </td>
                   <td>{row.sources.map(sourceLabel).join(', ')}</td>
-                  <td>{row.sessionCount}</td>
+                  <td className="num">{row.sessionCount}</td>
                   <td>{shortDate(row.lastActivity)}</td>
-                  <td>{compactNumber(row.totalTokens)}</td>
-                  <td>{percent(row.coverage * 100)}</td>
-                  <td>
+                  <td className="num">{compactNumber(row.totalTokens)}</td>
+                  <td className="num">{percent(row.coverage * 100)}</td>
+                  <td className="num">
                     <EquivalentValue cost={row.cost} coverage={row.coverage} currency={costs.currency} />
                   </td>
                 </tr>
@@ -88,23 +83,22 @@ export function ModelTable({ costs }: { costs: CostAnalytics }) {
     <section className="panel table-panel">
       <div className="panel-heading">
         <div>
-          <span className="eyebrow">Cost drivers</span>
-          <h2>Provider and model detail</h2>
+          <h2>By model</h2>
         </div>
-        <span className="table-note">Prices are editable in Data &amp; settings</span>
+        <span className="table-note">Prices are editable under Data &amp; settings</span>
       </div>
       <div className="table-scroll">
         <table>
           <thead>
             <tr>
-              <th>Provider / model</th>
-              <th>Input</th>
-              <th>Cache read</th>
-              <th>Write 5m</th>
-              <th>Write 1h</th>
-              <th>Output (reasoning subset)</th>
-              <th>Coverage</th>
-              <th>API-equivalent</th>
+              <th>Model</th>
+              <th className="num">Input</th>
+              <th className="num">Cache read</th>
+              <th className="num">Write 5m</th>
+              <th className="num">Write 1h</th>
+              <th className="num">Output (reasoning subset)</th>
+              <th className="num">Coverage</th>
+              <th className="num">API-equivalent</th>
             </tr>
           </thead>
           <tbody>
@@ -115,16 +109,16 @@ export function ModelTable({ costs }: { costs: CostAnalytics }) {
                     <span className={`table-provider ${row.sourceId}`}>{sourceLabel(row.sourceId)}</span>
                     <strong>{row.model}</strong>
                   </td>
-                  <td>{compactNumber(row.inputTokens)}</td>
-                  <td className="mint">{compactNumber(row.cachedInputTokens)}</td>
-                  <td>{compactNumber(row.cacheWrite5mInputTokens)}</td>
-                  <td>{compactNumber(row.cacheWrite1hInputTokens)}</td>
-                  <td>
-                    {compactNumber(row.outputTokens)}{' '}
-                    <small>({compactNumber(row.reasoningOutputTokens)} reasoning)</small>
+                  <td className="num">{compactNumber(row.inputTokens)}</td>
+                  <td className="num">{compactNumber(row.cachedInputTokens)}</td>
+                  <td className="num">{compactNumber(row.cacheWrite5mInputTokens)}</td>
+                  <td className="num">{compactNumber(row.cacheWrite1hInputTokens)}</td>
+                  <td className="num">
+                    {compactNumber(row.outputTokens)}
+                    <small>{compactNumber(row.reasoningOutputTokens)} reasoning</small>
                   </td>
-                  <td>{percent(row.coverage * 100)}</td>
-                  <td>
+                  <td className="num">{percent(row.coverage * 100)}</td>
+                  <td className="num">
                     <EquivalentValue cost={row.cost} coverage={row.coverage} currency={costs.currency} />
                   </td>
                 </tr>
@@ -148,8 +142,7 @@ export function SessionTable({ costs }: { costs: CostAnalytics }) {
     <section className="panel table-panel session-panel">
       <div className="panel-heading">
         <div>
-          <span className="eyebrow">Largest sessions</span>
-          <h2>Where the token value came from</h2>
+          <h2>Largest sessions</h2>
         </div>
       </div>
       <div className="table-scroll">
@@ -161,8 +154,8 @@ export function SessionTable({ costs }: { costs: CostAnalytics }) {
               <th>Session</th>
               <th>Model</th>
               <th>Last activity</th>
-              <th>Tokens</th>
-              <th>API-equivalent</th>
+              <th className="num">Tokens</th>
+              <th className="num">API-equivalent</th>
             </tr>
           </thead>
           <tbody>
@@ -183,8 +176,8 @@ export function SessionTable({ costs }: { costs: CostAnalytics }) {
                   </td>
                   <td>{row.model}</td>
                   <td>{shortDate(row.occurredAt)}</td>
-                  <td>{compactNumber(row.totalTokens)}</td>
-                  <td>
+                  <td className="num">{compactNumber(row.totalTokens)}</td>
+                  <td className="num">
                     <EquivalentValue cost={row.cost} coverage={row.coverage} currency={costs.currency} />
                   </td>
                 </tr>

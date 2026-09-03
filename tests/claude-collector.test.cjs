@@ -1070,3 +1070,34 @@ test('Claude Desktop is never mistaken for a Claude Code executable', () => {
     process.env.PATH = previous.PATH;
   }
 });
+
+test('one malformed transcript message is rejected without stopping the file or freezing its cursor', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-claude-'));
+  const oldProfile = process.env.USERPROFILE;
+  process.env.USERPROFILE = root;
+  const project = path.join(root, '.claude', 'projects', 'test-project');
+  fs.mkdirSync(project, { recursive: true });
+  const transcript = path.join(project, 'session.jsonl');
+  const broken = assistantRow({ id: 'message-2', uuid: 'broken', timestamp: '2026-08-29T10:01:00Z', model: 'claude-opus-5', input: 2, output: 2 });
+  broken.message.usage.output_tokens_details = { reasoning_tokens: 50 };
+  const rows = [
+    assistantRow({ id: 'message-1', uuid: 'first', timestamp: '2026-08-29T10:00:00Z', model: 'claude-opus-5', input: 2, output: 4 }),
+    broken,
+    assistantRow({ id: 'message-3', uuid: 'third', timestamp: '2026-08-29T10:02:00Z', model: 'claude-opus-5', input: 2, output: 6 }),
+  ];
+  fs.writeFileSync(transcript, `${rows.map(JSON.stringify).join('\n')}\n`);
+  const store = new UsageStore(path.join(root, 'test.sqlite'), path.join(root, 'Backups'));
+  try {
+    const first = importClaudeTranscripts(store);
+    assert.equal(first.usageEvents, 2);
+    assert.equal(first.rejectedRows, 1);
+    assert.match(first.lastRejection, /reasoning/i);
+    assert.equal(store.db.prepare('SELECT COUNT(*) AS count FROM usage_events').get().count, 2);
+    const again = importClaudeTranscripts(store);
+    assert.equal(again.usageEvents, 0, 'the cursor advanced past the bad row');
+    assert.equal(again.rejectedRows, 0);
+  } finally {
+    store.close();
+    process.env.USERPROFILE = oldProfile;
+  }
+});

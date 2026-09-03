@@ -22,10 +22,18 @@ function emptyState() {
   };
 }
 
+const STATE_RANK = { critical: 5, risk: 4, watch: 3, unknown: 2, safe: 1 };
+
+// The same rule the renderer uses (src/lib.ts primaryWindow): the worst active
+// window headlines, so the tray, the digest, and the header chip agree.
 function primaryWindow(quota) {
   if (!quota) return null;
   const windows = Array.isArray(quota.windows) && quota.windows.length ? quota.windows : [quota];
-  return windows.find((window) => !window?.forecast?.expired) || windows[0] || null;
+  const active = windows.filter((window) => !window?.forecast?.expired);
+  const candidates = active.length ? active : windows;
+  if (!candidates.length) return null;
+  return candidates.reduce((worst, window) =>
+    (STATE_RANK[window?.forecast?.state] || 0) > (STATE_RANK[worst?.forecast?.state] || 0) ? window : worst);
 }
 
 function displayedRemaining(window) {
@@ -39,7 +47,8 @@ function resetDistance(resetsAt, nowMs) {
   const hours = Math.max(0, (Date.parse(resetsAt) - nowMs) / 3_600_000);
   if (hours < 1) return 'under an hour';
   if (hours < 24) return `${Math.round(hours)}h`;
-  return `${Math.floor(hours / 24)}d ${Math.round(hours % 24)}h`;
+  const whole = Math.round(hours);
+  return `${Math.floor(whole / 24)}d ${whole % 24}h`;
 }
 
 // A plain-text digest of the dashboard: the tray tooltip, the daily digest,

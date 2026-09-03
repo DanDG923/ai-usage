@@ -1,4 +1,3 @@
-import { BellOff, BellRing } from 'lucide-react';
 import { shortDate } from '../../lib';
 import type { Settings, Snapshot } from '../../types';
 import { NumericSetting, SectionHeading, ToggleRow, hourOptions } from './fields';
@@ -20,10 +19,8 @@ export function AlertsSection({
   return (
     <section id="alerts" className="panel settings-section">
       <SectionHeading
-        eyebrow="Guardrails"
         title="Alerts"
         description="Desktop notifications from the tray process. They fire after a collection, so they are only as current as the collection interval."
-        icon={BellRing}
       />
       <div className="settings-fields alert-fields">
         <NumericSetting
@@ -82,7 +79,6 @@ export function AlertsSection({
         </label>
       </div>
       <div className="snooze-row">
-        <BellOff aria-hidden="true" />
         <span>
           <strong>
             {snoozed ? `Alerts snoozed until ${shortDate(settings.alertsSnoozedUntil)}` : 'Snooze alerts'}
