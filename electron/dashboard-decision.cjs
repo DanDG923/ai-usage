@@ -34,6 +34,48 @@ function unique(values) {
   return [...new Set(values)];
 }
 
+function joinNames(names) {
+  if (names.length <= 1) return names.join('');
+  return `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+}
+
+function providerNames(labels) {
+  return unique(labels.map((label) => String(label).split(' · ')[0].trim()));
+}
+
+function forecastReasons(state, forecast = {}) {
+  if (state === 'critical') return ['expected-exhaustion'];
+  if (state === 'watch') return ['watch'];
+  if (state !== 'risk') return [];
+  const reasons = [];
+  const heavyExhausts = Boolean(forecast.heavyExhaustsAt)
+    || (Number.isFinite(forecast.heavyRemaining) && forecast.heavyRemaining <= 0);
+  if (heavyExhausts) reasons.push('heavy-exhaustion');
+  if ((Number.isFinite(forecast.paceRatio) && forecast.paceRatio > 1) || !reasons.length) reasons.push('pace');
+  return reasons;
+}
+
+function actionableLabel(state, affected, reason, details, assessed) {
+  if (reason === 'mixed') return `${details.length} allowances need attention`;
+  const only = details.length === 1 ? details[0] : null;
+  const sameSourceWindows = only ? assessed.filter((entry) => entry.sourceId === only.sourceId).length : 0;
+  const names = only && sameSourceWindows > 1
+    ? [`${only.sourceLabel} ${only.bucketName || only.bucketId}`]
+    : providerNames(affected);
+  const subject = joinNames(names);
+  const plural = names.length > 1;
+  if (state === 'critical') {
+    return `${subject} ${plural ? 'will reach their limits' : 'will reach its limit'} before reset`;
+  }
+  if (reason === 'heavy-exhaustion') {
+    return `${subject} could reach ${plural ? 'their limits' : 'its limit'} under heavier usage`;
+  }
+  if (state === 'risk') {
+    return `${subject} ${plural ? 'are' : 'is'} above ${plural ? 'their' : 'its'} safe pace`;
+  }
+  return `${subject} ${plural ? 'are' : 'is'} running warm`;
+}
+
 function freshnessLimitHours(window) {
   const minutes = Number(window?.windowMinutes);
   if (!Number.isFinite(minutes) || minutes <= 0) return 24;
@@ -62,8 +104,13 @@ function buildDashboardVerdict(snapshot = {}) {
     }
     for (const window of windows) {
       assessed.push({
+        sourceId: source.id,
+        sourceLabel: source.label,
+        bucketId: window.bucketId || '',
+        bucketName: window.bucketName || window.bucketId || '',
         state: windowState(window),
         label: windowLabel(source.label, window),
+        forecast: window.forecast,
       });
       const health = sourceHealth.get(source.healthId);
       if (['error', 'stale', 'degraded'].includes(health?.status) || evidenceNeedsRefresh(window)) {
@@ -74,14 +121,30 @@ function buildDashboardVerdict(snapshot = {}) {
 
   const actionable = ACTIONABLE_STATES.find((state) => assessed.some((entry) => entry.state === state));
   if (actionable) {
-    const affected = unique(assessed.filter((entry) => entry.state === actionable).map((entry) => entry.label));
+    const affectedEntries = assessed.filter((entry) => entry.state === actionable);
+    const affected = unique(affectedEntries.map((entry) => entry.label));
+    const details = affectedEntries.map((entry) => ({
+      sourceId: entry.sourceId,
+      sourceLabel: entry.sourceLabel,
+      bucketId: entry.bucketId,
+      bucketName: entry.bucketName,
+      state: entry.state,
+      reasons: forecastReasons(entry.state, entry.forecast),
+      expectedRemaining: Number.isFinite(entry.forecast?.expectedRemaining) ? entry.forecast.expectedRemaining : null,
+      heavyRemaining: Number.isFinite(entry.forecast?.heavyRemaining) ? entry.forecast.heavyRemaining : null,
+      exhaustsAt: entry.forecast?.exhaustsAt || null,
+      heavyExhaustsAt: entry.forecast?.heavyExhaustsAt || null,
+      paceRatio: Number.isFinite(entry.forecast?.paceRatio) ? entry.forecast.paceRatio : 0,
+    }));
+    const reasons = unique(details.flatMap((entry) => entry.reasons));
+    const reason = reasons.length === 1 ? reasons[0] : 'mixed';
     return {
       state: actionable,
-      label: actionable === 'watch'
-        ? `${affected.join(' and ')} running warm`
-        : `${affected.join(' and ')} may hit the limit`,
+      reason,
+      label: actionableLabel(actionable, affected, reason, details, assessed),
       windowsChecked: assessed.length,
       affected,
+      details,
     };
   }
 
@@ -92,9 +155,11 @@ function buildDashboardVerdict(snapshot = {}) {
   if (unknown.length) {
     return {
       state: 'unknown',
+      reason: null,
       label: `Usage status needs data: ${unknown.join(', ')}`,
       windowsChecked: assessed.length,
       affected: unknown,
+      details: [],
     };
   }
 
@@ -102,17 +167,21 @@ function buildDashboardVerdict(snapshot = {}) {
   if (needsCurrentData.length) {
     return {
       state: 'unknown',
+      reason: null,
       label: `Allowance check needs current data: ${needsCurrentData.join(', ')}`,
       windowsChecked: assessed.length,
       affected: needsCurrentData,
+      details: [],
     };
   }
 
   return {
     state: 'safe',
+    reason: null,
     label: 'All allowances on track',
     windowsChecked: assessed.length,
     affected: [],
+    details: [],
   };
 }
 

@@ -240,9 +240,25 @@ export const demoSnapshot: Snapshot = {
   },
   dashboardVerdict: {
     state: 'risk',
-    label: 'Fable 5 · Fable 5 weekly may hit the limit',
+    reason: 'heavy-exhaustion',
+    label: 'Fable 5 could reach its limit under heavier usage',
     windowsChecked: 3,
     affected: ['Fable 5 · Fable 5 weekly'],
+    details: [
+      {
+        sourceId: 'fable',
+        sourceLabel: 'Fable 5',
+        bucketId: 'fable_seven_day',
+        bucketName: 'Fable 5 weekly',
+        state: 'risk',
+        reasons: ['heavy-exhaustion'],
+        expectedRemaining: 41,
+        heavyRemaining: 0,
+        exhaustsAt: null,
+        heavyExhaustsAt: new Date(now + 4.2 * day).toISOString(),
+        paceRatio: 0.56,
+      },
+    ],
   },
   cycles: {
     codex: cycles(6.3, [22, 91, 74, 68], [212.4, 1_102.3, 864.1, 790.7]),

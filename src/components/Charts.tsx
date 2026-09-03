@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import type { CostAnalytics, DailyUsage, Forecast, Point } from '../types';
 import { compactNumber, money } from '../lib';
+import type { ProviderView } from '../provider-view';
 
 function linePath(points: { x: number; y: number }[]) {
   if (!points.length) return '';
@@ -79,7 +80,15 @@ function usePlotHeight() {
   return [ref, height] as const;
 }
 
-export function ForecastChart({ forecast }: { forecast: Forecast }) {
+export function ForecastChart({
+  forecast,
+  tone = 'status',
+  label = 'Allowance runway',
+}: {
+  forecast: Forecast;
+  tone?: 'status' | 'codex' | 'claude' | 'fable';
+  label?: string;
+}) {
   const [hoverAt, setHoverAt] = useState<number | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const [plotRef, plotHeight] = usePlotHeight();
@@ -144,14 +153,14 @@ export function ForecastChart({ forecast }: { forecast: Forecast }) {
   const exhaustAt = forecast.exhaustsAt ? Date.parse(forecast.exhaustsAt) : null;
 
   return (
-    <div className="forecast-wrap">
+    <div className={`forecast-wrap forecast-tone-${tone}`}>
       <div className="forecast-plot" ref={plotRef}>
         <svg
           ref={svgRef}
           className="forecast-chart"
           viewBox={`0 0 ${PLOT.width} ${PLOT.height}`}
           role="img"
-          aria-label="Learned remaining allowance forecast"
+          aria-label={`${label}. Expected ${forecast.expectedRemaining == null ? 'unknown' : `${Math.round(forecast.expectedRemaining)}% remaining at reset`}; heavier case ${forecast.heavyRemaining == null ? 'unknown' : `${Math.round(forecast.heavyRemaining)}% remaining at reset`}.`}
           onMouseMove={moveHover}
           onMouseLeave={() => setHoverAt(null)}
         >
@@ -206,6 +215,184 @@ export function ForecastChart({ forecast }: { forecast: Forecast }) {
             : `${hoverLabel} · expected ${hoverExpected == null ? '—' : `${Math.round(hoverExpected)}%`} · heavier ${hoverHeavy == null ? '—' : `${Math.round(hoverHeavy)}%`}`}
         </div>
       )}
+    </div>
+  );
+}
+
+const RUNWAY = { width: 960, height: 360, left: 46, right: 112, top: 22, bottom: 42 };
+
+function observedWindow(points: Point[], startAt: number) {
+  const after = points.filter((point) => point.at >= startAt);
+  const before = points.filter((point) => point.at < startAt).at(-1);
+  return before ? [before, ...after] : after;
+}
+
+function boundedValueAt(points: Point[], at: number) {
+  if (!points.length || at < points[0].at || at > points.at(-1)!.at) return null;
+  return valueAt(points, at);
+}
+
+/**
+ * One truthful calendar chart for every provider. Series share the same date
+ * axis, but each stops at its own reset instead of being stretched to imply
+ * that unlike allowance windows end together.
+ */
+export function CombinedRunwayChart({ views }: { views: ProviderView[] }) {
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [hoverAt, setHoverAt] = useState<number | null>(null);
+  const active = views.filter((view) => {
+    const series = view.current?.forecast.series;
+    return Boolean(series && (series.observed.length || series.expected.length || series.heavy.length));
+  });
+  if (!active.length)
+    return <div className="empty-chart tall">Runway appears after the first allowance observations.</div>;
+
+  const expectedStarts = active
+    .map((view) => view.current!.forecast.series.expected[0]?.at)
+    .filter((at): at is number => Number.isFinite(at));
+  const nowAt = expectedStarts.length
+    ? Math.min(...expectedStarts)
+    : Math.max(...active.flatMap((view) => view.current!.forecast.series.observed.map((point) => point.at)));
+  const forecastEnds = active
+    .flatMap((view) => [
+      view.current!.forecast.series.expected.at(-1)?.at,
+      view.current!.forecast.series.heavy.at(-1)?.at,
+    ])
+    .filter((at): at is number => Number.isFinite(at));
+  const maxAt = forecastEnds.length ? Math.max(...forecastEnds) : nowAt + 86_400_000;
+  const historySpan = Math.min(48 * 3_600_000, Math.max(6 * 3_600_000, (maxAt - nowAt) * 0.22));
+  const minAt = nowAt - historySpan;
+  const plotWidth = RUNWAY.width - RUNWAY.left - RUNWAY.right;
+  const plotHeight = RUNWAY.height - RUNWAY.top - RUNWAY.bottom;
+  const x = (at: number) => RUNWAY.left + ((at - minAt) / Math.max(1, maxAt - minAt)) * plotWidth;
+  const y = (remaining: number) => RUNWAY.top + (1 - remaining / 100) * plotHeight;
+  const scale = (points: Point[]) => points.map((point) => ({ x: x(point.at), y: y(point.remaining) }));
+  const futureSpan = maxAt - nowAt;
+  const ticks = [minAt, nowAt, nowAt + futureSpan / 3, nowAt + (futureSpan * 2) / 3, maxAt];
+
+  const moveHover = (event: React.MouseEvent<SVGSVGElement>) => {
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect || rect.width < 1) return;
+    const canvasX = ((event.clientX - rect.left) / rect.width) * RUNWAY.width;
+    const fraction = (canvasX - RUNWAY.left) / plotWidth;
+    setHoverAt(fraction < 0 || fraction > 1 ? null : minAt + fraction * (maxAt - minAt));
+  };
+
+  const hoverLabel =
+    hoverAt == null
+      ? ''
+      : new Intl.DateTimeFormat('en-GB', {
+          weekday: 'short',
+          day: 'numeric',
+          month: 'short',
+          hour: '2-digit',
+          minute: '2-digit',
+        }).format(new Date(hoverAt));
+  const tipLeft = hoverAt == null ? '0%' : `${Math.min(68, Math.max(2, (x(hoverAt) / RUNWAY.width) * 100 + 1))}%`;
+  const summary = active
+    .map(
+      (view) =>
+        `${view.name}: expected ${Math.round(view.current!.forecast.expectedRemaining ?? 0)}%, heavier ${Math.round(view.current!.forecast.heavyRemaining ?? 0)}% at its reset`,
+    )
+    .join('. ');
+
+  return (
+    <div className="combined-runway-wrap">
+      <svg
+        ref={svgRef}
+        className="combined-runway-chart"
+        viewBox={`0 0 ${RUNWAY.width} ${RUNWAY.height}`}
+        role="img"
+        aria-label={`Combined allowance runway on a shared calendar axis. ${summary}.`}
+        onMouseMove={moveHover}
+        onMouseLeave={() => setHoverAt(null)}
+      >
+        {[0, 25, 50, 75, 100].map((value) => (
+          <g key={value}>
+            <line x1={RUNWAY.left} x2={RUNWAY.width - RUNWAY.right} y1={y(value)} y2={y(value)} className="grid-line" />
+            <text x="5" y={y(value) + 4}>
+              {value}%
+            </text>
+          </g>
+        ))}
+        {ticks.map((tick, index) => (
+          <text
+            key={tick}
+            x={x(tick)}
+            y={RUNWAY.height - 12}
+            textAnchor={index === 0 ? 'start' : index === ticks.length - 1 ? 'end' : 'middle'}
+          >
+            {index === 1
+              ? 'Now'
+              : new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric' }).format(new Date(tick))}
+          </text>
+        ))}
+        <line x1={x(nowAt)} x2={x(nowAt)} y1={RUNWAY.top} y2={RUNWAY.top + plotHeight} className="now-line" />
+        {active.map((view) => {
+          const forecast = view.current!.forecast;
+          const observed = observedWindow(forecast.series.observed, minAt);
+          const expected = forecast.series.expected;
+          const heavy = forecast.series.heavy;
+          const endpoint = expected.at(-1);
+          return (
+            <g key={view.id} className={`combined-series ${view.id}`}>
+              <path d={linePath(scale(observed))} className="combined-observed" />
+              <path d={linePath(scale(heavy))} className="combined-heavy" />
+              <path d={linePath(scale(expected))} className="combined-expected" />
+              {endpoint && (
+                <>
+                  <circle cx={x(endpoint.at)} cy={y(endpoint.remaining)} r="3.8" className="combined-endpoint" />
+                  <text x={x(endpoint.at) + 8} y={y(endpoint.remaining) - 2} className="combined-end-label">
+                    <tspan>{view.name}</tspan>
+                    <tspan x={x(endpoint.at) + 8} dy="13">
+                      {Math.round(endpoint.remaining)}%
+                    </tspan>
+                  </text>
+                </>
+              )}
+              {heavy.at(-1) && (
+                <circle
+                  cx={x(heavy.at(-1)!.at)}
+                  cy={y(heavy.at(-1)!.remaining)}
+                  r="2.8"
+                  className="combined-heavy-endpoint"
+                />
+              )}
+            </g>
+          );
+        })}
+        {hoverAt != null && (
+          <line
+            className="forecast-hover"
+            x1={x(hoverAt)}
+            x2={x(hoverAt)}
+            y1={RUNWAY.top}
+            y2={RUNWAY.top + plotHeight}
+          />
+        )}
+      </svg>
+      {hoverAt != null && (
+        <div className="combined-runway-tip" style={{ left: tipLeft }}>
+          <strong>{hoverLabel}</strong>
+          {active.map((view) => {
+            const forecast = view.current!.forecast;
+            const observed = boundedValueAt(forecast.series.observed, hoverAt);
+            const expected = boundedValueAt(forecast.series.expected, hoverAt);
+            const heavy = boundedValueAt(forecast.series.heavy, hoverAt);
+            if (observed == null && expected == null && heavy == null) return null;
+            return (
+              <span key={view.id}>
+                <i className={`source-dot ${view.id}`} />
+                {view.name}:{' '}
+                {observed != null
+                  ? `${Math.round(observed)}% observed`
+                  : `${expected == null ? '—' : `${Math.round(expected)}% expected`} · ${heavy == null ? '—' : `${Math.round(heavy)}% heavy`}`}
+              </span>
+            );
+          })}
+        </div>
+      )}
+      <p className="combined-runway-note">Shared calendar · each provider line ends at its own reset</p>
     </div>
   );
 }

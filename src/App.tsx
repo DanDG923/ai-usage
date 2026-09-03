@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Details } from './components/Details';
+import { Activity } from './components/Activity';
+import { Costs } from './components/Costs';
 import { BrandMark, Header, TABS, type Tab } from './components/Header';
 import { Overview } from './components/Overview';
 import { Settings, type SettingsActions } from './components/Settings';
 import { demoSnapshot } from './data/demo';
-import { watchViewportScale } from './scale';
 import type { ManualObservation, PriceRow, Settings as SettingsType, Snapshot, Theme } from './types';
 
 function applyThemeAttribute(theme: Theme | undefined) {
@@ -33,10 +33,6 @@ export default function App() {
   useEffect(() => {
     applyThemeAttribute(snapshot?.settings.theme);
   }, [snapshot?.settings.theme]);
-
-  // The page zooms to the window (see fluid.css); the factor is kept on the
-  // root element so CSS can read it without a re-render.
-  useEffect(() => watchViewportScale(), []);
 
   const load = useCallback(
     async (period: number) => {
@@ -119,7 +115,7 @@ export default function App() {
     }
   };
 
-  // Keyboard shortcuts: 1/2/3 switch sections, R refreshes. Typing fields
+  // Keyboard shortcuts: 1/2/3/4 switch sections, R refreshes. Typing fields
   // and modifier chords are left alone.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -127,7 +123,7 @@ export default function App() {
       const target = event.target as HTMLElement | null;
       if (target && (target.closest('input, select, textarea, [contenteditable="true"]') || target.isContentEditable))
         return;
-      const index = ['1', '2', '3'].indexOf(event.key);
+      const index = ['1', '2', '3', '4'].indexOf(event.key);
       if (index >= 0) {
         setTab(TABS[index].id);
         return;
@@ -139,6 +135,10 @@ export default function App() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   });
+
+  useEffect(() => {
+    document.getElementById(`panel-${tab}`)?.focus({ preventScroll: true });
+  }, [tab]);
 
   const changeDays = (period: number) => {
     if (!window.aiUsage) return;
@@ -372,14 +372,9 @@ export default function App() {
     <div className="app-shell">
       <Header snapshot={snapshot} tab={tab} onTab={setTab} refreshing={refreshing} onRefresh={refresh} />
       {tab === 'overview' && <Overview snapshot={snapshot} />}
-      {tab === 'details' && <Details snapshot={snapshot} days={days} onDays={changeDays} />}
+      {tab === 'activity' && <Activity snapshot={snapshot} days={days} />}
+      {tab === 'costs' && <Costs snapshot={snapshot} days={days} onDays={changeDays} />}
       {tab === 'settings' && <Settings snapshot={snapshot} actions={actions} />}
-      <footer className="app-footer">
-        <span>Local data only. Forecasts are estimates from your own history, not provider guarantees.</span>
-        <span>
-          Snapshot {new Date(snapshot.generatedAt).toLocaleString('en-GB')} · {snapshot.timezone}
-        </span>
-      </footer>
       {notice && (
         <div className="toast" role="status" aria-live="polite">
           <span>{notice}</span>

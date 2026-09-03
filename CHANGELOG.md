@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.0.15 — 3 September 2026
+
+This is an in-place interface and forecast-communication update. Running the 1.0.15 setup program upgrades an existing AI Usage installation and preserves its local database, settings, observations, imported cost history, and backups.
+
+### Professional application shell
+
+- Replaces the text-tab header with a compact Windows-style side rail and command bar across Overview, Activity, Costs, and Settings.
+- Removes viewport-wide CSS zoom. The interface now reflows at 1260, 980, and 760 pixel breakpoints, retaining readable type and usable controls down to the supported 720-pixel window width.
+- Establishes a restrained design system with flatter surfaces, tighter spacing, consistent six-pixel radii, provider colours reserved for data, semantic colours reserved for status, reduced-motion handling, and Windows forced-colour support.
+- Adds explicit tab-to-panel relationships, destination focus management, and number-key navigation for all four screens.
+
+### Joined allowance view
+
+- Joins Codex, Claude, and Fable 5 into one shared-calendar runway chart. Observed history is neutral, expected projections are solid, heavier-use projections are dashed, and each provider line ends at its own reset date.
+- Adds direct provider endpoint labels and a hover inspection view without collapsing the three independent reset schedules into one artificial cycle.
+- Rebuilds the top allowance summaries as compact rows with a neutral current-use segment, a softer provider gradient for expected usage, a deeper same-family gradient for additional heavy usage, and a visible scenario boundary.
+- Keeps exact expected and heavier-case values in accessible labels so the gradients are never the only distinction.
+
+### Clearer Activity, Costs, and Settings
+
+- Splits the previous Details screen into Activity and Costs. Activity owns source evidence, provenance, collection freshness, the activity heatmap, daily usage, and cycle history; Costs owns the API-equivalent total, trend, cache savings, and project, model, and session evidence.
+- Adds a single search control that filters all three cost evidence tables.
+- Keeps common collection, forecast, alert, appearance, and update settings visible while moving pricing, storage, manual observations, and diagnostics into progressive disclosures.
+
+### Forecast wording and notifications
+
+- Extends the dashboard verdict with structured per-window reasons for expected exhaustion, heavier-case exhaustion, safe-pace pressure, watch state, and mixed conditions.
+- Describes heavier-case-only exhaustion conditionally instead of calling it likely, keeps pace-only risk separate from run-out claims, and preserves the affected model-scoped window in supporting evidence.
+- Prevents an unknown heavier projection from being treated as zero and aligns tray notifications with the same expected, heavier-case, and pace distinctions shown in the dashboard.
+
+### Verification
+
+- Adds focused dashboard-decision, notification, and responsive-renderer release contracts.
+- Full automated suite: 225 tests passed.
+- oxlint, Prettier, strict TypeScript, the Vite production build, packaged-ASAR audit, native-size visual review, and 720-pixel responsive review passed.
+
 ## 1.0.14 — 3 September 2026
 
 This is an in-place design update. Running the 1.0.14 setup program upgrades an existing AI Usage installation and preserves its local database, settings, observations, imported cost history, and backups.

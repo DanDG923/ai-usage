@@ -20,7 +20,7 @@ export function AlertsSection({
     <section id="alerts" className="panel settings-section">
       <SectionHeading
         title="Alerts"
-        description="Desktop notifications from the tray process. They fire after a collection, so they are only as current as the collection interval."
+        description="Choose which changes are important enough to surface from the tray."
       />
       <div className="settings-fields alert-fields">
         <NumericSetting
@@ -43,8 +43,8 @@ export function AlertsSection({
         />
       </div>
       <ToggleRow
-        title="Pace notifications"
-        description="When learned use is projected to reach the cap before reset. One notification per episode, with the earliest run-out time."
+        title="Risk notifications"
+        description="Expected exhaustion, heavier-case risk, or sustained use above your configured safe pace."
         checked={settings.notifyDesktop}
         onChange={(checked) => update({ notifyDesktop: checked })}
       />

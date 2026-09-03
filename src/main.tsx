@@ -5,7 +5,7 @@ import './styles.css';
 import './overview.css';
 import './accessibility.css';
 import './pricing.css';
-import './fluid.css';
+import './professional.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
