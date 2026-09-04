@@ -97,6 +97,50 @@ test('changing display currency also selects a coherent default conversion rate'
   assert.throws(() => store.updateSettings({ currency: 'USD', usdToCurrency: 2 }), /USD conversion rate must be 1/);
 }));
 
+test('Astra catalogue seeding prices existing usage and preserves custom rates', () => withStore((store) => {
+  store.updateSettings({ currency: 'USD' });
+  store.db.prepare("DELETE FROM price_catalog WHERE model = 'gpt-6-astra'").run();
+  store.recordUsageEvent({
+    eventKey: 'astra-existing', sourceId: 'codex', occurredAt: new Date().toISOString(),
+    model: 'gpt-6-astra', inputTokens: 100_000,
+  });
+  assert.equal(store.getCostAnalytics(1).isLowerBound, true);
+  store.seed();
+  const costs = store.getCostAnalytics(1);
+  assert.equal(costs.actual, 1);
+  assert.equal(costs.coverage, 1);
+  assert.equal(costs.isComplete, true);
+  assert.deepEqual(costs.unpricedModels, []);
+  assert.equal(costs.byModel[0].model, 'gpt-6-astra');
+  const price = store.resolvePrice('gpt-6-astra');
+  assert.equal(price.effective_from, '2026-09-04');
+  assert.equal(price.source_url, 'https://developers.openai.com/api/docs/models/gpt-6-astra');
+  store.updatePrice({
+    model: 'gpt-6-astra', inputUsdPerMillion: 12, cacheWriteUsdPerMillion: 15,
+    cacheWrite1hUsdPerMillion: 15, cacheReadUsdPerMillion: 1.2, outputUsdPerMillion: 60,
+  });
+  store.seed();
+  assert.equal(store.getCostAnalytics(1).actual, 1.2);
+}));
+
+test('Astra prices cached input, cache writes, and output at the exact long-context boundary', () => withStore((store) => {
+  for (const model of ['gpt-6-astra', 'gpt-6-astra-20260904']) {
+    const row = {
+      source_id: 'codex', model, input_tokens: 172_000, cached_input_tokens: 100_000,
+      cache_write_input_tokens: 100_000, cache_write_5m_input_tokens: 50_000,
+      cache_write_1h_input_tokens: 50_000, output_tokens: 1_000,
+    };
+    const standard = store.calculateCost(row);
+    assert.equal(standard.covered, true);
+    assert.equal(standard.longContext, false);
+    assert.equal(standard.actualUsd, 2.12);
+    const long = store.calculateCost({ ...row, input_tokens: 172_001 });
+    assert.equal(long.longContext, true);
+    assert.equal(long.actualUsd, 4.21502);
+  }
+  assert.equal(store.resolvePrice('gpt-6-astra-unknown'), null);
+}));
+
 test('scheduled backups are rate limited', () => withStore((store) => {
   const first = store.maybeCreateScheduledBackup();
   const second = store.maybeCreateScheduledBackup();

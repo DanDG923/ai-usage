@@ -105,6 +105,19 @@ test('an explicit zero used percentage remains a valid observation', () => {
   assert.equal(observations[0].remainingPercent, 100);
 });
 
+test('a database failure is not treated as a rejected historical quota window', () => {
+  const failure = Object.assign(new Error('database is locked'), { code: 'ERR_SQLITE_ERROR' });
+  let rejected = 0;
+  assert.throws(() => recordRateLimit({
+    recordObservation: () => { throw failure; },
+  }, {
+    primary: { usedPercent: 20, windowDurationMins: 300, resetsAt: 2_000_000_000 },
+  }, '2033-05-17T00:00:00.000Z', 'local-official', {}, {
+    onRejected: () => { rejected += 1; },
+  }), (error) => error === failure);
+  assert.equal(rejected, 0);
+});
+
 test('an optional daily-usage failure does not discard a successful rate-limit reading', async () => {
   const observations = [];
   let closed = false;

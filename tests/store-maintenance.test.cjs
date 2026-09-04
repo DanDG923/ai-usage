@@ -73,6 +73,40 @@ test('forecasting reads a bounded window but still surfaces a dormant bucket by 
   assert.deepEqual(buckets.sort(), [['codex:primary', true], ['codex:secondary', false]]);
 }));
 
+test('a dormant bucket uses evidence time when older observations are imported later', () => withStore((store) => {
+  poll(store, NOW - 80 * DAY, 70, NOW - 79 * DAY);
+  poll(store, NOW - 90 * DAY, 20, NOW - 89 * DAY);
+  const quota = store.getQuota('codex', store.getSettings(), NOW);
+  assert.equal(quota.observedAt, iso(NOW - 80 * DAY));
+  assert.equal(quota.usedPercent, 70);
+}));
+
+test('source evidence timestamps never move backwards during historical imports', () => withStore((store) => {
+  poll(store, NOW - DAY, 70, NOW + DAY);
+  poll(store, NOW - 2 * DAY, 20, NOW + DAY);
+  const source = store.db.prepare("SELECT last_observation_at FROM sources WHERE id = 'codex'").get();
+  assert.equal(source.last_observation_at, iso(NOW - DAY));
+}));
+
+test('compaction preserves chronological endpoints and the peak after out-of-order imports', () => withStore((store) => {
+  const start = Date.parse('2026-06-01T08:00:00Z');
+  const reset = start + 6 * DAY;
+  // Import order deliberately differs from evidence order, as in a restore.
+  for (const [hour, used] of [[1, 20], [4, 85], [0, 10], [2, 95], [3, 90]]) {
+    poll(store, start + hour * 3_600_000, used, reset);
+  }
+  const quota = { bucketId: 'codex:primary' };
+  const before = store.getCycleHistory('codex', quota, store.getSettings(), 8, NOW)[0];
+  assert.equal(store.compactObservations(NOW).removed, 2);
+  const kept = store.db.prepare('SELECT used_percent FROM quota_observations ORDER BY observed_at').all();
+  assert.deepEqual(kept.map((row) => row.used_percent), [10, 95, 85]);
+  const after = store.getCycleHistory('codex', quota, store.getSettings(), 8, NOW)[0];
+  for (const key of ['peakUsedPercent', 'firstObservedAt', 'lastObservedAt', 'cost', 'tokens']) {
+    assert.equal(after[key], before[key], key);
+  }
+  assert.equal(store.compactObservations(NOW).removed, 0);
+}));
+
 test('cycle history summarises each past window with its peak, readings, and current-catalogue cost', () => withStore((store) => {
   const previousReset = NOW - 2 * DAY;
   const currentReset = NOW + 5 * DAY;

@@ -68,3 +68,45 @@ test('Codex session logs import incrementally with the working directory carried
     process.env.USERPROFILE = previousProfile;
   }
 });
+
+test('a rejected Codex quota window does not discard valid token records or stall the file cursor', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-codex-invalid-'));
+  const previousProfile = process.env.USERPROFILE;
+  process.env.USERPROFILE = root;
+  const sessions = path.join(root, '.codex', 'sessions');
+  fs.mkdirSync(sessions, { recursive: true });
+  const file = path.join(sessions, 'rollout-invalid-quota.jsonl');
+  const store = new UsageStore(path.join(root, 'test.sqlite'), path.join(root, 'Backups'));
+  try {
+    const entries = [
+      { type: 'turn_context', payload: { model: 'gpt-5.6-sol' } },
+      ...[0, 1].map((index) => ({
+        timestamp: `2026-09-01T10:0${index}:00.000Z`,
+        type: 'event_msg',
+        payload: {
+          type: 'token_count',
+          info: { last_token_usage: { input_tokens: 100, output_tokens: 5 } },
+          rate_limits: index === 0 ? {
+            limit_id: 'codex',
+            // A cached/reset window can be invalid while the other is valid.
+            primary: { used_percent: 20, window_minutes: 300, resets_at: Date.parse('2026-08-31T10:00:00Z') / 1000 },
+            secondary: { used_percent: 40, window_minutes: 10080, resets_at: Date.parse('2026-09-05T10:00:00Z') / 1000 },
+          } : undefined,
+        },
+      })),
+    ];
+    fs.writeFileSync(file, entries.map((entry) => JSON.stringify(entry)).join('\n') + '\n');
+    const result = importLocalSessions(store);
+    assert.equal(result.events, 2);
+    assert.equal(result.observations, 1);
+    assert.equal(result.rejected, 1);
+    assert.match(result.lastRejection, /Reset time must not be earlier/);
+    assert.equal(store.db.prepare('SELECT COUNT(*) AS count FROM usage_events').get().count, 2);
+    assert.equal(store.getImportedFile(file).size_bytes, fs.statSync(file).size);
+    assert.equal(importLocalSessions(store).importedFiles, 0);
+  } finally {
+    store.close();
+    if (previousProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = previousProfile;
+  }
+});

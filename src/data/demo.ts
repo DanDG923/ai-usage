@@ -97,6 +97,16 @@ export const demoSnapshot: Snapshot = {
   resetCredits: 1,
   priceCatalog: [
     {
+      model: 'gpt-6-astra',
+      input_usd_per_million: 10,
+      cache_write_usd_per_million: 12.5,
+      cache_write_1h_usd_per_million: 12.5,
+      cache_read_usd_per_million: 1,
+      output_usd_per_million: 50,
+      effective_from: '2026-09-04',
+      source_url: 'https://developers.openai.com/api/docs/models/gpt-6-astra',
+    },
+    {
       model: 'gpt-5.6-sol',
       input_usd_per_million: 4,
       cache_write_usd_per_million: 5,

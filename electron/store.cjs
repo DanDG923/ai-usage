@@ -17,11 +17,11 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // The learners look back 28 days for weighting and 21 for Fable calibration;
 // 45 days of raw polls covers both with room for a reset cycle either side.
 const FORECAST_LOOKBACK_MS = 45 * DAY_MS;
-// Beyond this age, polling rows are compacted to the first and last reading of
-// each bucket per local day: enough to reconstruct any past window's shape.
+// Beyond this age, keep each local day's endpoints and peak per bucket/window.
+// Provider rebounds must not erase the maximum shown in reset-cycle history.
 const COMPACT_AFTER_MS = 60 * DAY_MS;
-const GPT_56_LONG_CONTEXT_THRESHOLD = 272_000;
-const GPT_56_LONG_CONTEXT_MODELS = new Set(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
+const OPENAI_LONG_CONTEXT_THRESHOLD = 272_000;
+const OPENAI_LONG_CONTEXT_MODELS = new Set(['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
 
 const DEFAULT_SETTINGS = {
   currency: 'GBP',
@@ -90,6 +90,8 @@ const SETTING_VALIDATORS = {
 
 // model, input, five-minute cache write, one-hour cache write, cache read, output
 const PRICE_ROWS = [
+  // Standard API rates verified 2026-09-04; OpenAI has one cache-write rate.
+  ['gpt-6-astra', 10, 12.5, 12.5, 1, 50],
   ['gpt-5.6-sol', 4, 5, 5, 0.4, 20],
   ['codex-auto-review', 4, 5, 5, 0.4, 20],
   ['gpt-5.6-terra', 2, 2.5, 2.5, 0.2, 12],
@@ -154,11 +156,6 @@ function dateKey(value, timeZone) {
 }
 
 const WEEKDAY_INDEX = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
-/** Local weekday (Sunday = 0) and hour of an instant, for the activity grid. */
-function localSlot(value, timeZone) {
-  const values = localParts(value, timeZone);
-  return { weekday: WEEKDAY_INDEX[values.weekday] ?? 0, hour: Number(values.hour) % 24 };
-}
 
 class UsageStore {
   constructor(databasePath, backupDirectory) {
@@ -365,14 +362,17 @@ class UsageStore {
         model, input_usd_per_million, cache_write_usd_per_million,
         cache_write_1h_usd_per_million, cache_read_usd_per_million,
         output_usd_per_million, effective_from, source_url
-      ) VALUES (?, ?, ?, ?, ?, ?, '2026-08-01', ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(model) DO NOTHING
     `);
     for (const row of PRICE_ROWS) {
-      const source = row[0].startsWith('claude')
+      const astra = row[0] === 'gpt-6-astra';
+      const source = astra
+        ? 'https://developers.openai.com/api/docs/models/gpt-6-astra'
+        : row[0].startsWith('claude')
         ? 'https://platform.claude.com/docs/en/about-claude/pricing'
         : 'https://developers.openai.com/api/docs/models/compare';
-      insertPrice.run(...row, source);
+      insertPrice.run(...row, astra ? '2026-09-04' : '2026-08-01', source);
     }
     // Repair only the obsolete built-in Sonnet row. User-edited rows do not
     // match this complete old vector and are left alone.
@@ -585,7 +585,9 @@ class UsageStore {
       confidence,
       JSON.stringify(observation.metadata || {}),
     );
-    this.prepare('UPDATE sources SET last_observation_at = ? WHERE id = ?').run(observedAt, observation.sourceId);
+    this.prepare(`UPDATE sources SET last_observation_at = ?
+      WHERE id = ? AND (last_observation_at IS NULL OR last_observation_at < ?)`)
+      .run(observedAt, observation.sourceId, observedAt);
   }
 
   recordUsageEvent(event) {
@@ -727,10 +729,10 @@ class UsageStore {
     const rows = this.prepare(`
       SELECT * FROM quota_observations
       WHERE source_id = ?
-        AND (observed_at >= ? OR id IN (
-          SELECT MAX(id) FROM quota_observations WHERE source_id = ? GROUP BY bucket_id
+        AND (observed_at >= ? OR (bucket_id, observed_at) IN (
+          SELECT bucket_id, MAX(observed_at) FROM quota_observations WHERE source_id = ? GROUP BY bucket_id
         ))
-      ORDER BY observed_at ASC
+      ORDER BY observed_at ASC, id ASC
     `).all(sourceId, iso(nowMs - FORECAST_LOOKBACK_MS), sourceId);
     if (!rows.length) return null;
 
@@ -892,11 +894,11 @@ class UsageStore {
     // subset, and eligibility is based on the full prompt rather than only the
     // uncached portion. If collectors ever write aggregates, they must carry
     // an explicit request-context field instead of applying this rule to totals.
-    // Resolve through the catalogue row so dated GPT-5.6 model suffixes inherit
+    // Resolve through the catalogue row so dated supported model suffixes inherit
     // the rule, while similarly priced models such as codex-auto-review do not.
     const requestInput = Number(row.input_tokens || 0) + cacheWriteTotal;
-    const longContext = GPT_56_LONG_CONTEXT_MODELS.has(price.model)
-      && requestInput > GPT_56_LONG_CONTEXT_THRESHOLD;
+    const longContext = OPENAI_LONG_CONTEXT_MODELS.has(price.model)
+      && requestInput > OPENAI_LONG_CONTEXT_THRESHOLD;
     const inputMultiplier = longContext ? 2 : 1;
     const outputMultiplier = longContext ? 1.5 : 1;
     const actualUsd = (
@@ -923,7 +925,9 @@ class UsageStore {
   buildCostAnalytics(days, settings, nowMs) {
     const since = iso(nowMs - days * DAY_MS);
     const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    const events = this.prepare('SELECT * FROM usage_events WHERE occurred_at >= ? ORDER BY occurred_at ASC').all(since);
+    // Aggregate one row at a time instead of retaining the entire raw ledger
+    // alongside the model, project, and session summaries.
+    const events = this.prepare('SELECT * FROM usage_events WHERE occurred_at >= ? ORDER BY occurred_at ASC').iterate(since);
     const byModelMap = new Map();
     const unpricedModelsMap = new Map();
     const byDayMap = new Map();
@@ -934,8 +938,10 @@ class UsageStore {
     let withoutCacheUsd = 0;
     let coveredTokens = 0;
     let totalTokens = 0;
+    let requestCount = 0;
 
     for (const event of events) {
+      requestCount += 1;
       const cost = this.calculateCost(event);
       const eventTokens = event.source_id === 'codex'
         ? Number(event.input_tokens) + Number(event.cache_write_input_tokens) + Number(event.output_tokens)
@@ -982,13 +988,14 @@ class UsageStore {
       if (cost.covered) model.coveredTokens += eventTokens;
       byModelMap.set(key, model);
 
-      const day = dateKey(event.occurred_at, timeZone);
+      // The chart and activity grid share one local-time conversion per row.
+      const parts = localParts(event.occurred_at, timeZone);
+      const day = `${parts.year}-${parts.month}-${parts.day}`;
       const dayRow = byDayMap.get(day) || { date: day, codexUsd: 0, claudeUsd: 0 };
       if (event.source_id === 'codex') dayRow.codexUsd += cost.actualUsd;
       else dayRow.claudeUsd += cost.actualUsd;
       byDayMap.set(day, dayRow);
-      const slot = localSlot(event.occurred_at, timeZone);
-      activityUsd[slot.weekday][slot.hour] += cost.actualUsd;
+      activityUsd[WEEKDAY_INDEX[parts.weekday] ?? 0][Number(parts.hour) % 24] += cost.actualUsd;
 
       const projectKey = event.project || '';
       const projectRow = byProjectMap.get(projectKey) || {
@@ -1071,7 +1078,7 @@ class UsageStore {
       isComplete,
       isLowerBound: !isComplete,
       unpricedModels,
-      requestCount: events.length,
+      requestCount,
       byModel,
       byProject,
       chart,
@@ -1207,15 +1214,19 @@ class UsageStore {
   compactObservations(nowMs = Date.now()) {
     const cutoff = iso(nowMs - COMPACT_AFTER_MS);
     const result = this.prepare(`
+      WITH ranked AS (
+        SELECT id,
+          ROW_NUMBER() OVER (daily ORDER BY observed_at ASC, id ASC) AS first_reading,
+          ROW_NUMBER() OVER (daily ORDER BY observed_at DESC, id DESC) AS last_reading,
+          ROW_NUMBER() OVER (daily ORDER BY used_percent DESC, observed_at DESC, id DESC) AS peak_reading
+        FROM quota_observations WHERE observed_at < ?
+        WINDOW daily AS (PARTITION BY source_id, bucket_id, resets_at, date(observed_at, 'localtime'))
+      )
       DELETE FROM quota_observations
       WHERE observed_at < ? AND provenance != 'manual-official' AND id NOT IN (
-        SELECT MIN(id) FROM quota_observations WHERE observed_at < ?
-          GROUP BY source_id, bucket_id, resets_at, date(observed_at, 'localtime')
-        UNION
-        SELECT MAX(id) FROM quota_observations WHERE observed_at < ?
-          GROUP BY source_id, bucket_id, resets_at, date(observed_at, 'localtime')
+        SELECT id FROM ranked WHERE first_reading = 1 OR last_reading = 1 OR peak_reading = 1
       )
-    `).run(cutoff, cutoff, cutoff);
+    `).run(cutoff, cutoff);
     return { removed: Number(result.changes || 0), cutoff };
   }
 
