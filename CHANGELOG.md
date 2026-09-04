@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.17 — 4 September 2026
+
+Adds GPT-6 Astra pricing and fixes historical import and cleanup errors. Install over the existing version to preserve the local database, settings, and backups.
+
+- Adds `gpt-6-astra` to the built-in and preview price catalogues at standard API rates: $10 input, $1 cached input, $12.50 cache writes, and $50 output per million tokens. Requests above 272,000 input tokens apply the documented 2x input/cache and 1.5x output multipliers. Existing records are repriced automatically; saved custom prices are preserved.
+- Aggregates cost records without retaining a separate raw-ledger array and converts each timestamp to local date parts once. A 30,000-record synthetic benchmark improved from 231.53 ms to 160.22 ms median with an identical complete-result checksum. Adds a repeatable benchmark tool.
+- Preserves chronological endpoints and peak usage during cleanup of observations older than sixty days, including out-of-order imports. Previously removed observations cannot be reconstructed.
+- Selects the latest evidence by observation time for dormant allowance buckets and prevents historical imports from moving a source's evidence timestamp backwards.
+- Rejects invalid historical Codex quota windows individually so valid token records and other windows continue importing. Coded database/runtime failures still abort the import transaction.
+- Adds seven regression tests for history retention, import recovery, source timestamps, and Astra pricing, bringing the suite to 232 tests.
+
 ## 1.0.16 — 3 September 2026
 
 This is an in-place performance and maintenance update with no visible interface change. Running the 1.0.16 setup program upgrades an existing AI Usage installation and preserves its local database, settings, observations, imported cost history, and backups.

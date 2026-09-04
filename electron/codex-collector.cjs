@@ -147,7 +147,7 @@ function quotaWindow(window) {
   };
 }
 
-function recordRateLimit(store, raw, observedAt, provenance, extra = {}) {
+function recordRateLimit(store, raw, observedAt, provenance, extra = {}, { onRejected } = {}) {
   if (!raw) return 0;
   const sourceId = 'codex';
   const limitId = raw.limitId ?? raw.limit_id ?? 'codex';
@@ -157,7 +157,7 @@ function recordRateLimit(store, raw, observedAt, provenance, extra = {}) {
   for (const [label, value] of [['primary', raw.primary], ['secondary', raw.secondary]]) {
     const window = quotaWindow(value);
     if (!window?.resetsAt) continue;
-    store.recordObservation({
+    const observation = {
       sourceId,
       bucketId: `${limitId}:${label}`,
       bucketName: window.windowMinutes >= 10_000 ? 'Weekly' : window.windowMinutes >= 240 ? 'Five hour' : limitName,
@@ -170,8 +170,19 @@ function recordRateLimit(store, raw, observedAt, provenance, extra = {}) {
       provenance,
       confidence: provenance === 'official' ? 1 : 0.92,
       metadata: { limitId, limitName, ...extra },
-    });
-    count += 1;
+    };
+    try {
+      store.recordObservation(observation);
+      count += 1;
+    } catch (error) {
+      // Historical logs can contain a stale window beside a valid one. The
+      // importer reports that rejection and keeps reading; live reads retain
+      // their fail-fast behaviour when no rejection handler is supplied.
+      // Coded runtime/SQLite failures must still roll back the file so its
+      // cursor cannot advance past records that failed to persist.
+      if (!onRejected || error?.code) throw error;
+      onRejected(error);
+    }
   }
   return count;
 }
@@ -319,7 +330,12 @@ function importLocalSessions(store, days = 120) {
           }
         }
         if (entry.payload?.rate_limits) {
-          observations += recordRateLimit(store, entry.payload.rate_limits, entry.timestamp, 'local-official');
+          observations += recordRateLimit(store, entry.payload.rate_limits, entry.timestamp, 'local-official', {}, {
+            onRejected: (error) => {
+              rejected += 1;
+              lastRejection = error instanceof Error ? error.message : String(error);
+            },
+          });
         }
       }
       store.markImportedFile(fullPath, stat.mtimeMs, startOffset + chunk.consumedBytes, state);

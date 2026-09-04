@@ -9,9 +9,9 @@ It imports local usage evidence, learns your real burn pattern, evaluates every 
 
 ## Install
 
-Use `AI-Usage-Setup-1.0.16-x64.exe` for a normal Windows installation. Running it over an existing installation upgrades in place and preserves the local database, settings, observations, and backups. Uninstalling first is neither required nor recommended.
+Use `AI-Usage-Setup-1.0.17-x64.exe` for a normal Windows installation. Running it over an existing installation upgrades in place and preserves the local database, settings, observations, and backups. Uninstalling first is neither required nor recommended.
 
-Use `AI-Usage-Portable-1.0.16-x64.exe` for a single executable that does not install the app. Windows SmartScreen may show an unknown-publisher warning because this personal build is not backed by a commercial code-signing certificate; verify the supplied SHA-256 hash before running it.
+Use `AI-Usage-Portable-1.0.17-x64.exe` for a single executable that does not install the app. Windows SmartScreen may show an unknown-publisher warning because this personal build is not backed by a commercial code-signing certificate; verify the supplied SHA-256 hash before running it.
 
 ## First run
 
@@ -69,7 +69,7 @@ Desktop notifications come from the tray process after a collection, so they are
 
 The Details screen reconstructs token API-equivalent value from local input, output, cache-write, and cache-read records. Reasoning tokens are retained as an informational subset of output and are never billed twice. Claude five-minute and one-hour cache writes are stored and priced separately. Every selected historical period is recalculated with the current local price-catalogue row for each model; earlier tariff versions are not reconstructed, so editing a row intentionally reprices the displayed history.
 
-OpenAI GPT-5.6 Sol, Terra, and Luna requests over the published 272,000-input-token threshold use the long-context multipliers, including cached prompt input when determining whether the threshold is crossed. Unknown or future model names are not assigned a guessed price: their tokens remain visible, price coverage drops, and totals are labelled **At least** until you add the missing row.
+OpenAI GPT-6 Astra and GPT-5.6 Sol, Terra, and Luna requests over the published 272,000-input-token threshold use the long-context multipliers, including cached prompt input when determining whether the threshold is crossed. Astra is included in the built-in catalogue at standard API rates of $10 input, $1 cached input, $12.50 cache writes, and $50 output per million tokens, verified against [OpenAI's model documentation](https://developers.openai.com/api/docs/models/gpt-6-astra) on 4 September 2026. Existing Astra token records are repriced automatically when the new catalogue loads, and saved custom prices are preserved. Unknown or future model names are not assigned a guessed price: their tokens remain visible, price coverage drops, and totals are labelled **At least** until you add the missing row.
 
 These values are token-only comparisons, not provider invoices. They do not claim to include untracked tool charges, web-search charges, storage, taxes, subscription fees, or usage performed on another device that did not reach the local ledger. USD is the ledger currency; GBP and EUR use the manually saved display conversion rate and are not updated from a live foreign-exchange feed.
 
@@ -91,7 +91,7 @@ This keeps a failed refresh from pretending old evidence is current, without del
 
 Claude prompts and responses are never copied into the dashboard. The ledger retains token counts, timestamps, model names, session/request identifiers, the session's working directory path (for the project breakdown), and limited source metadata needed for deduplication and provenance. Dashboard data is not uploaded by AI Usage.
 
-Collection runs in a separate utility process with its own connection to the same database, so a slow transcript scan or a stalled provider call never freezes the window, the tray, or the settings screen. Transcripts and session logs are read incrementally from a byte cursor rather than re-parsed in full on every refresh, and polling rows older than sixty days are compacted to the first and last reading of each window per day. **Diagnostics** at the bottom of Settings shows what each collector last saw, including latency and the reason for any fallback.
+Collection runs in a separate utility process with its own connection to the same database, so a slow transcript scan or a stalled provider call never freezes the window, the tray, or the settings screen. Transcripts and session logs are read incrementally from a byte cursor rather than re-parsed in full on every refresh. Invalid historical Codex quota windows are counted as rejected while valid token records and other windows continue importing. Polling rows older than sixty days are compacted to the chronological first, last, and highest reading of each window per day; manual observations are retained. **Diagnostics** at the bottom of Settings shows what each collector last saw, including latency and the reason for any fallback.
 
 Update checks are opt-out and only run in a packaged build once a release feed is configured under `build.publish` in `package.json`; until then the setting reports that checks are off. A check fetches a version manifest and nothing else.
 
@@ -117,5 +117,7 @@ npm run build:web
 npm audit
 npm run build
 ```
+
+For a repeatable cost-analytics benchmark, run `node tools/benchmark-analytics.cjs` (optionally followed by a record count). It uses 30,000 synthetic records in an in-memory database by default, reports the median of seven measured runs after two warmups, and prints a checksum of the complete result. Compare the checksum as well as the timing when changing analytics. This measures backend cost aggregation, not collection or end-to-end UI latency, and never reads the installed app's data.
 
 Linting uses oxlint (typescript-eslint does not yet support the TypeScript 7 compiler this project builds with) and Prettier formats the renderer source. The same steps run in GitHub Actions on every push and pull request. `npm run build` runs the tests and web build, creates both Windows artifacts, audits the packaged ASAR for source maps, private local data, and the SDK's optional Claude binary, then writes `release\SHA256SUMS.txt`. The source uses React, Vite, Electron, Node's built-in SQLite support, the official Claude Agent SDK, and local JSON-line collectors. Packaged builds use the already installed external Claude binary instead.
