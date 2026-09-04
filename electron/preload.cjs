@@ -3,6 +3,9 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('aiUsage', {
+  getClaudeSetup: () => ipcRenderer.invoke('claude-setup:status'),
+  configureClaude: (action, enableHelper) => ipcRenderer.invoke('claude-setup:configure', action, enableHelper),
+  cancelClaudeSetup: () => ipcRenderer.invoke('claude-setup:cancel'),
   getSnapshot: (days) => ipcRenderer.invoke('dashboard:get-snapshot', days),
   refresh: () => ipcRenderer.invoke('dashboard:refresh'),
   updateSettings: (patch) => ipcRenderer.invoke('dashboard:update-settings', patch),

@@ -915,7 +915,14 @@ class UsageStore {
       allInputWithoutCache * price.input_usd_per_million * inputMultiplier
       + output * price.output_usd_per_million * outputMultiplier
     ) / million;
-    return { actualUsd, withoutCacheUsd, covered: true, longContext };
+    const breakdownUsd = {
+      input: regularInput * price.input_usd_per_million * inputMultiplier / million,
+      cacheRead: Number(row.cached_input_tokens || 0) * price.cache_read_usd_per_million * inputMultiplier / million,
+      cacheWrite5m: cacheWrite5m * price.cache_write_usd_per_million * inputMultiplier / million,
+      cacheWrite1h: cacheWrite1h * price.cache_write_1h_usd_per_million * inputMultiplier / million,
+      output: output * price.output_usd_per_million * outputMultiplier / million,
+    };
+    return { actualUsd, withoutCacheUsd, covered: true, longContext, breakdownUsd };
   }
 
   getCostAnalytics(days = 30, settings = this.getSettings(), nowMs = Date.now()) {
@@ -973,6 +980,7 @@ class UsageStore {
         outputTokens: 0,
         reasoningOutputTokens: 0,
         costUsd: 0,
+        breakdownUsd: { input: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, output: 0 },
         coveredTokens: 0,
         totalTokens: 0,
       };
@@ -984,6 +992,9 @@ class UsageStore {
       model.outputTokens += Number(event.output_tokens);
       model.reasoningOutputTokens += Number(event.reasoning_output_tokens);
       model.costUsd += cost.actualUsd;
+      if (cost.breakdownUsd) {
+        for (const category of Object.keys(model.breakdownUsd)) model.breakdownUsd[category] += cost.breakdownUsd[category];
+      }
       model.totalTokens += eventTokens;
       if (cost.covered) model.coveredTokens += eventTokens;
       byModelMap.set(key, model);
@@ -1040,6 +1051,10 @@ class UsageStore {
       ...row,
       totalTokens: row.totalTokens,
       cost: toCurrency(row.costUsd),
+      // Keep category precision until display; rounding each event would erase
+      // small charges. Price per event before grouping to preserve context tiers.
+      costBreakdown: Object.fromEntries(Object.entries(row.breakdownUsd).map(([key, value]) => [key, value * rate])),
+      costShare: actualUsd > 0 && row.coveredTokens > 0 ? row.costUsd / actualUsd : null,
       coverage: row.totalTokens ? row.coveredTokens / row.totalTokens : 0,
     })).sort((a, b) => b.cost - a.cost);
     const chart = [...byDayMap.values()].map((row) => ({

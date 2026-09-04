@@ -1336,3 +1336,69 @@ td small.path {
     margin: 0 5px;
   }
 }
+/* First-run setup also remains available from Sources after it is dismissed. */
+.claude-setup-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: #0009;
+  overflow: auto;
+}
+.claude-setup {
+  width: min(640px, 100%);
+  max-height: calc(100dvh - 48px);
+  overflow: auto;
+  padding: 32px;
+  margin: auto;
+  box-shadow: 0 24px 80px #0006;
+}
+.claude-setup h2 {
+  margin: 10px 0 16px;
+  font-size: 26px;
+}
+.claude-setup p,
+.claude-setup small {
+  line-height: 1.6;
+}
+.claude-setup-steps {
+  display: grid;
+  gap: 16px;
+  padding: 20px 0;
+  margin: 0;
+  list-style: none;
+}
+.claude-setup-steps li {
+  display: grid;
+  gap: 6px;
+}
+.claude-setup-steps span,
+.claude-setup-note,
+.claude-setup small {
+  opacity: 0.8;
+}
+.claude-setup-helper {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  line-height: 1.5;
+  margin: 16px 0;
+}
+.claude-setup-helper input {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+.claude-setup-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 24px 0;
+}
+.claude-setup-error {
+  color: #e66a6a;
+}
