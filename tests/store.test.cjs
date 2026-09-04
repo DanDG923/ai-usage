@@ -13,6 +13,52 @@ function withStore(run) {
   try { return run(store); } finally { store.close(); }
 }
 
+test('model categories preserve per-request context tiers, cache subsets and currency conversion', () => withStore((store) => {
+  store.updateSettings({ currency: 'GBP', usdToCurrency: 0.8 });
+  for (const [key, input] of [['short', 100_000], ['long', 300_000]]) {
+    store.recordUsageEvent({ eventKey: key, sourceId: 'codex', model: 'gpt-5.6-sol',
+      occurredAt: new Date().toISOString(), inputTokens: input, cachedInputTokens: 50_000,
+      outputTokens: 10_000, reasoningOutputTokens: 5_000 });
+  }
+  const costs = store.getCostAnalytics(7);
+  const row = costs.byModel[0];
+  const expected = { input: 1.76, cacheRead: 0.048, cacheWrite5m: 0, cacheWrite1h: 0, output: 0.4 };
+  for (const [key, amount] of Object.entries(expected)) assert.ok(Math.abs(row.costBreakdown[key] - amount) < 1e-10, key);
+  assert.equal(row.costShare, 1);
+  assert.equal(row.cost, 2.21);
+  assert.equal(costs.actual, row.cost);
+}));
+
+test('model breakdown splits Claude cache durations, keeps tiny costs and respects the selected period', () => withStore((store) => {
+  store.updateSettings({ currency: 'USD' });
+  store.recordUsageEvent({ eventKey: 'categories', sourceId: 'claude', model: 'claude-fable-5',
+    occurredAt: new Date().toISOString(), inputTokens: 100_000, cachedInputTokens: 200_000,
+    cacheWriteInputTokens: 300_000, cacheWrite5mInputTokens: 100_000, cacheWrite1hInputTokens: 200_000,
+    outputTokens: 1, reasoningOutputTokens: 1 });
+  store.recordUsageEvent({ eventKey: 'old', sourceId: 'claude', model: 'claude-fable-5',
+    occurredAt: new Date(Date.now() - 20 * 86400000).toISOString(), inputTokens: 1_000_000 });
+  const row = store.getCostAnalytics(7).byModel[0];
+  assert.deepEqual(row.costBreakdown, { input: 1, cacheRead: 0.2, cacheWrite5m: 1.25, cacheWrite1h: 4, output: 0.00005 });
+  assert.equal(row.cost, 6.45);
+  assert.equal(store.getCostAnalytics(30).byModel[0].costBreakdown.input, 11);
+}));
+
+test('unpriced model costs have no share and catalogue edits reprice all categories', () => withStore((store) => {
+  store.updateSettings({ currency: 'USD' });
+  store.recordUsageEvent({ eventKey: 'unknown', sourceId: 'claude', model: 'unknown-test',
+    occurredAt: new Date().toISOString(), inputTokens: 1_000_000 });
+  const unknown = store.getCostAnalytics(7).byModel[0];
+  assert.equal(unknown.coverage, 0);
+  assert.equal(unknown.costShare, null);
+  assert.equal(unknown.costBreakdown.input, 0);
+  store.updatePrice({ model: 'unknown-test', inputUsdPerMillion: 3, cacheWriteUsdPerMillion: 4,
+    cacheWrite1hUsdPerMillion: 6, cacheReadUsdPerMillion: 0.3, outputUsdPerMillion: 15 });
+  const priced = store.getCostAnalytics(7).byModel[0];
+  assert.equal(priced.costBreakdown.input, 3);
+  assert.equal(priced.costShare, 1);
+  assert.equal(priced.coverage, 1);
+}));
+
 test('Codex cached input is not charged twice', () => withStore((store) => {
   const cost = store.calculateCost({
     source_id: 'codex', model: 'codex-auto-review', input_tokens: 1_000_000,

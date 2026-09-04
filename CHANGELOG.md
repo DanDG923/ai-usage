@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.19
+
+- Adds cost by model with input, cache-read, five-minute and one-hour cache-write, and output values beside token counts.
+- Shows each model's share of priced cost, respecting the selected period, currency, custom prices, and per-request context rates.
+- Keeps missing prices visible as unpriced and reasoning included in output.
+
+
+## 1.0.18
+
+- Detect Microsoft Store Claude Code installations and newly installed native binaries before PATH refresh.
+- Include a first-run Claude setup guide in the Windows installer: dependency installation, browser sign-in, optional preserved status-line helper, and initial refresh.
+- Keep setup retryable and available from Settings, with cancellation and bounded operations.
+
 ## 1.0.17 — 4 September 2026
 
 Adds GPT-6 Astra pricing and fixes historical import and cleanup errors. Install over the existing version to preserve the local database, settings, and backups.

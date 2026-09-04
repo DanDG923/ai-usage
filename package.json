@@ -1,6 +1,6 @@
 {
   "name": "ai-usage",
-  "version": "1.0.17",
+  "version": "1.0.19",
   "private": true,
   "description": "Local-first AI subscription usage, runway forecasting, and API-equivalent cost dashboard.",
   "main": "electron/main.cjs",
@@ -74,7 +74,9 @@
       "perMachine": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "artifactName": "AI-Usage-Setup-${version}-${arch}.${ext}"
+      "artifactName": "AI-Usage-Setup-${version}-${arch}.${ext}",
+      "include": "build/installer.nsh",
+      "runAfterFinish": true
     },
     "publish": {
       "provider": "github",

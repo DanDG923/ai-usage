@@ -8,6 +8,7 @@ const {
 } = require('electron');
 const { UsageStore } = require('./store.cjs');
 const { installClaudeHelper, uninstallClaudeHelper } = require('./claude-collector.cjs');
+const { createClaudeSetup } = require('./claude-setup.cjs');
 const { createCollectorHost, createInlineCollectorHost } = require('./collector-host.cjs');
 const { createCollectorService } = require('./collector-service.cjs');
 const { buildSummaryText, buildTrayTooltip, decideNotifications, emptyState } = require('./notifications.cjs');
@@ -31,6 +32,7 @@ let tray;
 let store;
 let collectors;
 let updateChecker;
+let claudeSetup;
 let refreshPromise;
 let refreshTimer;
 let lastRefreshAt = 0;
@@ -435,6 +437,24 @@ async function refreshClaudeOnly() {
 }
 
 function registerIpc() {
+  const assertSetupSender = (event) => {
+    if (event.sender !== window?.webContents || event.senderFrame !== window?.webContents.mainFrame) {
+      throw new Error('Setup is only available from the AI Usage window.');
+    }
+  };
+  ipcMain.handle('claude-setup:status', (event) => { assertSetupSender(event); return claudeSetup.status(); });
+  ipcMain.handle('claude-setup:cancel', (event) => { assertSetupSender(event); claudeSetup.cancel(); });
+  ipcMain.handle('claude-setup:configure', async (event, action, enableHelper) => {
+    assertSetupSender(event);
+    switch (action) {
+      case 'check': return claudeSetup.status();
+      case 'install': return claudeSetup.install();
+      case 'login': return claudeSetup.login();
+      case 'finish': return claudeSetup.finish({ enableHelper: enableHelper === true });
+      case 'skip': claudeSetup.skip(); return claudeSetup.status();
+      default: throw new Error('Unknown Claude setup step.');
+    }
+  });
   ipcMain.handle('dashboard:get-snapshot', (_event, days = 30) => {
     setPeriodDays(days);
     return snapshot();
@@ -573,6 +593,11 @@ if (isPrimaryInstance) {
       const databasePath = testRoot ? path.join(testRoot, 'ai-usage.sqlite') : path.join(app.getPath('userData'), 'ai-usage.sqlite');
       const backupDirectory = testRoot ? path.join(testRoot, 'Backups') : path.join(app.getPath('documents'), 'AI Usage', 'Backups');
       store = new UsageStore(databasePath, backupDirectory);
+      claudeSetup = createClaudeSetup({
+        statePath: path.join(testRoot || app.getPath('userData'), 'claude-setup.json'),
+        installHelper: () => installClaudeHelper(getInboxPath()),
+        helperInstalled: () => fs.existsSync(path.join(process.env.USERPROFILE || '', '.claude', 'ai-usage-statusline.ps1')),
+      });
       collectors = createCollectors();
       notificationState = loadNotificationState();
       updateChecker = createUpdateChecker({
@@ -609,6 +634,7 @@ if (isPrimaryInstance) {
   });
   app.on('before-quit', () => {
     isQuitting = true;
+    claudeSetup?.cancel();
     clearInterval(refreshTimer);
     refreshTimer = null;
     updateChecker?.stop();

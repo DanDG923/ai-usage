@@ -15,8 +15,21 @@ function findClaudeBinary() {
   const found = lookup.stdout?.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
   if (found && fs.existsSync(found)) return found;
 
-  const bundledRoot = path.join(process.env.APPDATA || '', 'Claude', 'claude-code');
-  if (fs.existsSync(bundledRoot)) {
+  // Native installs update PATH for future processes. A running dashboard
+  // must also find the executable immediately after setup finishes.
+  if (process.env.USERPROFILE) {
+    const nativeBinary = path.join(process.env.USERPROFILE, '.local', 'bin', 'claude.exe');
+    try { if (fs.statSync(nativeBinary).isFile()) return nativeBinary; } catch { /* Not installed here. */ }
+  }
+
+  const bundledRoots = [
+    process.env.APPDATA && path.join(process.env.APPDATA, 'Claude', 'claude-code'),
+    // The Microsoft Store app redirects its roaming data into its package
+    // cache. Only inspect the official package's Code cache, never its GUI.
+    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Packages',
+      'Claude_pzs8sxrjxfjjc', 'LocalCache', 'Roaming', 'Claude', 'claude-code'),
+  ].filter(Boolean);
+  for (const bundledRoot of bundledRoots) {
     try {
       const versions = fs.readdirSync(bundledRoot, { withFileTypes: true })
         .filter((entry) => entry.isDirectory())
@@ -24,11 +37,13 @@ function findClaudeBinary() {
           version: entry.name,
           binary: path.join(bundledRoot, entry.name, 'claude.exe'),
         }))
-        .filter((entry) => fs.existsSync(entry.binary))
+        .filter((entry) => {
+          try { return fs.statSync(entry.binary).isFile(); } catch { return false; }
+        })
         .sort((a, b) => b.version.localeCompare(a.version, undefined, { numeric: true }));
       if (versions[0]) return versions[0].binary;
     } catch {
-      // A managed Windows install can make this folder visible but unreadable.
+      // Missing or unreadable installations must not prevent later fallbacks.
     }
   }
 

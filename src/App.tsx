@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Activity } from './components/Activity';
+import { ClaudeSetup } from './components/ClaudeSetup';
 import { Costs } from './components/Costs';
 import { BrandMark, Header, TABS, type Tab } from './components/Header';
 import { Overview } from './components/Overview';
@@ -15,6 +16,7 @@ function applyThemeAttribute(theme: Theme | undefined) {
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('overview');
+  const [setupRequested, setSetupRequested] = useState(false);
   const [days, setDays] = useState(30);
   const isBrowserPreview = !window.aiUsage && window.location.protocol !== 'file:';
   // Demo data is a browser-preview adapter only. An installed desktop window
@@ -331,6 +333,7 @@ export default function App() {
   };
 
   const actions: SettingsActions = {
+    onSetupClaude: () => setSetupRequested(true),
     onSettings: settings,
     onPrice: price,
     onInstallClaude: installClaude,
@@ -378,6 +381,7 @@ export default function App() {
   return (
     <div className="app-shell">
       <Header snapshot={snapshot} tab={tab} onTab={setTab} refreshing={refreshing} onRefresh={refresh} />
+      <ClaudeSetup requested={setupRequested} onClose={() => setSetupRequested(false)} onRefresh={refresh} />
       {tab === 'overview' && <Overview snapshot={snapshot} />}
       {tab === 'activity' && <Activity snapshot={snapshot} days={days} />}
       {tab === 'costs' && <Costs snapshot={snapshot} days={days} onDays={changeDays} />}
