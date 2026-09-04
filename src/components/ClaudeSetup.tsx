@@ -14,7 +14,10 @@ export function ClaudeSetup({
   const [hidden, setHidden] = useState(false);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
-  const [helper, setHelper] = useState(true);
+  // Null until the user touches the checkbox: the default follows whether the
+  // helper is already installed, so an upgrade never enables it unasked.
+  const [helper, setHelper] = useState<boolean | null>(null);
+  const helperChecked = helper ?? Boolean(status?.helperInstalled);
   const dialog = useRef<HTMLElement>(null);
   const visible = Boolean(window.aiUsage) && !(hidden && !requested) && Boolean(status || requested || error);
   useEffect(() => {
@@ -52,7 +55,7 @@ export function ClaudeSetup({
     setError('');
     setBusy(action);
     try {
-      const next = await window.aiUsage.configureClaude(action, helper);
+      const next = await window.aiUsage.configureClaude(action, helperChecked);
       setStatus(next);
       if (action === 'finish' || action === 'skip') {
         setHidden(true);
@@ -127,7 +130,7 @@ export function ClaudeSetup({
           <label className="claude-setup-helper">
             <input
               type="checkbox"
-              checked={helper}
+              checked={helperChecked}
               onChange={(event) => setHelper(event.target.checked)}
               disabled={Boolean(busy)}
             />

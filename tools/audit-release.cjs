@@ -72,7 +72,8 @@ async function auditArtifacts() {
     lines.push(`${await hashFile(artifactPath)} *${name}`);
   }
   const checksumPath = path.join(releaseDirectory, 'SHA256SUMS.txt');
-  fs.writeFileSync(checksumPath, `${lines.join('\r\n')}\r\n`, 'utf8');
+  // LF endings: `sha256sum -c` in Git Bash and WSL rejects a CRLF manifest.
+  fs.writeFileSync(checksumPath, `${lines.join('\n')}\n`, 'utf8');
   return { checksumPath, artifacts: artifactNames.length };
 }
 
