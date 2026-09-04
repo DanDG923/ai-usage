@@ -11,18 +11,23 @@ export function SourcesSection({
   update,
   onInstallClaude,
   onUninstallClaude,
+  onSetupClaude,
 }: {
   snapshot: Snapshot;
   update: (patch: Partial<Settings>) => Promise<void>;
   onInstallClaude: () => Promise<void>;
   onUninstallClaude: () => Promise<void>;
+  onSetupClaude: () => void;
 }) {
   return (
     <section id="sources" className="panel settings-section">
       <SectionHeading
         title="Sources"
-        description="Local files and official usage surfaces already on this PC. Nothing is fetched from the web."
+        description="Local activity files and official provider allowance checks. Setup can install Claude Code and help you sign in."
       />
+      <button className="secondary-button" onClick={onSetupClaude}>
+        Set up Claude
+      </button>
       <div className="source-list">
         {snapshot.sources.map((source) => (
           <div className="source-row" key={source.id}>

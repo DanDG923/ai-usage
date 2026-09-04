@@ -1,5 +1,31 @@
 import { compactNumber, money, percent, projectName, shortDate, sourceLabel } from '../../lib';
-import type { CostAnalytics } from '../../types';
+import type { CostAnalytics, ModelCost } from '../../types';
+
+function ModelCategory({
+  row,
+  category,
+  tokens,
+  currency,
+}: {
+  row: ModelCost;
+  category: keyof NonNullable<ModelCost['costBreakdown']>;
+  tokens: number;
+  currency: string;
+}) {
+  const value = row.costBreakdown?.[category];
+  return (
+    <>
+      <strong>
+        {row.coverage <= 0
+          ? 'Unpriced'
+          : value == null
+            ? '—'
+            : `${row.coverage < 1 ? '≥ ' : ''}${value > 0 && value < 0.01 ? '< ' + money(0.01, currency) : money(value, currency)}`}
+      </strong>
+      <small>{compactNumber(tokens)} tokens</small>
+    </>
+  );
+}
 
 export function EquivalentValue({ cost, coverage, currency }: { cost: number; coverage: number; currency: string }) {
   if (coverage <= 0)
@@ -94,7 +120,8 @@ export function ModelTable({ costs, query }: { costs: CostAnalytics; query?: str
     <section className="panel table-panel">
       <div className="panel-heading">
         <div>
-          <h2>By model</h2>
+          <h2>Cost by model</h2>
+          <p>Last {costs.periodDays} days · cost and token count for each category. Reasoning is included in output.</p>
         </div>
         <span className="table-note">Prices are editable under Settings</span>
       </div>
@@ -103,12 +130,13 @@ export function ModelTable({ costs, query }: { costs: CostAnalytics; query?: str
           <thead>
             <tr>
               <th>Model</th>
-              <th className="num">Input</th>
+              <th className="num">Uncached input</th>
               <th className="num">Cache read</th>
               <th className="num">Write 5m</th>
               <th className="num">Write 1h</th>
-              <th className="num">Output (reasoning subset)</th>
+              <th className="num">Output</th>
               <th className="num">Coverage</th>
+              <th className="num">Share of priced cost</th>
               <th className="num">API-equivalent</th>
             </tr>
           </thead>
@@ -120,15 +148,51 @@ export function ModelTable({ costs, query }: { costs: CostAnalytics; query?: str
                     <span className={`table-provider ${row.sourceId}`}>{sourceLabel(row.sourceId)}</span>
                     <strong>{row.model}</strong>
                   </td>
-                  <td className="num">{compactNumber(row.inputTokens)}</td>
-                  <td className="num">{compactNumber(row.cachedInputTokens)}</td>
-                  <td className="num">{compactNumber(row.cacheWrite5mInputTokens)}</td>
-                  <td className="num">{compactNumber(row.cacheWrite1hInputTokens)}</td>
                   <td className="num">
-                    {compactNumber(row.outputTokens)}
+                    <ModelCategory
+                      row={row}
+                      category="input"
+                      tokens={
+                        row.sourceId === 'codex'
+                          ? Math.max(0, row.inputTokens - row.cachedInputTokens)
+                          : row.inputTokens
+                      }
+                      currency={costs.currency}
+                    />
+                  </td>
+                  <td className="num">
+                    <ModelCategory
+                      row={row}
+                      category="cacheRead"
+                      tokens={row.cachedInputTokens}
+                      currency={costs.currency}
+                    />
+                  </td>
+                  <td className="num">
+                    <ModelCategory
+                      row={row}
+                      category="cacheWrite5m"
+                      tokens={
+                        row.cacheWrite5mInputTokens ||
+                        (row.cacheWrite1hInputTokens === 0 ? row.cacheWriteInputTokens : 0)
+                      }
+                      currency={costs.currency}
+                    />
+                  </td>
+                  <td className="num">
+                    <ModelCategory
+                      row={row}
+                      category="cacheWrite1h"
+                      tokens={row.cacheWrite1hInputTokens}
+                      currency={costs.currency}
+                    />
+                  </td>
+                  <td className="num">
+                    <ModelCategory row={row} category="output" tokens={row.outputTokens} currency={costs.currency} />
                     <small>{compactNumber(row.reasoningOutputTokens)} reasoning</small>
                   </td>
                   <td className="num">{percent(row.coverage * 100)}</td>
+                  <td className="num">{row.costShare == null ? '—' : percent(row.costShare * 100)}</td>
                   <td className="num">
                     <EquivalentValue cost={row.cost} coverage={row.coverage} currency={costs.currency} />
                   </td>
@@ -136,8 +200,8 @@ export function ModelTable({ costs, query }: { costs: CostAnalytics; query?: str
               ))
             ) : (
               <tr>
-                <td colSpan={8} className="empty-cell">
-                  No token records in this period yet.
+                <td colSpan={9} className="empty-cell">
+                  {query?.trim() ? 'No models match this filter.' : 'No token records in this period yet.'}
                 </td>
               </tr>
             )}

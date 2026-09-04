@@ -146,8 +146,8 @@ export function Costs({
           />
         </label>
       </div>
-      <ProjectTable costs={costs} query={query} />
       <ModelTable costs={costs} query={query} />
+      <ProjectTable costs={costs} query={query} />
       <SessionTable costs={costs} query={query} />
     </main>
   );

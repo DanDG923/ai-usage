@@ -9,9 +9,9 @@ It imports local usage evidence, learns your real burn pattern, evaluates every 
 
 ## Install
 
-Use `AI-Usage-Setup-1.0.17-x64.exe` for a normal Windows installation. Running it over an existing installation upgrades in place and preserves the local database, settings, observations, and backups. Uninstalling first is neither required nor recommended.
+Use `AI-Usage-Setup-1.0.19-x64.exe` for a normal Windows installation. Running it over an existing installation upgrades in place and preserves the local database, settings, observations, and backups. Uninstalling first is neither required nor recommended.
 
-Use `AI-Usage-Portable-1.0.17-x64.exe` for a single executable that does not install the app. Windows SmartScreen may show an unknown-publisher warning because this personal build is not backed by a commercial code-signing certificate; verify the supplied SHA-256 hash before running it.
+Use `AI-Usage-Portable-1.0.19-x64.exe` for a single executable that does not install the app. Windows SmartScreen may show an unknown-publisher warning because this personal build is not backed by a commercial code-signing certificate; verify the supplied SHA-256 hash before running it.
 
 ## First run
 
@@ -121,3 +121,11 @@ npm run build
 For a repeatable cost-analytics benchmark, run `node tools/benchmark-analytics.cjs` (optionally followed by a record count). It uses 30,000 synthetic records in an in-memory database by default, reports the median of seven measured runs after two warmups, and prints a checksum of the complete result. Compare the checksum as well as the timing when changing analytics. This measures backend cost aggregation, not collection or end-to-end UI latency, and never reads the installed app's data.
 
 Linting uses oxlint (typescript-eslint does not yet support the TypeScript 7 compiler this project builds with) and Prettier formats the renderer source. The same steps run in GitHub Actions on every push and pull request. `npm run build` runs the tests and web build, creates both Windows artifacts, audits the packaged ASAR for source maps, private local data, and the SDK's optional Claude binary, then writes `release\SHA256SUMS.txt`. The source uses React, Vite, Electron, Node's built-in SQLite support, the official Claude Agent SDK, and local JSON-line collectors. Packaged builds use the already installed external Claude binary instead.
+
+## Set up another Windows computer
+
+Run the Setup installer and leave **Open AI Usage and set up usage tracking** checked. The first-run guide detects Microsoft Store and native Claude Code installations. If missing, **Install Claude Code** runs Anthropic's official native installer for the current Windows user; no Node.js or npm installation is needed. Internet access and Windows 10/11 are required.
+
+Choose **Sign in to Claude** and complete the account flow in your browser. AI Usage never copies account credentials into its database or installer. Claude Desktop sign-in can be separate from Claude Code sign-in. Then choose **Start collecting** to optionally enable the fallback helper and refresh. Restart Claude Code for the helper to take effect. The provider may omit subscription windows even after a successful sign-in; missing limits are not reported as zero. Local activity only appears after Claude Code has written local usage records.
+
+**Set up later** leaves Codex collection available. Reopen the guide from **Settings → Sources → Set up Claude**. Failed or cancelled installation/sign-in can be retried. A silent installation defers account setup until the app is opened interactively. Codex must separately be installed and signed into on that computer.

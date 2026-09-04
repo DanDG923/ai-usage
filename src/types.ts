@@ -83,6 +83,8 @@ export type Source = {
 };
 
 export type ModelCost = {
+  costBreakdown?: { input: number; cacheRead: number; cacheWrite5m: number; cacheWrite1h: number; output: number };
+  costShare?: number | null;
   sourceId: string;
   model: string;
   inputTokens: number;
@@ -236,6 +238,12 @@ export type UpdateStatus = {
 };
 
 export type Bridge = {
+  getClaudeSetup(): Promise<ClaudeSetupStatus>;
+  configureClaude(
+    action: 'install' | 'login' | 'finish' | 'check' | 'skip',
+    enableHelper: boolean,
+  ): Promise<ClaudeSetupStatus>;
+  cancelClaudeSetup(): Promise<void>;
   getSnapshot(days?: number): Promise<Snapshot>;
   refresh(): Promise<{
     snapshot: Snapshot;
@@ -286,3 +294,11 @@ declare global {
     aiUsage?: Bridge;
   }
 }
+
+export type ClaudeSetupStatus = {
+  installed: boolean;
+  auth: 'signed-in' | 'signed-out' | 'unavailable';
+  helperInstalled: boolean;
+  dismissed: boolean;
+  busy: boolean;
+};

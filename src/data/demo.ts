@@ -314,6 +314,8 @@ export const demoSnapshot: Snapshot = {
         reasoningOutputTokens: 8_400_000,
         totalTokens: 41_700_000,
         cost: 1128.32,
+        costBreakdown: { input: 80, cacheRead: 18.72, cacheWrite5m: 0, cacheWrite1h: 0, output: 1029.6 },
+        costShare: 1128.32 / 1755.87,
         coverage: 1,
       },
       {
@@ -328,6 +330,7 @@ export const demoSnapshot: Snapshot = {
         reasoningOutputTokens: 0,
         totalTokens: 11_456_000,
         cost: 0,
+        costShare: null,
         coverage: 0,
       },
       {
@@ -342,6 +345,8 @@ export const demoSnapshot: Snapshot = {
         reasoningOutputTokens: 0,
         totalTokens: 32_000_000,
         cost: 398.74,
+        costBreakdown: { input: 39.2, cacheRead: 17.6, cacheWrite5m: 3, cacheWrite1h: 19.2, output: 319.74 },
+        costShare: 398.74 / 1755.87,
         coverage: 1,
       },
       {
@@ -356,6 +361,8 @@ export const demoSnapshot: Snapshot = {
         reasoningOutputTokens: 0,
         totalTokens: 44_900_000,
         cost: 228.81,
+        costBreakdown: { input: 40, cacheRead: 20, cacheWrite5m: 3, cacheWrite1h: 15, output: 150.81 },
+        costShare: 228.81 / 1755.87,
         coverage: 0.88,
       },
     ],

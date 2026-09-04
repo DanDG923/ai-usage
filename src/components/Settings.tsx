@@ -11,6 +11,7 @@ import { SourcesSection } from './settings/SourcesSection';
 import { StorageSection } from './settings/StorageSection';
 
 export type SettingsActions = {
+  onSetupClaude: () => void;
   onSettings: (patch: Partial<SettingsType>) => Promise<void>;
   onPrice: (row: PriceRow) => Promise<void>;
   onInstallClaude: () => Promise<void>;
@@ -68,6 +69,7 @@ export function Settings({ snapshot, actions }: { snapshot: Snapshot; actions: S
             </div>
           </div>
           <SourcesSection
+            onSetupClaude={actions.onSetupClaude}
             snapshot={snapshot}
             update={update}
             onInstallClaude={actions.onInstallClaude}
