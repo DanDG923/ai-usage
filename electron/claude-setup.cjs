@@ -19,7 +19,7 @@ function runCommand(file, args, { timeoutMs = 15000, acceptExitOne = false } = {
   });
 }
 
-function createClaudeSetup({ statePath, findBinary = findClaudeBinary, run = runCommand, launch = spawn, installHelper, helperInstalled = () => false } = {}) {
+function createClaudeSetup({ statePath, findBinary = findClaudeBinary, run = runCommand, launch = spawn, installHelper, uninstallHelper, helperInstalled = () => false } = {}) {
   let busy = false;
   let child = null;
   let cancelPending = null;
@@ -46,8 +46,12 @@ function createClaudeSetup({ statePath, findBinary = findClaudeBinary, run = run
   async function exclusive(action) {
     if (busy) throw new Error('Claude setup is already running.');
     busy = true;
-    try { await action(); } finally { busy = false; }
-    return status();
+    try {
+      // Login and finish already verify authentication. Reuse that result and
+      // refresh only local state after the action, keeping the lock until done.
+      const checked = await action() ?? await status();
+      return { ...checked, helperInstalled: helperInstalled(), dismissed: dismissed(), busy: false };
+    } finally { busy = false; }
   }
   function interactiveCommand(file, args, timeoutMs) {
     return new Promise((resolve, reject) => {
@@ -90,12 +94,17 @@ function createClaudeSetup({ statePath, findBinary = findClaudeBinary, run = run
       const binary = findBinary();
       if (!binary) throw new Error('Install Claude Code first.');
       await interactiveCommand(binary, ['auth', 'login'], 10 * 60_000);
-      if ((await status()).auth !== 'signed-in') throw new Error('Sign-in is not complete. Please try again.');
+      const checked = await status();
+      if (checked.auth !== 'signed-in') throw new Error('Sign-in is not complete. Please try again.');
+      return checked;
     }),
-    finish: ({ enableHelper = false } = {}) => exclusive(async () => {
-      if ((await status()).auth !== 'signed-in') throw new Error('Sign in to Claude before finishing setup.');
-      if (enableHelper) await installHelper();
+    finish: ({ enableHelper } = {}) => exclusive(async () => {
+      const checked = await status();
+      if (checked.auth !== 'signed-in') throw new Error('Sign in to Claude before finishing setup.');
+      if (enableHelper === true) await installHelper();
+      else if (enableHelper === false && checked.helperInstalled) await uninstallHelper();
       save(true);
+      return checked;
     }),
     skip: () => { if (busy) throw new Error('Cancel the current step before skipping setup.'); save(true); },
     cancel,

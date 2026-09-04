@@ -35,22 +35,32 @@ try {
     }
   });
   const settings = store.getSettings();
-  for (let index = 0; index < 2; index += 1) store.getCostAnalytics(30, settings, now);
-  const timings = [];
-  let result;
-  for (let index = 0; index < 7; index += 1) {
-    const start = performance.now();
-    result = store.getCostAnalytics(30, settings, now);
-    timings.push(performance.now() - start);
+  function measure(read) {
+    for (let index = 0; index < 2; index += 1) read();
+    const timings = [];
+    let result;
+    for (let index = 0; index < 7; index += 1) {
+      const start = performance.now();
+      result = read();
+      timings.push(performance.now() - start);
+    }
+    const sorted = [...timings].sort((a, b) => a - b);
+    return {
+      medianMs: Number(sorted[3].toFixed(3)),
+      runsMs: timings.map(value => Number(value.toFixed(3))),
+      resultSha256: createHash('sha256').update(JSON.stringify(result)).digest('hex'),
+    };
   }
-  const sorted = [...timings].sort((a, b) => a - b);
+  // Report full aggregation separately: a cache hit is not a faster cold scan.
+  const uncached = measure(() => store.withPriceCache(() => store.buildCostAnalytics(30, settings, now)));
+  const cached = measure(() => store.getCostAnalytics(30, settings, now));
+  if (cached.resultSha256 !== uncached.resultSha256) throw new Error('Cached analytics differ from a fresh aggregation.');
   console.log(JSON.stringify({
     records: count,
     node: process.version,
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    medianMs: Number(sorted[3].toFixed(2)),
-    runsMs: timings.map((value) => Number(value.toFixed(2))),
-    resultSha256: createHash('sha256').update(JSON.stringify(result)).digest('hex'),
+    uncached,
+    cached,
   }, null, 2));
 } finally {
   store.close();

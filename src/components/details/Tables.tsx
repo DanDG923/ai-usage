@@ -172,10 +172,7 @@ export function ModelTable({ costs, query }: { costs: CostAnalytics; query?: str
                     <ModelCategory
                       row={row}
                       category="cacheWrite5m"
-                      tokens={
-                        row.cacheWrite5mInputTokens ||
-                        (row.cacheWrite1hInputTokens === 0 ? row.cacheWriteInputTokens : 0)
-                      }
+                      tokens={row.cacheWrite5mInputTokens}
                       currency={costs.currency}
                     />
                   </td>
