@@ -109,69 +109,74 @@ function importClaudeInboxFile(store, inboxPath) {
   const chunk = tail.subarray(0, completeBytes).toString('utf8').replace(/^\uFEFF/, '');
   const lines = chunk.split(/\r?\n/).filter(Boolean);
   const result = emptyInboxResult({ bytesRead: completeBytes });
-  for (const line of lines) {
-    let payload;
-    try {
-      payload = JSON.parse(line.replace(/^\uFEFF/, ''));
-    } catch {
-      result.invalidRecords += 1;
-      continue;
-    }
-    result.snapshots += 1;
-    const capturedAt = epochToIso(payload.ai_usage_captured_at || payload.captured_at || new Date().toISOString());
-    if (!capturedAt || !payload.rate_limits || typeof payload.rate_limits !== 'object' || Array.isArray(payload.rate_limits)) {
-      result.rejectedRecords += 1;
-      continue;
-    }
-    const model = payload.model?.id || payload.model?.display_name || 'claude-unknown';
-    const limits = payload.rate_limits;
-    for (const [key, limit] of Object.entries(limits)) {
-      if (!limit || limit.used_percentage == null || limit.resets_at == null) continue;
-      const isFable = key.toLowerCase().includes('fable');
-      const sourceId = isFable ? 'claude-fable' : 'claude';
-      const minutes = key.includes('five_hour') ? 300 : key.includes('seven_day') || isFable ? 10_080 : null;
-      const bucketName = isFable ? 'Fable 5 weekly' : key === 'five_hour' ? 'Five hour' : key === 'seven_day' ? 'Weekly' : key.replaceAll('_', ' ');
-      const resetsAt = epochToIso(limit.resets_at);
-      if (!resetsAt) {
-        result.invalidResets += 1;
+  // Persist a file's observations and cursor together. A storage failure must
+  // leave the bytes available for retry, including already rotated inbox files.
+  return store.transaction(() => {
+    for (const line of lines) {
+      let payload;
+      try {
+        payload = JSON.parse(line.replace(/^\uFEFF/, ''));
+      } catch {
+        result.invalidRecords += 1;
         continue;
       }
-      try {
-        store.recordObservation({
-          sourceId,
-          bucketId: isFable && ['fable_seven_day', 'fable_weekly'].includes(key.toLowerCase()) ? 'fable_seven_day' : isFable ? `fable:${key}` : key,
-          bucketName,
-          observedAt: capturedAt,
-          usedPercent: Number(limit.used_percentage),
-          remainingPercent: 100 - Number(limit.used_percentage),
-          resetsAt,
-          windowMinutes: minutes,
-          // The documented status-line payload has no subscription/seat type.
-          // Exact percentages are official; a Max-plan assertion would not be.
-          planType: null,
-          provenance: 'official-statusline',
-          confidence: 1,
-          metadata: { model, sharedWithOverall: isFable },
-        });
-      } catch {
+      result.snapshots += 1;
+      const capturedAt = epochToIso(payload.ai_usage_captured_at || payload.captured_at || new Date().toISOString());
+      if (!capturedAt || !payload.rate_limits || typeof payload.rate_limits !== 'object' || Array.isArray(payload.rate_limits)) {
         result.rejectedRecords += 1;
         continue;
       }
-      result.observations += 1;
-      result.latestObservationAt = laterIso(result.latestObservationAt, capturedAt);
-      if (isFable) {
-        result.fableObservations += 1;
-        result.latestFableObservedAt = laterIso(result.latestFableObservedAt, capturedAt);
-      } else {
-        result.claudeObservations += 1;
-        result.latestClaudeObservedAt = laterIso(result.latestClaudeObservedAt, capturedAt);
+      const model = payload.model?.id || payload.model?.display_name || 'claude-unknown';
+      const limits = payload.rate_limits;
+      for (const [key, limit] of Object.entries(limits)) {
+        if (!limit || limit.used_percentage == null || limit.resets_at == null) continue;
+        const isFable = key.toLowerCase().includes('fable');
+        const sourceId = isFable ? 'claude-fable' : 'claude';
+        const minutes = key.includes('five_hour') ? 300 : key.includes('seven_day') || isFable ? 10_080 : null;
+        const bucketName = isFable ? 'Fable 5 weekly' : key === 'five_hour' ? 'Five hour' : key === 'seven_day' ? 'Weekly' : key.replaceAll('_', ' ');
+        const resetsAt = epochToIso(limit.resets_at);
+        if (!resetsAt) {
+          result.invalidResets += 1;
+          continue;
+        }
+        try {
+          store.recordObservation({
+            sourceId,
+            bucketId: isFable && ['fable_seven_day', 'fable_weekly'].includes(key.toLowerCase()) ? 'fable_seven_day' : isFable ? `fable:${key}` : key,
+            bucketName,
+            observedAt: capturedAt,
+            usedPercent: Number(limit.used_percentage),
+            remainingPercent: 100 - Number(limit.used_percentage),
+            resetsAt,
+            windowMinutes: minutes,
+            // The documented status-line payload has no subscription/seat type.
+            // Exact percentages are official; a Max-plan assertion would not be.
+            planType: null,
+            provenance: 'official-statusline',
+            confidence: 1,
+            metadata: { model, sharedWithOverall: isFable },
+          });
+        } catch (error) {
+          if (error?.code) throw error;
+          result.rejectedRecords += 1;
+          continue;
+        }
+        result.observations += 1;
+        result.latestObservationAt = laterIso(result.latestObservationAt, capturedAt);
+        if (isFable) {
+          result.fableObservations += 1;
+          result.latestFableObservedAt = laterIso(result.latestFableObservedAt, capturedAt);
+        } else {
+          result.claudeObservations += 1;
+          result.latestClaudeObservedAt = laterIso(result.latestClaudeObservedAt, capturedAt);
+        }
       }
     }
-  }
-  // Never rewrite the live helper file: doing so can race an in-flight append.
-  // The durable byte cursor keeps refresh work incremental without risking data.
-  store.markImportedFile(inboxPath, stat.mtimeMs, startOffset + completeBytes);
-  return result;
+    // Never rewrite the live helper file: doing so can race an in-flight append.
+    // The durable byte cursor keeps refresh work incremental without risking data.
+    store.markImportedFile(inboxPath, stat.mtimeMs, startOffset + completeBytes);
+    return result;
+  });
 }
 
 function importClaudeInbox(store, inboxPath) {
@@ -314,6 +319,7 @@ function importClaudeTranscripts(store, days = 120) {
             },
           });
         } catch (error) {
+          if (error?.code) throw error;
           rejectedRows += 1;
           lastRejection = error instanceof Error ? error.message : String(error);
           continue;

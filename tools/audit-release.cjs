@@ -30,6 +30,8 @@ function assertArchive(entries) {
     'dist/index.html',
     'electron/main.cjs',
     'electron/preload.cjs',
+    'electron/maintenance-host.cjs',
+    'electron/maintenance-service.cjs',
     'node_modules/@anthropic-ai/claude-agent-sdk/package.json',
   ];
   for (const entry of required) {

@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.22 — 5 September 2026
+
+- Retry valid usage records after database failures instead of advancing the import cursor past unwritten records.
+- Fix Escape cancelling numeric settings, repeated keyboard navigation between sections, and manual-entry retention after a failed save.
+- Cache reset-cycle calculations while keeping writes, pricing changes, reset boundaries, and clock changes correct.
+- Search all recorded sessions in the selected period with pagination, retain cost filters between sections, and distinguish missing data from empty search results.
+- Show actionable waiting states when allowance readings are missing and let forecast times wrap in provider summaries.
+- Run backups, restores, and CSV exports in a background worker with serialized operations and graceful shutdown.
+
 ## 1.0.21 — 5 September 2026
 
 - Verify that Claude fetched allowance data successfully before recording it as fresh. Cached SDK responses after a connection failure no longer advance the evidence timestamp.

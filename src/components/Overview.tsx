@@ -8,11 +8,26 @@ import { ProviderSummary } from './ProviderSummary';
 
 type Insight = { tone: 'neutral' | 'good' | 'warm' | 'hot'; title: string; detail: string };
 
+function hasForecast(view: ProviderView) {
+  const forecast = view.current?.forecast;
+  return Boolean(
+    forecast &&
+    !forecast.expired &&
+    forecast.state !== 'unknown' &&
+    view.expectedRemaining != null &&
+    view.heavyRemaining != null,
+  );
+}
+
+function names(views: ProviderView[]) {
+  return views.map((view) => view.name).join(', ');
+}
+
 function insights(views: ProviderView[], snapshot: Snapshot, nowMs: number): Insight[] {
   const rows: Insight[] = [];
   for (const view of views) {
     const forecast = view.current?.forecast;
-    if (!forecast) continue;
+    if (!forecast || forecast.expired) continue;
     if (forecast.exhaustsAt) {
       rows.push({
         tone: 'hot',
@@ -40,6 +55,23 @@ function insights(views: ProviderView[], snapshot: Snapshot, nowMs: number): Ins
         detail: 'The displayed balance is projected from the last successful local observation.',
       });
     }
+  }
+  const missing = views.filter((view) => !view.current || view.current.forecast.expired);
+  const learning = views.filter((view) => view.current && !view.current.forecast.expired && !hasForecast(view));
+  if (missing.length) {
+    rows.push({
+      tone: 'neutral',
+      title: `Waiting for ${names(missing)} allowance readings`,
+      detail:
+        'Refresh the local sources or check their setup. These allowances cannot be assessed until a current observation is available.',
+    });
+  }
+  if (learning.length) {
+    rows.push({
+      tone: 'neutral',
+      title: `${names(learning)} forecasts are still learning`,
+      detail: 'A balance is available, but there is not enough evidence to say how much will remain at reset.',
+    });
   }
   if (snapshot.resetCredits > 0) {
     rows.push({
@@ -106,11 +138,35 @@ function RecentCycles({ views, snapshot }: { views: ProviderView[]; snapshot: Sn
   );
 }
 
-export function Overview({ snapshot }: { snapshot: Snapshot }) {
+export function Overview({
+  snapshot,
+  refreshing,
+  onRefresh,
+  onSetupClaude,
+  onSources,
+}: {
+  snapshot: Snapshot;
+  refreshing: boolean;
+  onRefresh: () => Promise<void>;
+  onSetupClaude: () => void;
+  onSources: () => void;
+}) {
   const nowMs = Date.parse(snapshot.generatedAt);
   const views = providerViews(snapshot);
   const verdict = verdictSentence(snapshot.dashboardVerdict, snapshot.quotas);
   const attention = insights(views, snapshot, nowMs);
+  const unknown = views.filter((view) => !hasForecast(view));
+  const waiting = views.every((view) => !view.current || view.current.forecast.expired);
+  const needsReadings = unknown.length > 0 || views.some((view) => view.stale);
+  const headline = waiting
+    ? 'Waiting for allowance readings'
+    : snapshot.dashboardVerdict.state === 'safe' && unknown.length
+      ? 'Available allowances on track'
+      : verdict.headline;
+  const secondary = unknown.length
+    ? `${names(unknown)} ${unknown.length === 1 ? 'needs' : 'need'} more evidence before all allowances can be assessed.`
+    : verdict.secondary;
+  const statusTone = waiting ? 'unknown' : snapshot.dashboardVerdict.state;
   const unpriced = snapshot.costs.unpricedModels.map((entry) => entry.model).join(', ');
 
   return (
@@ -121,13 +177,11 @@ export function Overview({ snapshot }: { snapshot: Snapshot }) {
       aria-labelledby="tab-overview"
       tabIndex={-1}
     >
-      <section className={`overview-status ${snapshot.dashboardVerdict.state}`} role="status" aria-live="polite">
+      <section className={`overview-status ${statusTone}`} role="status" aria-live="polite">
         <span className="status-dot" aria-hidden="true" />
         <div>
-          <h1>{verdict.headline}</h1>
-          <p>
-            {verdict.secondary || 'Forecasts compare expected and heavier usage through each provider’s next reset.'}
-          </p>
+          <h1>{headline}</h1>
+          <p>{secondary || 'Forecasts compare expected and heavier usage through each provider’s next reset.'}</p>
         </div>
       </section>
 
@@ -201,6 +255,21 @@ export function Overview({ snapshot }: { snapshot: Snapshot }) {
                 );
               })}
             </div>
+            {needsReadings && (
+              <div className="action-row compact insight-actions">
+                <button className="secondary-button" disabled={refreshing} onClick={() => void onRefresh()}>
+                  {refreshing ? 'Refreshing…' : 'Refresh allowances'}
+                </button>
+                <button className="secondary-button" onClick={onSources}>
+                  View sources
+                </button>
+                {!snapshot.quotas.claude && !snapshot.isPreview && (
+                  <button className="secondary-button" onClick={onSetupClaude}>
+                    Set up Claude
+                  </button>
+                )}
+              </div>
+            )}
           </section>
 
           <section className="panel billing-summary">

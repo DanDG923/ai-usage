@@ -117,6 +117,11 @@ function validIso(value, label) {
   return date.toISOString();
 }
 
+function optionalText(value, label) {
+  if (value != null && typeof value !== 'string') throw new Error(`${label} must be text when supplied.`);
+  return value || null;
+}
+
 function json(value, fallback = null) {
   if (value == null) return fallback;
   try {
@@ -165,6 +170,7 @@ class UsageStore {
     this.backupDirectory = backupDirectory;
     this.statements = new Map();
     this.costAnalyticsCache = new Map();
+    this.cycleHistoryCache = new Map();
     this.transactionDepth = 0;
     this.db = new DatabaseSync(databasePath);
     this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
@@ -445,6 +451,7 @@ class UsageStore {
 
   close() {
     this.costAnalyticsCache.clear();
+    this.cycleHistoryCache.clear();
     this.statements.clear();
     this.db.close();
   }
@@ -524,8 +531,15 @@ class UsageStore {
     if (typeof observation.bucketId !== 'string' || !observation.bucketId.trim()) {
       throw new Error('Observation bucket is required.');
     }
+    const bucketName = optionalText(observation.bucketName, 'Observation bucket name');
+    const planType = optionalText(observation.planType, 'Observation plan type');
+    const provenance = optionalText(observation.provenance, 'Observation provenance');
+    let windowMinutes = null;
     if (observation.windowMinutes != null) {
-      const windowMinutes = Number(observation.windowMinutes);
+      if (!['number', 'string'].includes(typeof observation.windowMinutes)) {
+        throw new Error('Observation window must be a number.');
+      }
+      windowMinutes = Number(observation.windowMinutes);
       if (!Number.isSafeInteger(windowMinutes) || windowMinutes < 0 || windowMinutes > 31 * 24 * 60) {
         throw new Error('Observation window must be a non-negative whole number no longer than 31 days.');
       }
@@ -576,14 +590,14 @@ class UsageStore {
     `).run(
       observation.sourceId,
       observation.bucketId,
-      observation.bucketName || null,
+      bucketName,
       observedAt,
       usedPercent,
       remainingPercent,
       resetsAt,
-      observation.windowMinutes || null,
-      observation.planType || null,
-      observation.provenance || 'official',
+      windowMinutes || null,
+      planType,
+      provenance || 'official',
       confidence,
       JSON.stringify(observation.metadata || {}),
     );
@@ -595,6 +609,10 @@ class UsageStore {
   recordUsageEvent(event) {
     if (!KNOWN_SOURCE_IDS.has(event.sourceId)) throw new Error(`Unknown source: ${event.sourceId || 'missing'}.`);
     if (typeof event.eventKey !== 'string' || !event.eventKey.trim()) throw new Error('Usage event key is required.');
+    // Malformed JSON fields are rejected before SQLite binding. Coded SQLite
+    // errors remain operational failures that must roll back the file cursor.
+    const sessionId = optionalText(event.sessionId, 'Usage event session ID');
+    const model = optionalText(event.model, 'Usage event model');
     const occurredAt = validIso(event.occurredAt, 'Event time');
     const token = (value) => {
       if (value == null) return 0;
@@ -644,8 +662,8 @@ class UsageStore {
       event.eventKey,
       event.sourceId,
       occurredAt,
-      event.sessionId || null,
-      event.model || null,
+      sessionId,
+      model,
       project,
       inputTokens,
       cachedInputTokens,
@@ -928,15 +946,24 @@ class UsageStore {
   }
 
   getCostAnalytics(days = 30, settings = this.getSettings(), nowMs = Date.now()) {
+    return this.getAnalytics(days, settings, nowMs).costs;
+  }
+
+  refreshAnalyticsCaches() {
+    const version = `${this.prepare('PRAGMA data_version').get().data_version}:${this.prepare('SELECT total_changes() AS changes').get().changes}`;
+    if (version !== this.analyticsVersion) {
+      this.costAnalyticsCache.clear();
+      this.cycleHistoryCache.clear();
+      this.analyticsVersion = version;
+    }
+  }
+
+  getAnalytics(days, settings, nowMs) {
     // Cache the ledger separately from the time-sensitive forecast snapshot.
     // SQLite tracks both writes on this connection and collector-process commits.
     // Never cache transactional reads: a rollback must not preserve their totals.
-    if (this.db.isTransaction) return this.withPriceCache(() => this.buildCostAnalytics(days, settings, nowMs));
-    const version = `${this.prepare('PRAGMA data_version').get().data_version}:${this.prepare('SELECT total_changes() AS changes').get().changes}`;
-    if (version !== this.costAnalyticsVersion) {
-      this.costAnalyticsCache.clear();
-      this.costAnalyticsVersion = version;
-    }
+    if (this.db.isTransaction) return this.withPriceCache(() => this.buildAnalytics(days, settings, nowMs));
+    this.refreshAnalyticsCaches();
     const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const key = JSON.stringify([days, settings.currency, settings.usdToCurrency, timeZone]);
     const cached = this.costAnalyticsCache.get(key);
@@ -947,7 +974,7 @@ class UsageStore {
     }
     const oldest = this.prepare('SELECT occurred_at FROM usage_events WHERE occurred_at >= ? ORDER BY occurred_at ASC LIMIT 1')
       .get(iso(nowMs - days * DAY_MS));
-    const value = this.withPriceCache(() => this.buildCostAnalytics(days, settings, nowMs));
+    const value = this.withPriceCache(() => this.buildAnalytics(days, settings, nowMs));
     // The query includes its lower boundary; expire one millisecond after the
     // oldest included event falls outside it. Clock rollback also forces a read.
     const expiresAt = oldest ? Date.parse(oldest.occurred_at) + days * DAY_MS + 1 : Infinity;
@@ -958,6 +985,32 @@ class UsageStore {
   }
 
   buildCostAnalytics(days, settings, nowMs) {
+    return this.buildAnalytics(days, settings, nowMs).costs;
+  }
+
+  // All session aggregates stay in the same bounded, privately held cache as
+  // their period's costs. Snapshots expose only eight highlights; paginated
+  // requests search the complete ledger without re-costing it for each page.
+  getSessionPage({ days = 30, query = '', page = 1, pageSize = 20 } = {}, nowMs = Date.now()) {
+    const boundedInteger = (value, fallback, min, max) => {
+      const number = Number(value);
+      return Number.isFinite(number) ? Math.min(max, Math.max(min, Math.round(number))) : fallback;
+    };
+    const period = boundedInteger(days, 30, 1, 365);
+    const size = boundedInteger(pageSize, 20, 1, 100);
+    const needle = typeof query === 'string' ? query.trim().slice(0, 500).toLowerCase() : '';
+    const sessions = this.getAnalytics(period, this.getSettings(), nowMs).sessions;
+    const matches = needle ? sessions.filter((row) => [row.sourceId,
+      SOURCE_DEFINITIONS.find(([id]) => id === row.sourceId)?.[1], row.project, row.sessionId, row.model]
+      .some((value) => typeof value === 'string' && value.toLowerCase().includes(needle))) : sessions;
+    const total = matches.length;
+    const totalPages = Math.ceil(total / size);
+    const selectedPage = boundedInteger(page, 1, 1, Math.max(1, totalPages));
+    return { rows: matches.slice((selectedPage - 1) * size, selectedPage * size), total,
+      page: selectedPage, pageSize: size, totalPages };
+  }
+
+  buildAnalytics(days, settings, nowMs) {
     const since = iso(nowMs - days * DAY_MS);
     const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     // Aggregate one row at a time instead of retaining the entire raw ledger
@@ -1098,8 +1151,8 @@ class UsageStore {
       claude: toCurrency(row.claudeUsd),
     }));
     const sessions = [...sessionMap.values()]
-      .sort((a, b) => b.costUsd - a.costUsd)
-      .slice(0, 8)
+      .sort((a, b) => b.costUsd - a.costUsd || b.occurredAt.localeCompare(a.occurredAt)
+        || a.sourceId.localeCompare(b.sourceId) || a.sessionId.localeCompare(b.sessionId) || a.model.localeCompare(b.model))
       .map((row) => ({ ...row, cost: toCurrency(row.costUsd), coverage: row.totalTokens ? row.coveredTokens / row.totalTokens : 0 }));
     const byProject = [...byProjectMap.values()]
       .sort((a, b) => b.costUsd - a.costUsd)
@@ -1117,23 +1170,26 @@ class UsageStore {
     const isComplete = coveredTokens === totalTokens;
 
     return {
-      periodDays: days,
-      currency: settings.currency,
-      actual: toCurrency(actualUsd),
-      withoutCache: toCurrency(withoutCacheUsd),
-      cacheSavings: toCurrency(Math.max(0, withoutCacheUsd - actualUsd)),
-      cacheSavingsPercent: withoutCacheUsd > 0 ? Math.max(0, (withoutCacheUsd - actualUsd) / withoutCacheUsd) : 0,
-      totalTokens,
-      coverage: totalTokens ? coveredTokens / totalTokens : 0,
-      isComplete,
-      isLowerBound: !isComplete,
-      unpricedModels,
-      requestCount,
-      byModel,
-      byProject,
-      chart,
       sessions,
-      activityGrid: activityUsd.map((row) => row.map((value) => toCurrency(value))),
+      costs: {
+        periodDays: days,
+        currency: settings.currency,
+        actual: toCurrency(actualUsd),
+        withoutCache: toCurrency(withoutCacheUsd),
+        cacheSavings: toCurrency(Math.max(0, withoutCacheUsd - actualUsd)),
+        cacheSavingsPercent: withoutCacheUsd > 0 ? Math.max(0, (withoutCacheUsd - actualUsd) / withoutCacheUsd) : 0,
+        totalTokens,
+        coverage: totalTokens ? coveredTokens / totalTokens : 0,
+        isComplete,
+        isLowerBound: !isComplete,
+        unpricedModels,
+        requestCount,
+        byModel,
+        byProject,
+        chart,
+        sessions: sessions.slice(0, 8),
+        activityGrid: activityUsd.map((row) => row.map((value) => toCurrency(value))),
+      },
     };
   }
 
@@ -1141,6 +1197,34 @@ class UsageStore {
   // ran, how much of it was used, and what that window's tracked tokens would
   // have cost at the current catalogue. Windows are keyed by their reset time.
   getCycleHistory(sourceId, quota, settings = this.getSettings(), limit = 8, nowMs = Date.now()) {
+    if (!quota) return [];
+    if (this.db.isTransaction) return this.buildCycleHistory(sourceId, quota, settings, limit, nowMs);
+    this.refreshAnalyticsCaches();
+    const key = JSON.stringify([sourceId, quota.bucketId, limit, settings.currency, settings.usdToCurrency]);
+    const cached = this.cycleHistoryCache.get(key);
+    if (cached && nowMs >= cached.at && nowMs < cached.expiresAt) {
+      this.cycleHistoryCache.delete(key);
+      this.cycleHistoryCache.set(key, cached);
+      return cached.value;
+    }
+    const value = this.buildCycleHistory(sourceId, quota, settings, limit, nowMs);
+    const eventSource = sourceId === 'codex' ? 'codex' : 'claude';
+    const modelFilter = sourceId === 'claude-fable' ? "AND LOWER(COALESCE(model, '')) LIKE '%fable%'" : '';
+    // Current cycles end at now (exclusive). A future-dated imported event
+    // enters its cycle one millisecond after its timestamp; a reset also
+    // changes the current flag even when no database write occurs.
+    const nextEvent = this.prepare(`SELECT occurred_at FROM usage_events
+      WHERE source_id = ? AND occurred_at >= ? ${modelFilter}
+      ORDER BY occurred_at ASC LIMIT 1`).get(eventSource, iso(nowMs));
+    const expiresAt = Math.min(nextEvent ? Date.parse(nextEvent.occurred_at) + 1 : Infinity,
+      ...value.filter((row) => row.current).map((row) => Date.parse(row.resetsAt)));
+    this.cycleHistoryCache.delete(key);
+    this.cycleHistoryCache.set(key, { at: nowMs, expiresAt, value });
+    if (this.cycleHistoryCache.size > 12) this.cycleHistoryCache.delete(this.cycleHistoryCache.keys().next().value);
+    return value;
+  }
+
+  buildCycleHistory(sourceId, quota, settings = this.getSettings(), limit = 8, nowMs = Date.now()) {
     if (!quota) return [];
     const bucketId = quota.bucketId;
     const rows = this.prepare(`
@@ -1193,7 +1277,7 @@ class UsageStore {
       const events = this.prepare(`
         SELECT * FROM usage_events
         WHERE source_id = ? AND occurred_at >= ? AND occurred_at < ? ${modelFilter}
-      `).all(
+      `).iterate(
         eventSource,
         windows.reduce((min, window) => (window.startIso < min ? window.startIso : min), windows[0].startIso),
         windows.reduce((max, window) => (window.endIso > max ? window.endIso : max), windows[0].endIso),

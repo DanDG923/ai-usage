@@ -120,6 +120,21 @@ export type SessionCost = {
   coverage: number;
 };
 
+export type SessionPageOptions = {
+  days: number;
+  query: string;
+  page: number;
+  pageSize: number;
+};
+
+export type SessionPage = {
+  rows: SessionCost[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+};
+
 export type CostAnalytics = {
   periodDays: number;
   currency: string;
@@ -245,6 +260,7 @@ export type Bridge = {
   ): Promise<ClaudeSetupStatus>;
   cancelClaudeSetup(): Promise<void>;
   getSnapshot(days?: number): Promise<Snapshot>;
+  getSessions(options: SessionPageOptions): Promise<SessionPage>;
   refresh(): Promise<{
     snapshot: Snapshot;
     backupError?: string | null;

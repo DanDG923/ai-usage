@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('aiUsage', {
   configureClaude: (action, enableHelper) => ipcRenderer.invoke('claude-setup:configure', action, enableHelper),
   cancelClaudeSetup: () => ipcRenderer.invoke('claude-setup:cancel'),
   getSnapshot: (days) => ipcRenderer.invoke('dashboard:get-snapshot', days),
+  getSessions: (options) => ipcRenderer.invoke('dashboard:get-sessions', options),
   refresh: () => ipcRenderer.invoke('dashboard:refresh'),
   updateSettings: (patch) => ipcRenderer.invoke('dashboard:update-settings', patch),
   updatePrice: (price) => ipcRenderer.invoke('dashboard:update-price', price),

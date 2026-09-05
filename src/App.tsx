@@ -16,6 +16,8 @@ function applyThemeAttribute(theme: Theme | undefined) {
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('overview');
+  const [costQuery, setCostQuery] = useState('');
+  const [dataOperation, setDataOperation] = useState<SettingsActions['dataOperation']>(null);
   const [setupRequested, setSetupRequested] = useState(false);
   const [days, setDays] = useState(30);
   const isBrowserPreview = !window.aiUsage && window.location.protocol !== 'file:';
@@ -134,7 +136,9 @@ export default function App() {
         return;
       const index = ['1', '2', '3', '4'].indexOf(event.key);
       if (index >= 0) {
+        event.preventDefault();
         setTab(TABS[index].id);
+        document.getElementById(`tab-${TABS[index].id}`)?.focus();
         return;
       }
       if (event.key === 'r' || event.key === 'R') {
@@ -145,10 +149,6 @@ export default function App() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
-
-  useEffect(() => {
-    document.getElementById(`panel-${tab}`)?.focus({ preventScroll: true });
-  }, [tab]);
 
   const changeDays = (period: number) => {
     if (!window.aiUsage) return;
@@ -201,13 +201,16 @@ export default function App() {
   };
 
   const backup = async () => {
-    if (!window.aiUsage) return;
+    if (!window.aiUsage || dataOperation) return;
+    setDataOperation('backup');
     try {
       const result = await window.aiUsage.createBackup();
       commitSnapshot(result.snapshot);
       setNotice(`Backup saved to ${result.result.exportPath}`);
     } catch (error) {
       failWith('Backup could not be created.')(error);
+    } finally {
+      setDataOperation(null);
     }
   };
 
@@ -216,6 +219,8 @@ export default function App() {
       setNotice('Restoring runs in the installed desktop app.');
       return;
     }
+    if (dataOperation) return;
+    setDataOperation('restore');
     try {
       const result = await window.aiUsage.restoreBackup();
       if (result.cancelled || !result.result) return;
@@ -226,19 +231,23 @@ export default function App() {
       );
     } catch (error) {
       failWith('That backup could not be restored.')(error);
+    } finally {
+      setDataOperation(null);
     }
   };
 
   const manual = async (observation: ManualObservation) => {
     if (!window.aiUsage) {
       setNotice('Manual observations are saved by the installed desktop app.');
-      return;
+      return false;
     }
     try {
       commitSnapshot(await window.aiUsage.addManualObservation(observation));
       setNotice('Official observation added to the learner.');
+      return true;
     } catch (error) {
       failWith('Observation could not be saved.')(error);
+      return false;
     }
   };
 
@@ -274,6 +283,8 @@ export default function App() {
       setNotice('Exports are written by the installed desktop app.');
       return;
     }
+    if (dataOperation) return;
+    setDataOperation('export');
     try {
       const result = await window.aiUsage.exportCsv(period);
       if (result.cancelled) return;
@@ -282,6 +293,8 @@ export default function App() {
       );
     } catch (error) {
       failWith('The CSV export could not be written.')(error);
+    } finally {
+      setDataOperation(null);
     }
   };
 
@@ -334,6 +347,7 @@ export default function App() {
   };
 
   const actions: SettingsActions = {
+    dataOperation,
     onSetupClaude: () => setSetupRequested(true),
     onSettings: settings,
     onPrice: price,
@@ -383,9 +397,22 @@ export default function App() {
     <div className="app-shell">
       <Header snapshot={snapshot} tab={tab} onTab={setTab} refreshing={refreshing} onRefresh={refresh} />
       <ClaudeSetup requested={setupRequested} onClose={() => setSetupRequested(false)} onRefresh={refresh} />
-      {tab === 'overview' && <Overview snapshot={snapshot} />}
+      {tab === 'overview' && (
+        <Overview
+          snapshot={snapshot}
+          refreshing={refreshing}
+          onRefresh={refresh}
+          onSetupClaude={() => setSetupRequested(true)}
+          onSources={() => {
+            setTab('settings');
+            document.getElementById('tab-settings')?.focus();
+          }}
+        />
+      )}
       {tab === 'activity' && <Activity snapshot={snapshot} days={days} />}
-      {tab === 'costs' && <Costs snapshot={snapshot} days={days} onDays={changeDays} />}
+      {tab === 'costs' && (
+        <Costs snapshot={snapshot} days={days} onDays={changeDays} query={costQuery} onQuery={setCostQuery} />
+      )}
       {tab === 'settings' && <Settings snapshot={snapshot} actions={actions} />}
       {notice && (
         <div className="toast" role="status" aria-live="polite">

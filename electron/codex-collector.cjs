@@ -325,6 +325,7 @@ function importLocalSessions(store, days = 120) {
             });
             events += 1;
           } catch (error) {
+            if (error?.code) throw error;
             rejected += 1;
             lastRejection = error instanceof Error ? error.message : String(error);
           }

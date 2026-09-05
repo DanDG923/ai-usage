@@ -11,6 +11,7 @@ import { SourcesSection } from './settings/SourcesSection';
 import { StorageSection } from './settings/StorageSection';
 
 export type SettingsActions = {
+  dataOperation: 'backup' | 'restore' | 'export' | null;
   onSetupClaude: () => void;
   onSettings: (patch: Partial<SettingsType>) => Promise<void>;
   onPrice: (row: PriceRow) => Promise<void>;
@@ -19,7 +20,7 @@ export type SettingsActions = {
   onBackup: () => Promise<void>;
   onRestore: () => Promise<void>;
   onOpenBackups: () => Promise<void>;
-  onManual: (observation: ManualObservation) => Promise<void>;
+  onManual: (observation: ManualObservation) => Promise<boolean>;
   onExportCsv: (days: number) => Promise<void>;
   onCopySummary: () => Promise<void>;
   onSnooze: (hours: number) => Promise<void>;
@@ -114,6 +115,7 @@ export function Settings({ snapshot, actions }: { snapshot: Snapshot; actions: S
           <div className="settings-disclosure-body">
             <PricingSection snapshot={snapshot} update={update} onPrice={actions.onPrice} />
             <StorageSection
+              dataOperation={actions.dataOperation}
               snapshot={snapshot}
               update={update}
               onBackup={actions.onBackup}
