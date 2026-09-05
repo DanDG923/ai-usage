@@ -48,6 +48,7 @@ test('one read returns only plan windows and closes a no-message Claude query', 
         async return() {
           returnCalls += 1;
           idleResult = await idleNext;
+          params.options.stderr('[DEBUG] fetchUtilization: 200 after 1 attempt(s)\n');
           return { done: true };
         },
       };
