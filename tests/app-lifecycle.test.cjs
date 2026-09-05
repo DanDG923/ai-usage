@@ -10,6 +10,8 @@ const {
   registerSingleInstance,
   resolveWindowTarget,
   revealWindow,
+  createDeadline,
+  settleWithin,
 } = require('../electron/app-lifecycle.cjs');
 
 test('a secondary process quits without installing a second-instance handler', () => {
@@ -140,4 +142,38 @@ test('a visible load failure can retry the rejected operation', async () => {
   assert.equal(completed, true);
   assert.equal(attempts, 2);
   assert.deepEqual(failures, ['index.html unavailable']);
+});
+
+test('settleWithin passes results through and rejects once the shutdown budget is spent', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  assert.equal(await settleWithin(Promise.resolve('closed'), 1_000, 'late'), 'closed');
+  const stalled = settleWithin(new Promise(() => {}), 1_000, 'Storage did not close in time.');
+  t.mock.timers.tick(999);
+  await new Promise((resolve) => setImmediate(resolve));
+  t.mock.timers.tick(1);
+  await assert.rejects(stalled, /did not close in time/);
+});
+
+test('one deadline bounds a multi-step sequence and reports whether it was the cause', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  const deadline = createDeadline(15_000, 'Update preparation did not finish in time.');
+  assert.equal(await Promise.race([Promise.resolve('drained'), deadline.expiry]), 'drained');
+  assert.equal(deadline.expired, false);
+  // A step that fails on its own is distinguishable from the deadline firing.
+  await assert.rejects(Promise.race([Promise.reject(new Error('disk full')), deadline.expiry]), /disk full/);
+  assert.equal(deadline.expired, false);
+  const stalledBackup = assert.rejects(Promise.race([new Promise(() => {}), deadline.expiry]), /did not finish in time/);
+  t.mock.timers.tick(15_000);
+  await settle();
+  await stalledBackup;
+  assert.equal(deadline.expired, true);
+  // Later steps racing the same expired deadline fail immediately.
+  await assert.rejects(Promise.race([new Promise(() => {}), deadline.expiry]), /did not finish in time/);
+  deadline.cancel();
+  const cancelled = createDeadline(1_000, 'late');
+  cancelled.cancel();
+  t.mock.timers.tick(5_000);
+  await settle();
+  assert.equal(cancelled.expired, false);
 });

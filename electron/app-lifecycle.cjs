@@ -64,7 +64,33 @@ function resolveWindowTarget({ isPackaged, devUrl, filePath }) {
   return { kind: 'file', value: filePath };
 }
 
+// Shutdown work must never hold the process open indefinitely. A deadline can
+// span several awaited steps; `expired` tells a catch block whether it was the
+// deadline that fired. The timer is unref'd so it cannot itself keep an
+// otherwise finished process alive.
+function createDeadline(timeoutMs, message) {
+  const deadline = { expired: false, expiry: null, cancel: () => {} };
+  deadline.expiry = new Promise((_, reject) => {
+    const timer = setTimeout(() => {
+      deadline.expired = true;
+      reject(new Error(message));
+    }, timeoutMs);
+    timer.unref?.();
+    deadline.cancel = () => clearTimeout(timer);
+  });
+  // A deadline that nobody is racing any more must not surface as unhandled.
+  deadline.expiry.catch(() => {});
+  return deadline;
+}
+
+function settleWithin(promise, timeoutMs, message) {
+  const deadline = createDeadline(timeoutMs, message);
+  return Promise.race([promise, deadline.expiry]).finally(deadline.cancel);
+}
+
 module.exports = {
+  createDeadline,
+  settleWithin,
   WINDOW_BOUNDS,
   createDeferredWindowReveal,
   initializeWithVisibleFailure,

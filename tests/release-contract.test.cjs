@@ -55,10 +55,14 @@ test('private releases build without credentials and publish complete verified a
   const steps = workflow.jobs.release.steps;
   const build = steps.find((step) => step.run === 'npm run build');
   const publish = steps.find((step) => step.name === 'Publish audited private release');
+  const validate = steps.find((step) => step.name === 'Validate version and destination');
   assert.deepEqual(workflow.on.push.tags, ['v*']);
   assert.equal(workflow.on.workflow_dispatch.inputs.tag.required, true);
   assert.equal(workflow.jobs.release['runs-on'], 'windows-latest');
   assert.equal(build.env.GH_TOKEN, undefined);
+  assert.equal(validate.env.GH_TOKEN, '${{ github.token }}');
+  assert.match(validate.run, /compare\/main\.\.\.\$head/);
+  assert.match(validate.run, /-notin @\('identical', 'behind'\)/);
   assert.equal(build.env.GITHUB_TOKEN, undefined);
   assert.equal(publish.env.GH_TOKEN, '${{ github.token }}');
   assert.match(publish.run, /repository\.private -ne \$true/);

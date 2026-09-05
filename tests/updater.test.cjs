@@ -140,6 +140,17 @@ test('checksum failures never allow installation and do not leak HTTP diagnostic
   await checker.install();
   assert.equal(updater.installs, 0);
   assert.ok(!JSON.stringify({ states, logs }).includes('secret-for-test'));
+  // The emitted event and the rejected promise carry the same error object.
+  assert.equal(logs.length, 1);
+  assert.equal(states.filter((state) => state.status === 'error').length, 1);
+});
+
+test('environment tokens cannot replace the GitHub CLI sign-in for a private feed', async () => {
+  const environment = { GH_TOKEN: 'environment override', github_token: 'second override', GH_CONFIG_DIR: 'kept' };
+  const { checker, updater } = fixture({ environment });
+  assert.equal((await checker.check()).status, 'available');
+  assert.equal(updater.feed.token, 'secret-for-test');
+  assert.deepEqual(environment, { GH_CONFIG_DIR: 'kept' });
 });
 
 test('ordinary HTTP errors are replaced by safe messages and failed checks can be retried', async () => {
@@ -179,5 +190,34 @@ test('disabling automatic checks before the initial delay prevents its check', a
   t.mock.timers.tick(45_000);
   await Promise.resolve();
   assert.equal(updater.checks, 0);
+  checker.stop();
+});
+
+test('repeated starts keep the existing schedule and a disabled setting clears it', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  let enabled = true;
+  const { checker, updater } = fixture({ enabled: () => enabled });
+  checker.start();
+  t.mock.timers.tick(30_000);
+  // A settings save restarts effects; the first check must still land at 45 s.
+  checker.start();
+  t.mock.timers.tick(15_000);
+  await settle();
+  assert.equal(updater.checks, 1);
+  checker.start();
+  t.mock.timers.tick(45_000);
+  await settle();
+  assert.equal(updater.checks, 1, 'restarting must not schedule an extra check');
+  enabled = false;
+  checker.start();
+  t.mock.timers.tick(6 * 60 * 60 * 1000);
+  await settle();
+  assert.equal(updater.checks, 1, 'a disabled setting clears the schedule');
+  enabled = true;
+  checker.start();
+  t.mock.timers.tick(45_000);
+  await settle();
+  assert.equal(updater.checks, 2, 're-enabling schedules a fresh first check');
   checker.stop();
 });
