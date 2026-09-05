@@ -23,6 +23,8 @@ const {
   registerSingleInstance,
   resolveWindowTarget,
   revealWindow,
+  createDeadline,
+  settleWithin,
 } = require('./app-lifecycle.cjs');
 
 const pkg = require('../package.json');
@@ -56,6 +58,9 @@ const STALE_AFTER_MS = 5 * 60_000;
 // "now"-relative fields (staleness, estimated current balance) between writes.
 const SNAPSHOT_TTL_MS = 20_000;
 const TRAY_SIZE = 32;
+// A stalled restore, backup or collector must not hold Quit or an update open.
+const SHUTDOWN_TIMEOUT_MS = 15_000;
+const EMPTY_SESSION_PAGE = Object.freeze({ rows: [], total: 0, page: 1, pageSize: 20, totalPages: 0 });
 
 // Window chrome follows the theme the renderer paints, so the native caption
 // buttons never sit on a strip of the other palette.
@@ -480,10 +485,12 @@ function registerIpc() {
     }
   });
   ipcMain.handle('dashboard:get-snapshot', (_event, days = 30) => {
+    // The window outlives the database handle briefly while an update installs.
+    if (storageClosing()) return previousSnapshot ?? cachedSnapshot?.value ?? null;
     setPeriodDays(days);
     return snapshot();
   });
-  ipcMain.handle('dashboard:get-sessions', (_event, options) => store.getSessionPage(options));
+  ipcMain.handle('dashboard:get-sessions', (_event, options) => (storageClosing() ? EMPTY_SESSION_PAGE : store.getSessionPage(options)));
   ipcMain.handle('dashboard:refresh', () => refreshAll());
   ipcMain.handle('dashboard:update-settings', (_event, patch) => databaseJobs.run(() => {
     const settings = store.updateSettings(patch || {});
@@ -622,6 +629,10 @@ function stopForShutdown() {
   try { collectors?.stop(); } catch { /* Already gone. */ }
 }
 
+function storageClosing() {
+  return Boolean(shutdownPromise || preparingUpdate);
+}
+
 function closeStorage() {
   if (!shutdownPromise) {
     shutdownPromise = (async () => {
@@ -637,11 +648,31 @@ async function prepareUpdateInstall() {
   if (shutdownPromise || preparingUpdate) throw new Error('Application is already closing.');
   preparingUpdate = true;
   stopForShutdown();
+  // One deadline spans the drain, the backup and the close. Quit is refused
+  // while this runs, so the sequence itself has to be bounded.
+  const deadline = createDeadline(SHUTDOWN_TIMEOUT_MS, 'Update preparation did not finish in time.');
+  let backedUp = false;
   try {
     // Freeze new writes, drain accepted work, then back up the final database
     // state. A failed backup releases the queue and resumes the application.
-    await databaseJobs.prepareToClose(() => maintenance.request('create-backup'));
+    await Promise.race([
+      databaseJobs.prepareToClose(async () => {
+        const backup = await maintenance.request('create-backup');
+        backedUp = true;
+        return backup;
+      }),
+      deadline.expiry,
+    ]);
   } catch {
+    if (deadline.expired) {
+      // Accepted work or the backup is still running in the worker, so writes
+      // cannot safely resume and nothing may install: reopen without updating.
+      recoverFromUpdateInstallFailure(backedUp
+        ? 'Your safety backup has been saved, but storage did not settle in time. AI Usage will reopen without updating; please try again.'
+        : 'The safety backup did not finish in time. AI Usage will reopen without updating; please try again.');
+      throw Object.assign(new Error('Update preparation timed out.'), { code: 'UPDATE_BACKUP_FAILED' });
+    }
+    deadline.cancel();
     preparingUpdate = false;
     isQuitting = false;
     collectors = createCollectors();
@@ -649,19 +680,28 @@ async function prepareUpdateInstall() {
     throw Object.assign(new Error('Update safety backup failed.'), { code: 'UPDATE_BACKUP_FAILED' });
   }
   try {
-    await closeStorage();
+    await Promise.race([closeStorage(), deadline.expiry]);
   } catch (error) {
+    if (deadline.expired) {
+      // Every accepted write is drained and backed up; only the close itself
+      // stalled. The installer replaces the process, so let it proceed.
+      log('Update: storage did not close in time; installing with the backup taken.');
+      shutdownComplete = true;
+      return;
+    }
     recoverFromUpdateInstallFailure();
     throw error;
+  } finally {
+    deadline.cancel();
   }
 }
 
-function recoverFromUpdateInstallFailure() {
+function recoverFromUpdateInstallFailure(message = 'Your safety backup has been saved. AI Usage will reopen; please try the update again.') {
   // Storage may already be closed. Relaunch the existing version rather than
   // leave a visible dashboard attached to a closed database.
   if (!preparingUpdate) return;
   preparingUpdate = false;
-  dialog.showErrorBox('AI Usage update could not start', 'Your safety backup has been saved. AI Usage will reopen; please try the update again.');
+  dialog.showErrorBox('AI Usage update could not start', message);
   shutdownComplete = true;
   app.relaunch();
   app.quit();
@@ -741,9 +781,13 @@ if (isPrimaryInstance) {
     // Cancel provider calls, then drain database jobs and close the maintenance
     // connection gracefully. A running backup or restore must finish before
     // Electron tears down its worker and the main SQLite handle.
-    void closeStorage().catch((error) => log(`Shutdown: ${error.message}`)).finally(() => {
-      shutdownComplete = true;
-      app.quit();
-    });
+    // Electron does not raise before-quit for a Windows shutdown or sign-out;
+    // this bounds the tray Quit and an app-initiated quit only.
+    void settleWithin(closeStorage(), SHUTDOWN_TIMEOUT_MS, 'Storage did not close in time; quitting anyway.')
+      .catch((error) => log(`Shutdown: ${error.message}`))
+      .finally(() => {
+        shutdownComplete = true;
+        app.quit();
+      });
   });
 }

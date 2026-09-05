@@ -38,10 +38,20 @@ function notesText(notes) {
   return typeof value === 'string' ? value.slice(0, 20_000) : null;
 }
 
+// electron-updater prefers these over the token it is handed whenever the feed
+// is private. Only the GitHub CLI sign-in may authenticate an update check.
+const ENVIRONMENT_TOKEN_KEYS = /^(?:GH_TOKEN|GITHUB_TOKEN)$/i;
+
+function clearEnvironmentTokens(environment) {
+  for (const key of Object.keys(environment)) {
+    if (ENVIRONMENT_TOKEN_KEYS.test(key)) delete environment[key];
+  }
+}
+
 function createUpdateChecker({
   autoUpdater, enabled, isPackaged, pkg, getToken,
   isPortable = Boolean(process.env.PORTABLE_EXECUTABLE_FILE || process.env.PORTABLE_EXECUTABLE_DIR),
-  platform = process.platform, beforeInstall = async () => {}, onInstallError = () => {},
+  platform = process.platform, environment = process.env, beforeInstall = async () => {}, onInstallError = () => {},
   onStatus = () => {}, onLog = () => {},
 }) {
   const feed = releaseFeed(pkg);
@@ -50,6 +60,7 @@ function createUpdateChecker({
   let operation = null;
   let downloaded = false;
   let candidate = false;
+  let lastFailure = null;
   let result = {
     status: available ? 'idle' : 'unavailable', available,
     checkedAt: null, version: null, error: null, progress: null, releaseNotes: null, auth: null,
@@ -61,6 +72,10 @@ function createUpdateChecker({
     onStatus(status());
   }
   function fail(error) {
+    // electron-updater both emits 'error' and rejects the operation with the
+    // same object; report each failure once.
+    if (error && error === lastFailure) return;
+    lastFailure = error;
     const failure = updateError(error);
     change({ ...failure, ...(downloaded ? { status: 'downloaded' } : {}) });
     onLog(result.error);
@@ -102,6 +117,7 @@ function createUpdateChecker({
 
   function run(task) {
     if (operation) return operation;
+    lastFailure = null;
     operation = Promise.resolve().then(task).catch(fail).then(status).finally(() => { operation = null; });
     return operation;
   }
@@ -114,6 +130,7 @@ function createUpdateChecker({
       if (feed.provider === 'github' && feed.private) {
         if (!getToken) throw Object.assign(new Error(), { code: 'UPDATE_AUTH_REQUIRED' });
         const token = await getToken();
+        clearEnvironmentTokens(environment);
         // Keep the authenticated feed in main-process memory. Never persist it
         // or pass it to logs, a command line, or the renderer.
         autoUpdater.setFeedURL({ ...feed, token });
@@ -146,9 +163,14 @@ function createUpdateChecker({
     });
   }
 
+  // Settings changes call this repeatedly. An existing schedule is kept, so a
+  // theme edit cannot bring the next check forward.
   function start() {
-    stop();
-    if (!available || !enabled()) return;
+    if (!available || !enabled()) {
+      stop();
+      return;
+    }
+    if (timer) return;
     timer = setTimeout(() => {
       if (enabled()) void check();
       timer = setInterval(() => { if (enabled()) void check(); }, CHECK_INTERVAL_MS);

@@ -36,6 +36,8 @@ jobs:
           cache: npm
       - name: Validate version and destination
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
           $package = Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json
@@ -44,6 +46,14 @@ jobs:
           }
           if ($env:GITHUB_REPOSITORY -cne 'DanDG923/ai-usage' -or $package.build.publish.owner -cne 'DanDG923' -or $package.build.publish.repo -cne 'ai-usage' -or $package.build.publish.private -ne $true) {
             throw 'This workflow only publishes the configured private AI Usage repository.'
+          }
+          # Only reviewed, merged work may enter the update feed: the tagged
+          # commit has to be an ancestor of main, not a side branch.
+          $head = (git rev-parse 'HEAD^{commit}').Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to resolve the tagged commit.' }
+          $comparison = gh api "repos/$env:GITHUB_REPOSITORY/compare/main...$head" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $comparison.status -notin @('identical', 'behind')) {
+            throw 'The release tag must point at a commit that is already on main.'
           }
       - run: npm ci --ignore-scripts
       - run: node node_modules/electron/install.js
