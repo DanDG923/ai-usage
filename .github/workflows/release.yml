@@ -89,10 +89,15 @@ jobs:
           $notesPath = Join-Path 'release' 'release-notes.md'
           gh release create $env:RELEASE_TAG @assets --repo $repo --verify-tag --draft --title "AI Usage $version" --notes-file $notesPath
           if ($LASTEXITCODE -ne 0) { throw 'Draft release creation or upload failed.' }
-          $uploaded = gh api "repos/$repo/releases/tags/$($env:RELEASE_TAG)" | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0 -or -not $uploaded.draft -or $uploaded.assets.Count -ne $assetNames.Count) {
+          # The by-tag REST endpoint only returns published releases. A writer
+          # can see this new draft through the release-list endpoint.
+          $afterUpload = gh api "repos/$repo/releases?per_page=100" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to read the uploaded draft release.' }
+          $matchingDrafts = @($afterUpload | Where-Object { $_.tag_name -ceq $env:RELEASE_TAG -and $_.draft })
+          if ($matchingDrafts.Count -ne 1 -or $matchingDrafts[0].assets.Count -ne $assetNames.Count) {
             throw 'The draft release is incomplete; it has not been published.'
           }
+          $uploaded = $matchingDrafts[0]
           foreach ($name in $assetNames) {
             $local = Get-Item -LiteralPath (Join-Path 'release' $name)
             $remote = @($uploaded.assets | Where-Object { $_.name -ceq $name })

@@ -64,6 +64,8 @@ test('private releases build without credentials and publish complete verified a
   assert.match(publish.run, /repository\.private -ne \$true/);
   assert.match(publish.run, /--draft/);
   assert.match(publish.run, /--verify-tag/);
+  assert.doesNotMatch(publish.run, /releases\/tags\//);
+  assert.match(publish.run, /tag_name -ceq \$env:RELEASE_TAG -and \$_\.draft/);
   for (const artifact of ['latest.yml', 'SHA256SUMS.txt', '.exe.blockmap', 'AI-Usage-Portable-', 'AI-Usage-Setup-']) {
     assert.ok(publish.run.includes(artifact), `release uploads ${artifact}`);
   }
