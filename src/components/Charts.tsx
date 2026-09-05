@@ -1,7 +1,8 @@
-import { useMemo, useRef, useState } from 'react';
+import { useId, useMemo, useRef, useState } from 'react';
 import type { CostAnalytics, DailyUsage, Point } from '../types';
 import { compactNumber, money } from '../lib';
 import type { ProviderView } from '../provider-view';
+import { spreadRunwayLabels } from './details/runway-labels';
 
 // Built once: the charts label dozens of ticks and re-render on every mouse
 // move, so constructing a formatter per label was the largest cost of a hover.
@@ -146,7 +147,12 @@ function runwayLayout(views: ProviderView[]) {
         `${view.name}: expected ${Math.round(view.current!.forecast.expectedRemaining ?? 0)}%, heavier ${Math.round(view.current!.forecast.heavyRemaining ?? 0)}% at its reset`,
     )
     .join('. ');
-  return { series, nowAt, minAt, maxAt, x, y, plotWidth, plotHeight, ticks, summary };
+  const labels = spreadRunwayLabels(
+    series.flatMap(({ view, endpoint }) => (endpoint ? [{ view, endpoint, y: y(endpoint.remaining) - 2 }] : [])),
+    RUNWAY.top + 12,
+    RUNWAY.top + plotHeight - 15,
+  );
+  return { series, labels, nowAt, minAt, maxAt, x, y, plotWidth, plotHeight, ticks, summary };
 }
 
 /**
@@ -155,11 +161,13 @@ function runwayLayout(views: ProviderView[]) {
  * that unlike allowance windows end together.
  */
 export function CombinedRunwayChart({ views }: { views: ProviderView[] }) {
+  const plotClipId = useId();
   const svgRef = useRef<SVGSVGElement>(null);
   const [hoverAt, setHoverAt] = useState<number | null>(null);
   const layout = useMemo(() => runwayLayout(views), [views]);
   if (!layout) return <div className="empty-chart tall">Runway appears after the first allowance observations.</div>;
-  const { series, nowAt, minAt, maxAt, x, y, plotWidth, plotHeight, ticks, summary } = layout;
+  const { series, labels, nowAt, minAt, maxAt, x, y, plotWidth, plotHeight, ticks, summary } = layout;
+  const labelX = RUNWAY.width - RUNWAY.right + 16;
 
   const moveHover = (event: React.MouseEvent<SVGSVGElement>) => {
     const rect = svgRef.current?.getBoundingClientRect();
@@ -183,6 +191,11 @@ export function CombinedRunwayChart({ views }: { views: ProviderView[] }) {
         onMouseMove={moveHover}
         onMouseLeave={() => setHoverAt(null)}
       >
+        <defs>
+          <clipPath id={plotClipId}>
+            <rect x={RUNWAY.left} y={RUNWAY.top} width={plotWidth} height={plotHeight} />
+          </clipPath>
+        </defs>
         {[0, 25, 50, 75, 100].map((value) => (
           <g key={value}>
             <line x1={RUNWAY.left} x2={RUNWAY.width - RUNWAY.right} y1={y(value)} y2={y(value)} className="grid-line" />
@@ -199,19 +212,13 @@ export function CombinedRunwayChart({ views }: { views: ProviderView[] }) {
         <line x1={x(nowAt)} x2={x(nowAt)} y1={RUNWAY.top} y2={RUNWAY.top + plotHeight} className="now-line" />
         {series.map(({ view, observedPath, heavyPath, expectedPath, endpoint, heavyEndpoint }) => (
           <g key={view.id} className={`combined-series ${view.id}`}>
-            <path d={observedPath} className="combined-observed" />
-            <path d={heavyPath} className="combined-heavy" />
-            <path d={expectedPath} className="combined-expected" />
+            <g clipPath={`url(#${plotClipId})`}>
+              <path d={observedPath} className="combined-observed" />
+              <path d={heavyPath} className="combined-heavy" />
+              <path d={expectedPath} className="combined-expected" />
+            </g>
             {endpoint && (
-              <>
-                <circle cx={x(endpoint.at)} cy={y(endpoint.remaining)} r="3.8" className="combined-endpoint" />
-                <text x={x(endpoint.at) + 8} y={y(endpoint.remaining) - 2} className="combined-end-label">
-                  <tspan>{view.name}</tspan>
-                  <tspan x={x(endpoint.at) + 8} dy="13">
-                    {Math.round(endpoint.remaining)}%
-                  </tspan>
-                </text>
-              </>
+              <circle cx={x(endpoint.at)} cy={y(endpoint.remaining)} r="3.8" className="combined-endpoint" />
             )}
             {heavyEndpoint && (
               <circle
@@ -221,6 +228,23 @@ export function CombinedRunwayChart({ views }: { views: ProviderView[] }) {
                 className="combined-heavy-endpoint"
               />
             )}
+          </g>
+        ))}
+        {labels.map(({ view, endpoint, y: labelY }) => (
+          <g key={view.id} className={`combined-series ${view.id}`}>
+            <line
+              className="combined-label-connector"
+              x1={x(endpoint.at) + 6}
+              y1={y(endpoint.remaining)}
+              x2={labelX - 5}
+              y2={labelY + 2}
+            />
+            <text x={labelX} y={labelY} className="combined-end-label">
+              <tspan>{view.name}</tspan>
+              <tspan x={labelX} dy="13">
+                {Math.round(endpoint.remaining)}%
+              </tspan>
+            </text>
           </g>
         ))}
         {hoverAt != null && (

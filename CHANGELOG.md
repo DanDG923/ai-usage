@@ -7,6 +7,7 @@
 - Cache reset-cycle calculations while keeping writes, pricing changes, reset boundaries, and clock changes correct.
 - Search all recorded sessions in the selected period with pagination, retain cost filters between sections, and distinguish missing data from empty search results.
 - Show actionable waiting states when allowance readings are missing and let forecast times wrap in provider summaries.
+- Keep older observations inside the runway plot and separate nearby provider labels without moving their data points.
 - Run backups, restores, and CSV exports in a background worker with serialized operations and graceful shutdown.
 
 ## 1.0.21 — 5 September 2026
