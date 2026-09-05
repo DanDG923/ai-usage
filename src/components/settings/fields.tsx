@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
 export function NumericSetting({
   label,
@@ -21,6 +21,7 @@ export function NumericSetting({
   onCommit: (value: number) => Promise<void>;
 }) {
   const [draft, setDraft] = useState(String(value));
+  const cancelBlur = useRef(false);
   // A saved value arriving from a snapshot replaces the draft; typing does not.
   const [committed, setCommitted] = useState(value);
   if (committed !== value) {
@@ -30,6 +31,10 @@ export function NumericSetting({
   const parsed = Number(draft);
   const valid = draft.trim() !== '' && Number.isFinite(parsed) && parsed >= min && parsed <= max;
   const commit = () => {
+    if (cancelBlur.current) {
+      cancelBlur.current = false;
+      return;
+    }
     if (!valid) {
       setDraft(String(value));
       return;
@@ -50,6 +55,8 @@ export function NumericSetting({
       onKeyDown={(event) => {
         if (event.key === 'Enter') event.currentTarget.blur();
         if (event.key === 'Escape') {
+          event.preventDefault();
+          cancelBlur.current = true;
           setDraft(String(value));
           event.currentTarget.blur();
         }

@@ -16,7 +16,7 @@ if (!Number.isSafeInteger(count) || count < 1 || count > 1_000_000) {
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-benchmark-'));
 const store = new UsageStore(':memory:', root);
 const now = Date.parse('2026-09-04T12:00:00Z');
-const models = ['gpt-5.6-sol', 'claude-opus-5', 'gpt-5.6-sol-20260901', 'unknown-model'];
+const models = ['gpt-5.6-sol', 'claude-fable-5', 'gpt-5.6-sol-20260901', 'unknown-model'];
 try {
   store.updateSettings({ currency: 'USD', usdToCurrency: 1 });
   store.transaction(() => {
@@ -32,6 +32,15 @@ try {
         cachedInputTokens: 200,
         outputTokens: 50,
       });
+    }
+    for (const [sourceId, bucketId] of [['codex', 'codex:weekly'], ['claude', 'seven_day'], ['claude-fable', 'fable_seven_day']]) {
+      for (let index = 0; index < 8; index += 1) {
+        store.recordObservation({ sourceId, bucketId,
+          observedAt: new Date(now - (index * 7 + 1) * 86400000).toISOString(),
+          resetsAt: new Date(now - (index * 7 - 3) * 86400000).toISOString(),
+          usedPercent: 30, remainingPercent: 70, windowMinutes: 10080,
+          provenance: 'official', metadata: { scope: 'overall' } });
+      }
     }
   });
   const settings = store.getSettings();
@@ -55,12 +64,28 @@ try {
   const uncached = measure(() => store.withPriceCache(() => store.buildCostAnalytics(30, settings, now)));
   const cached = measure(() => store.getCostAnalytics(30, settings, now));
   if (cached.resultSha256 !== uncached.resultSha256) throw new Error('Cached analytics differ from a fresh aggregation.');
+  // Hold the regular cost cache warm in both snapshot measurements to isolate
+  // cycle work. Compare complete results, including all three cycle histories.
+  const cachedCycleReader = store.getCycleHistory;
+  store.getCycleHistory = store.buildCycleHistory;
+  let snapshotUncachedCycles;
+  try {
+    snapshotUncachedCycles = measure(() => store.getDashboardSnapshot(30, now));
+  } finally {
+    store.getCycleHistory = cachedCycleReader;
+  }
+  const snapshotCached = measure(() => store.getDashboardSnapshot(30, now));
+  if (snapshotCached.resultSha256 !== snapshotUncachedCycles.resultSha256) throw new Error('Cached snapshot differs from uncached cycles.');
+  const sessionSearch = measure(() => store.getSessionPage({ days: 30, query: 'synthetic-project-0', pageSize: 10 }, now));
   console.log(JSON.stringify({
     records: count,
     node: process.version,
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     uncached,
     cached,
+    snapshotUncachedCycles,
+    snapshotCached,
+    sessionSearch,
   }, null, 2));
 } finally {
   store.close();

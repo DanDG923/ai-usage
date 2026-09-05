@@ -3,7 +3,7 @@ import { FormEvent, useState } from 'react';
 import type { ManualObservation } from '../../types';
 import { SectionHeading } from './fields';
 
-export function ManualSection({ onManual }: { onManual: (observation: ManualObservation) => Promise<void> }) {
+export function ManualSection({ onManual }: { onManual: (observation: ManualObservation) => Promise<boolean> }) {
   const [sourceId, setSourceId] = useState<ManualObservation['sourceId']>('claude-fable');
   const [used, setUsed] = useState('');
   const [reset, setReset] = useState('');
@@ -13,8 +13,8 @@ export function ManualSection({ onManual }: { onManual: (observation: ManualObse
     if (!used || !reset) return;
     setSaving(true);
     try {
-      await onManual({ sourceId, usedPercent: Number(used), resetsAt: new Date(reset).toISOString() });
-      setUsed('');
+      const saved = await onManual({ sourceId, usedPercent: Number(used), resetsAt: new Date(reset).toISOString() });
+      if (saved) setUsed('');
     } finally {
       setSaving(false);
     }
@@ -29,6 +29,7 @@ export function ManualSection({ onManual }: { onManual: (observation: ManualObse
         <label>
           <span>Allowance</span>
           <select
+            disabled={saving}
             value={sourceId}
             onChange={(event) => setSourceId(event.target.value as ManualObservation['sourceId'])}
           >
@@ -41,6 +42,7 @@ export function ManualSection({ onManual }: { onManual: (observation: ManualObse
           <span>Used</span>
           <div className="input-suffix">
             <input
+              disabled={saving}
               required
               type="number"
               min="0"
@@ -54,11 +56,17 @@ export function ManualSection({ onManual }: { onManual: (observation: ManualObse
         </label>
         <label>
           <span>Resets at</span>
-          <input required type="datetime-local" value={reset} onChange={(event) => setReset(event.target.value)} />
+          <input
+            required
+            disabled={saving}
+            type="datetime-local"
+            value={reset}
+            onChange={(event) => setReset(event.target.value)}
+          />
         </label>
         <button disabled={saving} className="primary-button" type="submit">
           <Save aria-hidden="true" />
-          Record observation
+          {saving ? 'Saving observation…' : 'Record observation'}
         </button>
       </form>
     </section>

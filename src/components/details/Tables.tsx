@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { compactNumber, money, percent, projectName, shortDate, sourceLabel } from '../../lib';
 import type { CostAnalytics, ModelCost } from '../../types';
 
@@ -45,7 +46,7 @@ export function EquivalentValue({ cost, coverage, currency }: { cost: number; co
   return <strong>{money(cost, currency)}</strong>;
 }
 
-function matchesQuery(query: string | undefined, values: unknown[]) {
+export function matchesQuery(query: string | undefined, values: unknown[]) {
   const needle = query?.trim().toLocaleLowerCase();
   if (!needle) return true;
   return values.some((value) =>
@@ -55,7 +56,7 @@ function matchesQuery(query: string | undefined, values: unknown[]) {
   );
 }
 
-export function ProjectTable({ costs, query }: { costs: CostAnalytics; query?: string }) {
+export const ProjectTable = memo(function ProjectTable({ costs, query }: { costs: CostAnalytics; query?: string }) {
   const rows = costs.byProject.filter((row) => matchesQuery(query, [row.project, ...row.sources]));
   return (
     <section className="panel table-panel">
@@ -103,7 +104,9 @@ export function ProjectTable({ costs, query }: { costs: CostAnalytics; query?: s
             ) : (
               <tr>
                 <td colSpan={7} className="empty-cell">
-                  Projects appear once local session records carry a working directory.
+                  {query?.trim()
+                    ? 'No projects match this filter.'
+                    : 'Projects appear once local session records carry a working directory.'}
                 </td>
               </tr>
             )}
@@ -112,9 +115,9 @@ export function ProjectTable({ costs, query }: { costs: CostAnalytics; query?: s
       </div>
     </section>
   );
-}
+});
 
-export function ModelTable({ costs, query }: { costs: CostAnalytics; query?: string }) {
+export const ModelTable = memo(function ModelTable({ costs, query }: { costs: CostAnalytics; query?: string }) {
   const rows = costs.byModel.filter((row) => matchesQuery(query, [row.sourceId, row.model]));
   return (
     <section className="panel table-panel">
@@ -207,66 +210,4 @@ export function ModelTable({ costs, query }: { costs: CostAnalytics; query?: str
       </div>
     </section>
   );
-}
-
-export function SessionTable({ costs, query }: { costs: CostAnalytics; query?: string }) {
-  const rows = costs.sessions.filter((row) =>
-    matchesQuery(query, [row.sourceId, row.project, row.sessionId, row.model]),
-  );
-  return (
-    <section className="panel table-panel session-panel">
-      <div className="panel-heading">
-        <div>
-          <h2>Largest sessions</h2>
-        </div>
-      </div>
-      <div className="table-scroll">
-        <table>
-          <thead>
-            <tr>
-              <th>Source</th>
-              <th>Project</th>
-              <th>Session</th>
-              <th>Model</th>
-              <th>Last activity</th>
-              <th className="num">Tokens</th>
-              <th className="num">API-equivalent</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.length ? (
-              rows.map((row) => (
-                <tr key={`${row.sourceId}-${row.sessionId}-${row.model}`}>
-                  <td>
-                    <span className={`source-dot ${row.sourceId}`} />
-                    {sourceLabel(row.sourceId)}
-                  </td>
-                  <td>
-                    <strong>{projectName(row.project)}</strong>
-                  </td>
-                  <td>
-                    <code className="session-id" title={row.sessionId}>
-                      {row.sessionId.slice(0, 8)}
-                    </code>
-                  </td>
-                  <td>{row.model}</td>
-                  <td>{shortDate(row.occurredAt)}</td>
-                  <td className="num">{compactNumber(row.totalTokens)}</td>
-                  <td className="num">
-                    <EquivalentValue cost={row.cost} coverage={row.coverage} currency={costs.currency} />
-                  </td>
-                </tr>
-              ))
-            ) : (
-              <tr>
-                <td colSpan={7} className="empty-cell">
-                  Sessions will appear after local logs are imported.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  );
-}
+});

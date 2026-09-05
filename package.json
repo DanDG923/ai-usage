@@ -1,17 +1,24 @@
 {
   "name": "ai-usage",
-  "version": "1.0.21",
+  "version": "1.0.23",
   "private": true,
   "description": "Local-first AI subscription usage, runway forecasting, and API-equivalent cost dashboard.",
   "main": "electron/main.cjs",
   "type": "module",
+  "updateFeed": {
+    "provider": "github",
+    "owner": "DanDG923",
+    "repo": "ai-usage",
+    "private": true
+  },
   "scripts": {
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
     "dev:web": "vite --host 127.0.0.1",
     "build:web": "tsc -b && vite build",
-    "build": "npm run test && npm run build:web && electron-builder --win portable nsis && npm run release:audit",
+    "build": "npm run test && npm run build:web && npm run release:notes && electron-builder --win portable nsis --x64 --publish never && npm run release:audit",
     "release:audit": "node tools/audit-release.cjs",
-    "pack": "npm run build:web && electron-builder --dir",
+    "release:notes": "node tools/release-notes.cjs",
+    "pack": "npm run build:web && electron-builder --dir --publish never",
     "test": "cross-env TZ=Europe/London node --test tests/*.test.cjs",
     "lint": "oxlint",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
@@ -58,6 +65,9 @@
     "directories": {
       "output": "release"
     },
+    "releaseInfo": {
+      "releaseNotesFile": "release/release-notes.md"
+    },
     "win": {
       "icon": "build/icon.png",
       "target": [
@@ -80,8 +90,9 @@
     },
     "publish": {
       "provider": "github",
-      "owner": "REPLACE_WITH_GITHUB_OWNER",
-      "repo": "ai-usage"
+      "owner": "DanDG923",
+      "repo": "ai-usage",
+      "private": true
     }
   },
   "allowScripts": {

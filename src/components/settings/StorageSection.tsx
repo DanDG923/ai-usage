@@ -4,6 +4,7 @@ import type { Settings, Snapshot } from '../../types';
 import { NumericSetting, SectionHeading } from './fields';
 
 export function StorageSection({
+  dataOperation,
   snapshot,
   update,
   onBackup,
@@ -12,6 +13,7 @@ export function StorageSection({
   onExportCsv,
   onCopySummary,
 }: {
+  dataOperation: 'backup' | 'restore' | 'export' | null;
   snapshot: Snapshot;
   update: (patch: Partial<Settings>) => Promise<void>;
   onBackup: () => Promise<void>;
@@ -58,19 +60,29 @@ export function StorageSection({
         <code>{snapshot.storage.backupDirectory}</code>
       </div>
       <div className="action-row">
-        <button className="primary-button" onClick={onBackup}>
+        <button className="primary-button" disabled={Boolean(dataOperation)} onClick={onBackup}>
           <Save aria-hidden="true" />
-          Back up now
+          {dataOperation === 'backup' ? 'Backing up…' : 'Back up now'}
         </button>
-        <button className="secondary-button" onClick={onRestore}>
+        <button className="secondary-button" disabled={Boolean(dataOperation)} onClick={onRestore}>
           <RotateCcw aria-hidden="true" />
-          Restore from backup…
+          {dataOperation === 'restore' ? 'Restoring…' : 'Restore from backup…'}
         </button>
         <button className="secondary-button" onClick={onOpenBackups}>
           <ExternalLink aria-hidden="true" />
           Open backup folder
         </button>
       </div>
+      {dataOperation && (
+        <p className="storage-operation" role="status">
+          {dataOperation === 'backup'
+            ? 'Creating the local backup…'
+            : dataOperation === 'restore'
+              ? 'Restoring the selected backup…'
+              : 'Writing the CSV export…'}{' '}
+          You can continue browsing while this finishes.
+        </p>
+      )}
       <p className="restore-note">
         Restoring merges a <code>.aiusage.json</code> export into the local database. Token records, observations, daily
         totals and prices already held are kept as they are, so nothing is counted twice or rolled back.{' '}
@@ -86,6 +98,7 @@ export function StorageSection({
         </div>
         <div className="action-row compact">
           <select
+            disabled={dataOperation === 'export'}
             aria-label="Export period"
             value={exportDays}
             onChange={(event) => setExportDays(Number(event.target.value))}
@@ -94,9 +107,13 @@ export function StorageSection({
             <option value={90}>Last 90 days</option>
             <option value={365}>Last year</option>
           </select>
-          <button className="secondary-button" onClick={() => onExportCsv(exportDays)}>
+          <button
+            className="secondary-button"
+            disabled={Boolean(dataOperation)}
+            onClick={() => onExportCsv(exportDays)}
+          >
             <FileSpreadsheet aria-hidden="true" />
-            Export CSV…
+            {dataOperation === 'export' ? 'Exporting…' : 'Export CSV…'}
           </button>
           <button className="secondary-button" onClick={onCopySummary}>
             <ClipboardCopy aria-hidden="true" />

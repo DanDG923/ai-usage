@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('aiUsage', {
   configureClaude: (action, enableHelper) => ipcRenderer.invoke('claude-setup:configure', action, enableHelper),
   cancelClaudeSetup: () => ipcRenderer.invoke('claude-setup:cancel'),
   getSnapshot: (days) => ipcRenderer.invoke('dashboard:get-snapshot', days),
+  getSessions: (options) => ipcRenderer.invoke('dashboard:get-sessions', options),
   refresh: () => ipcRenderer.invoke('dashboard:refresh'),
   updateSettings: (patch) => ipcRenderer.invoke('dashboard:update-settings', patch),
   updatePrice: (price) => ipcRenderer.invoke('dashboard:update-price', price),
@@ -22,6 +23,13 @@ contextBridge.exposeInMainWorld('aiUsage', {
   getVersion: () => ipcRenderer.invoke('app:get-version'),
   checkForUpdates: () => ipcRenderer.invoke('app:check-updates'),
   getUpdateStatus: () => ipcRenderer.invoke('app:update-status'),
+  downloadUpdate: () => ipcRenderer.invoke('app:download-update'),
+  installUpdate: () => ipcRenderer.invoke('app:install-update'),
+  onUpdateStatus: (callback) => {
+    const listener = (_event, status) => callback(status);
+    ipcRenderer.on('app:update-status-changed', listener);
+    return () => ipcRenderer.removeListener('app:update-status-changed', listener);
+  },
   onUpdated: (callback) => {
     const listener = (_event, snapshot) => callback(snapshot);
     ipcRenderer.on('dashboard:updated', listener);
