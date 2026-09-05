@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.24 — 5 September 2026
+
+- Bound the whole update preparation to fifteen seconds. If the safety backup does not finish in time, nothing is installed and AI Usage reopens so the update can be retried; if only the final storage close stalls after the backup, the update proceeds.
+- Wait at most fifteen seconds for storage work when quitting from the tray, so a stalled restore or collector can no longer keep the app running.
+- Keep the scheduled update check in place across settings changes instead of restarting its delay on every edit; disabling automatic checks clears the schedule.
+- Ignore `GH_TOKEN` and `GITHUB_TOKEN` environment variables for update checks so only the GitHub CLI sign-in can authenticate against the private feed.
+- Report each update failure once, and answer dashboard reads with the last published view while storage is closing for an update.
+- Refuse to publish a release whose tag does not point at a commit already on `main`.
+
 ## 1.0.23 — 5 September 2026
 
 - Add personal updates from the private `DanDG923/ai-usage` GitHub repository using the existing GitHub CLI sign-in on this computer.
