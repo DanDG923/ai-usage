@@ -9,9 +9,21 @@ It imports local usage evidence, learns your real burn pattern, evaluates every 
 
 ## Install
 
-Use `AI-Usage-Setup-1.0.22-x64.exe` for a normal Windows installation. Running it over an existing installation upgrades in place and preserves the local database, settings, observations, and backups. Uninstalling first is neither required nor recommended.
+Use `AI-Usage-Setup-1.0.23-x64.exe` for a normal Windows installation. Running it over an existing installation upgrades in place and preserves the local database, settings, observations, and backups. Uninstalling first is neither required nor recommended. Install this version once to enable future updates through the app.
 
-Use `AI-Usage-Portable-1.0.22-x64.exe` for a single executable that does not install the app. Windows SmartScreen may show an unknown-publisher warning because this personal build is not backed by a commercial code-signing certificate; verify the supplied SHA-256 hash before running it.
+Use `AI-Usage-Portable-1.0.23-x64.exe` for a single executable that does not install the app. Windows SmartScreen may show an unknown-publisher warning because this personal build is not backed by a commercial code-signing certificate; verify the supplied SHA-256 hash before running it.
+
+## Personal private updates
+
+Source code and update downloads remain in the private [DanDG923/ai-usage repository](https://github.com/DanDG923/ai-usage). Updates work in the installed Windows app; portable copies continue to be replaced manually.
+
+The app reuses the existing [GitHub CLI](https://cli.github.com/) sign-in on this computer. If GitHub CLI is missing, install it and run `gh auth login --hostname github.com` once. Sign in with an account that can read this private repository, then open **Settings → Appearance & updates** and check for updates. `gh auth status --hostname github.com` can confirm the CLI sign-in without displaying its token. A fine-grained personal access token, if you use one for the CLI, needs access to this repository with **Contents: Read-only**; an existing CLI sign-in may have broader permissions, but the app performs only read requests for releases and downloads.
+
+Automatic update checks are enabled by default, start about 45 seconds after launch, and repeat every six hours while the app is running. The setting can be disabled, and a manual check is always available. When a release is available, review its notes and choose **Download update**. Download progress is shown; private downloads use the complete installer and verify its SHA-512 checksum against the release manifest.
+
+Choose **Restart and update** when ready. AI Usage finishes storage activity, makes a safety backup, and shuts down before installing and reopening. If the backup fails, installation is blocked so you can resolve the error and retry. Ordinary app exits do not install a downloaded update. The installer preserves local settings, the database, and existing backups.
+
+GitHub CLI manages the account credential. AI Usage reads it into main-process memory only when needed; it does not copy it to the database, settings, renderer, logs, source code, or packaged update feed. Usage history and backups are never uploaded as part of an update check or download. If access expires or is revoked, sign in again with GitHub CLI and retry the check.
 
 ## First run
 
@@ -97,7 +109,7 @@ Claude prompts and responses are never copied into the dashboard. The ledger ret
 
 Collection runs in a separate utility process with its own connection to the same database, so a slow transcript scan or a stalled provider call never freezes the window, the tray, or the settings screen. Transcripts and session logs are read incrementally from a byte cursor rather than re-parsed in full on every refresh. Invalid historical Codex quota windows are counted as rejected while valid token records and other windows continue importing. Polling rows older than sixty days are compacted to the chronological first, last, and highest reading of each window per day; manual observations are retained. **Diagnostics** at the bottom of Settings shows what each collector last saw, including latency and the reason for any fallback.
 
-Update checks are opt-out and only run in a packaged build once a release feed is configured under `build.publish` in `package.json`; until then the setting reports that checks are off. A check fetches a version manifest and nothing else.
+Update checks fetch private GitHub release metadata and a version manifest. Installer downloads happen only after **Download update** is selected. Update requests contain the GitHub authorization needed for this private repository; local usage data is not sent.
 
 ## Data and backups
 
@@ -126,7 +138,17 @@ npm run build
 
 For a repeatable cost-analytics benchmark, run `node tools/benchmark-analytics.cjs` (optionally followed by a record count). It uses 30,000 synthetic records in an in-memory database by default, reports the median of seven measured runs after two warmups, and prints a checksum of the complete result. Compare the checksum as well as the timing when changing analytics. This measures backend cost aggregation, not collection or end-to-end UI latency, and never reads the installed app's data.
 
-Linting uses oxlint (typescript-eslint does not yet support the TypeScript 7 compiler this project builds with) and Prettier formats the renderer source. The same steps run in GitHub Actions on every push and pull request. `npm run build` runs the tests and web build, creates both Windows artifacts, audits the packaged ASAR for source maps, private local data, and the SDK's optional Claude binary, then writes `release\SHA256SUMS.txt`. The source uses React, Vite, Electron, Node's built-in SQLite support, the official Claude Agent SDK, and local JSON-line collectors. Packaged builds use the already installed external Claude binary instead.
+Linting uses oxlint (typescript-eslint does not yet support the TypeScript 7 compiler this project builds with) and Prettier formats the renderer source. The same steps run in GitHub Actions on every push and pull request. `npm run build` runs the tests and web build, creates both Windows artifacts without publishing, audits the packaged ASAR for source maps, private local data, and the SDK's optional Claude binary, verifies the private update feed and installer manifest, then writes `release\SHA256SUMS.txt`. The checksums cover the installer, portable executable, installer block map, and `latest.yml`. The source uses React, Vite, Electron, Node's built-in SQLite support, the official Claude Agent SDK, and local JSON-line collectors. Packaged builds use the already installed external Claude binary instead.
+
+## Publish future private updates
+
+1. Update `package.json`, both root versions in `package-lock.json`, the current installer names in this README, the version contract test, and `CHANGELOG.md`. Keep the GitHub repository private and retain the matching `updateFeed` and `build.publish` settings in `package.json`; the separate `updateFeed` survives packaging so the installed app can verify its destination.
+2. Complete the checks above, review the changes, and merge them. Create and push the matching version tag, for example `v1.0.24` for version `1.0.24`.
+3. The **Private Windows release** GitHub Actions workflow builds Windows x64 packages, checks the manifest and packaged contents, and creates a draft release. It uploads the Setup installer, portable executable, installer block map, `latest.yml`, and `SHA256SUMS.txt`, verifies each remote asset's size and SHA-256 digest, then publishes the release as latest. The normal pull-request CI job is unchanged.
+
+The release workflow can also be started manually with an existing version tag. It refuses a mismatched version, a public or different destination, an existing release for that tag, or a version older than an existing stable release. If an upload fails, any created release stays a draft for inspection and is not offered to the app. Review and remove that incomplete draft before retrying; the workflow never overwrites existing release assets.
+
+Packaging uses `--publish never` and has no publishing credential in its environment. The workflow supplies its short-lived GitHub token only to the release-upload step; no personal token needs to be saved as a repository secret. `latest.yml` includes notes generated from the current changelog entry, and the release audit checks its version, installer filename, byte size, and SHA-512 against the installer on disk before publication.
 
 ## Set up another Windows computer
 

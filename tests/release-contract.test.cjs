@@ -15,7 +15,7 @@ test('release metadata, dependency pin, package exclusions, and docs agree', () 
   const readme = readText('README.md');
   const changelog = readText('CHANGELOG.md');
 
-  assert.equal(pkg.version, '1.0.22');
+  assert.equal(pkg.version, '1.0.23');
   assert.equal(lock.version, pkg.version);
   assert.equal(lock.packages[''].version, pkg.version);
   assert.equal(pkg.dependencies['@anthropic-ai/claude-agent-sdk'], '0.3.251');
@@ -28,6 +28,10 @@ test('release metadata, dependency pin, package exclusions, and docs agree', () 
   assert.match(pkg.scripts['format:check'], /prettier --check/);
   assert.equal(pkg.scripts.typecheck, 'tsc -b');
   assert.equal(pkg.build.publish.provider, 'github');
+  assert.deepEqual(pkg.build.publish, { provider: 'github', owner: 'DanDG923', repo: 'ai-usage', private: true });
+  assert.deepEqual(pkg.updateFeed, pkg.build.publish);
+  assert.match(pkg.scripts.build, /--win portable nsis --x64 --publish never/);
+  assert.match(pkg.scripts.pack, /--publish never/);
   assert.ok(pkg.build.files.includes('!node_modules/@anthropic-ai/claude-agent-sdk-win32-*/**'));
   assert.ok(pkg.build.files.includes('!dist/**/*.map'));
   assert.ok(pkg.build.files.includes('!**/*.map'));
@@ -39,10 +43,34 @@ test('release metadata, dependency pin, package exclusions, and docs agree', () 
   assert.match(releaseAudit, /SHA256SUMS\.txt/);
   assert.match(releaseAudit, /source map/i);
   assert.match(releaseAudit, /private local data/i);
-  assert.match(readme, /AI-Usage-Setup-1.0.22-x64\.exe/);
+  assert.match(readme, /AI-Usage-Setup-1.0.23-x64\.exe/);
   assert.match(readme, /actual local Fable token activity/i);
   assert.match(readme, /experimental/i);
-  assert.match(changelog, /^# Changelog\s+## 1.0.22/m);
+  assert.match(changelog, /^# Changelog\s+## 1.0.23/m);
+});
+
+test('private releases build without credentials and publish complete verified assets', () => {
+  const yaml = require('js-yaml');
+  const workflow = yaml.load(readText('.github/workflows/release.yml'));
+  const steps = workflow.jobs.release.steps;
+  const build = steps.find((step) => step.run === 'npm run build');
+  const publish = steps.find((step) => step.name === 'Publish audited private release');
+  assert.deepEqual(workflow.on.push.tags, ['v*']);
+  assert.equal(workflow.on.workflow_dispatch.inputs.tag.required, true);
+  assert.equal(workflow.jobs.release['runs-on'], 'windows-latest');
+  assert.equal(build.env.GH_TOKEN, undefined);
+  assert.equal(build.env.GITHUB_TOKEN, undefined);
+  assert.equal(publish.env.GH_TOKEN, '${{ github.token }}');
+  assert.match(publish.run, /repository\.private -ne \$true/);
+  assert.match(publish.run, /--draft/);
+  assert.match(publish.run, /--verify-tag/);
+  for (const artifact of ['latest.yml', 'SHA256SUMS.txt', '.exe.blockmap', 'AI-Usage-Portable-', 'AI-Usage-Setup-']) {
+    assert.ok(publish.run.includes(artifact), `release uploads ${artifact}`);
+  }
+  assert.match(publish.run, /Get-FileHash[\s\S]*SHA256/);
+  assert.match(publish.run, /\.digest -cne "sha256:\$sha256"/);
+  assert.match(publish.run, /--draft=false --latest/);
+  assert.match(readText('.github/workflows/ci.yml'), /jobs:\s+verify:/);
 });
 
 test('the desktop window integrates native controls into the app header', () => {

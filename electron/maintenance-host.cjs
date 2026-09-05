@@ -79,6 +79,7 @@ function createDatabaseQueue() {
   let exclusiveCount = 0;
   let closing = false;
   const collections = new Set();
+  let paused = false;
   const closingError = () => new Error('AI Usage is closing; changes cannot be saved.');
   function enqueue(operation) {
     const next = queue.then(operation);
@@ -87,20 +88,20 @@ function createDatabaseQueue() {
   }
   return {
     run(operation) {
-      return closing ? Promise.reject(closingError()) : enqueue(operation);
+      return closing || paused ? Promise.reject(closingError()) : enqueue(operation);
     },
     async collect(operation) {
-      if (closing) throw closingError();
+      if (closing || paused) throw closingError();
       // Completion decrements the count while this awaits the latest queue.
       // oxlint-disable-next-line no-unmodified-loop-condition
       while (exclusiveCount) await maintenanceQueue;
-      if (closing) throw closingError();
+      if (closing || paused) throw closingError();
       const next = Promise.resolve().then(operation);
       collections.add(next);
       try { return await next; } finally { collections.delete(next); }
     },
     exclusive(operation) {
-      if (closing) return Promise.reject(closingError());
+      if (closing || paused) return Promise.reject(closingError());
       exclusiveCount += 1;
       const next = maintenanceQueue.then(async () => {
         // Wait for provider reads outside the write queue, so editing settings
@@ -110,6 +111,18 @@ function createDatabaseQueue() {
       }).finally(() => { exclusiveCount -= 1; });
       maintenanceQueue = next.catch(() => {});
       return next;
+    },
+    async prepareToClose(operation) {
+      if (closing || paused) throw closingError();
+      paused = true;
+      try {
+        await Promise.allSettled([maintenanceQueue, ...collections]);
+        await queue;
+        return await operation();
+      } catch (error) {
+        paused = false;
+        throw error;
+      }
     },
     close() {
       closing = true;

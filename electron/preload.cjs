@@ -23,6 +23,13 @@ contextBridge.exposeInMainWorld('aiUsage', {
   getVersion: () => ipcRenderer.invoke('app:get-version'),
   checkForUpdates: () => ipcRenderer.invoke('app:check-updates'),
   getUpdateStatus: () => ipcRenderer.invoke('app:update-status'),
+  downloadUpdate: () => ipcRenderer.invoke('app:download-update'),
+  installUpdate: () => ipcRenderer.invoke('app:install-update'),
+  onUpdateStatus: (callback) => {
+    const listener = (_event, status) => callback(status);
+    ipcRenderer.on('app:update-status-changed', listener);
+    return () => ipcRenderer.removeListener('app:update-status-changed', listener);
+  },
   onUpdated: (callback) => {
     const listener = (_event, snapshot) => callback(snapshot);
     ipcRenderer.on('dashboard:updated', listener);

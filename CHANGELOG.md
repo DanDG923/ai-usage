@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.23 — 5 September 2026
+
+- Add personal updates from the private `DanDG923/ai-usage` GitHub repository using the existing GitHub CLI sign-in on this computer.
+- Check for releases automatically or on demand, download with progress, and offer a restart to install the verified update.
+- Preserve local data during updates, with a safety backup and an orderly shutdown before installation.
+- Keep GitHub credentials in the main process only; do not save them in app settings, send them to the renderer, or package them with releases.
+- Publish complete private update releases with `latest.yml`, installer block maps, and SHA-256 checksums; audit the manifest against the actual installer before upload.
+
 ## 1.0.22 — 5 September 2026
 
 - Retry valid usage records after database failures instead of advancing the import cursor past unwritten records.

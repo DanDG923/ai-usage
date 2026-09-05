@@ -1,0 +1,109 @@
+name: Private Windows release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing version tag to release, for example v1.0.23'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-windows-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+      - name: Validate version and destination
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $package = Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json
+          if ($env:RELEASE_TAG -cnotmatch '^v\d+\.\d+\.\d+$' -or $env:RELEASE_TAG -cne "v$($package.version)") {
+            throw 'The version tag must match package.json exactly.'
+          }
+          if ($env:GITHUB_REPOSITORY -cne 'DanDG923/ai-usage' -or $package.build.publish.owner -cne 'DanDG923' -or $package.build.publish.repo -cne 'ai-usage' -or $package.build.publish.private -ne $true) {
+            throw 'This workflow only publishes the configured private AI Usage repository.'
+          }
+      - run: npm ci --ignore-scripts
+      - run: node node_modules/electron/install.js
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm run typecheck
+      # build runs tests, renderer compilation, Windows packaging with
+      # --publish never, and the ASAR / manifest / checksum audit.
+      # No publishing token is present in the packaging environment.
+      - run: npm run build
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Publish audited private release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo = 'DanDG923/ai-usage'
+          $repository = gh api "repos/$repo" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $repository.private -ne $true) {
+            throw 'Release publication requires the destination repository to remain private.'
+          }
+          $version = (Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json).version
+          $releases = gh api "repos/$repo/releases?per_page=100" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to verify existing releases.' }
+          foreach ($existing in $releases) {
+            if ($existing.tag_name -ceq $env:RELEASE_TAG) {
+              throw 'A release for this tag already exists. Review it before retrying; released assets are never overwritten.'
+            }
+            if (-not $existing.draft -and -not $existing.prerelease -and $existing.tag_name -cmatch '^v(\d+\.\d+\.\d+)$' -and [version]$Matches[1] -ge [version]$version) {
+              throw 'A current or newer stable release already exists; refusing to move the update feed backwards.'
+            }
+          }
+          $assetNames = @(
+            "AI-Usage-Setup-$version-x64.exe",
+            "AI-Usage-Setup-$version-x64.exe.blockmap",
+            "AI-Usage-Portable-$version-x64.exe",
+            'latest.yml',
+            'SHA256SUMS.txt'
+          )
+          $assets = $assetNames | ForEach-Object { Join-Path 'release' $_ }
+          $notesPath = Join-Path 'release' 'release-notes.md'
+          gh release create $env:RELEASE_TAG @assets --repo $repo --verify-tag --draft --title "AI Usage $version" --notes-file $notesPath
+          if ($LASTEXITCODE -ne 0) { throw 'Draft release creation or upload failed.' }
+          $uploaded = gh api "repos/$repo/releases/tags/$($env:RELEASE_TAG)" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or -not $uploaded.draft -or $uploaded.assets.Count -ne $assetNames.Count) {
+            throw 'The draft release is incomplete; it has not been published.'
+          }
+          foreach ($name in $assetNames) {
+            $local = Get-Item -LiteralPath (Join-Path 'release' $name)
+            $remote = @($uploaded.assets | Where-Object { $_.name -ceq $name })
+            $sha256 = (Get-FileHash -LiteralPath $local.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($remote.Count -ne 1 -or $remote[0].size -ne $local.Length -or $remote[0].digest -cne "sha256:$sha256") {
+              throw "Uploaded asset verification failed: $name. The release remains a draft."
+            }
+          }
+          gh release edit $env:RELEASE_TAG --repo $repo --draft=false --latest
+          if ($LASTEXITCODE -ne 0) { throw 'The verified draft could not be published.' }
+          $published = gh api "repos/$repo/releases/latest" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $published.tag_name -cne $env:RELEASE_TAG -or $published.draft) {
+            throw 'Unable to verify that the update feed points at the published release.'
+          }

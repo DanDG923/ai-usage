@@ -15,6 +15,7 @@ const { createMaintenanceHost, createDatabaseQueue } = require('./maintenance-ho
 const { buildSummaryText, buildTrayTooltip, decideNotifications, emptyState } = require('./notifications.cjs');
 const { paintStateDot } = require('./tray-icon.cjs');
 const { createUpdateChecker } = require('./updater.cjs');
+const { createGitHubUpdateAuth } = require('./update-auth.cjs');
 const {
   WINDOW_BOUNDS,
   createDeferredWindowReveal,
@@ -45,6 +46,8 @@ let notificationState = emptyState();
 let cachedSnapshot = null;
 let shutdownPromise;
 let shutdownComplete = false;
+let preparingUpdate = false;
+const notifiedUpdates = new Set();
 const databaseJobs = createDatabaseQueue();
 
 const STALE_AFTER_MS = 5 * 60_000;
@@ -330,6 +333,9 @@ function scheduleAutomaticRefresh() {
 // the two write paths — the settings screen and a restore — cannot diverge, and
 // so a value repaired at startup takes effect rather than only being displayed.
 function applySettingsEffects() {
+  // Accepted settings or restore jobs may finish while shutdown drains them.
+  // Apply their saved settings on the next launch without restarting timers.
+  if (isQuitting) return;
   const settings = store.getSettings();
   app.setLoginItemSettings({ openAtLogin: Boolean(settings.launchAtLogin), path: process.execPath });
   applyTheme(settings.theme);
@@ -590,6 +596,75 @@ function registerIpc() {
     return updateChecker.status();
   });
   ipcMain.handle('app:update-status', () => (updateChecker ? updateChecker.status() : { status: 'unavailable', available: false }));
+  ipcMain.handle('app:download-update', () => updateChecker?.download() || { status: 'unavailable', available: false });
+  ipcMain.handle('app:install-update', () => updateChecker?.install() || { status: 'unavailable', available: false });
+}
+
+function publishUpdateStatus(status) {
+  if (window && !window.isDestroyed()) window.webContents.send('app:update-status-changed', status);
+  if (status.status !== 'available' || !status.version || notifiedUpdates.has(status.version)) return;
+  notifiedUpdates.add(status.version);
+  if (Notification.isSupported()) {
+    try {
+      const notification = new Notification({ title: 'AI Usage update available', body: `Version ${status.version} is ready to download in Settings, under Appearance & updates.` });
+      notification.on('click', () => deferredWindowReveal.request());
+      notification.show();
+    } catch { /* Windows notification settings must not break updates. */ }
+  }
+}
+
+function stopForShutdown() {
+  isQuitting = true;
+  claudeSetup?.cancel();
+  clearInterval(refreshTimer);
+  refreshTimer = null;
+  updateChecker?.stop();
+  try { collectors?.stop(); } catch { /* Already gone. */ }
+}
+
+function closeStorage() {
+  if (!shutdownPromise) {
+    shutdownPromise = (async () => {
+      await databaseJobs.close();
+      try { await maintenance?.close(); } finally { store?.close(); }
+      shutdownComplete = true;
+    })();
+  }
+  return shutdownPromise;
+}
+
+async function prepareUpdateInstall() {
+  if (shutdownPromise || preparingUpdate) throw new Error('Application is already closing.');
+  preparingUpdate = true;
+  stopForShutdown();
+  try {
+    // Freeze new writes, drain accepted work, then back up the final database
+    // state. A failed backup releases the queue and resumes the application.
+    await databaseJobs.prepareToClose(() => maintenance.request('create-backup'));
+  } catch {
+    preparingUpdate = false;
+    isQuitting = false;
+    collectors = createCollectors();
+    applySettingsEffects();
+    throw Object.assign(new Error('Update safety backup failed.'), { code: 'UPDATE_BACKUP_FAILED' });
+  }
+  try {
+    await closeStorage();
+  } catch (error) {
+    recoverFromUpdateInstallFailure();
+    throw error;
+  }
+}
+
+function recoverFromUpdateInstallFailure() {
+  // Storage may already be closed. Relaunch the existing version rather than
+  // leave a visible dashboard attached to a closed database.
+  if (!preparingUpdate) return;
+  preparingUpdate = false;
+  dialog.showErrorBox('AI Usage update could not start', 'Your safety backup has been saved. AI Usage will reopen; please try the update again.');
+  shutdownComplete = true;
+  app.relaunch();
+  app.quit();
 }
 
 function loadAutoUpdater() {
@@ -626,6 +701,10 @@ if (isPrimaryInstance) {
         enabled: () => Boolean(store.getSettings().autoUpdate),
         isPackaged: app.isPackaged,
         pkg,
+        getToken: createGitHubUpdateAuth().getToken,
+        beforeInstall: prepareUpdateInstall,
+        onInstallError: recoverFromUpdateInstallFailure,
+        onStatus: publishUpdateStatus,
         onLog: log,
       });
       registerIpc();
@@ -656,21 +735,13 @@ if (isPrimaryInstance) {
   app.on('before-quit', (event) => {
     if (shutdownComplete) return;
     event.preventDefault();
+    if (preparingUpdate) return;
     if (shutdownPromise) return;
-    isQuitting = true;
-    claudeSetup?.cancel();
-    clearInterval(refreshTimer);
-    refreshTimer = null;
-    updateChecker?.stop();
+    stopForShutdown();
     // Cancel provider calls, then drain database jobs and close the maintenance
     // connection gracefully. A running backup or restore must finish before
     // Electron tears down its worker and the main SQLite handle.
-    try { collectors?.stop(); } catch { /* Already gone. */ }
-    shutdownPromise = (async () => {
-      await databaseJobs.close();
-      try { await maintenance?.close(); } catch (error) { log(`Storage shutdown: ${error.message}`); }
-      store?.close();
-    })().catch((error) => log(`Shutdown: ${error.message}`)).finally(() => {
+    void closeStorage().catch((error) => log(`Shutdown: ${error.message}`)).finally(() => {
       shutdownComplete = true;
       app.quit();
     });
