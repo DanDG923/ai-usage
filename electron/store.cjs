@@ -164,6 +164,7 @@ class UsageStore {
     this.databasePath = databasePath;
     this.backupDirectory = backupDirectory;
     this.statements = new Map();
+    this.costAnalyticsCache = new Map();
     this.transactionDepth = 0;
     this.db = new DatabaseSync(databasePath);
     this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
@@ -443,6 +444,7 @@ class UsageStore {
   }
 
   close() {
+    this.costAnalyticsCache.clear();
     this.statements.clear();
     this.db.close();
   }
@@ -926,7 +928,33 @@ class UsageStore {
   }
 
   getCostAnalytics(days = 30, settings = this.getSettings(), nowMs = Date.now()) {
-    return this.withPriceCache(() => this.buildCostAnalytics(days, settings, nowMs));
+    // Cache the ledger separately from the time-sensitive forecast snapshot.
+    // SQLite tracks both writes on this connection and collector-process commits.
+    // Never cache transactional reads: a rollback must not preserve their totals.
+    if (this.db.isTransaction) return this.withPriceCache(() => this.buildCostAnalytics(days, settings, nowMs));
+    const version = `${this.prepare('PRAGMA data_version').get().data_version}:${this.prepare('SELECT total_changes() AS changes').get().changes}`;
+    if (version !== this.costAnalyticsVersion) {
+      this.costAnalyticsCache.clear();
+      this.costAnalyticsVersion = version;
+    }
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const key = JSON.stringify([days, settings.currency, settings.usdToCurrency, timeZone]);
+    const cached = this.costAnalyticsCache.get(key);
+    if (cached && nowMs >= cached.at && nowMs < cached.expiresAt) {
+      this.costAnalyticsCache.delete(key);
+      this.costAnalyticsCache.set(key, cached);
+      return cached.value;
+    }
+    const oldest = this.prepare('SELECT occurred_at FROM usage_events WHERE occurred_at >= ? ORDER BY occurred_at ASC LIMIT 1')
+      .get(iso(nowMs - days * DAY_MS));
+    const value = this.withPriceCache(() => this.buildCostAnalytics(days, settings, nowMs));
+    // The query includes its lower boundary; expire one millisecond after the
+    // oldest included event falls outside it. Clock rollback also forces a read.
+    const expiresAt = oldest ? Date.parse(oldest.occurred_at) + days * DAY_MS + 1 : Infinity;
+    this.costAnalyticsCache.delete(key);
+    this.costAnalyticsCache.set(key, { at: nowMs, expiresAt, value });
+    if (this.costAnalyticsCache.size > 4) this.costAnalyticsCache.delete(this.costAnalyticsCache.keys().next().value);
+    return value;
   }
 
   buildCostAnalytics(days, settings, nowMs) {
@@ -987,13 +1015,20 @@ class UsageStore {
       model.inputTokens += Number(event.input_tokens);
       model.cachedInputTokens += Number(event.cached_input_tokens);
       model.cacheWriteInputTokens += Number(event.cache_write_input_tokens);
-      model.cacheWrite5mInputTokens += Number(event.cache_write_5m_input_tokens);
+      // Apply the same legacy TTL fallback as pricing before grouping records.
+      const write5m = Number(event.cache_write_5m_input_tokens);
+      const write1h = Number(event.cache_write_1h_input_tokens);
+      model.cacheWrite5mInputTokens += write5m + write1h === 0 ? Number(event.cache_write_input_tokens) : write5m;
       model.cacheWrite1hInputTokens += Number(event.cache_write_1h_input_tokens);
       model.outputTokens += Number(event.output_tokens);
       model.reasoningOutputTokens += Number(event.reasoning_output_tokens);
       model.costUsd += cost.actualUsd;
       if (cost.breakdownUsd) {
-        for (const category of Object.keys(model.breakdownUsd)) model.breakdownUsd[category] += cost.breakdownUsd[category];
+        model.breakdownUsd.input += cost.breakdownUsd.input;
+        model.breakdownUsd.cacheRead += cost.breakdownUsd.cacheRead;
+        model.breakdownUsd.cacheWrite5m += cost.breakdownUsd.cacheWrite5m;
+        model.breakdownUsd.cacheWrite1h += cost.breakdownUsd.cacheWrite1h;
+        model.breakdownUsd.output += cost.breakdownUsd.output;
       }
       model.totalTokens += eventTokens;
       if (cost.covered) model.coveredTokens += eventTokens;
@@ -1029,7 +1064,7 @@ class UsageStore {
       const sessionKey = `${event.source_id}|${event.session_id || event.event_key}|${event.model || 'Unknown'}`;
       const session = sessionMap.get(sessionKey) || {
         sourceId: event.source_id,
-        sessionId: event.session_id || 'local-event',
+        sessionId: event.session_id || event.event_key,
         model: event.model || 'Unknown',
         project: event.project || null,
         occurredAt: event.occurred_at,

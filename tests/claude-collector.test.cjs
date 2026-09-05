@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { UsageStore } = require('../electron/store.cjs');
-const { deriveFableEstimate, epochToIso, findClaudeBinary, importClaudeInbox, importClaudeTranscripts, installClaudeHelper, makeHelperScript, refreshClaude, uninstallClaudeHelper } = require('../electron/claude-collector.cjs');
+const { deriveFableEstimate, epochToIso, findClaudeBinary, importClaudeInbox, importClaudeTranscripts, installClaudeHelper, isClaudeHelperInstalled, makeHelperScript, refreshClaude, uninstallClaudeHelper } = require('../electron/claude-collector.cjs');
 
 function withStore(run) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-fable-'));
@@ -850,6 +850,7 @@ test('disabling the helper hands the previous status line back', () => {
   fs.writeFileSync(settingsPath, JSON.stringify({ model: 'opus', statusLine: { type: 'command', command: 'old-status.cmd' } }));
   try {
     const installed = installClaudeHelper(path.join(root, 'inbox.jsonl'));
+    assert.equal(isClaudeHelperInstalled(), true);
     assert.equal(fs.existsSync(installed.helperPath), true);
     const result = uninstallClaudeHelper();
     assert.equal(result.managed, true);
@@ -860,6 +861,10 @@ test('disabling the helper hands the previous status line back', () => {
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
     assert.deepEqual(settings.statusLine, { type: 'command', command: 'old-status.cmd' });
     assert.equal(settings.model, 'opus');
+    assert.equal(isClaudeHelperInstalled(), false);
+    // A leftover locked script does not mean the helper remains enabled.
+    fs.writeFileSync(installed.helperPath, 'leftover script');
+    assert.equal(isClaudeHelperInstalled(), false);
   } finally {
     process.env.USERPROFILE = oldProfile;
   }

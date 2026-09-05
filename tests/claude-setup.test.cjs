@@ -92,3 +92,49 @@ test('failed helper setup leaves first-run setup unfinished', async () => {
   const f = fixture({ run: async () => JSON.stringify({ loggedIn: true }), installHelper: () => { throw new Error('helper failed'); } });
   try { await assert.rejects(f.setup.finish({ enableHelper: true }), /helper failed/); assert.equal(fs.existsSync(f.statePath), false); } finally { f.clean(); }
 });
+
+test('unchecking the existing helper disables it and verifies authentication only once', async () => {
+  let installed = true;
+  let checks = 0;
+  const f = fixture({
+    run: async () => { checks++; return JSON.stringify({ loggedIn: true }); },
+    helperInstalled: () => installed,
+    uninstallHelper: () => { installed = false; },
+  });
+  try {
+    const status = await f.setup.finish({ enableHelper: false });
+    assert.equal(status.helperInstalled, false);
+    assert.equal(status.dismissed, true);
+    assert.equal(status.busy, false);
+    assert.equal(checks, 1);
+  } finally { f.clean(); }
+});
+
+test('failed helper removal leaves setup unfinished and retryable', async () => {
+  const f = fixture({ run: async () => JSON.stringify({ loggedIn: true }),
+    helperInstalled: () => true, uninstallHelper: () => { throw new Error('settings locked'); } });
+  try {
+    await assert.rejects(f.setup.finish({ enableHelper: false }), /settings locked/);
+    assert.equal(fs.existsSync(f.statePath), false);
+    assert.equal((await f.setup.status()).busy, false);
+  } finally { f.clean(); }
+});
+
+test('login returns its single verification result and holds the lock during verification', async () => {
+  let checks = 0;
+  let resolveStatus;
+  const f = fixture({
+    run: () => { checks++; return new Promise(resolve => { resolveStatus = resolve; }); },
+    launch: () => { const child = new EventEmitter(); queueMicrotask(() => child.emit('exit', 0)); return child; },
+  });
+  try {
+    const pending = f.setup.login();
+    await new Promise(resolve => setImmediate(resolve));
+    await assert.rejects(f.setup.login(), /already running/);
+    resolveStatus(JSON.stringify({ loggedIn: true }));
+    const result = await pending;
+    assert.equal(checks, 1);
+    assert.equal(result.auth, 'signed-in');
+    assert.equal(result.busy, false);
+  } finally { f.clean(); }
+});

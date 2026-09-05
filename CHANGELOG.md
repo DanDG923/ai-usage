@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.20 — 5 September 2026
+
+- Correct five-minute cache-write token counts when older records without duration details are mixed with newer records.
+- Honour an unchecked fallback-helper option during Claude setup and restore the previous status line when disabling it.
+- Keep navigation and refresh shortcuts inside the setup dialog; normal shortcuts resume after closing it.
+- Reuse the verified sign-in result instead of launching a second status check during login and setup completion.
+- Cache cost analytics independently of forecasts, invalidating on database writes, currency or period changes, clock rollback, and rolling-window expiry. Transactional reads bypass the cache.
+- Give usage records without session IDs distinct identifiers to prevent duplicate table rows.
+- Add ten regression tests. The 30,000-record benchmark returns identical results for cached and full reads; cached reads measured 0.071 ms versus 293.69 ms for full aggregation. Initial scans still require full aggregation.
+
 ## 1.0.19
 
 - Adds cost by model with input, cache-read, five-minute and one-hour cache-write, and output values beside token counts.
