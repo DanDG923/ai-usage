@@ -1,6 +1,6 @@
 {
   "name": "ai-usage",
-  "version": "1.0.20",
+  "version": "1.0.21",
   "private": true,
   "description": "Local-first AI subscription usage, runway forecasting, and API-equivalent cost dashboard.",
   "main": "electron/main.cjs",

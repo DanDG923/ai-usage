@@ -1,6 +1,8 @@
 'use strict';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+const { setTimeout: delay } = require('node:timers/promises');
+const { createUsageDiagnostics } = require('./claude-usage-diagnostics.cjs');
 
 class ClaudeUsageAdapterError extends Error {
   constructor(code, message) {
@@ -223,106 +225,154 @@ function createClaudeAgentSdkUsagePort({
   loadSdk = defaultLoadSdk,
   findClaudeBinary = defaultFindClaudeBinary,
   timeoutMs = DEFAULT_TIMEOUT_MS,
+  retryDelayMs = 1000,
 } = {}) {
-  return {
-    async read({ signal } = {}) {
-      const abortController = new AbortController();
-      const cancellationError = () => new ClaudeUsageAdapterError(
-        'claude-usage-aborted',
-        'Claude usage reading was cancelled.',
-      );
-      const onCallerAbort = () => abortController.abort(cancellationError());
-      if (signal?.aborted) throw cancellationError();
-      signal?.addEventListener?.('abort', onCallerAbort, { once: true });
-      let input;
-      let query;
-      let primaryError;
+  async function readOnce({ signal } = {}) {
+    const diagnostics = createUsageDiagnostics();
+    let result;
+    const abortController = new AbortController();
+    const cancellationError = () => new ClaudeUsageAdapterError(
+      'claude-usage-aborted',
+      'Claude usage reading was cancelled.',
+    );
+    const onCallerAbort = () => abortController.abort(cancellationError());
+    if (signal?.aborted) throw cancellationError();
+    signal?.addEventListener?.('abort', onCallerAbort, { once: true });
+    let input;
+    let query;
+    let primaryError;
+    try {
+      const claudePath = findClaudeBinary();
+      if (typeof claudePath !== 'string' || !claudePath.trim()) {
+        throw new ClaudeUsageAdapterError(
+          'claude-not-installed',
+          'Claude Code is not installed or available locally.',
+        );
+      }
+      let sdk;
       try {
-        const claudePath = findClaudeBinary();
-        if (typeof claudePath !== 'string' || !claudePath.trim()) {
-          throw new ClaudeUsageAdapterError(
-            'claude-not-installed',
-            'Claude Code is not installed or available locally.',
-          );
-        }
-        let sdk;
-        try {
-          sdk = await loadSdk();
-        } catch {
-          throw new ClaudeUsageAdapterError('claude-sdk-unavailable', 'Claude Agent SDK is unavailable.');
-        }
-        input = idleInput();
-        try {
-          query = sdk.query({
-            prompt: input.iterable,
-            options: {
-              pathToClaudeCodeExecutable: claudePath,
-              persistSession: false,
-              settingSources: [],
-              systemPrompt: '',
-              tools: [],
-              allowedTools: [],
-              mcpServers: {},
-              strictMcpConfig: true,
-              plugins: [],
-              permissionMode: 'dontAsk',
-              abortController,
-            },
-          });
-        } catch {
-          throw new ClaudeUsageAdapterError(
-            'claude-query-launch-failed',
-            'Claude usage query could not be started.',
-          );
-        }
-        if (typeof query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET !== 'function') {
-          throw new ClaudeUsageAdapterError(
-            'claude-usage-unsupported',
-            'This Claude Code version does not support automated usage reading.',
-          );
-        }
-        await initializationWithinTimeout(
-          query.initializationResult(),
-          timeoutMs,
-          abortController,
+        sdk = await loadSdk();
+      } catch {
+        throw new ClaudeUsageAdapterError('claude-sdk-unavailable', 'Claude Agent SDK is unavailable.');
+      }
+      input = idleInput();
+      try {
+        query = sdk.query({
+          prompt: input.iterable,
+          options: {
+            pathToClaudeCodeExecutable: claudePath,
+            persistSession: false,
+            settingSources: [],
+            systemPrompt: '',
+            tools: [],
+            allowedTools: [],
+            mcpServers: {},
+            strictMcpConfig: true,
+            plugins: [],
+            permissionMode: 'dontAsk',
+            abortController,
+            extraArgs: { 'debug-to-stderr': null },
+            stderr: (data) => diagnostics.write(data),
+          },
+        });
+      } catch {
+        throw new ClaudeUsageAdapterError(
+          'claude-query-launch-failed',
+          'Claude usage query could not be started.',
         );
-        const raw = await usageWithinTimeout(
-          query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET(),
-          timeoutMs,
-          abortController,
+      }
+      if (typeof query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET !== 'function') {
+        throw new ClaudeUsageAdapterError(
+          'claude-usage-unsupported',
+          'This Claude Code version does not support automated usage reading.',
         );
-        return sanitizeUsage(raw);
-      } catch (error) {
-        primaryError = error instanceof ClaudeUsageAdapterError
-          ? error
-          : new ClaudeUsageAdapterError('claude-usage-failed', 'Claude usage request failed.');
-        throw primaryError;
-      } finally {
-        signal?.removeEventListener?.('abort', onCallerAbort);
-        input?.release();
-        abortController.abort();
-        if (query) {
-          try {
-            await cleanupWithinTimeout(query, timeoutMs);
-          } catch (error) {
-            // A cleanup failure only becomes the result when the read itself
-            // succeeded; a primary error is never masked by it. Throwing from
-            // the finally block is the intent here, not an accident.
-            if (!primaryError) {
-              if (error instanceof ClaudeUsageAdapterError
-                && error.code === 'claude-cleanup-timeout') {
-                // oxlint-disable-next-line no-unsafe-finally
-                throw error;
-              }
+      }
+      await initializationWithinTimeout(
+        query.initializationResult(),
+        timeoutMs,
+        abortController,
+      );
+      const raw = await usageWithinTimeout(
+        query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET(),
+        timeoutMs,
+        abortController,
+      );
+      result = sanitizeUsage(raw);
+    } catch (error) {
+      primaryError = error instanceof ClaudeUsageAdapterError
+        ? error
+        : new ClaudeUsageAdapterError('claude-usage-failed', 'Claude usage request failed.');
+      throw primaryError;
+    } finally {
+      signal?.removeEventListener?.('abort', onCallerAbort);
+      input?.release();
+      abortController.abort();
+      if (query) {
+        try {
+          await cleanupWithinTimeout(query, timeoutMs);
+        } catch (error) {
+          // A cleanup failure only becomes the result when the read itself
+          // succeeded; a primary error is never masked by it. Throwing from
+          // the finally block is the intent here, not an accident.
+          if (!primaryError) {
+            if (error instanceof ClaudeUsageAdapterError
+              && error.code === 'claude-cleanup-timeout') {
               // oxlint-disable-next-line no-unsafe-finally
-              throw new ClaudeUsageAdapterError(
-                'claude-cleanup-failed',
-                'Claude usage query could not be closed cleanly.',
-              );
+              throw error;
             }
+            // oxlint-disable-next-line no-unsafe-finally
+            throw new ClaudeUsageAdapterError(
+              'claude-cleanup-failed',
+              'Claude usage query could not be closed cleanly.',
+            );
           }
         }
       }
+    }
+    // Cleanup drains the child output before we inspect diagnostics: stdout
+    // control responses and stderr diagnostics travel over separate pipes.
+    const fetch = diagnostics.finish();
+    if (fetch.outcome === 'failed') {
+      const error = new ClaudeUsageAdapterError(fetch.code,
+        fetch.httpStatus === 429 ? 'Claude temporarily throttled the allowance check. The last fresh reading is retained.'
+          : 'Claude could not fetch current allowance data. The last fresh reading is retained.');
+      throw error;
+    }
+    if (result.rate_limits_available && result.rate_limits && fetch.outcome !== 'verified') {
+      throw new ClaudeUsageAdapterError('claude-usage-unverified', 'Claude returned allowance data without confirming a fresh fetch. The last fresh reading is retained.');
+    }
+    if (result.subscription_type && (!result.rate_limits_available || !result.rate_limits || !Object.keys(result.rate_limits).length)) {
+      throw new ClaudeUsageAdapterError('claude-usage-empty', 'Claude returned no current subscription allowance. The last fresh reading is retained.');
+    }
+    return result;
+  }
+  return {
+    async read({ signal } = {}) {
+      const attempts = [];
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        const startedAt = new Date().toISOString();
+        const started = Date.now();
+        try {
+          const result = await readOnce({ signal });
+          attempts.push({ startedAt, durationMs: Date.now() - started, outcome: result.rate_limits_available ? 'fresh' : 'unavailable', errorCode: null });
+          Object.defineProperty(result, 'collectionDiagnostics', { value: { attempts } });
+          return result;
+        } catch (error) {
+          attempts.push({ startedAt, durationMs: Date.now() - started, outcome: 'failed', errorCode: error.code });
+          error.collectionDiagnostics = { attempts };
+          const retryable = /^claude-usage-(?:empty|unverified|fetch-failed|econnrefused|econnreset|etimedout|enotfound|eai_again|http-50[0234]|http-529)$/.test(error.code);
+          // Do not immediately retry throttling, authentication, schema, or
+          // cleanup failures. Each retry starts only after cleanup completes.
+          if (attempt === 2 || !retryable || signal?.aborted) throw error;
+          try { await delay(retryDelayMs, undefined, { signal }); }
+          catch {
+            const cancelled = new ClaudeUsageAdapterError('claude-usage-aborted', 'Claude usage reading was cancelled.');
+            cancelled.collectionDiagnostics = { attempts };
+            throw cancelled;
+          }
+        }
+      }
+      throw new Error('Claude usage attempts exhausted.');
     },
   };
 }

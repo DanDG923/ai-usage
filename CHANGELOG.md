@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.21 — 5 September 2026
+
+- Verify that Claude fetched allowance data successfully before recording it as fresh. Cached SDK responses after a connection failure no longer advance the evidence timestamp.
+- Retry temporary fetch failures and unexpectedly empty subscription responses once, after a short delay and full query cleanup. Authentication failures and throttling wait for the next normal refresh.
+- Record safe error categories and up to two attempt summaries in source diagnostics. Raw Claude debug output is discarded.
+- Preserve the last good Claude and Fable readings when freshness cannot be verified, including after an incompatible provider diagnostic change.
+- Add regression coverage for cached failures, recovery, empty results, cancellation, throttling, split diagnostic output, and unchanged database evidence on failure.
+
 ## 1.0.20 — 5 September 2026
 
 - Correct five-minute cache-write token counts when older records without duration details are mixed with newer records.
