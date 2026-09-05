@@ -127,6 +127,7 @@ export default function App() {
   });
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || document.querySelector('[role="dialog"][aria-modal="true"]')) return;
       if (event.ctrlKey || event.metaKey || event.altKey) return;
       const target = event.target as HTMLElement | null;
       if (target && (target.closest('input, select, textarea, [contenteditable="true"]') || target.isContentEditable))

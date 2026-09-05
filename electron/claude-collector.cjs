@@ -700,6 +700,11 @@ function isManagedStatusLine(statusLine, helperPath) {
   return path.resolve(target).toLowerCase() === path.resolve(helperPath).toLowerCase();
 }
 
+function isClaudeHelperInstalled() {
+  const { settingsPath, helperPath } = helperPaths();
+  return fs.existsSync(helperPath) && isManagedStatusLine(readClaudeSettings(settingsPath).statusLine, helperPath);
+}
+
 // Enabling and disabling the helper both back up Claude's settings first, but
 // an unchanged file needs no second copy: without this, every click left
 // another timestamped backup in .claude for ever. The comparison and the copy
@@ -875,7 +880,8 @@ async function refreshClaude(store, inboxPath, options = {}) {
   // other two do not use.
   let helperPath = null;
   try { ({ helperPath } = helperPaths()); } catch { /* No Windows profile; nothing is installed. */ }
-  const helperInstalled = Boolean(helperPath) && fs.existsSync(helperPath);
+  let helperInstalled = false;
+  try { helperInstalled = isClaudeHelperInstalled(); } catch { /* Unreadable settings cannot confirm an active helper. */ }
   const helperUpdated = helperInstalled ? updateManagedHelper(helperPath, inboxPath) : false;
   const claudeQuota = store.getQuota('claude');
   const hasQuota = Boolean(claudeQuota && new Date(claudeQuota.resetsAt).getTime() > Date.now()
@@ -968,4 +974,4 @@ async function refreshClaude(store, inboxPath, options = {}) {
   return { binary, statusLine, transcripts, helperInstalled, helperUpdated, fableObserved, fableDerived, fableTracking };
 }
 
-module.exports = { deriveFableEstimate, epochToIso, findClaudeBinary, importClaudeInbox, importClaudeTranscripts, installClaudeHelper, makeHelperScript, refreshClaude, uninstallClaudeHelper };
+module.exports = { deriveFableEstimate, epochToIso, findClaudeBinary, importClaudeInbox, importClaudeTranscripts, installClaudeHelper, isClaudeHelperInstalled, makeHelperScript, refreshClaude, uninstallClaudeHelper };

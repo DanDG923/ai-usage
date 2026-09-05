@@ -7,7 +7,7 @@ const {
   powerMonitor, shell, Tray, utilityProcess,
 } = require('electron');
 const { UsageStore } = require('./store.cjs');
-const { installClaudeHelper, uninstallClaudeHelper } = require('./claude-collector.cjs');
+const { installClaudeHelper, uninstallClaudeHelper, isClaudeHelperInstalled } = require('./claude-collector.cjs');
 const { createClaudeSetup } = require('./claude-setup.cjs');
 const { createCollectorHost, createInlineCollectorHost } = require('./collector-host.cjs');
 const { createCollectorService } = require('./collector-service.cjs');
@@ -596,7 +596,8 @@ if (isPrimaryInstance) {
       claudeSetup = createClaudeSetup({
         statePath: path.join(testRoot || app.getPath('userData'), 'claude-setup.json'),
         installHelper: () => installClaudeHelper(getInboxPath()),
-        helperInstalled: () => fs.existsSync(path.join(process.env.USERPROFILE || '', '.claude', 'ai-usage-statusline.ps1')),
+        uninstallHelper: uninstallClaudeHelper,
+        helperInstalled: isClaudeHelperInstalled,
       });
       collectors = createCollectors();
       notificationState = loadNotificationState();

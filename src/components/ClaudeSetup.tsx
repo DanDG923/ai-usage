@@ -78,6 +78,7 @@ export function ClaudeSetup({
         aria-modal="true"
         aria-labelledby="claude-setup-title"
         onKeyDown={(event) => {
+          event.stopPropagation();
           if (event.key !== 'Tab') return;
           const controls = Array.from(
             event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)'),
@@ -135,8 +136,8 @@ export function ClaudeSetup({
               disabled={Boolean(busy)}
             />
             <span>
-              Enable the fallback allowance helper. Your existing status line is preserved; restart Claude Code to
-              activate it.
+              Enable the fallback allowance helper. Uncheck to disable it and restore your previous status line. Restart
+              Claude Code after changing this setting.
             </span>
           </label>
         )}
