@@ -11,9 +11,11 @@ const { installClaudeHelper, uninstallClaudeHelper, isClaudeHelperInstalled } = 
 const { createClaudeSetup } = require('./claude-setup.cjs');
 const { createCollectorHost, createInlineCollectorHost } = require('./collector-host.cjs');
 const { createCollectorService } = require('./collector-service.cjs');
+const { createMaintenanceHost, createDatabaseQueue } = require('./maintenance-host.cjs');
 const { buildSummaryText, buildTrayTooltip, decideNotifications, emptyState } = require('./notifications.cjs');
 const { paintStateDot } = require('./tray-icon.cjs');
 const { createUpdateChecker } = require('./updater.cjs');
+const { createGitHubUpdateAuth } = require('./update-auth.cjs');
 const {
   WINDOW_BOUNDS,
   createDeferredWindowReveal,
@@ -31,6 +33,7 @@ let window;
 let tray;
 let store;
 let collectors;
+let maintenance;
 let updateChecker;
 let claudeSetup;
 let refreshPromise;
@@ -41,6 +44,11 @@ let periodDays = 30;
 let previousSnapshot = null;
 let notificationState = emptyState();
 let cachedSnapshot = null;
+let shutdownPromise;
+let shutdownComplete = false;
+let preparingUpdate = false;
+const notifiedUpdates = new Set();
+const databaseJobs = createDatabaseQueue();
 
 const STALE_AFTER_MS = 5 * 60_000;
 // Tab switches and settings edits ask for the snapshot far more often than it
@@ -241,8 +249,8 @@ function buildTrayMenu() {
     { label: 'Copy usage summary', click: () => { try { clipboard.writeText(buildSummaryText(snapshot())); } catch { /* Clipboard denied. */ } } },
     { type: 'separator' },
     snoozed
-      ? { label: 'Resume alerts', click: () => { setSnooze(0); } }
-      : { label: 'Snooze alerts for 6 hours', click: () => { setSnooze(6); } },
+      ? { label: 'Resume alerts', click: () => { setSnooze(0).catch(() => {}); } }
+      : { label: 'Snooze alerts for 6 hours', click: () => { setSnooze(6).catch(() => {}); } },
     { type: 'separator' },
     { label: 'Quit', click: () => { isQuitting = true; app.quit(); } },
   ]);
@@ -276,12 +284,15 @@ function updateTray(current) {
 }
 
 function setSnooze(hours) {
-  const until = hours > 0 ? new Date(Date.now() + hours * 60 * 60 * 1000).toISOString() : null;
-  store.updateSettings({ alertsSnoozedUntil: until });
-  invalidateSnapshot();
-  const current = snapshot();
-  updateTray(current);
-  if (window && !window.isDestroyed()) window.webContents.send('dashboard:updated', current);
+  return databaseJobs.run(() => {
+    const until = hours > 0 ? new Date(Date.now() + hours * 60 * 60 * 1000).toISOString() : null;
+    store.updateSettings({ alertsSnoozedUntil: until });
+    invalidateSnapshot();
+    const current = snapshot();
+    updateTray(current);
+    if (window && !window.isDestroyed()) window.webContents.send('dashboard:updated', current);
+    return current;
+  });
 }
 
 function showNotifications(current) {
@@ -322,6 +333,9 @@ function scheduleAutomaticRefresh() {
 // the two write paths — the settings screen and a restore — cannot diverge, and
 // so a value repaired at startup takes effect rather than only being displayed.
 function applySettingsEffects() {
+  // Accepted settings or restore jobs may finish while shutdown drains them.
+  // Apply their saved settings on the next launch without restarting timers.
+  if (isQuitting) return;
   const settings = store.getSettings();
   app.setLoginItemSettings({ openAtLogin: Boolean(settings.launchAtLogin), path: process.execPath });
   applyTheme(settings.theme);
@@ -376,9 +390,10 @@ function publishAfterWrite(current) {
 async function refreshAll() {
   if (refreshPromise) return refreshPromise;
   refreshPromise = (async () => {
+    if (isQuitting) return { snapshot: previousSnapshot, backupError: null, collectors: {} };
     let outcomes;
     try {
-      outcomes = await collectors.refreshAll();
+      outcomes = await databaseJobs.collect(() => collectors.refreshAll());
     } catch (error) {
       const detail = `Local collection failed: ${error?.message || 'Unknown local error.'}`;
       outcomes = {
@@ -390,27 +405,33 @@ async function refreshAll() {
     // not a source failure and must not be written as one for the next launch.
     if (isQuitting) return { snapshot: previousSnapshot, backupError: null, collectors: {} };
     const { codex, claude } = outcomes;
-    if (codex?.status === 'rejected') store.setSourceStatus('codex', 'error', `Codex refresh failed: ${codex.reason?.message || 'Unknown local error.'}`);
-    if (claude?.status === 'rejected') {
-      const detail = `Claude refresh failed: ${claude.reason?.message || 'Unknown local error.'}`;
-      store.setSourceStatus('claude', 'error', detail);
-      store.setSourceStatus('claude-fable', 'error', detail);
-    }
-    try {
-      store.compactObservations();
-    } catch { /* Housekeeping is best effort. */ }
-    invalidateSnapshot();
-    const current = snapshot();
-    lastRefreshAt = Date.now();
-    publishAfterWrite(current);
+    await databaseJobs.run(() => {
+      if (codex?.status === 'rejected') store.setSourceStatus('codex', 'error', `Codex refresh failed: ${codex.reason?.message || 'Unknown local error.'}`);
+      if (claude?.status === 'rejected') {
+        const detail = `Claude refresh failed: ${claude.reason?.message || 'Unknown local error.'}`;
+        store.setSourceStatus('claude', 'error', detail);
+        store.setSourceStatus('claude-fable', 'error', detail);
+      }
+      try {
+        store.compactObservations();
+      } catch { /* Housekeeping is best effort. */ }
+      invalidateSnapshot();
+      const updated = snapshot();
+      lastRefreshAt = Date.now();
+      publishAfterWrite(updated);
+      return updated;
+    });
     let backupError = null;
     try {
-      store.maybeCreateScheduledBackup();
+      const backup = await databaseJobs.exclusive(() => maintenance.request('scheduled-backup'));
+      if (backup) invalidateSnapshot();
     } catch (error) {
       backupError = error.message;
     }
     return {
-      snapshot: current,
+      // Settings or a restore may have landed while the scheduled backup
+      // waited for other collectors. Never return an older published view.
+      snapshot: isQuitting ? previousSnapshot : snapshot(),
       backupError,
       collectors: {
         codex: collectorOutcome(codex),
@@ -426,14 +447,17 @@ async function refreshAll() {
 }
 
 async function refreshClaudeOnly() {
-  const outcomes = await collectors.refreshClaude();
+  if (isQuitting) return snapshot();
+  const outcomes = await databaseJobs.collect(() => collectors.refreshClaude());
   if (outcomes?.claude?.status === 'rejected') {
     throw new Error(outcomes.claude.reason?.message || 'Claude refresh failed.');
   }
-  invalidateSnapshot();
-  const current = snapshot();
-  publishAfterWrite(current);
-  return current;
+  return databaseJobs.run(() => {
+    invalidateSnapshot();
+    const current = snapshot();
+    publishAfterWrite(current);
+    return current;
+  });
 }
 
 function registerIpc() {
@@ -459,20 +483,21 @@ function registerIpc() {
     setPeriodDays(days);
     return snapshot();
   });
+  ipcMain.handle('dashboard:get-sessions', (_event, options) => store.getSessionPage(options));
   ipcMain.handle('dashboard:refresh', () => refreshAll());
-  ipcMain.handle('dashboard:update-settings', (_event, patch) => {
+  ipcMain.handle('dashboard:update-settings', (_event, patch) => databaseJobs.run(() => {
     const settings = store.updateSettings(patch || {});
     invalidateSnapshot();
     applySettingsEffects();
     const current = snapshot();
     updateTray(current);
     return { settings, snapshot: current };
-  });
-  ipcMain.handle('dashboard:update-price', (_event, price) => {
+  }));
+  ipcMain.handle('dashboard:update-price', (_event, price) => databaseJobs.run(() => {
     store.updatePrice(price || {});
     invalidateSnapshot();
     return { snapshot: snapshot() };
-  });
+  }));
   ipcMain.handle('dashboard:add-manual-observation', async (_event, observation) => {
     if (!observation || typeof observation !== 'object') throw new Error('An observation is required.');
     const sourceId = observation.sourceId;
@@ -484,21 +509,23 @@ function registerIpc() {
     // Only the fields the renderer's form sends are accepted; bucket, window,
     // plan, and observation time are fixed here rather than taken from IPC.
     const note = typeof observation.note === 'string' ? observation.note.slice(0, 500) : null;
-    store.recordObservation({
-      sourceId,
-      bucketId: store.getManualBucketId(sourceId),
-      bucketName: sourceId === 'claude-fable' ? 'Fable 5 weekly' : 'Weekly',
-      observedAt: new Date().toISOString(),
-      usedPercent,
-      remainingPercent: 100 - usedPercent,
-      resetsAt: resetsAt.toISOString(),
-      windowMinutes: 10_080,
-      planType: null,
-      provenance: 'manual-official',
-      confidence: 0.98,
-      metadata: { note, sharedWithOverall: false },
+    await databaseJobs.run(() => {
+      store.recordObservation({
+        sourceId,
+        bucketId: store.getManualBucketId(sourceId),
+        bucketName: sourceId === 'claude-fable' ? 'Fable 5 weekly' : 'Weekly',
+        observedAt: new Date().toISOString(),
+        usedPercent,
+        remainingPercent: 100 - usedPercent,
+        resetsAt: resetsAt.toISOString(),
+        windowMinutes: 10_080,
+        planType: null,
+        provenance: 'manual-official',
+        confidence: 0.98,
+        metadata: { note, sharedWithOverall: false },
+      });
+      invalidateSnapshot();
     });
-    invalidateSnapshot();
     return refreshClaudeOnly();
   });
   ipcMain.handle('dashboard:install-claude-helper', async () => {
@@ -511,11 +538,11 @@ function registerIpc() {
     const current = await refreshClaudeOnly();
     return { result, snapshot: current };
   });
-  ipcMain.handle('dashboard:create-backup', () => {
-    const result = store.createBackup();
+  ipcMain.handle('dashboard:create-backup', () => databaseJobs.exclusive(async () => {
+    const result = await maintenance.request('create-backup');
     invalidateSnapshot();
     return { result, snapshot: snapshot() };
-  });
+  }));
   ipcMain.handle('dashboard:restore-backup', async () => {
     const chosen = await dialog.showOpenDialog(window ?? undefined, {
       title: 'Restore an AI Usage export',
@@ -524,16 +551,15 @@ function registerIpc() {
       filters: [{ name: 'AI Usage export', extensions: ['json'] }],
     });
     if (chosen.canceled || !chosen.filePaths?.length) return { cancelled: true, snapshot: snapshot() };
-    // Read the export before taking the safety backup. Creating one prunes the
-    // oldest sets, and the dialog opens in that very folder — so backing up
-    // first could delete the file the user had just chosen.
-    const payload = store.readExport(chosen.filePaths[0]);
-    const safetyBackup = store.createBackup({ keep: chosen.filePaths[0] });
-    const result = store.restoreFromExport(payload);
-    invalidateSnapshot();
-    // Restored settings are only live once their effects are reapplied, and
-    // restored history means nothing until the sources describe themselves.
-    applySettingsEffects();
+    const { result, safetyBackup } = await databaseJobs.exclusive(async () => {
+      const restored = await maintenance.request('restore-backup', { filePath: chosen.filePaths[0] });
+      invalidateSnapshot();
+      // Settings effects belong in the main process. Publish immediately so
+      // imported history appears while the sources refresh in the background.
+      applySettingsEffects();
+      publishAfterWrite(snapshot());
+      return restored;
+    });
     const refreshed = await refreshAll().catch(() => null);
     return { cancelled: false, result, safetyBackup, snapshot: refreshed?.snapshot ?? snapshot() };
   });
@@ -550,19 +576,18 @@ function registerIpc() {
       filters: [{ name: 'CSV', extensions: ['csv'] }],
     });
     if (chosen.canceled || !chosen.filePath) return { cancelled: true };
-    const exported = store.exportLedgerCsv(period);
-    fs.writeFileSync(chosen.filePath, exported.csv, 'utf8');
-    return { cancelled: false, filePath: chosen.filePath, rows: exported.rows, days: period };
+    const exported = await databaseJobs.exclusive(() => maintenance.request('export-csv', { filePath: chosen.filePath, days: period }));
+    return { cancelled: false, ...exported };
   });
   ipcMain.handle('dashboard:copy-summary', () => {
     const text = buildSummaryText(snapshot());
     clipboard.writeText(text);
     return { text };
   });
-  ipcMain.handle('dashboard:snooze-alerts', (_event, hours) => {
+  ipcMain.handle('dashboard:snooze-alerts', async (_event, hours) => {
     const parsed = Number(hours);
-    setSnooze(Number.isFinite(parsed) && parsed > 0 ? Math.min(72, parsed) : 0);
-    return { snapshot: snapshot() };
+    const current = await setSnooze(Number.isFinite(parsed) && parsed > 0 ? Math.min(72, parsed) : 0);
+    return { snapshot: current };
   });
   ipcMain.handle('app:get-version', () => app.getVersion());
   ipcMain.handle('app:check-updates', async () => {
@@ -571,6 +596,75 @@ function registerIpc() {
     return updateChecker.status();
   });
   ipcMain.handle('app:update-status', () => (updateChecker ? updateChecker.status() : { status: 'unavailable', available: false }));
+  ipcMain.handle('app:download-update', () => updateChecker?.download() || { status: 'unavailable', available: false });
+  ipcMain.handle('app:install-update', () => updateChecker?.install() || { status: 'unavailable', available: false });
+}
+
+function publishUpdateStatus(status) {
+  if (window && !window.isDestroyed()) window.webContents.send('app:update-status-changed', status);
+  if (status.status !== 'available' || !status.version || notifiedUpdates.has(status.version)) return;
+  notifiedUpdates.add(status.version);
+  if (Notification.isSupported()) {
+    try {
+      const notification = new Notification({ title: 'AI Usage update available', body: `Version ${status.version} is ready to download in Settings, under Appearance & updates.` });
+      notification.on('click', () => deferredWindowReveal.request());
+      notification.show();
+    } catch { /* Windows notification settings must not break updates. */ }
+  }
+}
+
+function stopForShutdown() {
+  isQuitting = true;
+  claudeSetup?.cancel();
+  clearInterval(refreshTimer);
+  refreshTimer = null;
+  updateChecker?.stop();
+  try { collectors?.stop(); } catch { /* Already gone. */ }
+}
+
+function closeStorage() {
+  if (!shutdownPromise) {
+    shutdownPromise = (async () => {
+      await databaseJobs.close();
+      try { await maintenance?.close(); } finally { store?.close(); }
+      shutdownComplete = true;
+    })();
+  }
+  return shutdownPromise;
+}
+
+async function prepareUpdateInstall() {
+  if (shutdownPromise || preparingUpdate) throw new Error('Application is already closing.');
+  preparingUpdate = true;
+  stopForShutdown();
+  try {
+    // Freeze new writes, drain accepted work, then back up the final database
+    // state. A failed backup releases the queue and resumes the application.
+    await databaseJobs.prepareToClose(() => maintenance.request('create-backup'));
+  } catch {
+    preparingUpdate = false;
+    isQuitting = false;
+    collectors = createCollectors();
+    applySettingsEffects();
+    throw Object.assign(new Error('Update safety backup failed.'), { code: 'UPDATE_BACKUP_FAILED' });
+  }
+  try {
+    await closeStorage();
+  } catch (error) {
+    recoverFromUpdateInstallFailure();
+    throw error;
+  }
+}
+
+function recoverFromUpdateInstallFailure() {
+  // Storage may already be closed. Relaunch the existing version rather than
+  // leave a visible dashboard attached to a closed database.
+  if (!preparingUpdate) return;
+  preparingUpdate = false;
+  dialog.showErrorBox('AI Usage update could not start', 'Your safety backup has been saved. AI Usage will reopen; please try the update again.');
+  shutdownComplete = true;
+  app.relaunch();
+  app.quit();
 }
 
 function loadAutoUpdater() {
@@ -593,6 +687,7 @@ if (isPrimaryInstance) {
       const databasePath = testRoot ? path.join(testRoot, 'ai-usage.sqlite') : path.join(app.getPath('userData'), 'ai-usage.sqlite');
       const backupDirectory = testRoot ? path.join(testRoot, 'Backups') : path.join(app.getPath('documents'), 'AI Usage', 'Backups');
       store = new UsageStore(databasePath, backupDirectory);
+      maintenance = createMaintenanceHost({ databasePath, backupDirectory });
       claudeSetup = createClaudeSetup({
         statePath: path.join(testRoot || app.getPath('userData'), 'claude-setup.json'),
         installHelper: () => installClaudeHelper(getInboxPath()),
@@ -606,6 +701,10 @@ if (isPrimaryInstance) {
         enabled: () => Boolean(store.getSettings().autoUpdate),
         isPackaged: app.isPackaged,
         pkg,
+        getToken: createGitHubUpdateAuth().getToken,
+        beforeInstall: prepareUpdateInstall,
+        onInstallError: recoverFromUpdateInstallFailure,
+        onStatus: publishUpdateStatus,
         onLog: log,
       });
       registerIpc();
@@ -633,15 +732,18 @@ if (isPrimaryInstance) {
   app.on('window-all-closed', () => {
     // The dashboard remains available from the tray on Windows.
   });
-  app.on('before-quit', () => {
-    isQuitting = true;
-    claudeSetup?.cancel();
-    clearInterval(refreshTimer);
-    refreshTimer = null;
-    updateChecker?.stop();
-    // The collector process owns its own database handle; stopping it first
-    // means no write can land after the main handle closes.
-    try { collectors?.stop(); } catch { /* Already gone. */ }
-    if (store && !refreshPromise) store.close();
+  app.on('before-quit', (event) => {
+    if (shutdownComplete) return;
+    event.preventDefault();
+    if (preparingUpdate) return;
+    if (shutdownPromise) return;
+    stopForShutdown();
+    // Cancel provider calls, then drain database jobs and close the maintenance
+    // connection gracefully. A running backup or restore must finish before
+    // Electron tears down its worker and the main SQLite handle.
+    void closeStorage().catch((error) => log(`Shutdown: ${error.message}`)).finally(() => {
+      shutdownComplete = true;
+      app.quit();
+    });
   });
 }

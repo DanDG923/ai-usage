@@ -107,3 +107,93 @@ test('legacy and explicit TTL records retain matching per-category token and cos
   assert.equal(row.costBreakdown.cacheWrite1h, 4);
   assert.equal(new Set(costs(store).sessions.map(session => session.sessionId)).size, 3);
 });
+
+function reading(store, { sourceId = 'claude-fable', bucketId = 'fable_seven_day', at = NOW - 1000, reset = NOW + DAY, used = 30 } = {}) {
+  store.recordObservation({ sourceId, bucketId, observedAt: new Date(at).toISOString(),
+    resetsAt: new Date(reset).toISOString(), usedPercent: used, remainingPercent: 100 - used,
+    windowMinutes: 10080, provenance: 'official' });
+}
+function cycles(store, now = NOW, settings = store.getSettings(), sourceId = 'claude-fable', bucketId = 'fable_seven_day') {
+  return store.getCycleHistory(sourceId, { bucketId }, settings, 8, now);
+}
+
+test('unchanged cycle history is cached while current events, reset boundaries and clock rollback stay exact', t => {
+  const store = fixture(t);
+  reading(store);
+  event(store, 'past', NOW - 1000);
+  event(store, 'future', NOW + 5000);
+  const first = cycles(store);
+  assert.equal(first[0].cost, 1);
+  assert.equal(cycles(store, NOW + 5000), first, 'the upper event boundary is exclusive');
+  assert.equal(cycles(store, NOW + 5001)[0].cost, 2);
+  assert.equal(cycles(store, NOW + DAY - 1)[0].current, true);
+  assert.equal(cycles(store, NOW + DAY)[0].current, false);
+  assert.equal(cycles(store, NOW - 1001)[0].cost, 0);
+  assert.equal(cycles(store, NOW - 1001)[0].current, true);
+  assert.deepEqual(cycles(store), store.buildCycleHistory('claude-fable', { bucketId: 'fable_seven_day' }, store.getSettings(), 8, NOW));
+});
+
+test('cycle history invalidates for local events, observations, prices and currency conversion', t => {
+  const store = fixture(t);
+  reading(store);
+  event(store, 'one', NOW - 1000);
+  const first = cycles(store);
+  assert.equal(cycles(store, NOW + 21000), first);
+  event(store, 'one', NOW - 1000, 200000);
+  assert.equal(cycles(store)[0].cost, 2);
+  reading(store, { used: 60 });
+  assert.equal(cycles(store)[0].peakUsedPercent, 60);
+  store.updatePrice({ model: 'claude-fable-5', inputUsdPerMillion: 20,
+    cacheWriteUsdPerMillion: 25, cacheWrite1hUsdPerMillion: 40, cacheReadUsdPerMillion: 2, outputUsdPerMillion: 100 });
+  assert.equal(cycles(store)[0].cost, 4);
+  assert.equal(cycles(store, NOW, { currency: 'GBP', usdToCurrency: 0.5 })[0].cost, 2);
+  store.updateSettings({ currency: 'GBP', usdToCurrency: 0.75 });
+  assert.equal(cycles(store)[0].cost, 3);
+});
+
+test('collector commits invalidate cycle and full-session caches even when row IDs are unchanged', t => {
+  const store = fixture(t);
+  reading(store);
+  event(store, 'one', NOW - 1000);
+  assert.equal(cycles(store)[0].cost, 1);
+  assert.equal(store.getSessionPage({}, NOW).rows[0].cost, 1);
+  const writer = new DatabaseSync(store.databasePath);
+  try { writer.exec('UPDATE usage_events SET input_tokens = 300000; UPDATE quota_observations SET used_percent = 75'); }
+  finally { writer.close(); }
+  assert.equal(cycles(store)[0].cost, 3);
+  assert.equal(cycles(store)[0].peakUsedPercent, 75);
+  assert.equal(store.getSessionPage({}, NOW).rows[0].cost, 3);
+});
+
+test('transactional cycle reads bypass caches and rolled-back data cannot survive', t => {
+  const store = fixture(t);
+  reading(store);
+  event(store, 'one', NOW - 1000);
+  assert.equal(cycles(store)[0].cost, 1);
+  assert.throws(() => store.transaction(() => {
+    event(store, 'two', NOW - 500);
+    reading(store, { used: 90 });
+    assert.equal(cycles(store)[0].cost, 2);
+    assert.equal(cycles(store)[0].peakUsedPercent, 90);
+    throw new Error('rollback');
+  }), /rollback/);
+  assert.equal(cycles(store)[0].cost, 1);
+  assert.equal(cycles(store)[0].peakUsedPercent, 30);
+});
+
+test('cycle cache is bounded, keeps model scopes separate and notices restored history', t => {
+  const store = fixture(t);
+  assert.deepEqual(cycles(store), []);
+  store.restoreFromExport({ schemaVersion: 1, observations: [{ source_id: 'claude-fable', bucket_id: 'fable_seven_day',
+    observed_at: new Date(NOW - 1000).toISOString(), resets_at: new Date(NOW + DAY).toISOString(),
+    used_percent: 30, remaining_percent: 70, window_minutes: 10080, provenance: 'official' }] });
+  assert.equal(cycles(store).length, 1);
+  reading(store, { sourceId: 'claude', bucketId: 'seven_day' });
+  event(store, 'fable', NOW - 1000);
+  store.recordUsageEvent({ eventKey: 'opus', sourceId: 'claude', model: 'claude-opus-5',
+    occurredAt: new Date(NOW - 1000).toISOString(), inputTokens: 200000 });
+  assert.equal(cycles(store)[0].tokens, 100000);
+  assert.equal(cycles(store, NOW, store.getSettings(), 'claude', 'seven_day')[0].tokens, 300000);
+  for (let rate = 1; rate <= 20; rate += 1) cycles(store, NOW, { currency: 'USD', usdToCurrency: rate });
+  assert.equal(store.cycleHistoryCache.size, 12);
+});

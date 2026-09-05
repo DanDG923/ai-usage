@@ -57,9 +57,11 @@ export function Header({
   const onKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
     const forward = event.key === 'ArrowDown' || event.key === 'ArrowRight';
     const backward = event.key === 'ArrowUp' || event.key === 'ArrowLeft';
-    if (!forward && !backward) return;
+    const first = event.key === 'Home';
+    const last = event.key === 'End';
+    if (!forward && !backward && !first && !last) return;
     event.preventDefault();
-    const next = (index + (forward ? 1 : -1) + TABS.length) % TABS.length;
+    const next = first ? 0 : last ? TABS.length - 1 : (index + (forward ? 1 : -1) + TABS.length) % TABS.length;
     onTab(TABS[next].id);
     tabRefs.current[next]?.focus();
   };

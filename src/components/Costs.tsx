@@ -1,25 +1,30 @@
 import { Search } from 'lucide-react';
-import { useState } from 'react';
+import { useDeferredValue, useMemo } from 'react';
 import { compactNumber, money, percent, sourceLabel } from '../lib';
 import type { Snapshot } from '../types';
 import { CostChart } from './Charts';
 import { API_EQUIVALENT_EXPLAINER, InfoTip } from './InfoTip';
 import { cacheHitRate, rollups } from './details/cost-math';
-import { ModelTable, ProjectTable, SessionTable } from './details/Tables';
+import { ModelTable, ProjectTable } from './details/Tables';
+import { SessionTable } from './details/SessionTable';
 
 export function Costs({
   snapshot,
   days,
   onDays,
+  query,
+  onQuery,
 }: {
   snapshot: Snapshot;
   days: number;
   onDays: (days: number) => void;
+  query: string;
+  onQuery: (query: string) => void;
 }) {
-  const [query, setQuery] = useState('');
+  const tableQuery = useDeferredValue(query);
   const costs = snapshot.costs;
-  const recent = rollups(costs);
-  const hitRate = cacheHitRate(costs);
+  const recent = useMemo(() => rollups(costs, new Date(snapshot.generatedAt)), [costs, snapshot.generatedAt]);
+  const hitRate = useMemo(() => cacheHitRate(costs), [costs]);
   const previous = recent.previousWeek;
   const weekChange = previous && previous > 0 ? ((recent.week - previous) / previous) * 100 : null;
   const unpriced = costs.unpricedModels
@@ -141,14 +146,14 @@ export function Costs({
           <input
             type="search"
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => onQuery(event.target.value)}
             placeholder="Filter tables"
           />
         </label>
       </div>
-      <ModelTable costs={costs} query={query} />
-      <ProjectTable costs={costs} query={query} />
-      <SessionTable costs={costs} query={query} />
+      <ModelTable costs={costs} query={tableQuery} />
+      <ProjectTable costs={costs} query={tableQuery} />
+      <SessionTable snapshot={snapshot} query={query} />
     </main>
   );
 }

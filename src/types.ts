@@ -120,6 +120,21 @@ export type SessionCost = {
   coverage: number;
 };
 
+export type SessionPageOptions = {
+  days: number;
+  query: string;
+  page: number;
+  pageSize: number;
+};
+
+export type SessionPage = {
+  rows: SessionCost[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+};
+
 export type CostAnalytics = {
   periodDays: number;
   currency: string;
@@ -230,11 +245,25 @@ export type ManualObservation = {
 };
 
 export type UpdateStatus = {
-  status: 'idle' | 'checking' | 'available' | 'up-to-date' | 'error' | 'unavailable';
+  status:
+    | 'idle'
+    | 'checking'
+    | 'available'
+    | 'up-to-date'
+    | 'error'
+    | 'unavailable'
+    | 'auth-required'
+    | 'downloading'
+    | 'downloaded'
+    | 'installing';
   available: boolean;
   checkedAt?: string | null;
   version?: string | null;
   error?: string | null;
+  progress?: number | null;
+  releaseNotes?: string | null;
+  auth?: 'github-cli' | null;
+  reason?: string | null;
 };
 
 export type Bridge = {
@@ -245,6 +274,7 @@ export type Bridge = {
   ): Promise<ClaudeSetupStatus>;
   cancelClaudeSetup(): Promise<void>;
   getSnapshot(days?: number): Promise<Snapshot>;
+  getSessions(options: SessionPageOptions): Promise<SessionPage>;
   refresh(): Promise<{
     snapshot: Snapshot;
     backupError?: string | null;
@@ -286,6 +316,9 @@ export type Bridge = {
   getVersion(): Promise<string>;
   checkForUpdates(): Promise<UpdateStatus>;
   getUpdateStatus(): Promise<UpdateStatus>;
+  downloadUpdate(): Promise<UpdateStatus>;
+  installUpdate(): Promise<UpdateStatus>;
+  onUpdateStatus(callback: (status: UpdateStatus) => void): () => void;
   onUpdated?(callback: (snapshot: Snapshot) => void): () => void;
 };
 
