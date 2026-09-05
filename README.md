@@ -9,9 +9,9 @@ It imports local usage evidence, learns your real burn pattern, evaluates every 
 
 ## Install
 
-Use `AI-Usage-Setup-1.0.23-x64.exe` for a normal Windows installation. Running it over an existing installation upgrades in place and preserves the local database, settings, observations, and backups. Uninstalling first is neither required nor recommended. Install this version once to enable future updates through the app.
+Use `AI-Usage-Setup-1.0.24-x64.exe` for a normal Windows installation. Running it over an existing installation upgrades in place and preserves the local database, settings, observations, and backups. Uninstalling first is neither required nor recommended. Install this version once to enable future updates through the app.
 
-Use `AI-Usage-Portable-1.0.23-x64.exe` for a single executable that does not install the app. Windows SmartScreen may show an unknown-publisher warning because this personal build is not backed by a commercial code-signing certificate; verify the supplied SHA-256 hash before running it.
+Use `AI-Usage-Portable-1.0.24-x64.exe` for a single executable that does not install the app. Windows SmartScreen may show an unknown-publisher warning because this personal build is not backed by a commercial code-signing certificate; verify the supplied SHA-256 hash before running it.
 
 ## Personal private updates
 
