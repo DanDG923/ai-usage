@@ -407,6 +407,8 @@ function createFableUsageTracker({ store, usagePort, activityReader, clock = () 
       activityLastSuccessfulAt = refreshedAt;
     }
 
+    const collectionDiagnostics = (usageResult.status === 'fulfilled'
+      ? usageResult.value : usageResult.reason)?.collectionDiagnostics;
     return {
       refreshedAt,
       allowance,
@@ -418,6 +420,7 @@ function createFableUsageTracker({ store, usagePort, activityReader, clock = () 
         extraUsage: normalized?.kind !== 'invalid' ? normalized?.extraUsage ?? null : null,
         durationMs: usageDurationMs,
         errorCode: providerFailure?.code || null,
+        ...(collectionDiagnostics ? { collectionDiagnostics } : {}),
       },
       health: {
         state,

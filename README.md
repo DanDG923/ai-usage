@@ -9,9 +9,9 @@ It imports local usage evidence, learns your real burn pattern, evaluates every 
 
 ## Install
 
-Use `AI-Usage-Setup-1.0.20-x64.exe` for a normal Windows installation. Running it over an existing installation upgrades in place and preserves the local database, settings, observations, and backups. Uninstalling first is neither required nor recommended.
+Use `AI-Usage-Setup-1.0.21-x64.exe` for a normal Windows installation. Running it over an existing installation upgrades in place and preserves the local database, settings, observations, and backups. Uninstalling first is neither required nor recommended.
 
-Use `AI-Usage-Portable-1.0.20-x64.exe` for a single executable that does not install the app. Windows SmartScreen may show an unknown-publisher warning because this personal build is not backed by a commercial code-signing certificate; verify the supplied SHA-256 hash before running it.
+Use `AI-Usage-Portable-1.0.21-x64.exe` for a single executable that does not install the app. Windows SmartScreen may show an unknown-publisher warning because this personal build is not backed by a commercial code-signing certificate; verify the supplied SHA-256 hash before running it.
 
 ## First run
 
@@ -80,6 +80,8 @@ Details also shows the **cache hit rate** (the share of prompt tokens read from 
 Keyboard shortcuts: **1**, **2**, and **3** switch sections and **R** refreshes.
 
 ## Source health and privacy
+
+Claude allowance readings must include confirmation of a successful provider fetch. If Claude returns cached figures after a failed connection, AI Usage retains the previous fresh reading and reports the failure. Temporary fetch failures and unexpectedly empty subscription responses receive one retry after a short delay; authentication failures and throttling wait for the next normal refresh. Diagnostics retain only safe error categories and attempt timings, never raw provider debug output.
 
 Each source shows three different timestamps where relevant:
 
