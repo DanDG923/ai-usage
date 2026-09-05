@@ -10,6 +10,7 @@ const {
   registerSingleInstance,
   resolveWindowTarget,
   revealWindow,
+  settleWithin,
 } = require('../electron/app-lifecycle.cjs');
 
 test('a secondary process quits without installing a second-instance handler', () => {
@@ -140,4 +141,14 @@ test('a visible load failure can retry the rejected operation', async () => {
   assert.equal(completed, true);
   assert.equal(attempts, 2);
   assert.deepEqual(failures, ['index.html unavailable']);
+});
+
+test('settleWithin passes results through and rejects once the shutdown budget is spent', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  assert.equal(await settleWithin(Promise.resolve('closed'), 1_000, 'late'), 'closed');
+  const stalled = settleWithin(new Promise(() => {}), 1_000, 'Storage did not close in time.');
+  t.mock.timers.tick(999);
+  await new Promise((resolve) => setImmediate(resolve));
+  t.mock.timers.tick(1);
+  await assert.rejects(stalled, /did not close in time/);
 });

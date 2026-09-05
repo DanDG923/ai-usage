@@ -23,6 +23,7 @@ const {
   registerSingleInstance,
   resolveWindowTarget,
   revealWindow,
+  settleWithin,
 } = require('./app-lifecycle.cjs');
 
 const pkg = require('../package.json');
@@ -56,6 +57,9 @@ const STALE_AFTER_MS = 5 * 60_000;
 // "now"-relative fields (staleness, estimated current balance) between writes.
 const SNAPSHOT_TTL_MS = 20_000;
 const TRAY_SIZE = 32;
+// A stalled restore or collector must not hold Quit or a Windows sign-out open.
+const SHUTDOWN_TIMEOUT_MS = 15_000;
+const EMPTY_SESSION_PAGE = Object.freeze({ rows: [], total: 0, page: 1, pageSize: 20, totalPages: 0 });
 
 // Window chrome follows the theme the renderer paints, so the native caption
 // buttons never sit on a strip of the other palette.
@@ -480,10 +484,12 @@ function registerIpc() {
     }
   });
   ipcMain.handle('dashboard:get-snapshot', (_event, days = 30) => {
+    // The window outlives the database handle briefly while an update installs.
+    if (storageClosing()) return previousSnapshot ?? cachedSnapshot?.value ?? null;
     setPeriodDays(days);
     return snapshot();
   });
-  ipcMain.handle('dashboard:get-sessions', (_event, options) => store.getSessionPage(options));
+  ipcMain.handle('dashboard:get-sessions', (_event, options) => (storageClosing() ? EMPTY_SESSION_PAGE : store.getSessionPage(options)));
   ipcMain.handle('dashboard:refresh', () => refreshAll());
   ipcMain.handle('dashboard:update-settings', (_event, patch) => databaseJobs.run(() => {
     const settings = store.updateSettings(patch || {});
@@ -622,6 +628,10 @@ function stopForShutdown() {
   try { collectors?.stop(); } catch { /* Already gone. */ }
 }
 
+function storageClosing() {
+  return Boolean(shutdownPromise || preparingUpdate);
+}
+
 function closeStorage() {
   if (!shutdownPromise) {
     shutdownPromise = (async () => {
@@ -649,7 +659,7 @@ async function prepareUpdateInstall() {
     throw Object.assign(new Error('Update safety backup failed.'), { code: 'UPDATE_BACKUP_FAILED' });
   }
   try {
-    await closeStorage();
+    await settleWithin(closeStorage(), SHUTDOWN_TIMEOUT_MS, 'Storage did not close in time for the update.');
   } catch (error) {
     recoverFromUpdateInstallFailure();
     throw error;
@@ -741,9 +751,11 @@ if (isPrimaryInstance) {
     // Cancel provider calls, then drain database jobs and close the maintenance
     // connection gracefully. A running backup or restore must finish before
     // Electron tears down its worker and the main SQLite handle.
-    void closeStorage().catch((error) => log(`Shutdown: ${error.message}`)).finally(() => {
-      shutdownComplete = true;
-      app.quit();
-    });
+    void settleWithin(closeStorage(), SHUTDOWN_TIMEOUT_MS, 'Storage did not close in time; quitting anyway.')
+      .catch((error) => log(`Shutdown: ${error.message}`))
+      .finally(() => {
+        shutdownComplete = true;
+        app.quit();
+      });
   });
 }

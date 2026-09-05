@@ -64,7 +64,19 @@ function resolveWindowTarget({ isPackaged, devUrl, filePath }) {
   return { kind: 'file', value: filePath };
 }
 
+// Shutdown work must never hold the process open indefinitely. The timer is
+// unref'd so it cannot itself keep an otherwise finished process alive.
+function settleWithin(promise, timeoutMs, message) {
+  let timer;
+  const expiry = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    timer.unref?.();
+  });
+  return Promise.race([promise, expiry]).finally(() => clearTimeout(timer));
+}
+
 module.exports = {
+  settleWithin,
   WINDOW_BOUNDS,
   createDeferredWindowReveal,
   initializeWithVisibleFailure,
