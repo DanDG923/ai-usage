@@ -5,6 +5,7 @@ const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 const { buildDashboardVerdict } = require('./dashboard-decision.cjs');
 const { forecastQuota } = require('./forecast.cjs');
+const { TaskUsage } = require('./task-usage.cjs');
 const { MAX_QUOTA_RESET_AHEAD_MS, QUOTA_CLOCK_SKEW_MS, FORECAST_LOOKBACK_MS, validQuotaTime } = require('./quota-time.cjs');
 
 const SOURCE_DEFINITIONS = [
@@ -1076,6 +1077,26 @@ class UsageStore {
       page: selectedPage, pageSize: size, totalPages };
   }
 
+  getTaskPage({ days = 30, query = '', page = 1, pageSize = 20 } = {}, nowMs = Date.now()) {
+    const boundedInteger = (value, fallback, min, max) => {
+      const number = Number(value);
+      return Number.isFinite(number) ? Math.min(max, Math.max(min, Math.round(number))) : fallback;
+    };
+    const period = boundedInteger(days, 30, 1, 365);
+    const size = boundedInteger(pageSize, 20, 1, 100);
+    const needle = typeof query === 'string' ? query.trim().slice(0, 500).toLowerCase() : '';
+    const sessions = this.getAnalytics(period, this.getSettings(), nowMs).tasks;
+    const matches = needle ? sessions.filter((row) => [row.sourceId,
+      SOURCE_DEFINITIONS.find(([id]) => id === row.sourceId)?.[1], row.project, row.sessionId, row.taskId,
+      ...row.agents.flatMap((agent) => [agent.agentId, agent.agentName, agent.agentRole, agent.model])]
+      .some((value) => typeof value === 'string' && value.toLowerCase().includes(needle))) : sessions;
+    const total = matches.length;
+    const totalPages = Math.ceil(total / size);
+    const selectedPage = boundedInteger(page, 1, 1, Math.max(1, totalPages));
+    return { rows: matches.slice((selectedPage - 1) * size, selectedPage * size), total,
+      page: selectedPage, pageSize: size, totalPages };
+  }
+
   buildAnalytics(days, settings, nowMs) {
     const since = iso(nowMs - days * DAY_MS);
     const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -1087,6 +1108,7 @@ class UsageStore {
     const byDayMap = new Map();
     const byProjectMap = new Map();
     const sessionMap = new Map();
+    const taskUsage = new TaskUsage();
     const activityUsd = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0));
     let actualUsd = 0;
     let withoutCacheUsd = 0;
@@ -1101,6 +1123,7 @@ class UsageStore {
         ? Number(event.input_tokens) + Number(event.cache_write_input_tokens) + Number(event.output_tokens)
         : Number(event.input_tokens) + Number(event.cached_input_tokens)
           + Number(event.cache_write_input_tokens) + Number(event.output_tokens);
+      taskUsage.add(event, cost, eventTokens);
       totalTokens += eventTokens;
       if (cost.covered) coveredTokens += eventTokens;
       else if (eventTokens > 0) {
@@ -1237,6 +1260,7 @@ class UsageStore {
 
     return {
       sessions,
+      tasks: taskUsage.finish(rate),
       costs: {
         periodDays: days,
         currency: settings.currency,

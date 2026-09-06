@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const { claudeAgentMetadata } = require('./task-usage.cjs');
 const path = require('node:path');
 const { findClaudeBinary } = require('./provider-executable.cjs');
 const { createClaudeAgentSdkUsagePort } = require('./claude-agent-usage.cjs');
@@ -212,7 +213,7 @@ function importClaudeTranscripts(store, days = 120) {
 
   for (const { fullPath, stat } of files) {
     const previous = store.getImportedFile(fullPath);
-    const plan = planIncrementalRead(previous, stat);
+    const plan = planIncrementalRead(previous?.state?.agentAttributionVersion === 1 ? previous : null, stat);
     if (!plan) continue;
     // Every transcript row is self-describing (session, working directory,
     // usage), so an appended chunk needs no context from earlier lines. A
@@ -268,6 +269,7 @@ function importClaudeTranscripts(store, days = 120) {
             reasoningOutputTokens: usage.output_tokens_details?.reasoning_tokens || 0,
             metadata: {
               source: 'claude-transcript',
+              ...claudeAgentMetadata(row, fullPath),
               requestId: row.requestId || null,
               entrypoint: row.entrypoint || null,
               sidechain: Boolean(row.isSidechain),
@@ -283,7 +285,7 @@ function importClaudeTranscripts(store, days = 120) {
         usageEvents += 1;
         if (String(model).toLowerCase().includes('fable')) fableEvents += 1;
       }
-      store.markImportedFile(fullPath, stat.mtimeMs, plan.startOffset + chunk.consumedBytes);
+      store.markImportedFile(fullPath, stat.mtimeMs, plan.startOffset + chunk.consumedBytes, { agentAttributionVersion: 1 });
     });
     importedFiles += 1;
   }

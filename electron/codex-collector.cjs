@@ -7,6 +7,7 @@ const { spawn } = require('node:child_process');
 const { findCodexBinary, providerProcessOptions } = require('./provider-executable.cjs');
 const { planIncrementalRead, readCompleteLines } = require('./incremental-file.cjs');
 const { epochToIso } = require('./time.cjs');
+const { codexAgentMetadata, textId } = require('./task-usage.cjs');
 
 // Read from the manifest so the version reported to Codex cannot drift.
 const APP_VERSION = require('../package.json').version;
@@ -257,14 +258,14 @@ function importLocalSessions(store, days = 120) {
 
   for (const { fullPath, stat } of files) {
     const previous = store.getImportedFile(fullPath);
-    const plan = planIncrementalRead(previous, stat);
+    const plan = planIncrementalRead(previous?.state?.agentAttributionVersion === 1 ? previous : null, stat);
     if (!plan) continue;
     // A cursor written before context was stored cannot resume mid-file.
     const resumable = plan.resumed && previous?.state && typeof previous.state === 'object';
     const startOffset = resumable ? plan.startOffset : 0;
     const state = resumable
       ? { ...previous.state }
-      : { sessionId: path.basename(fullPath, '.jsonl'), model: null, project: null };
+      : { sessionId: path.basename(fullPath, '.jsonl'), model: null, project: null, agentAttributionVersion: 1 };
     let chunk;
     try {
       chunk = readCompleteLines(fullPath, startOffset, stat.size);
@@ -283,9 +284,15 @@ function importLocalSessions(store, days = 120) {
         }
         if (entry.type === 'session_meta') {
           if (entry.payload?.id) state.sessionId = entry.payload.id;
+          state.agent = codexAgentMetadata(entry.payload);
+          state.taskId = null;
           if (typeof entry.payload?.cwd === 'string' && entry.payload.cwd.trim()) state.project = entry.payload.cwd.trim();
         }
-        if (entry.type === 'turn_context') state.model = entry.payload?.model || state.model;
+        if (entry.type === 'turn_context') {
+          state.model = entry.payload?.model || state.model;
+          state.taskId = textId(entry.payload?.root_turn_id)
+            || (state.agent?.agentKind === 'main' ? textId(entry.payload?.turn_id) : null);
+        }
         if (entry.type !== 'event_msg' || entry.payload?.type !== 'token_count') continue;
         const usage = entry.payload?.info?.last_token_usage;
         const sessionId = state.sessionId;
@@ -307,7 +314,7 @@ function importLocalSessions(store, days = 120) {
               cacheWrite1hInputTokens: 0,
               outputTokens: usage.output_tokens,
               reasoningOutputTokens: usage.reasoning_output_tokens,
-              metadata: { source: 'codex-session-log' },
+              metadata: { source: 'codex-session-log', ...state.agent, taskId: state.taskId || null },
             });
             events += 1;
           } catch (error) {

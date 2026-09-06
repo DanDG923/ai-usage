@@ -6,6 +6,7 @@ import { CostChart } from './Charts';
 import { API_EQUIVALENT_EXPLAINER, InfoTip } from './InfoTip';
 import { cacheHitRate, rollups } from './details/cost-math';
 import { ModelTable, ProjectTable } from './details/Tables';
+import { TaskTable } from './details/TaskTable';
 import { SessionTable } from './details/SessionTable';
 import { DesktopEstimates } from './DesktopEstimates';
 
@@ -159,7 +160,7 @@ export function Costs({
       <div className="table-tools">
         <div>
           <h2>Cost evidence</h2>
-          <p>Search the project, model, and session breakdowns below.</p>
+          <p>Search tasks, agents, projects, models, and sessions below.</p>
         </div>
         <label className="table-search">
           <Search aria-hidden="true" />
@@ -172,6 +173,7 @@ export function Costs({
           />
         </label>
       </div>
+      <TaskTable snapshot={snapshot} query={query} />
       <ModelTable costs={costs} query={tableQuery} />
       <ProjectTable costs={costs} query={tableQuery} />
       <SessionTable snapshot={snapshot} query={query} />

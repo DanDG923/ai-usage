@@ -529,6 +529,7 @@ function registerIpc() {
     return snapshot();
   });
   handleIpc('dashboard:get-sessions', (_event, options) => (storageClosing() ? EMPTY_SESSION_PAGE : store.getSessionPage(options)));
+  handleIpc('dashboard:get-tasks', (_event, options) => (storageClosing() ? EMPTY_SESSION_PAGE : store.getTaskPage(options)));
   handleIpc('dashboard:refresh', () => refreshAll());
   handleIpc('dashboard:update-settings', (_event, patch) => databaseJobs.run(() => {
     const settings = store.updateSettings(patch || {});
