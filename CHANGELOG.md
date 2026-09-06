@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.28 — 6 September 2026
+
+- Import Claude desktop and web chat exports from the Costs page, with a preview before saving and duplicate detection on repeat imports. Conversation text and titles are never retained by AI Usage.
+- Show visible prompt-and-reply text estimates separately from recorded token costs and quota forecasts. Missing models stay unpriced unless you explicitly choose a pricing assumption, and desktop-only models can receive prices in Settings.
+- Include imported estimates in backups and restores, with a safety backup before removing them. Reject excessive model labels and skip malformed backup records without losing valid data.
+- These are rough text-value estimates, not measured subscription costs: caching, repeated context, attachments, tools, and hidden reasoning are excluded. Automatic desktop chat tracking is not included.
+
 ## 1.0.27 — 6 September 2026
 
 - Record every update stage and failure in `update.log` in the app's data folder, with stable error codes and the wording shown in Settings, so a failed installation can be diagnosed after the app restarts.
