@@ -1,12 +1,5 @@
 # Changelog
 
-## Unreleased
-
-- Add searchable, paginated task and session breakdowns with expandable main-agent and sub-agent costs, token categories, usage-record counts, and activity spans.
-- Preserve Codex root-turn/parent-thread and Claude transcript agent identifiers; backfill eligible logs once without changing event keys or duplicating ledger usage.
-- Keep missing task links, unknown agents, and unpriced models explicit; task totals share the existing pricing and bounded analytics cache.
-
-
 ## 1.0.28 — 6 September 2026
 
 - Import Claude desktop and web chat exports from the Costs page, with a preview before saving and duplicate detection on repeat imports. Conversation text and titles are never retained by AI Usage.
