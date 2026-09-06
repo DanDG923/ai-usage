@@ -109,7 +109,7 @@ export function TaskTable({ snapshot, query }: { snapshot: Snapshot; query: stri
               </span>
               <span>
                 <strong>{task.subagentCount}</strong>
-                <small>recorded sub-agents</small>
+                <small>recorded {task.subagentCount === 1 ? 'sub-agent' : 'sub-agents'}</small>
               </span>
               <span>
                 <strong>{compactNumber(task.totalTokens)}</strong>

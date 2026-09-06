@@ -9,13 +9,17 @@ function devLoopbackCsp() {
     name: 'dev-loopback-csp',
     apply: 'serve' as const,
     transformIndexHtml(html: string) {
-      return html.replace("connect-src 'self'", "connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:*");
+      return html.replace(
+        "connect-src 'self'",
+        "connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:* ws://terminal.local:4173",
+      );
     },
   };
 }
 
 export default defineConfig({
   plugins: [react(), devLoopbackCsp()],
+  server: { host: '0.0.0.0', allowedHosts: ['terminal.local'] },
   base: './',
   build: {
     target: 'es2022',

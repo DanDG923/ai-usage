@@ -12,7 +12,7 @@
     "private": true
   },
   "scripts": {
-    "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
+    "dev": "node tools/dev.cjs",
     "dev:web": "vite --host 127.0.0.1",
     "build:web": "tsc -b && vite build",
     "build": "npm run test && npm run build:web && npm run release:notes && electron-builder --win portable nsis --x64 --publish never && npm run release:audit",
@@ -24,7 +24,8 @@
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\"",
     "typecheck": "tsc -b",
-    "preview": "vite preview --host 127.0.0.1"
+    "preview": "vite preview --host 127.0.0.1",
+    "dev:desktop": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\""
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.251",
