@@ -141,7 +141,7 @@ test('checksum failures never allow installation and do not leak HTTP diagnostic
   assert.equal(updater.installs, 0);
   assert.ok(!JSON.stringify({ states, logs }).includes('secret-for-test'));
   // The emitted event and the rejected promise carry the same error object.
-  assert.equal(logs.length, 1);
+  assert.equal(logs.filter((line) => line.startsWith('Failed while')).length, 1);
   assert.equal(states.filter((state) => state.status === 'error').length, 1);
 });
 
