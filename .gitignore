@@ -23,3 +23,13 @@ Microsoft/
 
 # Local diagnostics are deliberately not source or release inputs.
 /tools/fable-probe.jsonl
+
+# Packaging outputs and local investigation notes are never source inputs.
+/work/
+/outputs/
+/*.exe
+/*.exe.blockmap
+/*.zip
+/AI-Usage-Source-*/
+/SHA256SUMS.txt
+/RELEASE-NOTES.md

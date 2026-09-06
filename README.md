@@ -111,6 +111,20 @@ Collection runs in a separate utility process with its own connection to the sam
 
 Update checks fetch private GitHub release metadata and a version manifest. Installer downloads happen only after **Download update** is selected. Update requests contain the GitHub authorization needed for this private repository; local usage data is not sent.
 
+## Security model and accepted risks
+
+The window runs sandboxed with context isolation, no Node integration, a content security policy that allows no network origin, and navigation, pop-ups, redirects and embedded web views denied. Web permission requests (notifications, media, geolocation and the rest) are refused outright; desktop notifications come from the main process. Every bridge call is accepted only from the dashboard's own main frame.
+
+Provider executables are located only through absolute PATH entries, the native Claude Code install location, and the official Claude Code and Codex caches. The directory the app was launched from is never searched, and each provider process starts in its own directory with a PATH from which relative and launch-directory entries have been removed. The same rule applies to the GitHub CLI used for private updates. Setting `CODEX_BINARY` selects an explicit Codex executable; an invalid value disables Codex rather than choosing something else.
+
+CSV exports neutralise spreadsheet formula prefixes. Quota readings are accepted only with a reset at most 31 days ahead and an observation time no more than five minutes in the future; rows written by older versions are re-checked when read.
+
+Some risks are accepted by design and worth knowing:
+
+- **Claude Code installation** runs Anthropic's installer script, fetched from `claude.ai` at the moment you choose to install. Trust rests on TLS to that host; the script is not pinned or hashed locally.
+- **In-app updates** are not code-signed. Trust rests on GitHub TLS, access control on the private repository, and the SHA-512 in the release manifest. Downloading and installing each require a click, so a compromised release cannot install itself.
+- **Backups** in `Documents\AI Usage\Backups` contain settings, session identifiers and the working directory of every session. They hold no credentials, but a synced Documents folder will copy them.
+
 ## Data and backups
 
 The database is stored under the standard Windows app-data directory for AI Usage. Backups are written to `Documents\AI Usage\Backups` as both a SQLite snapshot and a readable `.aiusage.json` export. Daily backup creation is enabled by default, and **Back up now** is available at any time.
