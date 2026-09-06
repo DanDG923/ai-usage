@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.27 — 6 September 2026
+
+- Record every update stage and failure in `update.log` in the app's data folder, with stable error codes and the wording shown in Settings, so a failed installation can be diagnosed after the app restarts.
+- Launch the installer from the app before quitting, re-verifying its checksum against the release manifest and retrying a launch the system refuses, for example during an antivirus scan of the download, before reporting failure and reopening the current version.
+- Keep electron-updater's launch for installs that need elevation or where no downloaded file path was reported.
+
 ## 1.0.26 — 6 September 2026
 
 - Accept bridge calls only from the dashboard's own main frame for every action, not just Claude setup.
