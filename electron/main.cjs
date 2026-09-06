@@ -3,8 +3,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const {
-  app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification,
-  powerMonitor, shell, Tray, utilityProcess,
+  app, BrowserWindow, clipboard, dialog, ipcMain: electronIpcMain, Menu, nativeImage, nativeTheme, Notification,
+  powerMonitor, session, shell, Tray, utilityProcess,
 } = require('electron');
 const { UsageStore } = require('./store.cjs');
 const { installClaudeHelper, uninstallClaudeHelper, isClaudeHelperInstalled } = require('./claude-collector.cjs');
@@ -205,8 +205,7 @@ function createWindow() {
   void loadWindowContents(targetWindow, target).catch((error) => {
     showFatalError('AI Usage could not load', 'The dashboard load failure could not be displayed.', error);
   });
-  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  window.webContents.on('will-navigate', (event) => event.preventDefault());
+  hardenWebContents(window.webContents);
   window.on('close', (event) => {
     if (!isQuitting) {
       event.preventDefault();
@@ -465,16 +464,33 @@ async function refreshClaudeOnly() {
   });
 }
 
+// Only the dashboard's own main frame may invoke the bridge. Every handler is
+// wrapped, not just setup: a restore or helper install changes files outside
+// the app, and a future embedded frame must never be able to request either.
+function assertDashboardSender(event) {
+  if (!window || window.isDestroyed() || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) {
+    throw new Error('This action is only available from the AI Usage window.');
+  }
+}
+
+function handleIpc(channel, handler) {
+  electronIpcMain.handle(channel, (event, ...args) => {
+    assertDashboardSender(event);
+    return handler(event, ...args);
+  });
+}
+
+function hardenWebContents(contents) {
+  contents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  contents.on('will-navigate', (event) => event.preventDefault());
+  contents.on('will-redirect', (event) => event.preventDefault());
+  contents.on('will-attach-webview', (event) => event.preventDefault());
+}
+
 function registerIpc() {
-  const assertSetupSender = (event) => {
-    if (event.sender !== window?.webContents || event.senderFrame !== window?.webContents.mainFrame) {
-      throw new Error('Setup is only available from the AI Usage window.');
-    }
-  };
-  ipcMain.handle('claude-setup:status', (event) => { assertSetupSender(event); return claudeSetup.status(); });
-  ipcMain.handle('claude-setup:cancel', (event) => { assertSetupSender(event); claudeSetup.cancel(); });
-  ipcMain.handle('claude-setup:configure', async (event, action, enableHelper) => {
-    assertSetupSender(event);
+  handleIpc('claude-setup:status', () => claudeSetup.status());
+  handleIpc('claude-setup:cancel', () => { claudeSetup.cancel(); });
+  handleIpc('claude-setup:configure', async (_event, action, enableHelper) => {
     switch (action) {
       case 'check': return claudeSetup.status();
       case 'install': return claudeSetup.install();
@@ -484,15 +500,15 @@ function registerIpc() {
       default: throw new Error('Unknown Claude setup step.');
     }
   });
-  ipcMain.handle('dashboard:get-snapshot', (_event, days = 30) => {
+  handleIpc('dashboard:get-snapshot', (_event, days = 30) => {
     // The window outlives the database handle briefly while an update installs.
     if (storageClosing()) return previousSnapshot ?? cachedSnapshot?.value ?? null;
     setPeriodDays(days);
     return snapshot();
   });
-  ipcMain.handle('dashboard:get-sessions', (_event, options) => (storageClosing() ? EMPTY_SESSION_PAGE : store.getSessionPage(options)));
-  ipcMain.handle('dashboard:refresh', () => refreshAll());
-  ipcMain.handle('dashboard:update-settings', (_event, patch) => databaseJobs.run(() => {
+  handleIpc('dashboard:get-sessions', (_event, options) => (storageClosing() ? EMPTY_SESSION_PAGE : store.getSessionPage(options)));
+  handleIpc('dashboard:refresh', () => refreshAll());
+  handleIpc('dashboard:update-settings', (_event, patch) => databaseJobs.run(() => {
     const settings = store.updateSettings(patch || {});
     invalidateSnapshot();
     applySettingsEffects();
@@ -500,12 +516,12 @@ function registerIpc() {
     updateTray(current);
     return { settings, snapshot: current };
   }));
-  ipcMain.handle('dashboard:update-price', (_event, price) => databaseJobs.run(() => {
+  handleIpc('dashboard:update-price', (_event, price) => databaseJobs.run(() => {
     store.updatePrice(price || {});
     invalidateSnapshot();
     return { snapshot: snapshot() };
   }));
-  ipcMain.handle('dashboard:add-manual-observation', async (_event, observation) => {
+  handleIpc('dashboard:add-manual-observation', async (_event, observation) => {
     if (!observation || typeof observation !== 'object') throw new Error('An observation is required.');
     const sourceId = observation.sourceId;
     const usedPercent = Number(observation.usedPercent);
@@ -535,22 +551,22 @@ function registerIpc() {
     });
     return refreshClaudeOnly();
   });
-  ipcMain.handle('dashboard:install-claude-helper', async () => {
+  handleIpc('dashboard:install-claude-helper', async () => {
     const result = installClaudeHelper(getInboxPath());
     const current = await refreshClaudeOnly();
     return { result, snapshot: current };
   });
-  ipcMain.handle('dashboard:uninstall-claude-helper', async () => {
+  handleIpc('dashboard:uninstall-claude-helper', async () => {
     const result = uninstallClaudeHelper();
     const current = await refreshClaudeOnly();
     return { result, snapshot: current };
   });
-  ipcMain.handle('dashboard:create-backup', () => databaseJobs.exclusive(async () => {
+  handleIpc('dashboard:create-backup', () => databaseJobs.exclusive(async () => {
     const result = await maintenance.request('create-backup');
     invalidateSnapshot();
     return { result, snapshot: snapshot() };
   }));
-  ipcMain.handle('dashboard:restore-backup', async () => {
+  handleIpc('dashboard:restore-backup', async () => {
     const chosen = await dialog.showOpenDialog(window ?? undefined, {
       title: 'Restore an AI Usage export',
       defaultPath: store.backupDirectory,
@@ -570,11 +586,11 @@ function registerIpc() {
     const refreshed = await refreshAll().catch(() => null);
     return { cancelled: false, result, safetyBackup, snapshot: refreshed?.snapshot ?? snapshot() };
   });
-  ipcMain.handle('dashboard:open-backup-directory', async () => {
+  handleIpc('dashboard:open-backup-directory', async () => {
     const error = await shell.openPath(store.backupDirectory);
     if (error) throw new Error(`Windows could not open the backup folder: ${error}`);
   });
-  ipcMain.handle('dashboard:export-csv', async (_event, days = 90) => {
+  handleIpc('dashboard:export-csv', async (_event, days = 90) => {
     const period = Math.min(365, Math.max(1, Math.round(Number(days)) || 90));
     const stamp = new Date().toISOString().slice(0, 10);
     const chosen = await dialog.showSaveDialog(window ?? undefined, {
@@ -586,25 +602,25 @@ function registerIpc() {
     const exported = await databaseJobs.exclusive(() => maintenance.request('export-csv', { filePath: chosen.filePath, days: period }));
     return { cancelled: false, ...exported };
   });
-  ipcMain.handle('dashboard:copy-summary', () => {
+  handleIpc('dashboard:copy-summary', () => {
     const text = buildSummaryText(snapshot());
     clipboard.writeText(text);
     return { text };
   });
-  ipcMain.handle('dashboard:snooze-alerts', async (_event, hours) => {
+  handleIpc('dashboard:snooze-alerts', async (_event, hours) => {
     const parsed = Number(hours);
     const current = await setSnooze(Number.isFinite(parsed) && parsed > 0 ? Math.min(72, parsed) : 0);
     return { snapshot: current };
   });
-  ipcMain.handle('app:get-version', () => app.getVersion());
-  ipcMain.handle('app:check-updates', async () => {
+  handleIpc('app:get-version', () => app.getVersion());
+  handleIpc('app:check-updates', async () => {
     if (!updateChecker) return { status: 'unavailable', available: false };
     await updateChecker.check();
     return updateChecker.status();
   });
-  ipcMain.handle('app:update-status', () => (updateChecker ? updateChecker.status() : { status: 'unavailable', available: false }));
-  ipcMain.handle('app:download-update', () => updateChecker?.download() || { status: 'unavailable', available: false });
-  ipcMain.handle('app:install-update', () => updateChecker?.install() || { status: 'unavailable', available: false });
+  handleIpc('app:update-status', () => (updateChecker ? updateChecker.status() : { status: 'unavailable', available: false }));
+  handleIpc('app:download-update', () => updateChecker?.download() || { status: 'unavailable', available: false });
+  handleIpc('app:install-update', () => updateChecker?.install() || { status: 'unavailable', available: false });
 }
 
 function publishUpdateStatus(status) {
@@ -747,6 +763,11 @@ if (isPrimaryInstance) {
         onStatus: publishUpdateStatus,
         onLog: log,
       });
+      // The renderer is local, offline content: it needs no notification,
+      // media, geolocation or other web permissions, so none are granted.
+      session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+      session.defaultSession.setPermissionCheckHandler(() => false);
+      app.on('web-contents-created', (_event, contents) => hardenWebContents(contents));
       registerIpc();
       applyTheme(store.getSettings().theme);
       createWindow();

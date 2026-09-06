@@ -85,6 +85,43 @@ const SETTING_VALIDATORS = {
   refreshIntervalMinutes: (value) => Number.isInteger(value) && (value === 0 || (value >= 5 && value <= 240)),
 };
 
+// Inherited names such as `constructor` are not settings. Only an own entry
+// of the validator table may vouch for a key from IPC, an export, or a row.
+function settingValidator(key) {
+  return typeof key === 'string' && Object.hasOwn(SETTING_VALIDATORS, key) ? SETTING_VALIDATORS[key] : null;
+}
+
+// Catalogue text fields come from the settings screen or a restored export.
+// They are stored and displayed, never dereferenced, so shape and length are
+// all that is enforced here.
+const MAX_PRICE_MODEL_LENGTH = 120;
+const MAX_PRICE_SOURCE_URL_LENGTH = 2048;
+
+function priceModelName(value) {
+  if (typeof value !== 'string') return null;
+  const model = value.trim();
+  if (!model || model.length > MAX_PRICE_MODEL_LENGTH || /[\p{Cc}\p{Cf}]/u.test(model)) return null;
+  return model;
+}
+
+function priceEffectiveFrom(value) {
+  if (value == null || value === '') return iso().slice(0, 10);
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(Date.parse(value))) return null;
+  return value;
+}
+
+function priceSourceUrl(value) {
+  if (value == null || value === '') return null;
+  if (typeof value !== 'string' || value.length > MAX_PRICE_SOURCE_URL_LENGTH || /[\p{Cc}\p{Cf}]/u.test(value)) return undefined;
+  try {
+    const parsed = new URL(value);
+    if (!['http:', 'https:'].includes(parsed.protocol)) return undefined;
+  } catch {
+    return undefined;
+  }
+  return value;
+}
+
 // model, input, five-minute cache write, one-hour cache write, cache read, output
 const PRICE_ROWS = [
   // Standard API rates verified 2026-09-04; OpenAI has one cache-write rate.
@@ -400,9 +437,10 @@ class UsageStore {
     const update = this.prepare('UPDATE settings SET value_json = ?, updated_at = ? WHERE key = ?');
     const repaired = { ...DEFAULT_SETTINGS };
     for (const row of this.prepare('SELECT key, value_json FROM settings').all()) {
-      if (!SETTING_VALIDATORS[row.key]) continue;
+      const validate = settingValidator(row.key);
+      if (!validate) continue;
       const value = json(row.value_json, undefined);
-      if (SETTING_VALIDATORS[row.key](value)) repaired[row.key] = value;
+      if (validate(value)) repaired[row.key] = value;
       else update.run(JSON.stringify(DEFAULT_SETTINGS[row.key]), iso(), row.key);
     }
     if (repaired.activeStartHour >= repaired.activeEndHour) {
@@ -485,7 +523,7 @@ class UsageStore {
     // Validate the complete patch before writing any part of it, so a rejected
     // cross-field update cannot leave settings half changed.
     for (const [key, value] of Object.entries(normalizedPatch)) {
-      const validate = SETTING_VALIDATORS[key];
+      const validate = settingValidator(key);
       if (!validate) throw new Error(`Unknown setting: ${key}`);
       if (!validate(value)) throw new Error(`Invalid value for ${key}.`);
     }
@@ -892,7 +930,13 @@ class UsageStore {
   updatePrice(row) {
     const values = ['inputUsdPerMillion', 'cacheWriteUsdPerMillion', 'cacheWrite1hUsdPerMillion', 'cacheReadUsdPerMillion', 'outputUsdPerMillion']
       .map((key) => Number(row[key]));
-    if (!row.model || values.some((value) => !Number.isFinite(value) || value < 0)) throw new Error('Every model price must be zero or greater.');
+    const model = priceModelName(row.model);
+    if (!model) throw new Error(`Model name must be plain text of at most ${MAX_PRICE_MODEL_LENGTH} characters.`);
+    if (values.some((value) => !Number.isFinite(value) || value < 0 || value > 1_000_000)) throw new Error('Every model price must be between zero and one million USD per million tokens.');
+    const effectiveFrom = priceEffectiveFrom(row.effectiveFrom);
+    if (!effectiveFrom) throw new Error('Effective date must be a calendar date in YYYY-MM-DD form.');
+    const sourceUrl = priceSourceUrl(row.sourceUrl);
+    if (sourceUrl === undefined) throw new Error('Source must be an http or https web address.');
     this.prepare(`
       INSERT INTO price_catalog(model, input_usd_per_million, cache_write_usd_per_million,
         cache_write_1h_usd_per_million, cache_read_usd_per_million,
@@ -906,7 +950,7 @@ class UsageStore {
         output_usd_per_million = excluded.output_usd_per_million,
         effective_from = excluded.effective_from,
         source_url = excluded.source_url
-    `).run(row.model, ...values, row.effectiveFrom || iso().slice(0, 10), row.sourceUrl || null);
+    `).run(model, ...values, effectiveFrom, sourceUrl);
     return this.getPriceCatalog();
   }
 
@@ -1552,8 +1596,8 @@ class UsageStore {
       // outlived it, leaving a start-after-end schedule updateSettings refuses.
       const accepted = {};
       for (const [exportedKey, value] of Object.entries(exported)) {
-        const key = SETTING_ALIASES[exportedKey] || exportedKey;
-        const validate = SETTING_VALIDATORS[key];
+        const key = Object.hasOwn(SETTING_ALIASES, exportedKey) ? SETTING_ALIASES[exportedKey] : exportedKey;
+        const validate = settingValidator(key);
         if (!validate || !validate(value)) {
           counts.skipped += 1;
           continue;
@@ -1668,10 +1712,14 @@ class UsageStore {
           const values = [row.input_usd_per_million, row.cache_write_usd_per_million,
             row.cache_write_1h_usd_per_million ?? 0, row.cache_read_usd_per_million,
             row.output_usd_per_million].map(finiteNumber);
-          const effectiveFrom = typeof row.effective_from === 'string' && row.effective_from ? row.effective_from : iso().slice(0, 10);
-          const sourceUrl = typeof row.source_url === 'string' ? row.source_url : null;
-          if (typeof row.model !== 'string' || !row.model || values.some((value) => value == null || value < 0)) throw unreadable();
-          counts.prices += insertPrice.run(row.model, ...values, effectiveFrom, sourceUrl).changes;
+          const model = priceModelName(row.model);
+          const effectiveFrom = priceEffectiveFrom(row.effective_from);
+          // The URL is a convenience for the reader. One that cannot be kept
+          // is dropped rather than costing a usable price row.
+          const sourceUrl = priceSourceUrl(row.source_url) ?? null;
+          if (!model || !effectiveFrom
+            || values.some((value) => value == null || value < 0 || value > 1_000_000)) throw unreadable();
+          counts.prices += insertPrice.run(model, ...values, effectiveFrom, sourceUrl).changes;
         } catch {
           counts.skipped += 1;
         }
