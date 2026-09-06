@@ -137,8 +137,21 @@ export function PricingSection({
 }) {
   const { settings } = snapshot;
   const pricedModels = new Set(snapshot.priceCatalog.map((row) => row.model.toLowerCase()));
-  const unpricedRows = snapshot.costs.unpricedModels
-    .filter((entry) => !pricedModels.has(entry.model.toLowerCase()))
+  const seenModels = new Set(pricedModels);
+  const unpricedRows = [
+    ...snapshot.costs.unpricedModels,
+    ...(snapshot.desktopEstimates?.byModel ?? []).flatMap((entry) =>
+      entry.model && entry.estimatedCost === null
+        ? [{ model: entry.model, sourceId: 'Claude desktop/web export' }]
+        : [],
+    ),
+  ]
+    .filter((entry) => {
+      const model = entry.model.toLowerCase();
+      if (seenModels.has(model)) return false;
+      seenModels.add(model);
+      return true;
+    })
     .map((entry) => ({
       sourceId: entry.sourceId,
       row: {

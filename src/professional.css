@@ -996,6 +996,34 @@ body {
   background: transparent;
   font-size: 12.5px;
 }
+.desktop-estimates-body {
+  padding: 0 24px 20px;
+}
+.desktop-estimates-body p {
+  color: var(--text-muted);
+  line-height: 1.6;
+  max-width: 100ch;
+}
+.desktop-estimates-body details {
+  margin: 16px 0;
+}
+.desktop-estimates-body summary {
+  cursor: pointer;
+}
+.desktop-import-preview {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+}
+.desktop-model-choice {
+  display: grid;
+  gap: 8px;
+  max-width: 480px;
+}
+.desktop-model-choice select {
+  width: 100%;
+}
 .costs-page .table-panel {
   margin-top: 14px;
 }
