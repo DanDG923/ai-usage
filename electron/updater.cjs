@@ -26,8 +26,11 @@ function updateError(error) {
   if (code === 'ERR_UPDATER_CHANNEL_FILE_NOT_FOUND' || /cannot find latest\.yml/i.test(message)) {
     return { status: 'error', error: 'The latest private release is missing its update manifest. Publish the complete release, then check again.' };
   }
-  if (code === 'ERR_UPDATER_CHECKSUM_MISMATCH' || code === 'ERR_UPDATER_INVALID_SIGNATURE' || /checksum mismatch/i.test(message)) {
+  if (code === 'ERR_UPDATER_CHECKSUM_MISMATCH' || code === 'ERR_UPDATER_INVALID_SIGNATURE' || code === 'ERR_UPDATER_INVALID_INSTALLER' || /checksum mismatch/i.test(message)) {
     return { status: 'error', error: 'The download could not be verified. Check again to download a fresh copy.' };
+  }
+  if (code === 'UPDATE_INSTALLER_LAUNCH_FAILED') {
+    return { status: 'error', error: 'The installer could not be started. If antivirus software is scanning the download, wait a moment and try again.' };
   }
   if (/\b403\b|\b404\b/.test(message)) return { status: 'error', error: 'GitHub could not provide this private release. Check repository access and try again later.' };
   return { status: 'error', error: 'The update could not finish. Check your connection and free disk space, then try again.' };
@@ -48,10 +51,35 @@ function clearEnvironmentTokens(environment) {
   }
 }
 
+// The manifest may list several files. Verify against the entry that names
+// the file actually downloaded; the single-file top-level digest is the fallback.
+function fileName(value) {
+  return String(value || '').split(/[/\\]/).pop().toLowerCase();
+}
+
+function manifestDigest(info, downloadedFile) {
+  const name = fileName(downloadedFile);
+  const files = Array.isArray(info?.files) ? info.files : [];
+  const match = name ? files.find((file) => fileName(file?.url) === name) : null;
+  if (match?.sha512) return match.sha512;
+  if (name && fileName(info?.path) === name && info?.sha512) return info.sha512;
+  return files.length === 1 ? files[0]?.sha512 ?? info?.sha512 ?? null : info?.sha512 ?? null;
+}
+
+// Error codes are stable identifiers, never request details; anything else is
+// omitted from the log rather than risk carrying a header or signed URL.
+function safeCode(error) {
+  const code = String(error?.code || '');
+  return /^[A-Z0-9_]{1,40}$/i.test(code) ? code : null;
+}
+
 function createUpdateChecker({
   autoUpdater, enabled, isPackaged, pkg, getToken,
   isPortable = Boolean(process.env.PORTABLE_EXECUTABLE_FILE || process.env.PORTABLE_EXECUTABLE_DIR),
   platform = process.platform, environment = process.env, beforeInstall = async () => {}, onInstallError = () => {},
+  // When both are supplied the app verifies and launches the installer itself,
+  // retrying a refused launch before it quits; otherwise electron-updater does.
+  launchInstaller = null, quitForInstall = null, installDirectoryWritable = () => false,
   onStatus = () => {}, onLog = () => {},
 }) {
   const feed = releaseFeed(pkg);
@@ -59,6 +87,8 @@ function createUpdateChecker({
   let timer = null;
   let operation = null;
   let downloaded = false;
+  let downloadedFile = null;
+  let downloadedSha512 = null;
   let candidate = false;
   let lastFailure = null;
   let result = {
@@ -77,8 +107,10 @@ function createUpdateChecker({
     if (error && error === lastFailure) return;
     lastFailure = error;
     const failure = updateError(error);
+    const stage = result.status;
     change({ ...failure, ...(downloaded ? { status: 'downloaded' } : {}) });
-    onLog(result.error);
+    const code = safeCode(error);
+    onLog(`Failed while ${stage}${code ? ` (${code})` : ''}: ${result.error}`);
   }
 
   if (autoUpdater) {
@@ -94,19 +126,24 @@ function createUpdateChecker({
     autoUpdater.on('update-available', (info) => {
       candidate = true;
       change({ status: 'available', version: info?.version || null, releaseNotes: notesText(info?.releaseNotes), checkedAt: new Date().toISOString(), error: null });
+      onLog(`Update available: ${result.version || 'unknown version'}.`);
     });
     autoUpdater.on('update-not-available', () => {
       candidate = false;
       change({ status: 'up-to-date', version: null, releaseNotes: null, checkedAt: new Date().toISOString(), error: null });
+      onLog('Up to date.');
     });
     autoUpdater.on('download-progress', (progress) => {
       if (result.status !== 'downloading') return;
       const percent = Number(progress?.percent);
       change({ progress: Number.isFinite(percent) ? Math.min(100, Math.max(0, percent)) : null });
     });
-    autoUpdater.on('update-downloaded', () => {
+    autoUpdater.on('update-downloaded', (info) => {
       downloaded = true;
+      downloadedFile = typeof info?.downloadedFile === 'string' ? info.downloadedFile : null;
+      downloadedSha512 = manifestDigest(info, downloadedFile);
       change({ status: 'downloaded', progress: 100, error: null });
+      onLog(`Download complete: ${result.version || 'unknown version'}.`);
     });
     autoUpdater.on('error', (error) => {
       const installing = result.status === 'installing';
@@ -146,6 +183,7 @@ function createUpdateChecker({
     if (!candidate) return Promise.resolve(status());
     return run(async () => {
       change({ status: 'downloading', progress: 0, error: null });
+      onLog(`Download started: ${result.version || 'unknown version'}.`);
       await autoUpdater.downloadUpdate();
     });
   }
@@ -154,9 +192,19 @@ function createUpdateChecker({
     if (!available || !downloaded || result.status === 'installing') return Promise.resolve(status());
     return run(async () => {
       change({ status: 'installing', error: null });
+      onLog(`Install requested: ${result.version || 'unknown version'}.`);
       // NSIS starts its installer before Electron emits before-quit.
       await beforeInstall();
-      try { autoUpdater.quitAndInstall(true, true); } catch (error) {
+      try {
+        if (launchInstaller && quitForInstall && downloadedFile && installDirectoryWritable()) {
+          await launchInstaller({ filePath: downloadedFile, sha512: downloadedSha512, onLog });
+          onLog('Quitting so the installer can replace the application.');
+          quitForInstall();
+        } else {
+          onLog('Installer launch delegated to electron-updater.');
+          autoUpdater.quitAndInstall(true, true);
+        }
+      } catch (error) {
         onInstallError();
         throw error;
       }

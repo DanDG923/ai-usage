@@ -15,6 +15,7 @@ const { createMaintenanceHost, createDatabaseQueue } = require('./maintenance-ho
 const { buildSummaryText, buildTrayTooltip, decideNotifications, emptyState } = require('./notifications.cjs');
 const { paintStateDot } = require('./tray-icon.cjs');
 const { createUpdateChecker } = require('./updater.cjs');
+const { installDirectoryWritable, launchInstaller } = require('./installer-launch.cjs');
 const { createGitHubUpdateAuth } = require('./update-auth.cjs');
 const {
   WINDOW_BOUNDS,
@@ -101,6 +102,27 @@ function saveNotificationState(state) {
 
 function log(message) {
   if (process.env.AI_USAGE_DEBUG === '1') process.stderr.write(`[ai-usage] ${message}\n`);
+}
+
+// A failed update used to leave no trace once the app had quit. Stage changes
+// and the sanitised failure messages the updater already shows are appended
+// here; request details, URLs and credentials never reach this file.
+const UPDATE_LOG_MAX_BYTES = 256 * 1024;
+
+function updateLogPath() {
+  return path.join(app.getPath('userData'), 'update.log');
+}
+
+function updateLog(message) {
+  const line = String(message).replace(/[\r\n\t]+/g, ' ').trim();
+  log(`Update: ${line}`);
+  try {
+    const file = updateLogPath();
+    try {
+      if (fs.statSync(file).size > UPDATE_LOG_MAX_BYTES) fs.renameSync(file, `${file}.1`);
+    } catch { /* No log yet, or rotation is not possible; append anyway. */ }
+    fs.appendFileSync(file, `${new Date().toISOString()} ${line}\n`, 'utf8');
+  } catch { /* Diagnostics must never affect the update itself. */ }
 }
 
 // The renderer owns the selected period, so every snapshot the main process
@@ -675,11 +697,13 @@ async function prepareUpdateInstall() {
       databaseJobs.prepareToClose(async () => {
         const backup = await maintenance.request('create-backup');
         backedUp = true;
+        updateLog('Safety backup complete.');
         return backup;
       }),
       deadline.expiry,
     ]);
-  } catch {
+  } catch (error) {
+    updateLog(`Preparation failed${deadline.expired ? ' (timed out)' : ''}: ${error?.message || 'unknown error'}`);
     if (deadline.expired) {
       // Accepted work or the backup is still running in the worker, so writes
       // cannot safely resume and nothing may install: reopen without updating.
@@ -697,14 +721,16 @@ async function prepareUpdateInstall() {
   }
   try {
     await Promise.race([closeStorage(), deadline.expiry]);
+    updateLog('Storage closed; ready for the installer.');
   } catch (error) {
     if (deadline.expired) {
       // Every accepted write is drained and backed up; only the close itself
       // stalled. The installer replaces the process, so let it proceed.
-      log('Update: storage did not close in time; installing with the backup taken.');
+      updateLog('Storage did not close in time; installing with the backup taken.');
       shutdownComplete = true;
       return;
     }
+    updateLog(`Storage close failed: ${error?.message || 'unknown error'}`);
     recoverFromUpdateInstallFailure();
     throw error;
   } finally {
@@ -717,6 +743,7 @@ function recoverFromUpdateInstallFailure(message = 'Your safety backup has been 
   // leave a visible dashboard attached to a closed database.
   if (!preparingUpdate) return;
   preparingUpdate = false;
+  updateLog(`Recovery: ${message} Relaunching the current version.`);
   dialog.showErrorBox('AI Usage update could not start', message);
   shutdownComplete = true;
   app.relaunch();
@@ -760,9 +787,13 @@ if (isPrimaryInstance) {
         getToken: createGitHubUpdateAuth().getToken,
         beforeInstall: prepareUpdateInstall,
         onInstallError: recoverFromUpdateInstallFailure,
+        launchInstaller,
+        quitForInstall: () => app.quit(),
+        installDirectoryWritable,
         onStatus: publishUpdateStatus,
-        onLog: log,
+        onLog: updateLog,
       });
+      updateLog(`Application started: version ${app.getVersion()}${app.isPackaged ? '' : ' (development)'}.`);
       // The renderer is local, offline content: it needs no notification,
       // media, geolocation or other web permissions, so none are granted.
       session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
