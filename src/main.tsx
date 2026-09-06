@@ -6,6 +6,7 @@ import './overview.css';
 import './accessibility.css';
 import './pricing.css';
 import './professional.css';
+import './tasks.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

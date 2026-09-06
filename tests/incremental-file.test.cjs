@@ -51,7 +51,11 @@ test('Codex session logs import incrementally with the working directory carried
     assert.equal(first.events, 1);
     const cursor = store.getImportedFile(file);
     assert.equal(cursor.size_bytes, fs.statSync(file).size);
-    assert.deepEqual(cursor.state, { sessionId: 'session-a', model: 'gpt-5.6-sol', project: 'C:\\work\\alpha' });
+    assert.equal(cursor.state.sessionId, 'session-a');
+    assert.equal(cursor.state.model, 'gpt-5.6-sol');
+    assert.equal(cursor.state.project, 'C:\\work\\alpha');
+    assert.equal(cursor.state.agentAttributionVersion, 1);
+    assert.equal(cursor.state.agent.agentKind, 'main');
     assert.equal(store.db.prepare('SELECT project FROM usage_events').get().project, 'C:\\work\\alpha');
 
     assert.equal(importLocalSessions(store).events, 0);

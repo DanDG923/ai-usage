@@ -135,6 +135,47 @@ export type SessionPage = {
   totalPages: number;
 };
 
+export type TaskUsageTotals = {
+  inputTokens: number;
+  cachedInputTokens: number;
+  cacheWriteInputTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+  totalTokens: number;
+  usageCount: number;
+  cost: number;
+  coverage: number;
+  startedAt: string | null;
+  occurredAt: string | null;
+  activitySpanMs: number | null;
+};
+
+export type TaskAgent = TaskUsageTotals & {
+  key: string;
+  sessionId: string;
+  agentId: string | null;
+  agentKind: 'main' | 'subagent' | 'unknown';
+  agentName: string | null;
+  agentRole: string | null;
+  parentSessionId: string | null;
+  model: string;
+};
+
+export type TaskCost = TaskUsageTotals & {
+  key: string;
+  sourceId: string;
+  sessionId: string;
+  taskId: string | null;
+  project: string | null;
+  subagentCount: number;
+  main: TaskUsageTotals;
+  subagent: TaskUsageTotals;
+  unknown: TaskUsageTotals;
+  agents: TaskAgent[];
+};
+
+export type TaskPage = Omit<SessionPage, 'rows'> & { rows: TaskCost[] };
+
 export type CostAnalytics = {
   periodDays: number;
   currency: string;
@@ -152,6 +193,7 @@ export type CostAnalytics = {
   byProject: ProjectCost[];
   chart: { date: string; codex: number; claude: number }[];
   sessions: SessionCost[];
+  tasks?: TaskCost[];
   /** Seven rows (Sunday first) of 24 hourly API-equivalent values in the display currency. */
   activityGrid?: number[][];
 };
@@ -286,6 +328,7 @@ export type Bridge = {
   ): Promise<ClaudeSetupStatus>;
   cancelClaudeSetup(): Promise<void>;
   getSnapshot(days?: number): Promise<Snapshot>;
+  getTasks(options: SessionPageOptions): Promise<TaskPage>;
   getSessions(options: SessionPageOptions): Promise<SessionPage>;
   refresh(): Promise<{
     snapshot: Snapshot;
