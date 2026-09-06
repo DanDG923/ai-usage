@@ -5,6 +5,7 @@ const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 const { buildDashboardVerdict } = require('./dashboard-decision.cjs');
 const { forecastQuota } = require('./forecast.cjs');
+const { MAX_QUOTA_RESET_AHEAD_MS, QUOTA_CLOCK_SKEW_MS, FORECAST_LOOKBACK_MS, validQuotaTime } = require('./quota-time.cjs');
 
 const SOURCE_DEFINITIONS = [
   ['codex', 'Codex', 'codex'],
@@ -12,11 +13,7 @@ const SOURCE_DEFINITIONS = [
   ['claude-fable', 'Fable 5', 'fable'],
 ];
 const KNOWN_SOURCE_IDS = new Set(SOURCE_DEFINITIONS.map(([id]) => id));
-const MAX_QUOTA_RESET_AHEAD_MS = 31 * 24 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
-// The learners look back 28 days for weighting and 21 for Fable calibration;
-// 45 days of raw polls covers both with room for a reset cycle either side.
-const FORECAST_LOOKBACK_MS = 45 * DAY_MS;
 // Beyond this age, keep each local day's endpoints and peak per bucket/window.
 // Provider rebounds must not erase the maximum shown in reset-cycle history.
 const COMPACT_AFTER_MS = 60 * DAY_MS;
@@ -549,6 +546,9 @@ class UsageStore {
       throw new Error('Observation confidence must be between 0 and 1.');
     }
     const observedAt = validIso(observation.observedAt || Date.now(), 'Observation time');
+    if (new Date(observedAt).getTime() > Date.now() + QUOTA_CLOCK_SKEW_MS) {
+      throw new Error('Observation time must not be more than five minutes in the future.');
+    }
     const resetsAt = validIso(observation.resetsAt, 'Reset time');
     const resetDistanceMs = new Date(resetsAt).getTime() - new Date(observedAt).getTime();
     if (resetDistanceMs < -5 * 60_000) {
@@ -746,14 +746,35 @@ class UsageStore {
   // vanishing. The full history stays in the table for cycle history and
   // backups; it is simply not re-forecast on every snapshot.
   getQuota(sourceId, settings = this.getSettings(), nowMs = Date.now()) {
-    const rows = this.prepare(`
+    const latestAllowed = iso(nowMs + QUOTA_CLOCK_SKEW_MS);
+    const oldestRecent = iso(nowMs - FORECAST_LOOKBACK_MS);
+    const usable = (row) => validQuotaTime(new Date(row.observed_at).getTime(),
+      new Date(row.resets_at).getTime(), row.window_minutes, nowMs);
+    const candidates = this.prepare(`
       SELECT * FROM quota_observations
-      WHERE source_id = ?
+      WHERE source_id = ? AND observed_at <= ?
         AND (observed_at >= ? OR (bucket_id, observed_at) IN (
-          SELECT bucket_id, MAX(observed_at) FROM quota_observations WHERE source_id = ? GROUP BY bucket_id
+          SELECT bucket_id, MAX(observed_at) FROM quota_observations
+          WHERE source_id = ? AND observed_at <= ? GROUP BY bucket_id
         ))
       ORDER BY observed_at ASC, id ASC
-    `).all(sourceId, iso(nowMs - FORECAST_LOOKBACK_MS), sourceId);
+    `).all(sourceId, latestAllowed, oldestRecent, sourceId, latestAllowed);
+    // Recheck persisted rows before selecting current card data or forecasting.
+    // Older app versions could store dates and windows now rejected on ingest.
+    const rows = candidates.filter(usable);
+    const presentBuckets = new Set(rows.map((row) => row.bucket_id));
+    const missingBuckets = new Set(candidates.filter((row) => !presentBuckets.has(row.bucket_id)).map((row) => row.bucket_id));
+    for (const bucketId of missingBuckets) {
+      // A malformed latest row must not hide valid dormant history. Only these
+      // buckets need an indexed, lazy search beyond the usual learning horizon.
+      for (const row of this.prepare(`
+        SELECT * FROM quota_observations
+        WHERE source_id = ? AND bucket_id = ? AND observed_at < ?
+        ORDER BY observed_at DESC, id DESC
+      `).iterate(sourceId, bucketId, oldestRecent)) {
+        if (usable(row)) { rows.push(row); break; }
+      }
+    }
     if (!rows.length) return null;
 
     const grouped = new Map();
@@ -1320,6 +1341,14 @@ class UsageStore {
     const events = this.prepare('SELECT * FROM usage_events WHERE occurred_at >= ? ORDER BY occurred_at ASC').all(since);
     const escape = (value) => {
       const text = value == null ? '' : String(value);
+      // CSV quoting alone does not stop spreadsheet formulas. Guard text at
+      // this sink, including prefixes hidden by whitespace/control characters
+      // and full-width formula markers, while leaving numeric cells numeric.
+      if (typeof value === 'string'
+        && (/^[\s\p{Cc}\p{Cf}]*[=+\-@\uff1d\uff0b\uff0d\uff20]/u.test(text)
+          || /^\s*[\p{Cc}\p{Cf}]/u.test(text))) {
+        return `"'${text.replaceAll('"', '""')}"`;
+      }
       return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
     };
     const header = ['occurred_at', 'source', 'model', 'project', 'session_id', 'input_tokens', 'cached_input_tokens',
@@ -1457,6 +1486,7 @@ class UsageStore {
   // can say so. Records the export cannot supply validly are skipped and
   // counted, never guessed, and one bad row never costs the others.
   restoreFromExport(payload) {
+    const nowMs = Date.now();
     const unreadable = () => new Error('That file is not a readable AI Usage export.');
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw unreadable();
     const schemaVersion = Number(payload.schemaVersion);
@@ -1565,6 +1595,7 @@ class UsageStore {
           if (resetDistanceMs < -5 * 60_000 || resetDistanceMs > MAX_QUOTA_RESET_AHEAD_MS) throw unreadable();
           const windowMinutes = row.window_minutes == null ? null : finiteNumber(row.window_minutes);
           const confidence = row.confidence == null ? 1 : finiteNumber(row.confidence);
+          if (!validQuotaTime(new Date(observedAt).getTime(), new Date(resetsAt).getTime(), windowMinutes, nowMs)) throw unreadable();
           if (windowMinutes != null && (!Number.isSafeInteger(windowMinutes) || windowMinutes < 0 || windowMinutes > 31 * 24 * 60)) throw unreadable();
           if (confidence == null || confidence < 0 || confidence > 1) throw unreadable();
           const provenance = typeof row.provenance === 'string' && row.provenance ? row.provenance : 'official';
