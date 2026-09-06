@@ -227,7 +227,7 @@ export default function App() {
       commitSnapshot(result.snapshot);
       const { settings: settingCount, observations, usageEvents, dailyUsage, prices, skipped } = result.result;
       setNotice(
-        `Added ${observations} observations, ${usageEvents} token records, ${dailyUsage} daily totals and ${prices} prices; records already held were left as they were. ${settingCount} settings were replaced by the export's.${skipped ? ` ${skipped} unusable records were skipped.` : ''}`,
+        `Added ${observations} observations, ${usageEvents} token records, ${dailyUsage} daily totals, ${prices} prices and ${result.result.desktopEstimates ?? 0} chat estimates; records already held were left as they were. ${settingCount} settings were replaced by the export's.${skipped ? ` ${skipped} unusable records were skipped.` : ''}`,
       );
     } catch (error) {
       failWith('That backup could not be restored.')(error);
@@ -411,7 +411,14 @@ export default function App() {
       )}
       {tab === 'activity' && <Activity snapshot={snapshot} days={days} />}
       {tab === 'costs' && (
-        <Costs snapshot={snapshot} days={days} onDays={changeDays} query={costQuery} onQuery={setCostQuery} />
+        <Costs
+          snapshot={snapshot}
+          days={days}
+          onDays={changeDays}
+          query={costQuery}
+          onQuery={setCostQuery}
+          onSnapshot={commitSnapshot}
+        />
       )}
       {tab === 'settings' && <Settings snapshot={snapshot} actions={actions} />}
       {notice && (

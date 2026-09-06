@@ -33,4 +33,4 @@ export function InfoTip({ label, children }: { label: string; children: React.Re
 }
 
 export const API_EQUIVALENT_EXPLAINER =
-  'The tracked tokens repriced at today’s API list prices, per model, as if every call had been billed by the token. It is a comparison, not an invoice: subscription fees, tool and web-search charges, taxes, and work done on other devices are not included. Editing a price reprices all displayed history.';
+  'The tracked tokens repriced at today’s API list prices, per model, as if every call had been billed by the token. It is a comparison, not an invoice: subscription fees, tool and web-search charges, taxes, regular Claude desktop and web chats, and work done on other devices are not included. Price coverage describes recorded tokens only, not how much of your account activity was captured. Editing a price reprices all displayed history.';

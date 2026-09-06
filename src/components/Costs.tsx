@@ -7,6 +7,7 @@ import { API_EQUIVALENT_EXPLAINER, InfoTip } from './InfoTip';
 import { cacheHitRate, rollups } from './details/cost-math';
 import { ModelTable, ProjectTable } from './details/Tables';
 import { SessionTable } from './details/SessionTable';
+import { DesktopEstimates } from './DesktopEstimates';
 
 export function Costs({
   snapshot,
@@ -14,12 +15,14 @@ export function Costs({
   onDays,
   query,
   onQuery,
+  onSnapshot,
 }: {
   snapshot: Snapshot;
   days: number;
   onDays: (days: number) => void;
   query: string;
   onQuery: (query: string) => void;
+  onSnapshot: (snapshot: Snapshot) => void;
 }) {
   const tableQuery = useDeferredValue(query);
   const costs = snapshot.costs;
@@ -58,6 +61,24 @@ export function Costs({
         </div>
       </section>
 
+      <section className="panel" aria-labelledby="cost-scope-heading">
+        <div className="panel-heading">
+          <div>
+            <h2 id="cost-scope-heading">Which usage is included?</h2>
+            <p>
+              Costs include models found in local Codex and Claude Code token records, including Opus, Sonnet, and
+              Haiku. Regular Claude desktop and web chats can be imported as{' '}
+              <a href="#desktop-estimates">separate text estimates below</a>. Their usage can also count toward the
+              account allowance shown on Overview.
+            </p>
+            <p>
+              Price coverage measures the recorded tokens we can price. Even 100% does not mean every chat on your
+              account was captured. Adding a model price does not import missing activity.
+            </p>
+          </div>
+        </div>
+      </section>
+
       <section className="cost-summary" aria-label="Cost summary">
         <div className="cost-primary">
           <span>Last {costs.periodDays} days</span>
@@ -92,9 +113,9 @@ export function Costs({
             <small>of prompt-side tokens</small>
           </div>
           <div>
-            <dt>Price coverage</dt>
+            <dt>Recorded token price coverage</dt>
             <dd>{percent(costs.coverage * 100)}</dd>
-            <small>{costs.isLowerBound ? 'Some tracked models are unpriced' : 'All tracked categories priced'}</small>
+            <small>{costs.isLowerBound ? 'Some recorded models are unpriced' : 'Recorded tokens only'}</small>
           </div>
         </dl>
       </section>
@@ -154,6 +175,7 @@ export function Costs({
       <ModelTable costs={costs} query={tableQuery} />
       <ProjectTable costs={costs} query={tableQuery} />
       <SessionTable snapshot={snapshot} query={query} />
+      <DesktopEstimates snapshot={snapshot} onSnapshot={onSnapshot} />
     </main>
   );
 }
