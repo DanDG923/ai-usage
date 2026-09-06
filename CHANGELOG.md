@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.29 — 6 September 2026
+
+- Added expandable task and session breakdowns under Costs, with main-agent and sub-agent API-equivalent costs, token categories, models, usage-record counts, and activity spans.
+- Added task and agent search with pagination. Missing task identifiers are shown as session breakdowns; unlinked or unattributed usage remains explicit.
+- Preserved Codex task/parent-thread and Claude sub-agent metadata during collection. Existing logs are rescanned once to backfill attribution without duplicating usage records.
+- Kept pricing coverage and unpriced models visible. Reasoning stays included in output tokens, and activity spans include idle time.
+
 ## 1.0.28 — 6 September 2026
 
 - Import Claude desktop and web chat exports from the Costs page, with a preview before saving and duplicate detection on repeat imports. Conversation text and titles are never retained by AI Usage.

@@ -9,9 +9,9 @@ It imports local usage evidence, learns your real burn pattern, evaluates every 
 
 ## Install
 
-Use `AI-Usage-Setup-1.0.28-x64.exe` for a normal Windows installation. Running it over an existing installation upgrades in place and preserves the local database, settings, observations, and backups. Uninstalling first is neither required nor recommended. Install this version once to enable future updates through the app.
+Use `AI-Usage-Setup-1.0.29-x64.exe` for a normal Windows installation. Running it over an existing installation upgrades in place and preserves the local database, settings, observations, and backups. Uninstalling first is neither required nor recommended. Install this version once to enable future updates through the app.
 
-Use `AI-Usage-Portable-1.0.28-x64.exe` for a single executable that does not install the app. Windows SmartScreen may show an unknown-publisher warning because this personal build is not backed by a commercial code-signing certificate; verify the supplied SHA-256 hash before running it.
+Use `AI-Usage-Portable-1.0.29-x64.exe` for a single executable that does not install the app. Windows SmartScreen may show an unknown-publisher warning because this personal build is not backed by a commercial code-signing certificate; verify the supplied SHA-256 hash before running it.
 
 ## Personal private updates
 
@@ -99,6 +99,12 @@ OpenAI GPT-6 Astra and GPT-5.6 Sol, Terra, and Luna requests over the published 
 
 These values are token-only comparisons, not provider invoices. They do not claim to include untracked tool charges, web-search charges, storage, taxes, subscription fees, or usage performed on another device that did not reach the local ledger. USD is the ledger currency; GBP and EUR use the manually saved display conversion rate and are not updated from a live foreign-exchange feed.
 
+The Costs screen now includes **Tasks & sub-agents**. Expand a row to see the main-agent and sub-agent API-equivalent totals, recorded agent count, each agent/model's uncached input, cache reads, cache writes, output (including reasoning), usage-record count, and first-to-last activity span. Search includes task/session IDs, agent IDs, names, roles, models, and projects. A model switch adds a row without counting the same agent twice. Totals use the existing per-event pricing and currency settings; unknown prices remain unpriced or lower bounds.
+
+Codex records are grouped by the recorded root turn ID (or a main thread's turn ID) when available. Parent/root session metadata links child and nested agent usage. Claude transcripts use their agent ID or the `session/subagents/agent-ID.jsonl` layout, with legacy `agent-ID.jsonl` support. When task attribution is absent, the UI explicitly shows a **session breakdown**; it does not infer task boundaries or read prompts to invent names. Unlinked child usage remains separate from identified turns. Legacy records without usable agent metadata stay **unattributed**. For older Codex logs without a root session ID, ancestry can only be followed through parent links present in the selected period. Agent counts include only agents with recorded usage, not every agent spawned. Activity span includes idle time and is not execution duration; a single record has no measurable span.
+
+On the next normal collection, each eligible local log is re-read once to backfill structural attribution, using the existing event keys to update rather than duplicate usage. Subsequent scans resume incrementally. Logs no longer available locally retain their existing costs and may remain unattributed. No prompts or response content are added to the ledger. The browser preview includes clearly labelled sample task breakdowns.
+
 The Details screen also groups the ledger **by project**, using the working directory each Codex or Claude session ran in, and shows **reset cycles**: the peak percentage each past allowance window reached and what that window's tokens are worth today. **Export CSV…** writes the ledger for the last 30, 90, or 365 days with the per-record API-equivalent, and **Copy summary** puts a plain-text version of every allowance on the clipboard.
 
 Details also shows the **cache hit rate** (the share of prompt tokens read from cache), **recent totals** (today, the last seven days against the seven before, month to date, and a straight-line projection for the month), and **when the work happens**, an hour-by-weekday heatmap of API-equivalent cost. With monthly subscription fees entered under **API pricing**, the Overview adds a **subscription value** figure: how many times over the period's API-equivalent value covers the fees for the same number of days. It compares; it never charges.
@@ -171,7 +177,7 @@ Linting uses oxlint (typescript-eslint does not yet support the TypeScript 7 com
 ## Publish future private updates
 
 1. Update `package.json`, both root versions in `package-lock.json`, the current installer names in this README, the version contract test, and `CHANGELOG.md`. Keep the GitHub repository private and retain the matching `updateFeed` and `build.publish` settings in `package.json`; the separate `updateFeed` survives packaging so the installed app can verify its destination.
-2. Complete the checks above, review the changes, and merge them. Create and push the matching version tag, for example `v1.0.28` for version `1.0.28`.
+2. Complete the checks above, review the changes, and merge them. Create and push the matching version tag, for example `v1.0.29` for version `1.0.29`.
 3. The **Private Windows release** GitHub Actions workflow builds Windows x64 packages, checks the manifest and packaged contents, and creates a draft release. It uploads the Setup installer, portable executable, installer block map, `latest.yml`, and `SHA256SUMS.txt`, verifies each remote asset's size and SHA-256 digest, then publishes the release as latest. The normal pull-request CI job is unchanged.
 
 The release workflow can also be started manually with an existing version tag. It refuses a mismatched version, a public or different destination, a tag whose commit is not already on `main`, an existing release for that tag, or a version older than an existing stable release. If an upload fails, any created release stays a draft for inspection and is not offered to the app. Review and remove that incomplete draft before retrying; the workflow never overwrites existing release assets.

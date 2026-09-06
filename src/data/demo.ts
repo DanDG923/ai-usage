@@ -424,3 +424,59 @@ export const demoSnapshot: Snapshot = {
     databaseSize: 3_480_576,
   },
 };
+
+// Browser-preview examples only; installed windows always use the local ledger.
+demoSnapshot.costs.tasks = demoSnapshot.costs.sessions.map((session, index) => {
+  const totals = (share: number, usageCount: number) => ({
+    inputTokens: Math.round(session.totalTokens * share * 0.6),
+    cachedInputTokens: Math.round(session.totalTokens * share * 0.3),
+    cacheWriteInputTokens: 0,
+    outputTokens: Math.round(session.totalTokens * share * 0.1),
+    reasoningOutputTokens: Math.round(session.totalTokens * share * 0.04),
+    totalTokens: Math.round(session.totalTokens * share),
+    usageCount,
+    cost: session.cost * share,
+    coverage: share ? 1 : 0,
+    startedAt: usageCount ? new Date(Date.parse(session.occurredAt) - 30 * 60_000).toISOString() : null,
+    occurredAt: usageCount ? session.occurredAt : null,
+    activitySpanMs: usageCount ? 30 * 60_000 : null,
+  });
+  const main = totals(0.6, 4);
+  const subagent = totals(0.4, 2);
+  return {
+    ...totals(1, 6),
+    key: `example-task-${index}`,
+    sourceId: session.sourceId,
+    sessionId: session.sessionId,
+    taskId: index === 0 ? 'example-task-review' : null,
+    project: session.project,
+    subagentCount: 1,
+    main,
+    subagent,
+    unknown: totals(0, 0),
+    agents: [
+      {
+        ...main,
+        key: 'main',
+        sessionId: session.sessionId,
+        agentId: session.sessionId,
+        agentKind: 'main',
+        agentName: null,
+        agentRole: null,
+        parentSessionId: null,
+        model: session.model,
+      },
+      {
+        ...subagent,
+        key: 'worker',
+        sessionId: `${session.sessionId}-worker`,
+        agentId: 'example-verifier',
+        agentKind: 'subagent',
+        agentName: 'Verifier',
+        agentRole: 'reviewer',
+        parentSessionId: session.sessionId,
+        model: session.model,
+      },
+    ],
+  };
+});
