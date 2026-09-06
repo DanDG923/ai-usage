@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.25 — 6 September 2026
+
+- Export potentially executable spreadsheet formulas as literal CSV text while preserving ordinary labels and numeric values.
+- Resolve Claude and Codex through validated absolute executable paths, preventing programs planted in the launch directory from being selected.
+- Reject far-future quota observations and bound forecasting work, including when older versions already stored invalid dates.
+- Preserve valid dormant quota history when newer malformed observations exist, with regression coverage for database reopening and supported reset windows.
+
 ## 1.0.24 — 5 September 2026
 
 - Bound the whole update preparation to fifteen seconds. If the safety backup does not finish in time, nothing is installed and AI Usage reopens so the update can be retried; if only the final storage close stalls after the backup, the update proceeds.
