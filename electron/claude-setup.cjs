@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFile, spawn } = require('node:child_process');
-const { findClaudeBinary } = require('./claude-collector.cjs');
+const { findClaudeBinary, providerProcessOptions } = require('./provider-executable.cjs');
 
 // Fixed vendor command: neither executable arguments nor script content come
 // from the renderer. The native installer needs no npm or administrator rights.
@@ -11,7 +11,7 @@ const INSTALL_COMMAND = "$ErrorActionPreference='Stop'; & ([scriptblock]::Create
 
 function runCommand(file, args, { timeoutMs = 15000, acceptExitOne = false } = {}) {
   return new Promise((resolve, reject) => {
-    execFile(file, args, { windowsHide: true, timeout: timeoutMs, maxBuffer: 1024 * 1024 }, (error, stdout) => {
+    execFile(file, args, { ...providerProcessOptions(file), windowsHide: true, timeout: timeoutMs, maxBuffer: 1024 * 1024 }, (error, stdout) => {
       if (error && !(acceptExitOne && error.code === 1)) {
         reject(new Error(error.killed ? 'Claude setup timed out. Check your connection and try again.' : 'Claude could not complete this step. Please try again.'));
       } else resolve(stdout);
@@ -57,7 +57,7 @@ function createClaudeSetup({ statePath, findBinary = findClaudeBinary, run = run
     return new Promise((resolve, reject) => {
       // Claude opens the user's browser itself. Discard its output so OAuth
       // URLs, codes and account details never enter app logs or the renderer.
-      child = launch(file, args, { windowsHide: true, stdio: 'ignore' });
+      child = launch(file, args, { ...providerProcessOptions(file), windowsHide: true, stdio: 'ignore' });
       const active = child;
       const timer = setTimeout(() => cancel(), timeoutMs);
       let settled = false;

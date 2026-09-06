@@ -1,8 +1,12 @@
 'use strict';
 
+const { MAX_QUOTA_RESET_AHEAD_MS, QUOTA_CLOCK_SKEW_MS, FORECAST_LOOKBACK_MS, validQuotaTime } = require('./quota-time.cjs');
+
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 const RESET_TOLERANCE_MS = 60_000;
+const MAX_PROJECTION_MS = MAX_QUOTA_RESET_AHEAD_MS + QUOTA_CLOCK_SKEW_MS;
+const MAX_SERIES_POINTS = Math.ceil(MAX_PROJECTION_MS / HOUR_MS) + 1;
 
 function clamp(value, min, max) { return Math.min(max, Math.max(min, value)); }
 
@@ -156,12 +160,13 @@ function windowPaceOf(rows, schedule, observedResetAt = null) {
 }
 
 function normaliseObservation(row) {
+  const windowMinutes = row.windowMinutes ?? row.window_minutes;
   return {
     observedAt: new Date(row.observedAt ?? row.observed_at).getTime(),
     resetsAt: new Date(row.resetsAt ?? row.resets_at).getTime(),
     usedPercent: Number(row.usedPercent ?? row.used_percent),
     remainingPercent: Number(row.remainingPercent ?? row.remaining_percent),
-    windowMinutes: Number(row.windowMinutes ?? row.window_minutes ?? NaN),
+    windowMinutes: windowMinutes == null ? null : Number(windowMinutes),
     provenance: row.provenance || 'official',
   };
 }
@@ -215,7 +220,8 @@ function addIntervalSamples(samples, before, after, schedule, nowMs, rateElapsed
 
 function deriveLearningSamples(observations, schedule, nowMs) {
   const rows = observations.map(normaliseObservation)
-    .filter((row) => Number.isFinite(row.observedAt) && Number.isFinite(row.resetsAt) && Number.isFinite(row.usedPercent))
+    .filter((row) => validQuotaTime(row.observedAt, row.resetsAt, row.windowMinutes, nowMs)
+      && row.observedAt >= nowMs - FORECAST_LOOKBACK_MS && Number.isFinite(row.usedPercent))
     .sort((a, b) => a.observedAt - b.observedAt);
   const samples = [];
   if (rows.length < 2) return samples;
@@ -304,6 +310,11 @@ function recentRate(samples, nowMs, phase) {
 }
 
 function buildSeries(expectedStart, heavyStart, startMs, endMs, schedule, samples, rates) {
+  // Reject unsupported work before allocation. Never turn a distant reset into
+  // a shorter, apparently valid forecast (including an already empty allowance).
+  const points = Math.ceil(Math.max(0, endMs - startMs) / HOUR_MS) + 1;
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)
+    || endMs - startMs > MAX_PROJECTION_MS || points > MAX_SERIES_POINTS) return null;
   const expected = [{ at: startMs, remaining: clamp(expectedStart, 0, 100) }];
   const heavy = [{ at: startMs, remaining: clamp(heavyStart, 0, 100) }];
   const learnedRate = createRateLookup(samples);
@@ -368,7 +379,8 @@ function exhaustionTime(series) {
 }
 
 function forecastQuota(observations, options = {}) {
-  const nowMs = options.now ? new Date(options.now).getTime() : Date.now();
+  const nowMs = options.now != null ? new Date(options.now).getTime() : Date.now();
+  if (!Number.isFinite(nowMs)) return unknownForecast();
   const schedule = {
     activeDays: options.schedule?.activeDays ?? [1, 2, 3, 4, 5, 6, 0],
     startHour: options.schedule?.startHour ?? 8,
@@ -381,11 +393,14 @@ function forecastQuota(observations, options = {}) {
   // It is subtracted from what the safe pace may spend, never from the
   // projection itself — the forecast still says what will happen.
   const reservePercent = clamp(Number(options.reservePercent ?? 0) || 0, 0, 90);
-  const normalised = observations.map(normaliseObservation)
-    .filter((row) => Number.isFinite(row.observedAt) && Number.isFinite(row.resetsAt))
+  let normalised = observations.map(normaliseObservation)
+    .filter((row) => validQuotaTime(row.observedAt, row.resetsAt, row.windowMinutes, nowMs))
     .sort((a, b) => a.observedAt - b.observedAt);
   const current = normalised.at(-1);
   if (!current) return unknownForecast();
+  // Keep the latest dormant reading so it still reports expired, but do not
+  // traverse ancient rolling windows in learning or active-hour calculations.
+  normalised = normalised.filter((row) => row === current || row.observedAt >= nowMs - FORECAST_LOOKBACK_MS);
 
   const resetMs = current.resetsAt;
   const clusters = clusterByWindow(normalised);
@@ -512,9 +527,11 @@ function forecastQuota(observations, options = {}) {
   };
 
   const catchUp = buildSeries(remaining, remaining, current.observedAt, nowMs, schedule, samples, rates);
+  if (!catchUp) return unknownForecast({ observed, staleHours });
   const estimatedCurrent = catchUp.expected.at(-1)?.remaining ?? remaining;
   const heavyCurrent = catchUp.heavy.at(-1)?.remaining ?? remaining;
   const future = buildSeries(estimatedCurrent, heavyCurrent, nowMs, resetMs, schedule, samples, rates);
+  if (!future) return unknownForecast({ observed, staleHours });
   const expectedRemaining = future.expected.at(-1)?.remaining ?? estimatedCurrent;
   const heavyRemaining = future.heavy.at(-1)?.remaining ?? heavyCurrent;
   const activeHoursLeft = activeHoursBetween(nowMs, resetMs, schedule);

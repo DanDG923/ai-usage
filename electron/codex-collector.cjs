@@ -3,38 +3,13 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const readline = require('node:readline');
-const { spawn, spawnSync } = require('node:child_process');
+const { spawn } = require('node:child_process');
+const { findCodexBinary, providerProcessOptions } = require('./provider-executable.cjs');
 const { planIncrementalRead, readCompleteLines } = require('./incremental-file.cjs');
 const { epochToIso } = require('./time.cjs');
 
 // Read from the manifest so the version reported to Codex cannot drift.
 const APP_VERSION = require('../package.json').version;
-
-function findCodexBinary() {
-  if (process.env.CODEX_BINARY && fs.existsSync(process.env.CODEX_BINARY)) return process.env.CODEX_BINARY;
-  const lookup = spawnSync('where.exe', ['codex.exe'], { encoding: 'utf8', windowsHide: true });
-  const found = lookup.stdout?.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
-  if (found && fs.existsSync(found)) return found;
-
-  const binRoot = path.join(process.env.LOCALAPPDATA || '', 'OpenAI', 'Codex', 'bin');
-  if (fs.existsSync(binRoot)) {
-    const candidates = [];
-    try {
-      for (const entry of fs.readdirSync(binRoot, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue;
-        const candidate = path.join(binRoot, entry.name, 'codex.exe');
-        try {
-          if (fs.existsSync(candidate)) candidates.push({ candidate, modified: fs.statSync(candidate).mtimeMs });
-        } catch { /* A managed install can change while it is being scanned. */ }
-      }
-    } catch {
-      return null;
-    }
-    candidates.sort((a, b) => b.modified - a.modified);
-    if (candidates[0]) return candidates[0].candidate;
-  }
-  return null;
-}
 
 class JsonLineClient {
   constructor(binary, spawnProcess = spawn) {
@@ -47,7 +22,7 @@ class JsonLineClient {
     this.child = spawnProcess(binary, ['app-server', '--stdio'], {
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
-      env: process.env,
+      ...providerProcessOptions(binary),
     });
     this.child.once('error', (error) => {
       this.fail(new Error(`Codex app server process error: ${error.message}`));
