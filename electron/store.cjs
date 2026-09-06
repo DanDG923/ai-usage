@@ -213,6 +213,7 @@ class UsageStore {
   }
 
   migrate() {
+    require('./desktop-estimates.cjs').migrateDesktopEstimates(this.db);
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY,
@@ -1467,6 +1468,7 @@ class UsageStore {
       resetCredits,
       priceCatalog: this.getPriceCatalog(),
       costs: this.getCostAnalytics(days, settings, nowMs),
+      desktopEstimates: require('./desktop-estimates.cjs').desktopAnalytics(this, days, settings, nowMs),
       cycles: {
         codex: this.getCycleHistory('codex', quotas.codex, settings, 8, nowMs),
         claude: this.getCycleHistory('claude', quotas.claude, settings, 8, nowMs),
@@ -1496,6 +1498,7 @@ class UsageStore {
       sources: this.prepare('SELECT * FROM sources').all(),
       observations: this.prepare('SELECT * FROM quota_observations').all(),
       usageEvents: this.prepare('SELECT * FROM usage_events').all(),
+      desktopEstimates: this.prepare('SELECT * FROM desktop_chat_estimates').all(),
       dailyUsage: this.prepare('SELECT * FROM account_daily_usage').all(),
       prices: this.prepare('SELECT * FROM price_catalog').all(),
     };
@@ -1722,6 +1725,19 @@ class UsageStore {
           counts.prices += insertPrice.run(model, ...values, effectiveFrom, sourceUrl).changes;
         } catch {
           counts.skipped += 1;
+        }
+      }
+
+      if (list(payload.desktopEstimates).length) {
+        counts.desktopEstimates = 0;
+        const models = require('./desktop-estimates.cjs').storedDesktopModels(this);
+        for (const row of payload.desktopEstimates) {
+          try {
+            counts.desktopEstimates += require('./desktop-estimates.cjs').insertDesktopEstimate(this, row, models);
+          } catch (error) {
+            if (error?.code) throw error;
+            counts.skipped += 1;
+          }
         }
       }
 

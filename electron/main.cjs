@@ -612,6 +612,46 @@ function registerIpc() {
     const error = await shell.openPath(store.backupDirectory);
     if (error) throw new Error(`Windows could not open the backup folder: ${error}`);
   });
+  handleIpc('dashboard:preview-desktop-export', async () => {
+    const chosen = await dialog.showOpenDialog(window ?? undefined, {
+      title: 'Choose conversations.json from your Claude export', properties: ['openFile'],
+      filters: [{ name: 'Claude conversation export', extensions: ['json'] }],
+    });
+    if (chosen.canceled || !chosen.filePaths?.length) return null;
+    return databaseJobs.exclusive(() => maintenance.request('preview-desktop-export', { filePath: chosen.filePaths[0] }));
+  });
+  handleIpc('dashboard:cancel-desktop-export', async (_event, previewId) => {
+    await maintenance.request('cancel-desktop-export', { previewId });
+  });
+  handleIpc('dashboard:import-desktop-export', async (_event, previewId, assumedModel) => {
+    if (typeof previewId !== 'string' || previewId.length > 100
+      || (assumedModel != null && (typeof assumedModel !== 'string' || assumedModel.length > 120))) {
+      throw new Error('Invalid desktop import selection.');
+    }
+    return databaseJobs.exclusive(async () => {
+      const result = await maintenance.request('import-desktop-export', { previewId, assumedModel });
+      invalidateSnapshot();
+      const current = snapshot();
+      publishAfterWrite(current);
+      return { result, snapshot: current };
+    });
+  });
+  handleIpc('dashboard:clear-desktop-estimates', async () => {
+    const choice = await dialog.showMessageBox(window ?? undefined, {
+      type: 'question', title: 'Remove imported chat estimates?',
+      message: 'Remove all imported Claude chat estimates?',
+      detail: 'A backup is created first. Recorded token usage and quota history are kept.',
+      buttons: ['Cancel', 'Remove estimates'], defaultId: 0, cancelId: 0,
+    });
+    if (choice.response !== 1) return { cancelled: true, snapshot: snapshot() };
+    return databaseJobs.exclusive(async () => {
+      await maintenance.request('clear-desktop-estimates');
+      invalidateSnapshot();
+      const current = snapshot();
+      publishAfterWrite(current);
+      return { cancelled: false, snapshot: current };
+    });
+  });
   handleIpc('dashboard:export-csv', async (_event, days = 90) => {
     const period = Math.min(365, Math.max(1, Math.round(Number(days)) || 90));
     const stamp = new Date().toISOString().slice(0, 10);

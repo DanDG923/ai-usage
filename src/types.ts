@@ -201,6 +201,7 @@ export type Settings = {
 };
 
 export type RestoreCounts = {
+  desktopEstimates?: number;
   settings: number;
   observations: number;
   usageEvents: number;
@@ -221,6 +222,7 @@ export type PriceRow = {
 };
 
 export type Snapshot = {
+  desktopEstimates?: DesktopEstimates;
   generatedAt: string;
   timezone: string;
   settings: Settings;
@@ -267,6 +269,16 @@ export type UpdateStatus = {
 };
 
 export type Bridge = {
+  previewDesktopExport(): Promise<DesktopImportPreview | null>;
+  cancelDesktopExport(previewId: string): Promise<void>;
+  importDesktopExport(
+    previewId: string,
+    assumedModel: string | null,
+  ): Promise<{
+    result: { imported: number; duplicates: number };
+    snapshot: Snapshot;
+  }>;
+  clearDesktopEstimates(): Promise<{ cancelled: boolean; snapshot: Snapshot }>;
   getClaudeSetup(): Promise<ClaudeSetupStatus>;
   configureClaude(
     action: 'install' | 'login' | 'finish' | 'check' | 'skip',
@@ -320,6 +332,34 @@ export type Bridge = {
   installUpdate(): Promise<UpdateStatus>;
   onUpdateStatus(callback: (status: UpdateStatus) => void): () => void;
   onUpdated?(callback: (snapshot: Snapshot) => void): () => void;
+};
+
+export type DesktopImportPreview = {
+  id: string;
+  conversations: number;
+  replies: number;
+  skipped: number;
+  unknownModelReplies: number;
+  excludedContentReplies: number;
+  models: string[];
+};
+
+export type DesktopEstimates = {
+  periodDays: number;
+  currency: string;
+  estimatedCost: number;
+  replies: number;
+  storedReplies: number;
+  unpricedReplies: number;
+  byModel: {
+    model: string | null;
+    modelOrigin: 'exported' | 'assumed' | 'unknown';
+    replies: number;
+    inputTokens: number;
+    outputTokens: number;
+    incompleteReplies: number;
+    estimatedCost: number | null;
+  }[];
 };
 
 declare global {
