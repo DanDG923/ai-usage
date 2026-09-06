@@ -111,6 +111,8 @@ Collection runs in a separate utility process with its own connection to the sam
 
 Update checks fetch private GitHub release metadata and a version manifest. Installer downloads happen only after **Download update** is selected. Update requests contain the GitHub authorization needed for this private repository; local usage data is not sent.
 
+Each update stage and any failure message is appended to `update.log` in the app's data folder (`%APPDATA%\ai-usage`), so a failed installation can be diagnosed after the app has restarted. The log holds only stage names, versions and the same wording shown in Settings; no request details or credentials. Before the installer runs, its checksum is verified again against the release manifest, and a launch the system refuses, for example while antivirus software is still scanning the download, is retried a few times before the update is reported as failed.
+
 ## Security model and accepted risks
 
 The window runs sandboxed with context isolation, no Node integration, a content security policy that allows no network origin, and navigation, pop-ups, redirects and embedded web views denied. Web permission requests (notifications, media, geolocation and the rest) are refused outright; desktop notifications come from the main process. Every bridge call is accepted only from the dashboard's own main frame.
