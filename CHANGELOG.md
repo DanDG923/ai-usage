@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.26 — 6 September 2026
+
+- Accept bridge calls only from the dashboard's own main frame for every action, not just Claude setup.
+- Deny pop-ups, navigation, redirects, embedded web views, and all web permission requests such as notifications or microphone access in the renderer.
+- Validate settings keys as own entries only, so inherited object names cannot pass validation from the settings screen, an export, or a stored row.
+- Bound and shape price catalogue text: plain-text model names, calendar effective dates, http(s) source links, and capped rates, while keeping restored rows whose link is unusable.
+- Reduce Codex exit diagnostics to one short line before they appear in source status or a desktop notification.
+- Exclude the launch directory when locating the GitHub CLI for private updates, matching the provider executable rule.
+- Document the security model and accepted risks in the README, and stop tracking packaging outputs and local investigation notes.
+
 ## 1.0.25 — 6 September 2026
 
 - Export potentially executable spreadsheet formulas as literal CSV text while preserving ordinary labels and numeric values.
