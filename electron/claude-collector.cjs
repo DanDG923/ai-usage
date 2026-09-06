@@ -2,57 +2,13 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { findClaudeBinary } = require('./provider-executable.cjs');
 const { createClaudeAgentSdkUsagePort } = require('./claude-agent-usage.cjs');
 const { createFableUsageTracker, OFFICIAL_PROVENANCES } = require('./fable-tracker.cjs');
 const { planIncrementalRead, readCompleteLines } = require('./incremental-file.cjs');
 const { epochToIso } = require('./time.cjs');
 
 const MAX_INBOX_BYTES = 2 * 1024 * 1024;
-
-function findClaudeBinary() {
-  const lookup = spawnSync('where.exe', ['claude'], { encoding: 'utf8', windowsHide: true });
-  const found = lookup.stdout?.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
-  if (found && fs.existsSync(found)) return found;
-
-  // Native installs update PATH for future processes. A running dashboard
-  // must also find the executable immediately after setup finishes.
-  if (process.env.USERPROFILE) {
-    const nativeBinary = path.join(process.env.USERPROFILE, '.local', 'bin', 'claude.exe');
-    try { if (fs.statSync(nativeBinary).isFile()) return nativeBinary; } catch { /* Not installed here. */ }
-  }
-
-  const bundledRoots = [
-    process.env.APPDATA && path.join(process.env.APPDATA, 'Claude', 'claude-code'),
-    // The Microsoft Store app redirects its roaming data into its package
-    // cache. Only inspect the official package's Code cache, never its GUI.
-    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Packages',
-      'Claude_pzs8sxrjxfjjc', 'LocalCache', 'Roaming', 'Claude', 'claude-code'),
-  ].filter(Boolean);
-  for (const bundledRoot of bundledRoots) {
-    try {
-      const versions = fs.readdirSync(bundledRoot, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => ({
-          version: entry.name,
-          binary: path.join(bundledRoot, entry.name, 'claude.exe'),
-        }))
-        .filter((entry) => {
-          try { return fs.statSync(entry.binary).isFile(); } catch { return false; }
-        })
-        .sort((a, b) => b.version.localeCompare(a.version, undefined, { numeric: true }));
-      if (versions[0]) return versions[0].binary;
-    } catch {
-      // Missing or unreadable installations must not prevent later fallbacks.
-    }
-  }
-
-  // Claude Desktop and Claude Code both ship a claude.exe on Windows, but the
-  // Agent SDK requires the Code CLI. Do not guess from the Desktop install
-  // directory: launching that GUI binary as a control process is unsafe and
-  // can leave automatic refresh wedged.
-  return null;
-}
 
 function emptyInboxResult(overrides = {}) {
   return {

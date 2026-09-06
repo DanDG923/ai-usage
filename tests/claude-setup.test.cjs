@@ -84,6 +84,8 @@ test('login is exclusive, cancellable, and retryable without leaking its output'
     f.setup.cancel(); await rejection;
     assert.equal((await f.setup.status()).busy, false);
     assert.equal(launchOptions.stdio, 'ignore');
+    assert.equal(launchOptions.cwd, 'C:\\Claude Code');
+    assert.ok(Object.hasOwn(launchOptions.env, 'PATH'));
     assert.equal(fs.existsSync(f.statePath), false);
   } finally { f.clean(); }
 });

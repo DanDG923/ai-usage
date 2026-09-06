@@ -84,6 +84,8 @@ test('one read returns only plan windows and closes a no-message Claude query', 
   assert.equal(queryOptions.pathToClaudeCodeExecutable, 'C:\\fixture\\claude.exe');
   assert.equal(queryOptions.persistSession, false);
   assert.deepEqual(queryOptions.settingSources, []);
+  assert.equal(queryOptions.cwd, 'C:\\fixture');
+  assert.ok(Object.hasOwn(queryOptions.env, 'PATH'));
   assert.equal(queryOptions.systemPrompt, '');
   assert.deepEqual(queryOptions.tools, []);
   assert.deepEqual(queryOptions.allowedTools, []);
