@@ -1,5 +1,7 @@
 'use strict';
 
+const { providerProcessOptions } = require('./provider-executable.cjs');
+
 const DEFAULT_TIMEOUT_MS = 10_000;
 const { setTimeout: delay } = require('node:timers/promises');
 const { createUsageDiagnostics } = require('./claude-usage-diagnostics.cjs');
@@ -261,6 +263,7 @@ function createClaudeAgentSdkUsagePort({
           prompt: input.iterable,
           options: {
             pathToClaudeCodeExecutable: claudePath,
+            ...providerProcessOptions(claudePath),
             persistSession: false,
             settingSources: [],
             systemPrompt: '',

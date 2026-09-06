@@ -26,7 +26,13 @@ function makeChild() {
 
 test('the JSON-line client rejects pending and future requests when the child cannot start', async () => {
   const child = makeChild();
-  const client = new JsonLineClient('codex.exe', () => child);
+  const client = new JsonLineClient('C:\\fixture\\codex.exe', (file, args, options) => {
+    assert.equal(file, 'C:\\fixture\\codex.exe');
+    assert.deepEqual(args, ['app-server', '--stdio']);
+    assert.equal(options.cwd, 'C:\\fixture');
+    assert.ok(Object.hasOwn(options.env, 'PATH'));
+    return child;
+  });
   const pending = client.request('initialize');
 
   child.emit('error', new Error('spawn ENOENT'));
@@ -38,7 +44,7 @@ test('the JSON-line client rejects pending and future requests when the child ca
 for (const pipe of ['stdin', 'stdout', 'stderr']) {
   test(`the JSON-line client rejects a pending request when ${pipe} fails`, async () => {
     const child = makeChild();
-    const client = new JsonLineClient('codex.exe', () => child);
+    const client = new JsonLineClient('C:\\fixture\\codex.exe', () => child);
     const pending = client.request('account/rateLimits/read');
 
     child[pipe].emit('error', new Error(`${pipe} EPIPE`));
@@ -55,14 +61,14 @@ test('the JSON-line client handles an asynchronous stdin write failure', async (
       return false;
     },
   });
-  const client = new JsonLineClient('codex.exe', () => child);
+  const client = new JsonLineClient('C:\\fixture\\codex.exe', () => child);
 
   await assert.rejects(client.request('initialize'), /write EPIPE/);
 });
 
 test('the JSON-line client still resolves valid JSON-line responses', async () => {
   const child = makeChild();
-  const client = new JsonLineClient('codex.exe', () => child);
+  const client = new JsonLineClient('C:\\fixture\\codex.exe', () => child);
   const response = client.request('account/usage/read');
 
   child.stdout.write(`${JSON.stringify({ id: 1, result: { dailyUsageBuckets: [] } })}\n`);
