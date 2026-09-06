@@ -28,7 +28,28 @@ function absoluteDirectory(value) {
   return path.normalize(unquoted);
 }
 
-function commandEnvironment(environment) {
+// The launch directory is where a shortcut, a downloaded archive or an
+// Explorer "open with" placed the process. Even when it also appears in PATH
+// as an absolute entry it must not be searched for gh.exe or handed to it.
+function launchDirectory(realpath) {
+  try { return path.normalize(realpath(process.cwd())).toLowerCase(); } catch { return null; }
+}
+
+function trustedPathDirectories(environment, realpath) {
+  const launch = launchDirectory(realpath);
+  const directories = [];
+  for (const entry of String(environmentValue(environment, 'PATH') || '').split(';')) {
+    const directory = absoluteDirectory(entry);
+    if (!directory) continue;
+    let canonical = directory;
+    try { canonical = absoluteDirectory(realpath(directory)) ?? directory; } catch { /* Compare the entry as written. */ }
+    if (launch && canonical.toLowerCase() === launch) continue;
+    directories.push(canonical);
+  }
+  return directories;
+}
+
+function commandEnvironment(environment, realpath) {
   const clean = {};
   for (const [key, value] of Object.entries(environment)) {
     // gh gives environment tokens priority over the user's stored sign-in.
@@ -36,14 +57,14 @@ function commandEnvironment(environment) {
     if (/^(?:GH_TOKEN|GITHUB_TOKEN|GH_ENTERPRISE_TOKEN|GITHUB_ENTERPRISE_TOKEN|GH_HOST|GH_DEBUG|DEBUG|PATH)$/i.test(key)) continue;
     clean[key] = value;
   }
-  clean.PATH = String(environmentValue(environment, 'PATH') || '').split(';').map(absoluteDirectory).filter(Boolean).join(';');
+  clean.PATH = trustedPathDirectories(environment, realpath).join(';');
   clean.GH_PROMPT_DISABLED = '1';
   clean.GH_NO_UPDATE_NOTIFIER = '1';
   clean.GH_NO_EXTENSION_UPDATE_NOTIFIER = '1';
   return clean;
 }
 
-function createGitHubUpdateAuth({ environment = process.env, stat = fs.statSync, execute = execFile } = {}) {
+function createGitHubUpdateAuth({ environment = process.env, stat = fs.statSync, execute = execFile, realpath = fs.realpathSync } = {}) {
   function findCli() {
     const programRoots = [
       environmentValue(environment, 'ProgramW6432'),
@@ -56,7 +77,7 @@ function createGitHubUpdateAuth({ environment = process.env, stat = fs.statSync,
     const directories = [
       ...programRoots.map((root) => path.join(root, 'GitHub CLI')),
       ...(local ? [path.join(local, 'Programs', 'GitHub CLI'), path.join(local, 'Microsoft', 'WinGet', 'Links')] : []),
-      ...String(environmentValue(environment, 'PATH') || '').split(';').map(absoluteDirectory).filter(Boolean),
+      ...trustedPathDirectories(environment, realpath),
     ];
     const visited = new Set();
     for (const directory of directories) {
@@ -79,7 +100,7 @@ function createGitHubUpdateAuth({ environment = process.env, stat = fs.statSync,
           maxBuffer: MAX_OUTPUT_BYTES,
           encoding: 'utf8',
           cwd: path.dirname(executable),
-          env: commandEnvironment(environment),
+          env: commandEnvironment(environment, realpath),
         }, (error, stdout) => {
           if (error) reject(authRequired());
           else resolve(stdout);
@@ -100,4 +121,4 @@ function createGitHubUpdateAuth({ environment = process.env, stat = fs.statSync,
   return { getToken };
 }
 
-module.exports = { createGitHubUpdateAuth };
+module.exports = { createGitHubUpdateAuth, trustedPathDirectories };

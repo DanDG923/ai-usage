@@ -11,6 +11,17 @@ const { epochToIso } = require('./time.cjs');
 // Read from the manifest so the version reported to Codex cannot drift.
 const APP_VERSION = require('../package.json').version;
 
+// The exit message becomes the source's status text, which the dashboard and
+// a desktop notification display. Only a short, single-line excerpt of the
+// final stderr output is useful there; the full buffer stays in this process.
+const MAX_STDERR_EXCERPT = 240;
+
+function stderrExcerpt(stderr) {
+  const text = String(stderr || '').replace(/[\p{Cc}\p{Cf}]+/gu, ' ').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  return text.length > MAX_STDERR_EXCERPT ? `…${text.slice(-MAX_STDERR_EXCERPT)}` : text;
+}
+
 class JsonLineClient {
   constructor(binary, spawnProcess = spawn) {
     this.nextId = 1;
@@ -56,7 +67,7 @@ class JsonLineClient {
     });
     this.child.once('exit', (code, signal) => {
       const reason = signal ? `signal ${signal}` : `code ${code}`;
-      const detail = this.stderr.trim();
+      const detail = stderrExcerpt(this.stderr);
       this.fail(new Error(`Codex app server exited with ${reason}.${detail ? ` ${detail}` : ''}`));
     });
   }
@@ -374,7 +385,7 @@ async function refreshCodex(store, {
   }
 }
 
-module.exports = {
+module.exports = { stderrExcerpt,
   collectFromAppServer,
   JsonLineClient,
   findCodexBinary,
