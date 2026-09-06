@@ -1038,12 +1038,13 @@ test('the settings backup is byte-exact, not a UTF-8 round trip', () => {
 
 test('bundled Claude Code executable is detected when it is not on PATH', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-binary-'));
-  const oldAppData = process.env.APPDATA;
-  const oldPath = process.env.PATH;
+  const previous = { USERPROFILE: process.env.USERPROFILE, APPDATA: process.env.APPDATA, PATH: process.env.PATH };
   process.env.APPDATA = root;
   // The premise is "not on PATH": empty PATH so a machine with a real Claude
-  // install (or even where.exe itself) cannot satisfy the lookup first.
+  // install (or even where.exe itself) cannot satisfy the lookup first, and
+  // an empty profile so a real native install under ~/.local/bin cannot either.
   process.env.PATH = '';
+  process.env.USERPROFILE = path.join(root, 'empty-profile');
   const older = path.join(root, 'Claude', 'claude-code', '2.1.9');
   const newer = path.join(root, 'Claude', 'claude-code', '2.1.10');
   fs.mkdirSync(older, { recursive: true });
@@ -1053,14 +1054,16 @@ test('bundled Claude Code executable is detected when it is not on PATH', () => 
   try {
     assert.equal(findClaudeBinary(), path.join(newer, 'claude.exe'));
   } finally {
-    process.env.APPDATA = oldAppData;
-    process.env.PATH = oldPath;
+    process.env.USERPROFILE = previous.USERPROFILE;
+    process.env.APPDATA = previous.APPDATA;
+    process.env.PATH = previous.PATH;
   }
 });
 
 test('Claude Desktop is never mistaken for a Claude Code executable', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-desktop-binary-'));
-  const previous = { APPDATA: process.env.APPDATA, LOCALAPPDATA: process.env.LOCALAPPDATA, PATH: process.env.PATH };
+  const previous = { USERPROFILE: process.env.USERPROFILE, APPDATA: process.env.APPDATA, LOCALAPPDATA: process.env.LOCALAPPDATA, PATH: process.env.PATH };
+  process.env.USERPROFILE = path.join(root, 'empty-profile');
   process.env.APPDATA = path.join(root, 'empty-appdata');
   process.env.LOCALAPPDATA = root;
   process.env.PATH = '';
@@ -1070,6 +1073,7 @@ test('Claude Desktop is never mistaken for a Claude Code executable', () => {
   try {
     assert.equal(findClaudeBinary(), null);
   } finally {
+    process.env.USERPROFILE = previous.USERPROFILE;
     process.env.APPDATA = previous.APPDATA;
     process.env.LOCALAPPDATA = previous.LOCALAPPDATA;
     process.env.PATH = previous.PATH;
