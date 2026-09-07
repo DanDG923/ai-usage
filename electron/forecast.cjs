@@ -146,7 +146,7 @@ function usedPercentOf(row) {
   return clamp(Number.isFinite(row.usedPercent) ? row.usedPercent : 100 - row.remainingPercent, 0, 100);
 }
 
-function windowPaceOf(rows, schedule, observedResetAt = null) {
+function windowPaceOf(rows, schedule, observedResetAt = null, nowMs = Date.now()) {
   const last = rows.at(-1);
   const usedEnd = usedPercentOf(last);
   const windowMinutes = rows.findLast((row) => Number.isFinite(row.windowMinutes) && row.windowMinutes > 0)?.windowMinutes;
@@ -155,8 +155,38 @@ function windowPaceOf(rows, schedule, observedResetAt = null) {
     : windowMinutes ? last.resetsAt - windowMinutes * 60_000 : rows[0].observedAt;
   // Backward jitter within a window must not discard the pace entirely.
   const used = windowMinutes ? usedEnd : Math.max(0, usedEnd - usedPercentOf(rows[0]));
-  const activeHours = activeHoursBetween(startMs, last.observedAt, schedule);
-  return activeHours >= 1 && used >= 0 ? { pace: used / activeHours, activeHours } : null;
+  if (!(used >= 0)) return null;
+  // Only the scheduled share of the window's usage may carry forward as an
+  // active-hour pace: the projection adds off-schedule use separately, so a
+  // whole-window average would count every late-night point twice.
+  const split = splitWindowUsage(rows, schedule, nowMs, startMs, last.observedAt, used);
+  return split.activeHours >= 1 ? { pace: split.activeUsed / split.activeHours, activeHours: split.activeHours } : null;
+}
+
+// Split one window's usage between scheduled and off-schedule hours. Usage
+// already localised by observation intervals belongs to its measured phase.
+// The remainder happened before the first useful reading, so the observed
+// phase mix cannot tell us where it occurred; distribute that unknown
+// remainder by elapsed exposure instead, otherwise one +1 just after the
+// active-hours boundary can assign an entire 13% window burn to off-schedule use.
+function splitWindowUsage(rows, schedule, nowMs, startMs, endMs, used) {
+  const elapsedHours = Math.max(0, (endMs - startMs) / HOUR_MS);
+  const activeHours = activeHoursBetween(startMs, endMs, schedule);
+  const offHours = Math.max(0, elapsedHours - activeHours);
+  const samples = deriveLearningSamples(rows, schedule, nowMs);
+  const knownActive = samples.filter((sample) => sample.phase === 'active').reduce((sum, sample) => sum + sample.delta, 0);
+  const knownOff = samples.filter((sample) => sample.phase === 'off-schedule').reduce((sum, sample) => sum + sample.delta, 0);
+  const known = knownActive + knownOff;
+  const scale = known > used && known > 0 ? used / known : 1;
+  const unlocalised = Math.max(0, used - known * scale);
+  const exposureActiveShare = elapsedHours > 0 ? activeHours / elapsedHours : 1;
+  return {
+    elapsedHours,
+    activeHours,
+    offHours,
+    activeUsed: knownActive * scale + unlocalised * exposureActiveShare,
+    offUsed: knownOff * scale + unlocalised * (1 - exposureActiveShare),
+  };
 }
 
 function normaliseObservation(row) {
@@ -428,26 +458,9 @@ function forecastQuota(observations, options = {}) {
   // Backward jitter on the latest reading (e.g. 5.0% → 4.9%) must degrade the
   // anchor to "pace ≈ 0", not discard the whole window's evidence as invalid.
   const anchorUsed = windowMinutes ? usedNow : Math.max(0, usedNow - usedPercentOf(inWindow[0]));
-  const anchorElapsedHours = Math.max(0, (current.observedAt - anchorStartMs) / HOUR_MS);
-  const anchorActiveHours = activeHoursBetween(anchorStartMs, current.observedAt, schedule);
-  const anchorOffHours = Math.max(0, anchorElapsedHours - anchorActiveHours);
-  const currentWindowSamples = deriveLearningSamples(inWindow, schedule, nowMs);
-  const knownActiveUsed = currentWindowSamples.filter((sample) => sample.phase === 'active').reduce((sum, sample) => sum + sample.delta, 0);
-  const knownOffUsed = currentWindowSamples.filter((sample) => sample.phase === 'off-schedule').reduce((sum, sample) => sum + sample.delta, 0);
-  const knownUsed = knownActiveUsed + knownOffUsed;
-  const knownScale = knownUsed > anchorUsed && knownUsed > 0 ? anchorUsed / knownUsed : 1;
-  const boundedActiveUsed = knownActiveUsed * knownScale;
-  const boundedOffUsed = knownOffUsed * knownScale;
-  const unlocalisedUsed = Math.max(0, anchorUsed - boundedActiveUsed - boundedOffUsed);
-  // Usage already localised by observation intervals belongs to its measured
-  // phase. The remainder happened before the first useful reading, so the
-  // observed phase mix cannot tell us where it occurred. Distribute that
-  // unknown remainder by elapsed exposure instead; otherwise one +1 just
-  // after the active-hours boundary can assign the entire 13% window burn to
-  // off-schedule use.
-  const exposureActiveShare = anchorElapsedHours > 0 ? anchorActiveHours / anchorElapsedHours : 1;
-  const activeAnchorUsed = boundedActiveUsed + unlocalisedUsed * exposureActiveShare;
-  const offAnchorUsed = boundedOffUsed + unlocalisedUsed * (1 - exposureActiveShare);
+  const {
+    activeHours: anchorActiveHours, offHours: anchorOffHours, activeUsed: activeAnchorUsed, offUsed: offAnchorUsed,
+  } = splitWindowUsage(inWindow, schedule, nowMs, anchorStartMs, current.observedAt, anchorUsed);
   const windowPace = anchorActiveHours >= 1 && anchorUsed >= 0 ? activeAnchorUsed / anchorActiveHours : null;
   const offWindowPace = anchorOffHours >= 1 && anchorUsed >= 0 ? offAnchorUsed / anchorOffHours : null;
   // After a reset the fresh window has no history of its own, so the most
@@ -455,7 +468,7 @@ function forecastQuota(observations, options = {}) {
   // instead of letting while-working burst rates run unchecked until reset.
   const priorEvidence = clusters
     .filter((entry) => entry !== currentCluster && entry.rows.length >= 2)
-    .map((entry) => windowPaceOf(entry.rows, schedule, entry.observedResetAt))
+    .map((entry) => windowPaceOf(entry.rows, schedule, entry.observedResetAt, nowMs))
     .filter((entry) => entry && entry.activeHours >= 6)
     .at(-1) ?? null;
   const windowWeight = windowPace == null ? 0 : clamp(anchorActiveHours / 30, 0, 0.9);

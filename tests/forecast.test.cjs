@@ -386,6 +386,39 @@ test('a fresh window after a reset inherits the prior window pace', () => {
   assert.ok(result.heavyRemaining > 5, `heavy ${result.heavyRemaining}`);
 });
 
+test('prior window off-schedule use is not projected twice after a reset', () => {
+  // The old window burned 35% entirely between 23:00 and 04:00 local, 5% a
+  // night for seven nights, and nothing during the 08:00-22:00 schedule. After
+  // the reset the fresh window inherits the old window's pace. That pace must
+  // be the scheduled share only, because the projection adds off-schedule use
+  // separately; a whole-window average would spend those 35 points twice.
+  const priorReset = Date.parse('2026-08-30T09:00:00Z');
+  const priorStart = priorReset - 7 * 24 * 3_600_000;
+  const observations = [];
+  let used = 0;
+  for (let at = priorStart; at < priorReset; at += 3_600_000) {
+    const localHour = new Date(at).getHours();
+    if (localHour >= 23 || localHour < 4) used += 1;
+    observations.push({
+      observedAt: new Date(at).toISOString(), usedPercent: used, remainingPercent: 100 - used,
+      resetsAt: new Date(priorReset).toISOString(), windowMinutes: 10_080, provenance: 'official',
+    });
+  }
+  assert.equal(used, 35);
+  observations.push({
+    observedAt: '2026-08-30T09:05:00.000Z', usedPercent: 0, remainingPercent: 100,
+    resetsAt: '2026-09-06T09:05:00.000Z', windowMinutes: 10_080, provenance: 'official',
+  });
+  const result = forecastQuota(observations, {
+    now: '2026-08-30T10:00:00Z',
+    schedule: { activeDays: [1, 2, 3, 4, 5, 6, 0], startHour: 8, endHour: 22 },
+  });
+  // Roughly last week again (35 points), not last week plus its nights repeated.
+  assert.ok(result.expectedRemaining > 55, `expected ${result.expectedRemaining}`);
+  assert.ok(result.expectedRemaining < 75, `expected ${result.expectedRemaining}`);
+  assert.ok(result.recentPace < 0.15, `recent pace ${result.recentPace}`);
+});
+
 test('accumulated idle reset drift does not inflate the learned rate', () => {
   // An idle window rolls its reset forward ~1:1 with elapsed time. A fixed
   // 60s tolerance against the last change point breaks after one idle minute,
