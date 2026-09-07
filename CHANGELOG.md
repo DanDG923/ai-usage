@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.31 — 7 September 2026
+
+- Temper the heavier-usage forecast while history is sparse. A few busy days no longer receive full weight as the pace for every remaining day; the learned busy-day pace gains influence across seven historical days, separately for scheduled and off-schedule use.
+- Keep the expected forecast unchanged and retain a heavier-use margin while learning. Repeated busy days still produce exhaustion warnings when the history supports them.
+- Preserve local usage history, settings, observations, and backups during an in-place update.
+
 ## 1.0.30 — 7 September 2026
 
 This is an in-place forecast correction. Running the 1.0.30 setup program upgrades an existing AI Usage installation and preserves its local database, settings, observations, imported cost history, and backups.

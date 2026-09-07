@@ -43,6 +43,66 @@ test('learned high usage produces a lower heavy projection', () => {
   assert.ok(result.confidence > 0.4);
 });
 
+function heavyHistoryRow(observedAt, usedPercent, resetsAt, windowMinutes = 10_080) {
+  return { observedAt, usedPercent, remainingPercent: 100 - usedPercent, resetsAt, windowMinutes, provenance: 'official' };
+}
+
+for (const phase of ['active', 'off-schedule']) {
+  test(`one busy day in sparse ${phase} history does not set the whole week's heavy pace`, () => {
+    const hour = 3_600_000;
+    const reset = new Date(2026, 8, 7).getTime();
+    const observations = [
+      heavyHistoryRow(reset - 48 * hour, 0, reset),
+      heavyHistoryRow(reset - 24 * hour, 2, reset),
+      heavyHistoryRow(reset, 18, reset),
+      heavyHistoryRow(reset, 0, reset + 168 * hour),
+      heavyHistoryRow(reset + 12 * hour, 2, reset + 168 * hour),
+    ];
+    const result = forecastQuota(observations, {
+      now: reset + 12 * hour,
+      schedule: { activeDays: phase === 'active' ? [0, 1, 2, 3, 4, 5, 6] : [], startHour: 0, endHour: 24 },
+    });
+    // Two days (2% then 16%) do not establish a repeating busy-week pattern.
+    // Previously the upper daily percentile left only about 28% in both phases.
+    assert.ok(result.heavyRemaining > (phase === 'active' ? 50 : 35), `heavy ${result.heavyRemaining}`);
+    assert.ok(result.heavyRemaining < result.expectedRemaining, 'heavier use must still reduce the buffer');
+    for (let index = 0; index < result.series.heavy.length; index += 1) {
+      const point = result.series.heavy[index];
+      assert.ok(point.remaining <= result.series.expected[index].remaining);
+      assert.ok(point.remaining >= 0 && point.remaining <= 100);
+      if (index) assert.ok(point.remaining <= result.series.heavy[index - 1].remaining);
+    }
+  });
+}
+
+test('a week of repeated busy days still predicts heavy exhaustion', () => {
+  const hour = 3_600_000;
+  const reset = new Date(2026, 8, 7).getTime();
+  const observations = [];
+  for (let day = 0; day < 7; day += 1) {
+    const start = reset - (7 - day) * 24 * hour;
+    // Distinct daily cycles keep the history realistic without exceeding 100%.
+    const used = day === 0 ? 2 : 16;
+    observations.push(
+      heavyHistoryRow(start, 0, start + 24 * hour, 1440),
+      heavyHistoryRow(start + 22 * hour, used, start + 24 * hour, 1440),
+      heavyHistoryRow(start + 24 * hour, used, start + 24 * hour, 1440),
+    );
+  }
+  observations.push(
+    heavyHistoryRow(reset, 0, reset + 168 * hour),
+    heavyHistoryRow(reset + 12 * hour, 2, reset + 168 * hour),
+  );
+  const result = forecastQuota(observations, {
+    now: reset + 12 * hour,
+    schedule: { activeDays: [0, 1, 2, 3, 4, 5, 6], startHour: 0, endHour: 24 },
+  });
+  assert.ok(result.expectedRemaining > 20, `expected ${result.expectedRemaining}`);
+  assert.equal(result.heavyRemaining, 0);
+  assert.ok(result.heavyExhaustsAt);
+  assert.equal(result.state, 'risk');
+});
+
 test('empty history is explicitly unknown', () => {
   const result = forecastQuota([]);
   assert.equal(result.state, 'unknown');
