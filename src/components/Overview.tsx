@@ -113,20 +113,34 @@ function RecentCycles({ views, snapshot }: { views: ProviderView[]; snapshot: Sn
           <tbody>
             {views.map((view) => {
               const rows = snapshot.cycles[view.id] ?? [];
-              const cycle = rows.find((row) => row.current) ?? rows[0];
+              // Cycle history follows the backend's primary bucket, while the
+              // summary card can headline a different, riskier window.
+              const quota = view.quota && !view.quota.forecast.expired ? view.quota : null;
+              const cycle = quota
+                ? rows.find(
+                    (row) =>
+                      row.current &&
+                      Math.abs(Date.parse(row.resetsAt) - Date.parse(quota.resetsAt)) <= 60_000 &&
+                      (!(quota.windowMinutes && quota.windowMinutes > 0) || row.windowMinutes === quota.windowMinutes),
+                  )
+                : null;
+              const forecast = quota?.forecast;
               return (
                 <tr key={view.id}>
                   <td>
                     <span className={`source-dot ${view.id}`} aria-hidden="true" />
                     <strong>{view.name}</strong>
+                    {quota && <small>{quota.bucketName}</small>}
                   </td>
-                  <td>{cycle ? dateTimeLabel(cycle.resetsAt) : view.resetAt ? dateTimeLabel(view.resetAt) : '—'}</td>
+                  <td>{quota ? dateTimeLabel(quota.resetsAt) : '—'}</td>
                   <td className="num">{cycle ? percent(cycle.peakUsedPercent) : '—'}</td>
                   <td className="num">{cycle ? money(cycle.cost, snapshot.costs.currency) : '—'}</td>
-                  <td className={`forecast-outcome ${view.state}`}>
-                    {view.expectedRemaining == null
-                      ? 'Learning'
-                      : `${percent(view.expectedRemaining)} expected at reset`}
+                  <td className={`forecast-outcome ${forecast?.state ?? 'unknown'}`}>
+                    {!quota
+                      ? 'Awaiting current reading'
+                      : forecast?.expectedRemaining == null
+                        ? 'Learning'
+                        : `${percent(forecast.expectedRemaining)} expected at reset`}
                   </td>
                 </tr>
               );
