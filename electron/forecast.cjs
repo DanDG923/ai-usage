@@ -5,6 +5,7 @@ const { MAX_QUOTA_RESET_AHEAD_MS, QUOTA_CLOCK_SKEW_MS, FORECAST_LOOKBACK_MS, val
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 const RESET_TOLERANCE_MS = 60_000;
+const HEAVY_HISTORY_DAYS = 7;
 const MAX_PROJECTION_MS = MAX_QUOTA_RESET_AHEAD_MS + QUOTA_CLOCK_SKEW_MS;
 const MAX_SERIES_POINTS = Math.ceil(MAX_PROJECTION_MS / HOUR_MS) + 1;
 
@@ -373,7 +374,13 @@ function buildSeries(expectedStart, heavyStart, startMs, endMs, schedule, sample
           ? phaseRates.anchor.rate * phaseRates.anchor.weight + conditional * (1 - phaseRates.anchor.weight)
           : conditional;
       expectedRemaining -= expectedRate * duration;
-      heavyRemaining -= Math.max(expectedRate * 1.22, phaseRates.heavy) * duration;
+      // A few busy days are weak evidence for repeating that pace all week.
+      // Start with the usual heavier-use margin and gradually trust the
+      // learned daily upper pace as independent historical days accumulate.
+      const heavyBaseline = expectedRate * 1.22;
+      const heavyRate = heavyBaseline
+        + Math.max(0, phaseRates.heavy - heavyBaseline) * phaseRates.heavyWeight;
+      heavyRemaining -= heavyRate * duration;
     }
     expected.push({ at: next, remaining: clamp(expectedRemaining, 0, 100) });
     heavy.push({ at: next, remaining: clamp(heavyRemaining, 0, 100) });
@@ -528,14 +535,25 @@ function forecastQuota(observations, options = {}) {
   const heavyOffSchedule = offDailyRates.length >= 2
     ? percentile(offDailyRates, 0.82)
     : sustainableOffSchedulePace * 1.6;
+  // The latest observed day is still partial. Poll count and reset count
+  // cannot turn it into multiple independent days of heavy-use evidence.
+  const latestObservedDay = localDayKey(new Date(current.observedAt));
+  const heavyWeight = (dailyUsage) => clamp(
+    [...dailyUsage.keys()].filter((day) => day < latestObservedDay).length / HEAVY_HISTORY_DAYS,
+    0, 1,
+  );
   const rates = {
-    active: { fallback: globalRate, blend: { rate: recent || globalRate, weight: recentWeight }, anchor, heavy: heavyActive },
+    active: {
+      fallback: globalRate, blend: { rate: recent || globalRate, weight: recentWeight }, anchor,
+      heavy: heavyActive, heavyWeight: heavyWeight(activeDayUsage),
+    },
     offSchedule: {
       fallback: offScheduleRate,
       blend: { rate: offScheduleRecent || offScheduleRate, weight: offScheduleRecentWeight },
       anchor: offAnchor,
       sustainable: sustainableOffSchedulePace,
       heavy: heavyOffSchedule,
+      heavyWeight: heavyWeight(offDayUsage),
     },
   };
 
