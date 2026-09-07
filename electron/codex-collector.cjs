@@ -58,7 +58,7 @@ class JsonLineClient {
       } catch {
         return;
       }
-      if (message.id == null) return;
+      if (!message || typeof message !== 'object' || Array.isArray(message) || message.id == null) return;
       const pending = this.pending.get(message.id);
       if (!pending) return;
       this.pending.delete(message.id);
@@ -213,7 +213,7 @@ async function collectFromAppServer(store, binary, {
   }
 }
 
-function listSessionFiles(root, cutoffMs) {
+function listSessionFiles(root, cutoffMs, legacyFiles = new Set()) {
   if (!fs.existsSync(root)) return [];
   const result = [];
   const stack = [root];
@@ -228,7 +228,7 @@ function listSessionFiles(root, cutoffMs) {
       else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
         try {
           const stat = fs.statSync(fullPath);
-          if (stat.mtimeMs >= cutoffMs) result.push({ fullPath, stat });
+          if (stat.mtimeMs >= cutoffMs || legacyFiles.has(path.resolve(fullPath).toLowerCase())) result.push({ fullPath, stat });
         } catch { /* Session rotation can remove a file between calls. */ }
       }
     }
@@ -244,83 +244,200 @@ function readSessionLines(fullPath, readFile = fs.readFileSync) {
   }
 }
 
+// Rate-limit notifications repeat the last request's usage without advancing
+// the cumulative counters. Only complete, valid counter snapshots establish
+// that identity; older logs without totals retain their per-record behaviour.
+function usageFingerprint(info, sessionId, model, occurredAt) {
+  if (typeof sessionId !== 'string' || !sessionId.trim()) return null;
+  if ((model != null && typeof model !== 'string') || !epochToIso(occurredAt)) return null;
+  const snapshots = [info?.total_token_usage, info?.last_token_usage];
+  const fields = ['input_tokens', 'cached_input_tokens', 'cache_write_input_tokens',
+    'output_tokens', 'reasoning_output_tokens', 'total_tokens'];
+  const values = [];
+  for (const snapshot of snapshots) {
+    if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return null;
+    if (['input_tokens', 'output_tokens', 'total_tokens'].some((field) => !Number.isSafeInteger(snapshot[field]))) return null;
+    const tokens = fields.map((field) => snapshot[field] ?? 0);
+    if (tokens.some((value) => !Number.isSafeInteger(value) || value < 0)) return null;
+    if (snapshot.reasoning_output_tokens > snapshot.output_tokens) return null;
+    values.push(tokens);
+  }
+  return JSON.stringify([sessionId, ...values]);
+}
+
+function* sessionEntries(lines, state, onRejected = () => {}) {
+  for (const line of lines) {
+    let entry;
+    try { entry = JSON.parse(line); } catch { continue; }
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      onRejected('Codex session record must be an object.');
+      continue;
+    }
+    if (entry.type === 'session_meta') {
+      if (entry.payload?.id) state.sessionId = entry.payload.id;
+      state.agent = codexAgentMetadata(entry.payload);
+      state.taskId = null;
+      state.lastTokenSnapshot = null;
+      if (typeof entry.payload?.cwd === 'string' && entry.payload.cwd.trim()) state.project = entry.payload.cwd.trim();
+    }
+    if (entry.type === 'turn_context') {
+      state.model = entry.payload?.model || state.model;
+      state.taskId = textId(entry.payload?.root_turn_id)
+        || (state.agent?.agentKind === 'main' ? textId(entry.payload?.turn_id) : null);
+    }
+    if (entry.type === 'compacted' || (entry.type === 'event_msg' && entry.payload?.type === 'context_compacted')) {
+      state.lastTokenSnapshot = null;
+    }
+    yield entry;
+  }
+}
+
+function codexUsageEvent(entry, state) {
+  const usage = entry.payload.info.last_token_usage;
+  return {
+    eventKey: `codex:${state.sessionId}:${entry.timestamp}`,
+    sourceId: 'codex', occurredAt: entry.timestamp, sessionId: state.sessionId,
+    model: state.model, project: state.project,
+    inputTokens: usage.input_tokens, cachedInputTokens: usage.cached_input_tokens,
+    cacheWriteInputTokens: usage.cache_write_input_tokens,
+    cacheWrite5mInputTokens: usage.cache_write_input_tokens, cacheWrite1hInputTokens: 0,
+    outputTokens: usage.output_tokens, reasoningOutputTokens: usage.reasoning_output_tokens,
+    metadata: { source: 'codex-session-log', ...state.agent, taskId: state.taskId || null },
+  };
+}
+
+// A repair may remove only the exact old importer row still matching the log.
+// Manual/imported/conflicting edits are left alone, as are records whose source
+// file is unavailable. Keep the same guard for the preflight and the DELETE.
+const DUPLICATE_METADATA_FIELDS = ['agentAttributionVersion', 'agentId', 'agentKind', 'parentSessionId',
+  'rootSessionId', 'agentName', 'agentRole', 'taskId'];
+const DUPLICATE_ROW_GUARD = `event_key = ? AND source_id = 'codex'
+  AND occurred_at = ? AND session_id IS ? AND model IS ? AND project IS ?
+  AND input_tokens = ? AND cached_input_tokens = ? AND cache_write_input_tokens = ?
+  AND cache_write_5m_input_tokens = ? AND cache_write_1h_input_tokens = 0
+  AND output_tokens = ? AND reasoning_output_tokens = ? AND reported_cost_usd IS NULL
+  AND CASE WHEN json_valid(metadata_json) THEN json_extract(metadata_json, '$.source') = 'codex-session-log'
+    AND ${DUPLICATE_METADATA_FIELDS.map((field) => `(json_type(metadata_json, '$.${field}') IS NULL OR json_extract(metadata_json, '$.${field}') IS ?)`).join('\n    AND ')}
+    AND NOT EXISTS (SELECT 1 FROM json_each(metadata_json) WHERE key NOT IN ('source', ${DUPLICATE_METADATA_FIELDS.map((field) => `'${field}'`).join(', ')}))
+    ELSE 0 END`;
+
+function duplicateRowParameters(event) {
+  return [event.eventKey, epochToIso(event.occurredAt), event.sessionId.trim(),
+    typeof event.model === 'string' ? event.model.trim() || null : null,
+    typeof event.project === 'string' ? event.project.trim() || null : null,
+    event.inputTokens ?? 0, event.cachedInputTokens ?? 0, event.cacheWriteInputTokens ?? 0,
+    event.cacheWrite5mInputTokens ?? 0, event.outputTokens ?? 0, event.reasoningOutputTokens ?? 0,
+    ...DUPLICATE_METADATA_FIELDS.map((field) => event.metadata[field] ?? null)];
+}
+
+function retainedSnapshotExists(store, eventKey, event) {
+  return Boolean(store.prepare(`SELECT 1 AS found FROM usage_events
+    WHERE event_key = ? AND source_id = 'codex' AND session_id IS ?
+      AND input_tokens = ? AND cached_input_tokens = ? AND cache_write_input_tokens = ?
+      AND cache_write_5m_input_tokens = ? AND cache_write_1h_input_tokens = 0
+      AND output_tokens = ? AND reasoning_output_tokens = ?
+      AND CASE WHEN json_valid(metadata_json) THEN json_extract(metadata_json, '$.source') END = 'codex-session-log'`)
+    .get(eventKey, event.sessionId.trim(), event.inputTokens ?? 0, event.cachedInputTokens ?? 0,
+      event.cacheWriteInputTokens ?? 0, event.cacheWrite5mInputTokens ?? 0,
+      event.outputTokens ?? 0, event.reasoningOutputTokens ?? 0));
+}
+
+function needsDuplicateBackup(store, lines, initialState) {
+  const state = { ...initialState };
+  for (const entry of sessionEntries(lines, state)) {
+    if (entry.type !== 'event_msg' || entry.payload?.type !== 'token_count' || !entry.payload?.info?.last_token_usage) continue;
+    const fingerprint = usageFingerprint(entry.payload.info, state.sessionId, state.model, entry.timestamp);
+    const event = codexUsageEvent(entry, state);
+    const previous = state.lastTokenSnapshot;
+    if (fingerprint && fingerprint === previous?.fingerprint) {
+      if (event.eventKey !== previous.eventKey
+        && store.prepare(`SELECT 1 AS found FROM usage_events WHERE ${DUPLICATE_ROW_GUARD}`).get(...duplicateRowParameters(event))) return true;
+    } else {
+      state.lastTokenSnapshot = fingerprint ? { fingerprint, eventKey: event.eventKey } : null;
+    }
+  }
+  return false;
+}
+
 // A Codex rollout log carries its session id, working directory, and model in
 // earlier lines than the token counts that need them. That context is kept in
 // the import cursor's state so an appended chunk can be parsed on its own.
 function importLocalSessions(store, days = 120) {
   const root = path.join(process.env.USERPROFILE || '', '.codex', 'sessions');
-  const files = listSessionFiles(root, Date.now() - days * 24 * 60 * 60 * 1000);
+  // The live scan has a lookback, but a one-time accounting repair must also
+  // reach older ledger records whose original, previously imported logs still
+  // exist. Do not expand collection to brand-new ancient transcripts.
+  const rootPrefix = `${path.resolve(root).replaceAll('\\', '/').toLowerCase()}/`;
+  const legacyFiles = new Set(store.prepare(`SELECT file_path FROM imported_files
+    WHERE substr(lower(replace(file_path, char(92), '/')), 1, ?) = ?
+      AND CASE WHEN json_valid(state_json) THEN
+        COALESCE(json_extract(state_json, '$.accountingVersion'), 0) != 1
+        OR COALESCE(json_extract(state_json, '$.agentAttributionVersion'), 0) != 1
+        ELSE 1 END`).all(rootPrefix.length, rootPrefix)
+    .map((row) => path.resolve(row.file_path).toLowerCase()));
+  const files = listSessionFiles(root, Date.now() - days * 24 * 60 * 60 * 1000, legacyFiles);
   let importedFiles = 0;
   let events = 0;
   let observations = 0;
   let rejected = 0;
   let lastRejection = null;
+  let duplicateEvents = 0;
+  let reconciledEvents = 0;
+  let reconciliationBackup = null;
 
   for (const { fullPath, stat } of files) {
     const previous = store.getImportedFile(fullPath);
-    const plan = planIncrementalRead(previous?.state?.agentAttributionVersion === 1 ? previous : null, stat);
+    const currentCursor = previous?.state?.agentAttributionVersion === 1 && previous.state.accountingVersion === 1;
+    const plan = planIncrementalRead(currentCursor ? previous : null, stat);
     if (!plan) continue;
     // A cursor written before context was stored cannot resume mid-file.
     const resumable = plan.resumed && previous?.state && typeof previous.state === 'object';
     const startOffset = resumable ? plan.startOffset : 0;
     const state = resumable
       ? { ...previous.state }
-      : { sessionId: path.basename(fullPath, '.jsonl'), model: null, project: null, agentAttributionVersion: 1 };
+      : { sessionId: path.basename(fullPath, '.jsonl'), model: null, project: null, agentAttributionVersion: 1, accountingVersion: 1 };
     let chunk;
     try {
       chunk = readCompleteLines(fullPath, startOffset, stat.size);
     } catch {
       continue;
     }
+    // VACUUM-backed safety copies must happen outside the file transaction.
+    // This read-only pass runs only during accounting migration; a clean first
+    // import makes no backup unless an exact historical duplicate exists.
+    if (!plan.resumed && !reconciliationBackup && needsDuplicateBackup(store, chunk.lines, state)) {
+      reconciliationBackup = store.createBackup();
+    }
     // One commit per file: the rows and the cursor that says they were read
     // land together, and a first import no longer pays a WAL sync per event.
     store.transaction(() => {
-      for (const line of chunk.lines) {
-        let entry;
-        try {
-          entry = JSON.parse(line);
-        } catch {
-          continue;
-        }
-        if (entry.type === 'session_meta') {
-          if (entry.payload?.id) state.sessionId = entry.payload.id;
-          state.agent = codexAgentMetadata(entry.payload);
-          state.taskId = null;
-          if (typeof entry.payload?.cwd === 'string' && entry.payload.cwd.trim()) state.project = entry.payload.cwd.trim();
-        }
-        if (entry.type === 'turn_context') {
-          state.model = entry.payload?.model || state.model;
-          state.taskId = textId(entry.payload?.root_turn_id)
-            || (state.agent?.agentKind === 'main' ? textId(entry.payload?.turn_id) : null);
-        }
+      for (const entry of sessionEntries(chunk.lines, state, (message) => { rejected += 1; lastRejection = message; })) {
         if (entry.type !== 'event_msg' || entry.payload?.type !== 'token_count') continue;
         const usage = entry.payload?.info?.last_token_usage;
-        const sessionId = state.sessionId;
-        const currentModel = state.model;
         if (usage) {
-          // One malformed event must not stop the file; see the Claude importer.
-          try {
-            store.recordUsageEvent({
-              eventKey: `codex:${sessionId}:${entry.timestamp}`,
-              sourceId: 'codex',
-              occurredAt: entry.timestamp,
-              sessionId,
-              model: currentModel,
-              project: state.project,
-              inputTokens: usage.input_tokens,
-              cachedInputTokens: usage.cached_input_tokens,
-              cacheWriteInputTokens: usage.cache_write_input_tokens,
-              cacheWrite5mInputTokens: usage.cache_write_input_tokens,
-              cacheWrite1hInputTokens: 0,
-              outputTokens: usage.output_tokens,
-              reasoningOutputTokens: usage.reasoning_output_tokens,
-              metadata: { source: 'codex-session-log', ...state.agent, taskId: state.taskId || null },
-            });
-            events += 1;
-          } catch (error) {
-            if (error?.code) throw error;
-            rejected += 1;
-            lastRejection = error instanceof Error ? error.message : String(error);
+          const event = codexUsageEvent(entry, state);
+          const fingerprint = usageFingerprint(entry.payload.info, state.sessionId, state.model, entry.timestamp);
+          const previousSnapshot = state.lastTokenSnapshot;
+          const duplicate = fingerprint && fingerprint === previousSnapshot?.fingerprint
+            && retainedSnapshotExists(store, previousSnapshot.eventKey, event);
+          if (duplicate) {
+            duplicateEvents += 1;
+            if (reconciliationBackup && event.eventKey !== previousSnapshot.eventKey) {
+              reconciledEvents += store.prepare(`DELETE FROM usage_events WHERE ${DUPLICATE_ROW_GUARD}`)
+                .run(...duplicateRowParameters(event)).changes;
+            }
+          } else {
+            // One malformed event must not stop the file; see the Claude importer.
+            try {
+              store.recordUsageEvent(event);
+              state.lastTokenSnapshot = fingerprint ? { fingerprint, eventKey: event.eventKey } : null;
+              events += 1;
+            } catch (error) {
+              if (error?.code) throw error;
+              state.lastTokenSnapshot = null;
+              rejected += 1;
+              lastRejection = error instanceof Error ? error.message : String(error);
+            }
           }
         }
         if (entry.payload?.rate_limits) {
@@ -336,7 +453,7 @@ function importLocalSessions(store, days = 120) {
     });
     importedFiles += 1;
   }
-  return { importedFiles, events, observations, rejected, lastRejection };
+  return { importedFiles, events, observations, rejected, lastRejection, duplicateEvents, reconciledEvents, reconciliationBackup };
 }
 
 async function refreshCodex(store, {

@@ -39,9 +39,19 @@ export function ProviderSummary({ view, nowMs }: { view: ProviderView; nowMs: nu
             <h2>{view.name}</h2>
             <span>{view.subtitle}</span>
           </div>
-          <span className="state-pill unknown">Learning</span>
+          <span className="state-pill unknown">{view.expired ? 'Needs reading' : 'Learning'}</span>
         </div>
-        <p className="provider-empty">Waiting for the provider’s first allowance observation.</p>
+        <p className="provider-empty">
+          {view.expired
+            ? 'The last allowance window ended. Waiting for a new provider reading.'
+            : 'Waiting for the provider’s first allowance observation.'}
+        </p>
+        {view.expired && view.current && (
+          <div className="provider-meta">
+            <span>Last observed {percent(view.current.remainingPercent)} before reset</span>
+            <span>Window ended {dateTimeLabel(view.current.resetsAt)}</span>
+          </div>
+        )}
       </article>
     );
   }
