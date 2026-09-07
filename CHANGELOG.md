@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.30 — 7 September 2026
+
+This is an in-place forecast correction. Running the 1.0.30 setup program upgrades an existing AI Usage installation and preserves its local database, settings, observations, imported cost history, and backups.
+
+- Fixed a double count in the run-out forecast just after an allowance reset. The previous window's pace that carries into a fresh window now covers only usage during your scheduled active hours, because off-schedule use is projected separately; late-night use was previously spent twice, overstating Codex and Fable 5 weekly expectations by roughly the prior week's off-schedule share.
+- The current window's own pace, the heavier scenario, collection, and storage are unchanged.
+
 ## 1.0.29 — 6 September 2026
 
 - Added expandable task and session breakdowns under Costs, with main-agent and sub-agent API-equivalent costs, token categories, models, usage-record counts, and activity spans.
