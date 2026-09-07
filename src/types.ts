@@ -222,6 +222,8 @@ export type Settings = {
   activeStartHour: number;
   activeEndHour: number;
   forecastFallbackRate: number;
+  /** Local calendar dates excluded from forecast learning, with usage history retained. */
+  forecastExcludedDates: string[];
   paceRiskThreshold: number;
   hardLimitThreshold: number;
   reservePercent: number;

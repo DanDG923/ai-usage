@@ -55,6 +55,21 @@ function localDayKey(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
+// Exclusions describe local calendar days, including the real 23/25-hour DST
+// boundaries. Quota deltas cover [before, after), so a midnight reading can
+// still close the preceding clean day. Never infer where a delta crossing an
+// excluded day was spent: discard that interval and resume at its next reading.
+function exclusionLookup(dates = []) {
+  const ranges = (Array.isArray(dates) ? dates : []).flatMap((day) => {
+    if (typeof day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(day)) return [];
+    const [year, month, date] = day.split('-').map(Number);
+    const start = new Date(year, month - 1, date);
+    if (localDayKey(start) !== day) return [];
+    return [{ start: start.getTime(), end: new Date(year, month - 1, date + 1).getTime() }];
+  });
+  return (start, end) => end > start && ranges.some((range) => range.start < end && range.end > start);
+}
+
 function activeHoursBetween(startMs, endMs, schedule) {
   if (endMs <= startMs) return 0;
   let total = 0;
@@ -147,7 +162,7 @@ function usedPercentOf(row) {
   return clamp(Number.isFinite(row.usedPercent) ? row.usedPercent : 100 - row.remainingPercent, 0, 100);
 }
 
-function windowPaceOf(rows, schedule, observedResetAt = null, nowMs = Date.now()) {
+function windowPaceOf(rows, schedule, observedResetAt = null, nowMs = Date.now(), excluded = null) {
   const last = rows.at(-1);
   const usedEnd = usedPercentOf(last);
   const windowMinutes = rows.findLast((row) => Number.isFinite(row.windowMinutes) && row.windowMinutes > 0)?.windowMinutes;
@@ -160,7 +175,7 @@ function windowPaceOf(rows, schedule, observedResetAt = null, nowMs = Date.now()
   // Only the scheduled share of the window's usage may carry forward as an
   // active-hour pace: the projection adds off-schedule use separately, so a
   // whole-window average would count every late-night point twice.
-  const split = splitWindowUsage(rows, schedule, nowMs, startMs, last.observedAt, used);
+  const split = splitWindowUsage(rows, schedule, nowMs, startMs, last.observedAt, used, excluded);
   return split.activeHours >= 1 ? { pace: split.activeUsed / split.activeHours, activeHours: split.activeHours } : null;
 }
 
@@ -170,7 +185,31 @@ function windowPaceOf(rows, schedule, observedResetAt = null, nowMs = Date.now()
 // phase mix cannot tell us where it occurred; distribute that unknown
 // remainder by elapsed exposure instead, otherwise one +1 just after the
 // active-hours boundary can assign an entire 13% window burn to off-schedule use.
-function splitWindowUsage(rows, schedule, nowMs, startMs, endMs, used) {
+function splitWindowUsage(rows, schedule, nowMs, startMs, endMs, used, excluded = null) {
+  if (excluded?.(startMs, endMs)) {
+    // A cumulative provider total includes the ignored day's burn. Only clean
+    // spans bounded by actual readings can supply usage and elapsed exposure;
+    // distributing the missing remainder would silently relearn that day.
+    const segments = [];
+    let peakUsed = 0;
+    for (const row of rows) {
+      const segment = segments.at(-1);
+      peakUsed = Math.max(peakUsed, usedPercentOf(row));
+      const monotonic = { ...row, usedPercent: peakUsed };
+      if (!segment || excluded(segment.at(-1).observedAt, row.observedAt)) segments.push([monotonic]);
+      else segment.push(monotonic);
+    }
+    const result = { elapsedHours: 0, activeHours: 0, offHours: 0, activeUsed: 0, offUsed: 0 };
+    for (const segment of segments) {
+      if (segment.length < 2) continue;
+      const first = segment[0];
+      const last = segment.at(-1);
+      const cleanUsed = segment.reduce((peak, row) => Math.max(peak, usedPercentOf(row)), usedPercentOf(first)) - usedPercentOf(first);
+      const split = splitWindowUsage(segment, schedule, nowMs, first.observedAt, last.observedAt, cleanUsed);
+      for (const key of Object.keys(result)) result[key] += split[key];
+    }
+    return result;
+  }
   const elapsedHours = Math.max(0, (endMs - startMs) / HOUR_MS);
   const activeHours = activeHoursBetween(startMs, endMs, schedule);
   const offHours = Math.max(0, elapsedHours - activeHours);
@@ -249,7 +288,8 @@ function addIntervalSamples(samples, before, after, schedule, nowMs, rateElapsed
   }
 }
 
-function deriveLearningSamples(observations, schedule, nowMs) {
+function deriveLearningSamples(observations, schedule, nowMs, excludedDates = []) {
+  const excluded = typeof excludedDates === 'function' ? excludedDates : exclusionLookup(excludedDates);
   const rows = observations.map(normaliseObservation)
     .filter((row) => validQuotaTime(row.observedAt, row.resetsAt, row.windowMinutes, nowMs)
       && row.observedAt >= nowMs - FORECAST_LOOKBACK_MS && Number.isFinite(row.usedPercent))
@@ -265,6 +305,21 @@ function deriveLearningSamples(observations, schedule, nowMs) {
   let previous = rows[0];
   for (let index = 1; index < rows.length; index += 1) {
     const after = rows[index];
+    // The smoothing span starts at the last change, not merely the previous
+    // poll. Restart both anchors when it crosses an excluded day so neither
+    // cumulative usage nor a quiet ignored day changes the learned rate.
+    if (excluded(anchor.observedAt, after.observedAt)) {
+      if (latest.observedAt - anchor.observedAt >= HOUR_MS) {
+        addIntervalSamples(samples, anchor, latest, schedule, nowMs);
+      }
+      // A provider correction can dip below usage seen on the ignored day.
+      // Keep that high-water mark so a later rebound is not counted again.
+      anchor = sameWindowDrift(previous, after) && after.usedPercent < anchor.usedPercent
+        ? { ...after, usedPercent: anchor.usedPercent } : after;
+      latest = anchor;
+      previous = after;
+      continue;
+    }
     // Same chained drift model as clusterByWindow: an idle window rolls its
     // reset forward with elapsed time, so compare against the previous row,
     // never a fixed anchor — a fixed 60s tolerance breaks after one idle
@@ -430,6 +485,7 @@ function forecastQuota(observations, options = {}) {
   // It is subtracted from what the safe pace may spend, never from the
   // projection itself — the forecast still says what will happen.
   const reservePercent = clamp(Number(options.reservePercent ?? 0) || 0, 0, 90);
+  const excluded = exclusionLookup(options.excludedDates);
   let normalised = observations.map(normaliseObservation)
     .filter((row) => validQuotaTime(row.observedAt, row.resetsAt, row.windowMinutes, nowMs))
     .sort((a, b) => a.observedAt - b.observedAt);
@@ -451,7 +507,7 @@ function forecastQuota(observations, options = {}) {
 
   const remaining = Number.isFinite(current.remainingPercent) ? current.remainingPercent : 100 - current.usedPercent;
   const usedNow = clamp(Number.isFinite(current.usedPercent) ? current.usedPercent : 100 - remaining, 0, 100);
-  const samples = deriveLearningSamples(normalised, schedule, nowMs);
+  const samples = deriveLearningSamples(normalised, schedule, nowMs, excluded);
   const modelSamples = samples.filter((sample) => sample.rateEligible !== false);
 
   // Window anchor: the provider's used-percentage covers the whole window, so
@@ -467,7 +523,7 @@ function forecastQuota(observations, options = {}) {
   const anchorUsed = windowMinutes ? usedNow : Math.max(0, usedNow - usedPercentOf(inWindow[0]));
   const {
     activeHours: anchorActiveHours, offHours: anchorOffHours, activeUsed: activeAnchorUsed, offUsed: offAnchorUsed,
-  } = splitWindowUsage(inWindow, schedule, nowMs, anchorStartMs, current.observedAt, anchorUsed);
+  } = splitWindowUsage(inWindow, schedule, nowMs, anchorStartMs, current.observedAt, anchorUsed, excluded);
   const windowPace = anchorActiveHours >= 1 && anchorUsed >= 0 ? activeAnchorUsed / anchorActiveHours : null;
   const offWindowPace = anchorOffHours >= 1 && anchorUsed >= 0 ? offAnchorUsed / anchorOffHours : null;
   // After a reset the fresh window has no history of its own, so the most
@@ -475,7 +531,7 @@ function forecastQuota(observations, options = {}) {
   // instead of letting while-working burst rates run unchecked until reset.
   const priorEvidence = clusters
     .filter((entry) => entry !== currentCluster && entry.rows.length >= 2)
-    .map((entry) => windowPaceOf(entry.rows, schedule, entry.observedResetAt, nowMs))
+    .map((entry) => windowPaceOf(entry.rows, schedule, entry.observedResetAt, nowMs, excluded))
     .filter((entry) => entry && entry.activeHours >= 6)
     .at(-1) ?? null;
   const windowWeight = windowPace == null ? 0 : clamp(anchorActiveHours / 30, 0, 0.9);
@@ -583,10 +639,16 @@ function forecastQuota(observations, options = {}) {
   const paceRatio = safePace > 0
     ? recentPace / safePace
     : activeHoursLeft > 0 && recentPace > 0 ? paceRiskThreshold + 1 : 0;
-  const learnedDays = new Set(modelSamples.map((sample) => localDayKey(new Date(sample.observedAt)))).size;
+  // Preserve ordinary evidence counting when exclusions do not affect a
+  // sample. A clean interval may close at midnight on an ignored day; only
+  // that endpoint needs the preceding allocation day instead of its label.
+  const learnedDays = new Set(modelSamples.map((sample) => excluded(sample.observedAt, sample.observedAt + 1)
+    ? sample.dailyDeltas.at(-1).day
+    : localDayKey(new Date(sample.observedAt)))).size;
   const coveredHours = modelSamples.reduce((total, sample) => total + sample.coveredHours, 0);
   const changedSamples = new Set(modelSamples.filter((sample) => sample.changed).map((sample) => sample.observedAt)).size;
-  const resetCycles = new Set(normalised.map((row) => Math.round(row.resetsAt / RESET_TOLERANCE_MS))).size;
+  const resetCycles = new Set(normalised.filter((row) => !excluded(row.observedAt, row.observedAt + 1))
+    .map((row) => Math.round(row.resetsAt / RESET_TOLERANCE_MS))).size;
   const evidenceConfidence = 0.18 + Math.min(learnedDays, 28) / 28 * 0.5
     + Math.min(coveredHours, 80) / 80 * 0.15 + Math.min(changedSamples, 12) / 12 * 0.08
     + Math.min(resetCycles, 3) / 3 * 0.04;

@@ -15,7 +15,7 @@ test('release metadata, dependency pin, package exclusions, and docs agree', () 
   const readme = readText('README.md');
   const changelog = readText('CHANGELOG.md');
 
-  assert.equal(pkg.version, '1.0.31');
+  assert.equal(pkg.version, '1.0.32');
   assert.equal(lock.version, pkg.version);
   assert.equal(lock.packages[''].version, pkg.version);
   assert.equal(pkg.dependencies['@anthropic-ai/claude-agent-sdk'], '0.3.251');
@@ -43,10 +43,10 @@ test('release metadata, dependency pin, package exclusions, and docs agree', () 
   assert.match(releaseAudit, /SHA256SUMS\.txt/);
   assert.match(releaseAudit, /source map/i);
   assert.match(releaseAudit, /private local data/i);
-  assert.match(readme, /AI-Usage-Setup-1.0.31-x64\.exe/);
+  assert.match(readme, /AI-Usage-Setup-1.0.32-x64\.exe/);
   assert.match(readme, /actual local Fable token activity/i);
   assert.match(readme, /experimental/i);
-  assert.match(changelog, /^# Changelog\s+## 1.0.31/m);
+  assert.match(changelog, /^# Changelog\s+## 1.0.32/m);
 });
 
 test('private releases build without credentials and publish complete verified assets', () => {
@@ -154,7 +154,7 @@ test('renderer contracts keep desktop failures honest and estimates visibly appr
   assert.match(app, /secure desktop bridge/i);
   assert.match(app, /if\s*\(!window\.aiUsage\)\s*return;/);
   assert.match(providerView, /displayedRemaining\(current\)/);
-  assert.match(providerView, /estimated: current \? isEstimated\(current\) : false/);
+  assert.match(providerView, /estimated: current && !expired \? isEstimated\(current\) : false/);
   assert.match(providerSummary, /\{view\.estimated\s*\?\s*'~'\s*:\s*''\}/);
   assert.match(providerSummary, /view\.estimated \? 'Estimated balance' : 'Current balance'/);
   assert.match(styles, /\.settings-content[^}]*min-width\s*:\s*0/s);

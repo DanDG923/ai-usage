@@ -9,9 +9,9 @@ It imports local usage evidence, learns your real burn pattern, evaluates every 
 
 ## Install
 
-Use `AI-Usage-Setup-1.0.31-x64.exe` for a normal Windows installation. Running it over an existing installation upgrades in place and preserves the local database, settings, observations, and backups. Uninstalling first is neither required nor recommended. Install this version once to enable future updates through the app.
+Use `AI-Usage-Setup-1.0.32-x64.exe` for a normal Windows installation. Running it over an existing installation upgrades in place and preserves the local database, settings, observations, and backups. Uninstalling first is neither required nor recommended. Install this version once to enable future updates through the app.
 
-Use `AI-Usage-Portable-1.0.31-x64.exe` for a single executable that does not install the app. Windows SmartScreen may show an unknown-publisher warning because this personal build is not backed by a commercial code-signing certificate; verify the supplied SHA-256 hash before running it.
+Use `AI-Usage-Portable-1.0.32-x64.exe` for a single executable that does not install the app. Windows SmartScreen may show an unknown-publisher warning because this personal build is not backed by a commercial code-signing certificate; verify the supplied SHA-256 hash before running it.
 
 ## Personal private updates
 
@@ -55,6 +55,10 @@ Local transcript activity is deliberately described as **this device**. It canno
 
 ## Run-out forecasting
 
+Use **Settings → Forecast → Ignored forecast days** to exclude a date when your usage was unusual, such as a one-off intensive task or a day away. Choose today or a past date and select **Ignore day**; **Include again** restores it to learning. Dates follow the local timezone shown beside the control and apply across Codex, Claude, and Fable. The list is saved in the local settings and included in backups.
+
+Ignoring a date changes the historical patterns used for forecasting. Recorded usage and costs, observed allowance, and your future active-day schedule stay intact. Because quota readings are cumulative, learning also leaves out intervals crossing an ignored day instead of attributing that usage to a neighbouring day. Less usable history can reduce forecast confidence or require the configured fallback pace.
+
 Codex, overall Claude, and Fable each have an independent learner. Repeated polling snapshots are compacted so they cannot manufacture confidence. The model combines:
 
 - allowance used across the current reset window;
@@ -69,6 +73,8 @@ When a successful official allowance reading shows a new window—or a clear all
 
 The header verdict is built in the backend from every active primary, secondary, and model-specific window. A risky secondary window overrides a safe headline window. **All allowances on track** appears only when every expected source has sufficiently current evidence and every active window is safe; missing, stale, failed, or expired-only evidence produces an unknown verdict rather than a false all-clear. The verdict chip and the tray tooltip both carry the three headline percentages, and the tray icon carries a colour dot for the current state.
 
+Expired allowance readings are labelled as historical evidence while the app waits for a current reading. The **Current cycles** table pairs each cycle with its own allowance-window forecast; a shorter, more restrictive window can still drive the headline verdict without being shown as the weekly cycle's forecast.
+
 Each card also answers **Runs out**: the moment the expected projection first reaches zero, or the heavier projection's moment when only that one does. The same time is included in pace notifications.
 
 **Budget mode** (Settings → Forecast → *Keep in reserve*) sets a share of each allowance you want untouched at reset. The safe pace only spends what sits above the reserve, and a projection that would eat into it is shown as a watch state; the forecast itself still reports what will actually happen.
@@ -82,6 +88,8 @@ Desktop notifications come from the tray process after a collection, so they are
 The **Costs** search filters model and project summaries and searches every recorded session in the selected period. Session results are paginated, and the filter is retained when switching sections. The default session order is highest API-equivalent value first.
 
 The Details screen reconstructs token API-equivalent value from local input, output, cache-write, and cache-read records. Reasoning tokens are retained as an informational subset of output and are never billed twice. Claude five-minute and one-hour cache writes are stored and priced separately. Every selected historical period is recalculated with the current local price-catalogue row for each model; earlier tariff versions are not reconstructed, so editing a row intentionally reprices the displayed history.
+
+Historical costs, tasks, sessions, and CSV exports include records through the current moment. Records dated in the future remain stored and enter those totals when their timestamp is reached.
 
 Costs include every model present in the imported Codex and Claude Code token records. Opus 5, Opus 4.8, Sonnet 5, and Haiku 4.5 already have built-in prices alongside Astra, Sol, Terra, Luna, and Fable. Regular Claude desktop and web chats can consume the same account allowance but do not appear in the token ledger. A missing model row can therefore mean missing activity records rather than missing pricing. **Price coverage measures only recorded tokens**: 100% does not establish complete account activity coverage.
 
@@ -126,6 +134,12 @@ This keeps a failed refresh from pretending old evidence is current, without del
 Claude prompts and responses are never copied into the dashboard. The ledger retains token counts, timestamps, model names, session/request identifiers, the session's working directory path (for the project breakdown), and limited source metadata needed for deduplication and provenance. Dashboard data is not uploaded by AI Usage.
 
 Collection runs in a separate utility process with its own connection to the same database, so a slow transcript scan or a stalled provider call never freezes the window, the tray, or the settings screen. Transcripts and session logs are read incrementally from a byte cursor rather than re-parsed in full on every refresh. Invalid historical Codex quota windows are counted as rejected while valid token records and other windows continue importing. Polling rows older than sixty days are compacted to the chronological first, last, and highest reading of each window per day; manual observations are retained. **Diagnostics** at the bottom of Settings shows what each collector last saw, including latency and the reason for any fallback.
+
+Malformed non-object transcript records are skipped without blocking later valid records; storage failures still roll back the file for a complete retry. Codex cumulative token totals distinguish new usage from repeated quota notifications. When eligible logs are first rechecked by the corrected importer, existing duplicates are removed only where the source records and stored token details prove the duplication, with a safety backup before correction. Unavailable logs and conflicting records are left intact.
+
+The one-time correction also checks previously imported Codex logs outside the usual recent scan, if those files are still available. Restoring an older export that adds Codex records schedules another check on the next scan.
+
+Analytics caches track changes to usage, pricing, and the relevant allowance bucket separately. A source-status or import-cursor update therefore retains previously calculated costs and cycle history. Cycle history merges small reset-timestamp variations before applying its display limit.
 
 Update checks fetch private GitHub release metadata and a version manifest. Installer downloads happen only after **Download update** is selected. Update requests contain the GitHub authorization needed for this private repository; local usage data is not sent.
 
@@ -177,7 +191,7 @@ Linting uses oxlint (typescript-eslint does not yet support the TypeScript 7 com
 ## Publish future private updates
 
 1. Update `package.json`, both root versions in `package-lock.json`, the current installer names in this README, the version contract test, and `CHANGELOG.md`. Keep the GitHub repository private and retain the matching `updateFeed` and `build.publish` settings in `package.json`; the separate `updateFeed` survives packaging so the installed app can verify its destination.
-2. Complete the checks above, review the changes, and merge them. Create and push the matching version tag, for example `v1.0.31` for version `1.0.31`.
+2. Complete the checks above, review the changes, and merge them. Create and push the matching version tag, for example `v1.0.32` for version `1.0.32`.
 3. The **Private Windows release** GitHub Actions workflow builds Windows x64 packages, checks the manifest and packaged contents, and creates a draft release. It uploads the Setup installer, portable executable, installer block map, `latest.yml`, and `SHA256SUMS.txt`, verifies each remote asset's size and SHA-256 digest, then publishes the release as latest. The normal pull-request CI job is unchanged.
 
 The release workflow can also be started manually with an existing version tag. It refuses a mismatched version, a public or different destination, a tag whose commit is not already on `main`, an existing release for that tag, or a version older than an existing stable release. If an upload fails, any created release stays a draft for inspection and is not offered to the app. Review and remove that incomplete draft before retrying; the workflow never overwrites existing release assets.

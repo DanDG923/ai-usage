@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.32 — 7 September 2026
+
+- Add ignored forecast days in Settings so unusual days can be excluded from learned usage patterns. Dates are reversible, use your local timezone, and persist in settings and backups without removing recorded usage or costs.
+- Prevent repeated Codex quota notifications from duplicating token usage. Recheck available legacy logs once and repair source-verified duplicate records only after a safety backup; preserve unavailable or conflicting records.
+- Skip malformed transcript records without stalling imports, and record each diagnostic operation's actual duration.
+- Show expired allowance readings clearly, match current-cycle forecasts to the correct allowance window, and retain complete cycle history across reset-time jitter.
+- Exclude future-dated usage from historical costs and exports, prevent overlapping schedule saves, and avoid rebuilding analytics for unrelated status or cursor writes while retaining correct invalidation for usage, pricing, and time boundaries.
+- Preserve local usage history, settings, observations, and backups during an in-place update.
+
 ## 1.0.31 — 7 September 2026
 
 - Temper the heavier-usage forecast while history is sparse. A few busy days no longer receive full weight as the pace for every remaining day; the learned busy-day pace gains influence across seven historical days, separately for scheduled and off-schedule use.

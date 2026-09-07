@@ -6,7 +6,8 @@ import { DailyUsageChart } from './Charts';
 import { ActivityHeatmap } from './details/ActivityHeatmap';
 import { CycleHistory } from './details/CycleHistory';
 
-function sourceState(status: string) {
+function sourceState(status: string, expired: boolean) {
+  if (expired) return { label: 'Needs reading', tone: 'watch', icon: CircleAlert };
   if (status === 'connected') return { label: 'Current', tone: 'safe', icon: CheckCircle2 };
   if (status === 'stale' || status === 'degraded') return { label: 'Needs refresh', tone: 'watch', icon: CircleAlert };
   if (status === 'error') return { label: 'Unavailable', tone: 'critical', icon: CircleAlert };
@@ -58,7 +59,7 @@ export function Activity({ snapshot, days }: { snapshot: Snapshot; days: number 
             </thead>
             <tbody>
               {views.map((view) => {
-                const state = sourceState(view.source?.status ?? 'waiting');
+                const state = sourceState(view.source?.status ?? 'waiting', view.expired);
                 const Icon = state.icon;
                 return (
                   <tr key={view.id}>
@@ -84,6 +85,7 @@ export function Activity({ snapshot, days }: { snapshot: Snapshot; days: number 
                     <td>{view.provenance.replaceAll('-', ' ')}</td>
                     <td className="num">
                       {view.remaining == null ? '—' : `${view.estimated ? '~' : ''}${percent(view.remaining)}`}
+                      {view.expired && <small>Window expired</small>}
                     </td>
                     <td className="num">{percent(view.expectedRemaining)}</td>
                   </tr>
