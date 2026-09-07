@@ -31,6 +31,7 @@ const DEFAULT_SETTINGS = {
   paceRiskThreshold: 1.2,
   hardLimitThreshold: 90,
   reservePercent: 0,
+  forecastExcludedDates: [],
   codexPlanUsdPerMonth: 0,
   claudePlanUsdPerMonth: 0,
   notifyDesktop: true,
@@ -55,6 +56,16 @@ function isIsoOrNull(value) {
   return value === null || (typeof value === 'string' && Number.isFinite(Date.parse(value)));
 }
 
+function isForecastDate(value) {
+  return typeof value === 'string' && /^(?:20\d{2}|2100)-\d{2}-\d{2}$/.test(value)
+    && value >= '2020-01-01' && Number.isFinite(Date.parse(value))
+    && new Date(value).toISOString().slice(0, 10) === value;
+}
+
+function normalizedSetting(key, value) {
+  return key === 'forecastExcludedDates' ? [...new Set(value)].sort() : value;
+}
+
 const SETTING_VALIDATORS = {
   currency: (value) => ['GBP', 'USD', 'EUR'].includes(value),
   usdToCurrency: (value) => Number.isFinite(value) && value > 0 && value <= 10_000,
@@ -68,6 +79,7 @@ const SETTING_VALIDATORS = {
   paceRiskThreshold: (value) => Number.isFinite(value) && value >= 0.1 && value <= 20,
   hardLimitThreshold: (value) => Number.isFinite(value) && value >= 0 && value <= 100,
   reservePercent: (value) => Number.isFinite(value) && value >= 0 && value <= 50,
+  forecastExcludedDates: (value) => Array.isArray(value) && value.length <= 366 && value.every(isForecastDate),
   codexPlanUsdPerMonth: (value) => Number.isFinite(value) && value >= 0 && value <= 100_000,
   claudePlanUsdPerMonth: (value) => Number.isFinite(value) && value >= 0 && value <= 100_000,
   notifyDesktop: (value) => typeof value === 'boolean',
@@ -326,6 +338,7 @@ class UsageStore {
     const priceColumns = new Set(this.prepare('PRAGMA table_info(price_catalog)').all().map((row) => row.name));
     this.addedOneHourPriceColumn = !priceColumns.has('cache_write_1h_usd_per_million');
     if (!priceColumns.has('cache_write_1h_usd_per_million')) this.db.exec('ALTER TABLE price_catalog ADD COLUMN cache_write_1h_usd_per_million REAL NOT NULL DEFAULT 0;');
+    this.migrateAnalyticsRevisions();
     if (addedCacheBreakdown) {
       // Existing Claude transcript events did not retain cache TTL detail. Make
       // the next refresh rebuild them from the local source of truth.
@@ -367,6 +380,40 @@ class UsageStore {
       }
     }
     this.canonicaliseCodexManualRows();
+  }
+
+  migrateAnalyticsRevisions() {
+    // These revisions belong to the same SQLite transaction as their data.
+    // They see collector-process writes and direct SQL, and roll back with
+    // aborted imports. Status, cursor, backup and preference writes do not
+    // invalidate unchanged ledger totals or cycle history.
+    this.db.exec(`CREATE TABLE IF NOT EXISTS analytics_revisions (
+      domain TEXT NOT NULL, source_id TEXT NOT NULL, bucket_id TEXT NOT NULL,
+      revision INTEGER NOT NULL,
+      PRIMARY KEY(domain, source_id, bucket_id)
+    ) WITHOUT ROWID;`);
+    for (const [table, domain, scope] of [
+      ['usage_events', 'usage', ['source_id']],
+      ['quota_observations', 'quota', ['source_id', 'bucket_id']],
+      ['price_catalog', 'price', []],
+    ]) {
+      const bump = (reference, condition = null) => {
+        const source = scope.includes('source_id') ? `${reference}.source_id` : "''";
+        const bucket = scope.includes('bucket_id') ? `${reference}.bucket_id` : "''";
+        const values = `'${domain}', ${source}, ${bucket}, 1`;
+        return `INSERT INTO analytics_revisions(domain, source_id, bucket_id, revision)
+          ${condition ? `SELECT ${values} WHERE ${condition}` : `VALUES (${values})`}
+          ON CONFLICT(domain, source_id, bucket_id) DO UPDATE SET revision = revision + 1;`;
+      };
+      for (const action of ['INSERT', 'UPDATE', 'DELETE']) {
+        const writes = [bump(action === 'INSERT' ? 'NEW' : 'OLD')];
+        if (action === 'UPDATE' && scope.length) {
+          writes.push(bump('NEW', scope.map((column) => `OLD.${column} IS NOT NEW.${column}`).join(' OR ')));
+        }
+        this.db.exec(`CREATE TRIGGER IF NOT EXISTS analytics_${table}_${action.toLowerCase()}
+          AFTER ${action} ON ${table} BEGIN ${writes.join('\n')} END;`);
+      }
+    }
   }
 
   canonicaliseCodexManualRows() {
@@ -442,7 +489,12 @@ class UsageStore {
       const validate = settingValidator(row.key);
       if (!validate) continue;
       const value = json(row.value_json, undefined);
-      if (validate(value)) repaired[row.key] = value;
+      if (validate(value)) {
+        repaired[row.key] = normalizedSetting(row.key, value);
+        if (JSON.stringify(repaired[row.key]) !== JSON.stringify(value)) {
+          update.run(JSON.stringify(repaired[row.key]), iso(), row.key);
+        }
+      }
       else update.run(JSON.stringify(DEFAULT_SETTINGS[row.key]), iso(), row.key);
     }
     if (repaired.activeStartHour >= repaired.activeEndHour) {
@@ -530,7 +582,7 @@ class UsageStore {
       if (!validate(value)) throw new Error(`Invalid value for ${key}.`);
     }
     for (const [key, value] of Object.entries(normalizedPatch)) {
-      statement.run(key, JSON.stringify(value), iso());
+      statement.run(key, JSON.stringify(normalizedSetting(key, value)), iso());
     }
     return this.getSettings();
   }
@@ -836,6 +888,7 @@ class UsageStore {
         paceRiskThreshold: settings.paceRiskThreshold,
         hardLimitThreshold: settings.hardLimitThreshold,
         reservePercent: settings.reservePercent,
+        excludedDates: settings.forecastExcludedDates,
       });
       return {
         bucketId,
@@ -1016,13 +1069,17 @@ class UsageStore {
     return this.getAnalytics(days, settings, nowMs).costs;
   }
 
-  refreshAnalyticsCaches() {
-    const version = `${this.prepare('PRAGMA data_version').get().data_version}:${this.prepare('SELECT total_changes() AS changes').get().changes}`;
-    if (version !== this.analyticsVersion) {
-      this.costAnalyticsCache.clear();
-      this.cycleHistoryCache.clear();
-      this.analyticsVersion = version;
-    }
+  analyticsRevision() {
+    return this.prepare("SELECT COALESCE(SUM(revision), 0) AS revision FROM analytics_revisions WHERE domain IN ('usage', 'price')")
+      .get().revision;
+  }
+
+  cycleRevision(sourceId, bucketId) {
+    const eventSource = sourceId === 'codex' ? 'codex' : 'claude';
+    return this.prepare(`SELECT COALESCE(SUM(revision), 0) AS revision FROM analytics_revisions
+      WHERE domain = 'price' OR (domain = 'usage' AND source_id = ?)
+        OR (domain = 'quota' AND source_id = ? AND bucket_id = ?)`)
+      .get(eventSource, sourceId, bucketId).revision;
   }
 
   getAnalytics(days, settings, nowMs) {
@@ -1030,23 +1087,27 @@ class UsageStore {
     // SQLite tracks both writes on this connection and collector-process commits.
     // Never cache transactional reads: a rollback must not preserve their totals.
     if (this.db.isTransaction) return this.withPriceCache(() => this.buildAnalytics(days, settings, nowMs));
-    this.refreshAnalyticsCaches();
+    const revision = this.analyticsRevision();
     const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const key = JSON.stringify([days, settings.currency, settings.usdToCurrency, timeZone]);
     const cached = this.costAnalyticsCache.get(key);
-    if (cached && nowMs >= cached.at && nowMs < cached.expiresAt) {
+    if (cached && cached.revision === revision && nowMs >= cached.at && nowMs < cached.expiresAt) {
       this.costAnalyticsCache.delete(key);
       this.costAnalyticsCache.set(key, cached);
       return cached.value;
     }
-    const oldest = this.prepare('SELECT occurred_at FROM usage_events WHERE occurred_at >= ? ORDER BY occurred_at ASC LIMIT 1')
-      .get(iso(nowMs - days * DAY_MS));
+    const oldest = this.prepare('SELECT occurred_at FROM usage_events WHERE occurred_at >= ? AND occurred_at <= ? ORDER BY occurred_at ASC LIMIT 1')
+      .get(iso(nowMs - days * DAY_MS), iso(nowMs));
+    const nextEvent = this.prepare('SELECT occurred_at FROM usage_events WHERE occurred_at > ? ORDER BY occurred_at ASC LIMIT 1')
+      .get(iso(nowMs));
     const value = this.withPriceCache(() => this.buildAnalytics(days, settings, nowMs));
     // The query includes its lower boundary; expire one millisecond after the
-    // oldest included event falls outside it. Clock rollback also forces a read.
-    const expiresAt = oldest ? Date.parse(oldest.occurred_at) + days * DAY_MS + 1 : Infinity;
+    // oldest included event falls outside it, or when a future-dated record
+    // enters at its timestamp. Clock rollback also forces a read.
+    const expiresAt = Math.min(oldest ? Date.parse(oldest.occurred_at) + days * DAY_MS + 1 : Infinity,
+      nextEvent ? Date.parse(nextEvent.occurred_at) : Infinity);
     this.costAnalyticsCache.delete(key);
-    this.costAnalyticsCache.set(key, { at: nowMs, expiresAt, value });
+    this.costAnalyticsCache.set(key, { at: nowMs, expiresAt, revision, value });
     if (this.costAnalyticsCache.size > 4) this.costAnalyticsCache.delete(this.costAnalyticsCache.keys().next().value);
     return value;
   }
@@ -1102,7 +1163,7 @@ class UsageStore {
     const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     // Aggregate one row at a time instead of retaining the entire raw ledger
     // alongside the model, project, and session summaries.
-    const events = this.prepare('SELECT * FROM usage_events WHERE occurred_at >= ? ORDER BY occurred_at ASC').iterate(since);
+    const events = this.prepare('SELECT * FROM usage_events WHERE occurred_at >= ? AND occurred_at <= ? ORDER BY occurred_at ASC').iterate(since, iso(nowMs));
     const byModelMap = new Map();
     const unpricedModelsMap = new Map();
     const byDayMap = new Map();
@@ -1289,10 +1350,10 @@ class UsageStore {
   getCycleHistory(sourceId, quota, settings = this.getSettings(), limit = 8, nowMs = Date.now()) {
     if (!quota) return [];
     if (this.db.isTransaction) return this.buildCycleHistory(sourceId, quota, settings, limit, nowMs);
-    this.refreshAnalyticsCaches();
+    const revision = this.cycleRevision(sourceId, quota.bucketId);
     const key = JSON.stringify([sourceId, quota.bucketId, limit, settings.currency, settings.usdToCurrency]);
     const cached = this.cycleHistoryCache.get(key);
-    if (cached && nowMs >= cached.at && nowMs < cached.expiresAt) {
+    if (cached && cached.revision === revision && nowMs >= cached.at && nowMs < cached.expiresAt) {
       this.cycleHistoryCache.delete(key);
       this.cycleHistoryCache.set(key, cached);
       return cached.value;
@@ -1309,7 +1370,7 @@ class UsageStore {
     const expiresAt = Math.min(nextEvent ? Date.parse(nextEvent.occurred_at) + 1 : Infinity,
       ...value.filter((row) => row.current).map((row) => Date.parse(row.resetsAt)));
     this.cycleHistoryCache.delete(key);
-    this.cycleHistoryCache.set(key, { at: nowMs, expiresAt, value });
+    this.cycleHistoryCache.set(key, { at: nowMs, expiresAt, revision, value });
     if (this.cycleHistoryCache.size > 12) this.cycleHistoryCache.delete(this.cycleHistoryCache.keys().next().value);
     return value;
   }
@@ -1325,10 +1386,11 @@ class UsageStore {
       WHERE source_id = ? AND bucket_id = ?
       GROUP BY resets_at
       ORDER BY resets_at DESC
-      LIMIT ?
-    `).all(sourceId, bucketId, limit + 8);
+    `).iterate(sourceId, bucketId);
     // Rounding jitter in reset timestamps splits one window into neighbours a
     // few seconds apart; merge anything within a minute of the previous row.
+    // Apply the limit to merged windows, not timestamps: a busy current window
+    // can have hundreds of jittered timestamps and must not hide older cycles.
     const merged = [];
     for (const row of rows) {
       const previous = merged.at(-1);
@@ -1340,6 +1402,7 @@ class UsageStore {
         previous.readings += row.readings;
         continue;
       }
+      if (merged.length >= limit) break;
       merged.push({ ...row });
     }
     const rate = Number(settings.usdToCurrency || 1);
@@ -1407,7 +1470,7 @@ class UsageStore {
   // Token counts and the current-catalogue equivalent in USD; no prompts.
   exportLedgerCsv(days = 90, nowMs = Date.now()) {
     const since = iso(nowMs - days * DAY_MS);
-    const events = this.prepare('SELECT * FROM usage_events WHERE occurred_at >= ? ORDER BY occurred_at ASC').all(since);
+    const events = this.prepare('SELECT * FROM usage_events WHERE occurred_at >= ? AND occurred_at <= ? ORDER BY occurred_at ASC').all(since, iso(nowMs));
     const escape = (value) => {
       const text = value == null ? '' : String(value);
       // CSV quoting alone does not stop spreadsheet formulas. Guard text at
@@ -1566,6 +1629,7 @@ class UsageStore {
     const list = (value) => (Array.isArray(value) ? value : []);
     const knownSources = new Set(SOURCE_DEFINITIONS.map(([id]) => id));
     const counts = { settings: 0, observations: 0, usageEvents: 0, dailyUsage: 0, prices: 0, skipped: 0 };
+    let restoredCodexEvents = 0;
 
     const insertObservation = this.prepare(`
       INSERT OR IGNORE INTO quota_observations(
@@ -1629,7 +1693,7 @@ class UsageStore {
           counts.skipped += 1;
           continue;
         }
-        accepted[key] = value;
+        accepted[key] = normalizedSetting(key, value);
       }
       const merged = { ...this.getSettings(), ...accepted };
       if (merged.activeStartHour >= merged.activeEndHour) {
@@ -1707,7 +1771,7 @@ class UsageStore {
           const reasoningTokens = tokens(row.reasoning_output_tokens);
           if (reasoningTokens > outputTokens
             || (row.reported_cost_usd != null && (reportedCost == null || reportedCost < 0))) throw unreadable();
-          counts.usageEvents += insertEvent.run(
+          const inserted = insertEvent.run(
             row.event_key, row.source_id, validIso(row.occurred_at, 'Event time'),
             typeof row.session_id === 'string' ? row.session_id : null,
             typeof row.model === 'string' ? row.model : null,
@@ -1718,9 +1782,21 @@ class UsageStore {
             reportedCost,
             typeof row.metadata_json === 'string' ? row.metadata_json : JSON.stringify(row.metadata_json ?? {}),
           ).changes;
+          counts.usageEvents += inserted;
+          if (row.source_id === 'codex') restoredCodexEvents += inserted;
         } catch {
           counts.skipped += 1;
         }
+      }
+
+      if (restoredCodexEvents) {
+        // A pre-repair backup can restore duplicate token snapshots after the
+        // source log's migration cursor was already completed. Recheck those
+        // logs on the next scan using the collector's source proof and safety
+        // backup; do not delete restored evidence here or disturb Claude cursors.
+        this.prepare(`UPDATE imported_files SET state_json = json_remove(state_json, '$.accountingVersion')
+          WHERE lower(replace(file_path, char(92), '/')) LIKE '%/.codex/sessions/%.jsonl'
+            AND CASE WHEN json_valid(state_json) THEN json_type(state_json, '$.accountingVersion') END IS NOT NULL`).run();
       }
 
       for (const row of list(payload.dailyUsage)) {

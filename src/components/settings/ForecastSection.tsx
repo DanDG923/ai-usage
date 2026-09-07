@@ -1,4 +1,6 @@
+import { useRef, useState } from 'react';
 import type { Settings, Snapshot } from '../../types';
+import { ForecastExcludedDates } from './ForecastExcludedDates';
 import { NumericSetting, SectionHeading, hourOptions } from './fields';
 
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -11,6 +13,25 @@ export function ForecastSection({
   update: (patch: Partial<Settings>) => Promise<void>;
 }) {
   const { settings } = snapshot;
+  const [savingDays, setSavingDays] = useState(false);
+  const daySavePending = useRef(false);
+  const toggleDay = async (index: number) => {
+    // The snapshot is the last saved selection. Until the next one arrives,
+    // another whole-array write would overwrite the first change.
+    if (daySavePending.current) return;
+    daySavePending.current = true;
+    setSavingDays(true);
+    try {
+      await update({
+        activeDays: settings.activeDays.includes(index)
+          ? settings.activeDays.filter((day) => day !== index)
+          : [...settings.activeDays, index],
+      });
+    } finally {
+      daySavePending.current = false;
+      setSavingDays(false);
+    }
+  };
   return (
     <section id="schedule" className="panel settings-section">
       <SectionHeading
@@ -37,19 +58,16 @@ export function ForecastSection({
           </select>
         </label>
       </div>
-      <div className="day-picker" role="group" aria-label="Active days">
+      <div className="day-picker" role="group" aria-label="Active days" aria-busy={savingDays}>
         {DAY_NAMES.map((day, index) => {
           const active = settings.activeDays.includes(index);
           return (
             <button
               key={day}
               aria-pressed={active}
+              disabled={savingDays}
               className={active ? 'active' : ''}
-              onClick={() =>
-                update({
-                  activeDays: active ? settings.activeDays.filter((d) => d !== index) : [...settings.activeDays, index],
-                })
-              }
+              onClick={() => toggleDay(index)}
             >
               {day}
             </button>
@@ -85,6 +103,7 @@ export function ForecastSection({
           </p>
         </div>
       </details>
+      <ForecastExcludedDates snapshot={snapshot} update={update} />
     </section>
   );
 }

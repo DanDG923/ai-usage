@@ -78,6 +78,10 @@ function importClaudeInboxFile(store, inboxPath) {
         continue;
       }
       result.snapshots += 1;
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+        result.rejectedRecords += 1;
+        continue;
+      }
       const capturedAt = epochToIso(payload.ai_usage_captured_at || payload.captured_at || new Date().toISOString());
       if (!capturedAt || !payload.rate_limits || typeof payload.rate_limits !== 'object' || Array.isArray(payload.rate_limits)) {
         result.rejectedRecords += 1;
@@ -230,6 +234,11 @@ function importClaudeTranscripts(store, days = 120) {
       try {
         row = JSON.parse(line);
       } catch {
+        continue;
+      }
+      if (!row || typeof row !== 'object' || Array.isArray(row)) {
+        rejectedRows += 1;
+        lastRejection = 'Claude transcript record must be an object.';
         continue;
       }
       const usage = row.message?.usage;

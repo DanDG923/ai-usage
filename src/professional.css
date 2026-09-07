@@ -1161,6 +1161,63 @@ body {
   border-top: 0;
 }
 
+.forecast-exclusions {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+  max-width: 700px;
+}
+
+.forecast-exclusions h3 {
+  font-size: 13px;
+  margin: 0 0 6px;
+}
+
+.forecast-exclusions p {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.settings-fields.forecast-exclusion-controls {
+  grid-template-columns: minmax(0, 240px) auto;
+  justify-content: start;
+  align-items: end;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.forecast-exclusion-controls button {
+  min-height: 32px;
+}
+
+.forecast-exclusions .forecast-exclusion-note {
+  margin-top: 8px;
+  font-size: 11.5px;
+}
+
+.forecast-exclusion-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  max-height: 224px;
+  overflow-y: auto;
+}
+
+.forecast-exclusion-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 2px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.forecast-exclusion-list button {
+  font-size: 11.5px;
+}
+
 .inline-advanced {
   margin-top: 14px;
   border-top: 1px solid var(--line);

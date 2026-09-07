@@ -71,6 +71,7 @@ test('the JSON-line client still resolves valid JSON-line responses', async () =
   const client = new JsonLineClient('C:\\fixture\\codex.exe', () => child);
   const response = client.request('account/usage/read');
 
+  child.stdout.write('null\n[]\n42\n');
   child.stdout.write(`${JSON.stringify({ id: 1, result: { dailyUsageBuckets: [] } })}\n`);
 
   assert.deepEqual(await response, { dailyUsageBuckets: [] });

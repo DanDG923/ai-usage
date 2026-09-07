@@ -77,6 +77,20 @@ try {
   const snapshotCached = measure(() => store.getDashboardSnapshot(30, now));
   if (snapshotCached.resultSha256 !== snapshotUncachedCycles.resultSha256) throw new Error('Cached snapshot differs from uncached cycles.');
   const sessionSearch = measure(() => store.getSessionPage({ days: 30, query: 'synthetic-project-0', pageSize: 10 }, now));
+  const afterStatusWrite = measure(() => {
+    store.setSourceStatus('codex', 'connected', 'Synthetic status-only refresh.');
+    return store.getCostAnalytics(30, settings, now);
+  });
+  if (afterStatusWrite.resultSha256 !== uncached.resultSha256) throw new Error('Status-only refresh changed analytics.');
+  const readCycles = () => Object.fromEntries([
+    ['codex', 'codex:weekly'], ['claude', 'seven_day'], ['claude-fable', 'fable_seven_day'],
+  ].map(([sourceId, bucketId]) => [sourceId, store.getCycleHistory(sourceId, { bucketId }, settings, 8, now)]));
+  const cachedCycles = measure(readCycles);
+  const cyclesAfterStatusWrite = measure(() => {
+    store.setSourceStatus('codex', 'connected', 'Synthetic status-only refresh.');
+    return readCycles();
+  });
+  if (cyclesAfterStatusWrite.resultSha256 !== cachedCycles.resultSha256) throw new Error('Status-only refresh changed cycle history.');
   console.log(JSON.stringify({
     records: count,
     node: process.version,
@@ -86,6 +100,9 @@ try {
     snapshotUncachedCycles,
     snapshotCached,
     sessionSearch,
+    afterStatusWrite,
+    cachedCycles,
+    cyclesAfterStatusWrite,
   }, null, 2));
 } finally {
   store.close();

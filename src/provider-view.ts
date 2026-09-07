@@ -16,6 +16,7 @@ export type ProviderView = {
   resetAt: string | null;
   subtitle: string;
   provenance: string;
+  expired: boolean;
   estimated: boolean;
   stale: boolean;
   notes: string[];
@@ -83,6 +84,7 @@ function providerSubtitle(id: ProviderId, current: QuotaWindow | null, source: S
 function providerNotes(id: ProviderId, current: QuotaWindow | null, source: Source | null) {
   const notes: string[] = [];
   if (!current) return notes;
+  if (current.forecast.expired) return ['The last allowance window ended. A new provider reading is needed.'];
   if (current.provenance === 'derived-tokens') {
     notes.push('Allowance estimated from local activity and calibrated history.');
   }
@@ -119,6 +121,7 @@ function buildProviderViews(snapshot: Snapshot): ProviderView[] {
   return PROVIDERS.map(({ id, name, sourceId }) => {
     const quota = snapshot.quotas[id];
     const current = primaryWindow(quota);
+    const expired = Boolean(current?.forecast.expired);
     const source = snapshot.sources.find((entry) => entry.id === sourceId) ?? null;
     return {
       id,
@@ -126,19 +129,23 @@ function buildProviderViews(snapshot: Snapshot): ProviderView[] {
       quota,
       current,
       source,
-      state: current?.forecast.state ?? 'unknown',
-      remaining: current ? Math.max(0, Math.min(100, displayedRemaining(current))) : null,
+      state: expired ? 'unknown' : (current?.forecast.state ?? 'unknown'),
+      remaining: current && !expired ? Math.max(0, Math.min(100, displayedRemaining(current))) : null,
       expectedRemaining:
-        current?.forecast.expectedRemaining == null
+        expired || current?.forecast.expectedRemaining == null
           ? null
           : Math.max(0, Math.min(100, current.forecast.expectedRemaining)),
       heavyRemaining:
-        current?.forecast.heavyRemaining == null ? null : Math.max(0, Math.min(100, current.forecast.heavyRemaining)),
+        expired || current?.forecast.heavyRemaining == null
+          ? null
+          : Math.max(0, Math.min(100, current.forecast.heavyRemaining)),
       resetAt: current?.resetsAt ?? null,
       subtitle: providerSubtitle(id, current, source),
       provenance: current?.provenance ?? 'unavailable',
-      estimated: current ? isEstimated(current) : false,
+      expired,
+      estimated: current && !expired ? isEstimated(current) : false,
       stale: Boolean(
+        expired ||
         (source && ['stale', 'degraded', 'error'].includes(source.status)) ||
         (current?.forecast.staleHours != null && current.forecast.staleHours > 24),
       ),

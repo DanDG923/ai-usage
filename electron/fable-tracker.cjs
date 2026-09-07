@@ -333,8 +333,9 @@ function createFableUsageTracker({ store, usagePort, activityReader, clock = () 
     // Wall-clock cost of each surface, for the diagnostics panel.
     const timed = (run) => {
       const startedAt = Date.now();
-      const promise = Promise.resolve().then(run);
-      return { promise, elapsed: () => Date.now() - startedAt };
+      let elapsedMs;
+      const promise = Promise.resolve().then(run).finally(() => { elapsedMs = Date.now() - startedAt; });
+      return { promise, elapsed: () => elapsedMs };
     };
     const usageRead = timed(() => usagePort.read({ signal: options.signal }));
     const activityRead = timed(() => activityReader.import({ signal: options.signal }));
