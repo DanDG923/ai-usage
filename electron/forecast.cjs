@@ -6,6 +6,8 @@ const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 const RESET_TOLERANCE_MS = 60_000;
 const HEAVY_HISTORY_DAYS = 7;
+const EARLY_RESET_DAY_WEIGHT = 0.25;
+const RESET_EVIDENCE_PROVENANCES = new Set(['official', 'local-official', 'official-statusline', 'official-claude-usage', 'manual-official']);
 const MAX_PROJECTION_MS = MAX_QUOTA_RESET_AHEAD_MS + QUOTA_CLOCK_SKEW_MS;
 const MAX_SERIES_POINTS = Math.ceil(MAX_PROJECTION_MS / HOUR_MS) + 1;
 
@@ -162,7 +164,7 @@ function usedPercentOf(row) {
   return clamp(Number.isFinite(row.usedPercent) ? row.usedPercent : 100 - row.remainingPercent, 0, 100);
 }
 
-function windowPaceOf(rows, schedule, observedResetAt = null, nowMs = Date.now(), excluded = null) {
+function windowPaceOf(rows, schedule, observedResetAt = null, nowMs = Date.now(), excluded = null, dayWeights = null) {
   const last = rows.at(-1);
   const usedEnd = usedPercentOf(last);
   const windowMinutes = rows.findLast((row) => Number.isFinite(row.windowMinutes) && row.windowMinutes > 0)?.windowMinutes;
@@ -175,8 +177,11 @@ function windowPaceOf(rows, schedule, observedResetAt = null, nowMs = Date.now()
   // Only the scheduled share of the window's usage may carry forward as an
   // active-hour pace: the projection adds off-schedule use separately, so a
   // whole-window average would count every late-night point twice.
-  const split = splitWindowUsage(rows, schedule, nowMs, startMs, last.observedAt, used, excluded);
-  return split.activeHours >= 1 ? { pace: split.activeUsed / split.activeHours, activeHours: split.activeHours } : null;
+  const split = splitWindowUsage(rows, schedule, nowMs, startMs, last.observedAt, used, excluded, dayWeights);
+  const evidenceActiveHours = dayWeights?.size
+    ? splitWindowUsage(rows, schedule, nowMs, startMs, last.observedAt, used, excluded).activeHours : split.activeHours;
+  return evidenceActiveHours >= 1 && split.activeHours > 0
+    ? { pace: split.activeUsed / split.activeHours, activeHours: split.activeHours, evidenceActiveHours } : null;
 }
 
 // Split one window's usage between scheduled and off-schedule hours. Usage
@@ -185,7 +190,7 @@ function windowPaceOf(rows, schedule, observedResetAt = null, nowMs = Date.now()
 // phase mix cannot tell us where it occurred; distribute that unknown
 // remainder by elapsed exposure instead, otherwise one +1 just after the
 // active-hours boundary can assign an entire 13% window burn to off-schedule use.
-function splitWindowUsage(rows, schedule, nowMs, startMs, endMs, used, excluded = null) {
+function splitWindowUsage(rows, schedule, nowMs, startMs, endMs, used, excluded = null, dayWeights = null) {
   if (excluded?.(startMs, endMs)) {
     // A cumulative provider total includes the ignored day's burn. Only clean
     // spans bounded by actual readings can supply usage and elapsed exposure;
@@ -205,8 +210,32 @@ function splitWindowUsage(rows, schedule, nowMs, startMs, endMs, used, excluded 
       const first = segment[0];
       const last = segment.at(-1);
       const cleanUsed = segment.reduce((peak, row) => Math.max(peak, usedPercentOf(row)), usedPercentOf(first)) - usedPercentOf(first);
-      const split = splitWindowUsage(segment, schedule, nowMs, first.observedAt, last.observedAt, cleanUsed);
+      const split = splitWindowUsage(segment, schedule, nowMs, first.observedAt, last.observedAt, cleanUsed, null, dayWeights);
       for (const key of Object.keys(result)) result[key] += split[key];
+    }
+    return result;
+  }
+  if (dayWeights?.size && exclusionLookup([...dayWeights.keys()])(startMs, endMs)) {
+    // Change the weight of localised usage and its measured exposure together.
+    // Earlier cumulative usage cannot be assigned to this day: preserve its
+    // original contribution and exposure. In particular, an initial 0% reading
+    // proves the earlier window was quiet; dropping those hours inflates pace.
+    const result = splitWindowUsage(rows, schedule, nowMs, startMs, endMs, used);
+    const samples = deriveLearningSamples(rows, schedule, nowMs);
+    const known = samples.reduce((sum, sample) => sum + sample.delta, 0);
+    const scale = known > used && known > 0 ? used / known : 1;
+    for (const sample of samples) {
+      const key = sample.phase === 'active' ? 'activeUsed' : 'offUsed';
+      result[key] -= sample.dailyDeltas.reduce((sum, entry) => sum + entry.delta * scale * (1 - (dayWeights.get(entry.day) ?? 1)), 0);
+    }
+    let cursor = Math.max(startMs, rows[0].observedAt);
+    while (cursor < endMs) {
+      const next = Math.min(endMs, Math.floor(cursor / HOUR_MS) * HOUR_MS + HOUR_MS);
+      const midpoint = new Date((cursor + next) / 2);
+      const hours = (next - cursor) / HOUR_MS * (1 - (dayWeights.get(localDayKey(midpoint)) ?? 1));
+      result.elapsedHours -= hours;
+      result[isActiveHour(midpoint, schedule) ? 'activeHours' : 'offHours'] -= hours;
+      cursor = next;
     }
     return result;
   }
@@ -238,6 +267,8 @@ function normaliseObservation(row) {
     remainingPercent: Number(row.remainingPercent ?? row.remaining_percent),
     windowMinutes: windowMinutes == null ? null : Number(windowMinutes),
     provenance: row.provenance || 'official',
+    sourceId: row.sourceId ?? row.source_id,
+    bucketId: row.bucketId ?? row.bucket_id,
   };
 }
 
@@ -260,12 +291,13 @@ function addIntervalSamples(samples, before, after, schedule, nowMs, rateElapsed
     const midpoint = new Date(midpointMs);
     const phase = isActiveHour(midpoint, schedule) ? 'active' : 'off-schedule';
     const hours = (next - cursor) / HOUR_MS;
-    const group = phases.get(phase) || { coveredHours: 0, delta: 0, midpointHours: 0, dailyDeltas: new Map() };
+    const group = phases.get(phase) || { coveredHours: 0, delta: 0, midpointHours: 0, dailyDeltas: new Map(), dailyHours: new Map() };
     group.coveredHours += hours * coverageScale;
     group.delta += allocationRate * hours;
     group.midpointHours += midpointMs * hours * coverageScale;
     const day = localDayKey(midpoint);
     group.dailyDeltas.set(day, (group.dailyDeltas.get(day) || 0) + allocationRate * hours);
+    group.dailyHours.set(day, (group.dailyHours.get(day) || 0) + hours);
     phases.set(phase, group);
     cursor = next;
   }
@@ -284,6 +316,7 @@ function addIntervalSamples(samples, before, after, schedule, nowMs, rateElapsed
       delta: group.delta,
       coveredHours: group.coveredHours,
       dailyDeltas: [...group.dailyDeltas].map(([day, dayDelta]) => ({ day, delta: dayDelta })),
+      dailyHours: [...group.dailyHours].map(([day, hours]) => ({ day, hours })),
     });
   }
 }
@@ -378,21 +411,29 @@ function createRateLookup(samples) {
     const exact = phaseSamples.filter((sample) => sample.weekday === weekday && Math.abs(sample.hour - hour) <= 1);
     const sameHour = phaseSamples.filter((sample) => Math.abs(sample.hour - hour) <= 1);
     const candidates = exact.length >= 2 ? exact : sameHour.length >= 3 ? sameHour : phaseSamples;
-    const rate = candidates.length
-      ? weightedMean(candidates.map((sample) => ({ value: sample.rate, weight: sample.weight * sample.coveredHours })))
-      : fallbackRate;
+    const rate = contextualRate(candidates, fallbackRate);
     answers.set(key, rate);
     return rate;
   };
 }
 
-function recentRate(samples, nowMs, phase) {
+function contextualRate(samples, fallbackRate, recency = () => 1) {
+  if (!samples.length) return fallbackRate;
+  const entries = samples.map((sample) => ({ value: sample.rate,
+    weight: sample.weight * sample.coveredHours * recency(sample), influence: sample.influence ?? 1 }));
+  const retained = entries.reduce((sum, entry) => sum + entry.weight, 0);
+  const original = entries.reduce((sum, entry) => sum + entry.weight / entry.influence, 0);
+  const influence = original > 0 ? retained / original : 1;
+  // A recent/hour-specific subset may contain only the unusual day. Merely
+  // multiplying all its weights by 0.25 would cancel out in its own mean, so
+  // reduce that subset's pull towards its rate as well as its sample weight.
+  return weightedMean(entries) * influence + fallbackRate * (1 - influence);
+}
+
+function recentRate(samples, nowMs, phase, fallbackRate) {
   const recent = samples.filter((sample) => sample.phase === phase && sample.rateEligible !== false && nowMs - sample.observedAt <= 36 * HOUR_MS);
   if (!recent.length) return 0;
-  return weightedMean(recent.map((sample) => ({
-    value: sample.rate,
-    weight: sample.weight * sample.coveredHours * Math.exp(-(nowMs - sample.observedAt) / (8 * HOUR_MS)),
-  })));
+  return contextualRate(recent, fallbackRate, (sample) => Math.exp(-(nowMs - sample.observedAt) / (8 * HOUR_MS)));
 }
 
 function buildSeries(expectedStart, heavyStart, startMs, endMs, schedule, samples, rates) {
@@ -470,7 +511,7 @@ function exhaustionTime(series) {
   return null;
 }
 
-function forecastQuota(observations, options = {}) {
+function forecastQuotaWithLearning(observations, options = {}, dayWeights = null) {
   const nowMs = options.now != null ? new Date(options.now).getTime() : Date.now();
   if (!Number.isFinite(nowMs)) return unknownForecast();
   const schedule = {
@@ -507,7 +548,14 @@ function forecastQuota(observations, options = {}) {
 
   const remaining = Number.isFinite(current.remainingPercent) ? current.remainingPercent : 100 - current.usedPercent;
   const usedNow = clamp(Number.isFinite(current.usedPercent) ? current.usedPercent : 100 - remaining, 0, 100);
-  const samples = deriveLearningSamples(normalised, schedule, nowMs, excluded);
+  const samples = deriveLearningSamples(normalised, schedule, nowMs, excluded).map((sample) => {
+    if (!dayWeights?.size) return sample;
+    const hours = sample.dailyHours.reduce((sum, entry) => sum + entry.hours, 0);
+    const weightedHours = sample.dailyHours.reduce((sum, entry) => sum + entry.hours * (dayWeights.get(entry.day) ?? 1), 0);
+    const influence = hours > 0 ? weightedHours / hours : 1;
+    return { ...sample, weight: sample.weight * influence, influence,
+      dailyDeltas: sample.dailyDeltas.map((entry) => ({ ...entry, delta: entry.delta * (dayWeights.get(entry.day) ?? 1) })) };
+  });
   const modelSamples = samples.filter((sample) => sample.rateEligible !== false);
 
   // Window anchor: the provider's used-percentage covers the whole window, so
@@ -523,7 +571,7 @@ function forecastQuota(observations, options = {}) {
   const anchorUsed = windowMinutes ? usedNow : Math.max(0, usedNow - usedPercentOf(inWindow[0]));
   const {
     activeHours: anchorActiveHours, offHours: anchorOffHours, activeUsed: activeAnchorUsed, offUsed: offAnchorUsed,
-  } = splitWindowUsage(inWindow, schedule, nowMs, anchorStartMs, current.observedAt, anchorUsed, excluded);
+  } = splitWindowUsage(inWindow, schedule, nowMs, anchorStartMs, current.observedAt, anchorUsed, excluded, dayWeights);
   const windowPace = anchorActiveHours >= 1 && anchorUsed >= 0 ? activeAnchorUsed / anchorActiveHours : null;
   const offWindowPace = anchorOffHours >= 1 && anchorUsed >= 0 ? offAnchorUsed / anchorOffHours : null;
   // After a reset the fresh window has no history of its own, so the most
@@ -531,8 +579,8 @@ function forecastQuota(observations, options = {}) {
   // instead of letting while-working burst rates run unchecked until reset.
   const priorEvidence = clusters
     .filter((entry) => entry !== currentCluster && entry.rows.length >= 2)
-    .map((entry) => windowPaceOf(entry.rows, schedule, entry.observedResetAt, nowMs, excluded))
-    .filter((entry) => entry && entry.activeHours >= 6)
+    .map((entry) => windowPaceOf(entry.rows, schedule, entry.observedResetAt, nowMs, excluded, dayWeights))
+    .filter((entry) => entry && entry.evidenceActiveHours >= 6)
     .at(-1) ?? null;
   const windowWeight = windowPace == null ? 0 : clamp(anchorActiveHours / 30, 0, 0.9);
   const priorWeight = priorEvidence ? clamp(priorEvidence.activeHours / 30, 0, 0.85) * (1 - windowWeight) : 0;
@@ -551,8 +599,8 @@ function forecastQuota(observations, options = {}) {
     : fallback;
   const globalRate = mean(activeSamples, fallbackRate);
   const offScheduleRate = mean(offScheduleSamples, 0);
-  const recent = recentRate(samples, nowMs, 'active');
-  const offScheduleRecent = recentRate(samples, nowMs, 'off-schedule');
+  const recent = recentRate(samples, nowMs, 'active', globalRate);
+  const offScheduleRecent = recentRate(samples, nowMs, 'off-schedule', offScheduleRate);
   const recentWeight = activeSamples.length < 3 ? 0 : clamp(activeSamples.filter((sample) => nowMs - sample.observedAt <= 36 * HOUR_MS).length / 10, 0.1, 0.38);
   const offScheduleRecentWeight = offScheduleSamples.length < 3 ? 0 : clamp(offScheduleSamples.filter((sample) => nowMs - sample.observedAt <= 36 * HOUR_MS).length / 10, 0.1, 0.38);
   // Heavy scenario: the busy end of learned *daily* usage, never of momentary
@@ -574,17 +622,24 @@ function forecastQuota(observations, options = {}) {
   // Each learned local day supplies its real off-schedule capacity: an
   // inactive day has all 24 hours, and a DST boundary may have 23 or 25.
   const offCapacityHours = [...sampleDays]
-    .reduce((sum, day) => sum + offScheduleHoursForLocalDay(day, schedule), 0);
+    .reduce((sum, day) => sum + offScheduleHoursForLocalDay(day, schedule) * (dayWeights?.get(day) ?? 1), 0);
   const offDailyPace = offCapacityHours > 0
     ? offDailyTotals.reduce((sum, value) => sum + value, 0) / offCapacityHours
     : 0;
   const offDailyRates = [...offDayUsage]
     .map(([day, value]) => {
-      const hours = offScheduleHoursForLocalDay(day, schedule);
+      const hours = offScheduleHoursForLocalDay(day, schedule) * (dayWeights?.get(day) ?? 1);
       return hours > 0 ? value / hours : null;
     })
     .filter(Number.isFinite);
-  const sustainableOffSchedulePace = Math.max(offWindowPace ?? 0, offDailyPace);
+  // This window's own off-schedule pace is a burst until its elapsed off-hours
+  // cover about one full night: a fresh window's first late-evening surge must
+  // not be extrapolated across every remaining night. Trust it in proportion
+  // to that exposure and never fall below the learned daily off budget.
+  const offWindowWeight = offWindowPace == null ? 0 : clamp(anchorOffHours / 10, 0, 1);
+  const sustainableOffSchedulePace = offWindowPace == null
+    ? offDailyPace
+    : Math.max(offDailyPace, offDailyPace + (offWindowPace - offDailyPace) * offWindowWeight);
   const heavyActive = activeDailyTotals.length >= 2
     ? percentile(activeDailyTotals, 0.82) / scheduleHoursPerDay
     : anchor ? anchor.rate * 1.6 : fallbackRate * 1.55;
@@ -670,6 +725,129 @@ function forecastQuota(observations, options = {}) {
     reservePercent,
     series: { observed, expected: future.expected, heavy: future.heavy },
   };
+}
+
+function earlyResetAdjustment(observations, options, nowMs) {
+  const rows = observations.map((row) => ({ ...normaliseObservation(row), resetEvidence: RESET_EVIDENCE_PROVENANCES.has(row.provenance) }))
+    .filter((row) => validQuotaTime(row.observedAt, row.resetsAt, row.windowMinutes, nowMs)
+      && row.observedAt >= nowMs - FORECAST_LOOKBACK_MS && Number.isFinite(row.usedPercent))
+    .sort((a, b) => a.observedAt - b.observedAt);
+  if (rows.length < 2) return null;
+  // Callers normally supply one bucket. A mixed history cannot establish that
+  // an apparent drop represents replenishment of the same allowance.
+  const identity = (row) => JSON.stringify([row.sourceId, row.bucketId, row.windowMinutes]);
+  if (!rows[0].sourceId || !rows[0].bucketId || new Set(rows.map(identity)).size !== 1 || !(rows[0].windowMinutes > 0)) return null;
+  const candidates = new Map();
+  const excluded = exclusionLookup(options.excludedDates);
+  for (let index = 1; index < rows.length; index += 1) {
+    const before = rows[index - 1], after = rows[index];
+    if (!before.resetEvidence || !after.resetEvidence) continue;
+    const windowMs = before.windowMinutes * 60_000;
+    const gap = after.observedAt - before.observedAt;
+    const earlyMargin = Math.max(HOUR_MS / 2, Math.min(6 * HOUR_MS, windowMs / 10));
+    if (!(gap > 0) || gap > Math.min(6 * HOUR_MS, windowMs / 4)
+      || before.resetsAt - after.observedAt < earlyMargin
+      || before.usedPercent - after.usedPercent < 20 || after.usedPercent > 2) continue;
+    // The preceding completed calendar day has an independent daily total.
+    // Do not discount the partly observed reset day or invent a reason for the
+    // replenishment (a reset alone cannot establish the user's motivation).
+    const previousDay = new Date(after.observedAt);
+    previousDay.setHours(0, 0, 0, 0);
+    previousDay.setDate(previousDay.getDate() - 1);
+    const day = localDayKey(previousDay);
+    const nextDay = new Date(previousDay);
+    nextDay.setDate(nextDay.getDate() + 1);
+    if (!excluded(previousDay.getTime(), nextDay.getTime())) candidates.set(day, after.observedAt);
+  }
+  if (!candidates.size) return null;
+  const schedule = { activeDays: options.schedule?.activeDays ?? [1, 2, 3, 4, 5, 6, 0],
+    startHour: options.schedule?.startHour ?? 8, endHour: options.schedule?.endHour ?? 22 };
+  const days = new Map(), uncertainDays = new Set();
+  const boundedSamples = [];
+  let peak = rows[0].usedPercent;
+  for (let index = 1; index < rows.length; index += 1) {
+    const before = rows[index - 1], after = rows[index];
+    if (!sameWindowDrift(before, after)) { peak = after.usedPercent; continue; }
+    const delta = Math.max(0, after.usedPercent - peak);
+    peak = Math.max(peak, after.usedPercent);
+    const gap = after.observedAt - before.observedAt;
+    if (!(gap > 0)) continue;
+    const firstDay = localDayKey(new Date(before.observedAt));
+    const lastDay = localDayKey(new Date(after.observedAt - 1));
+    // A long gap crossing midnight cannot prove on which day the usage
+    // happened. Within one date, midnight-to-midnight readings can establish
+    // a complete day, including its real 23/25-hour DST duration.
+    if (!before.resetEvidence || !after.resetEvidence || delta > 70
+      || (firstDay !== lastDay && gap > 6 * HOUR_MS)) {
+      const cursor = new Date(before.observedAt);
+      cursor.setHours(0, 0, 0, 0);
+      while (cursor.getTime() < after.observedAt) {
+        uncertainDays.add(localDayKey(cursor));
+        cursor.setDate(cursor.getDate() + 1);
+      }
+      continue;
+    }
+    if (excluded(before.observedAt, after.observedAt)) continue;
+    // Consecutive unchanged polls prove quiet exposure too; the forecasting
+    // samples intentionally compact those polls and are not coverage proof.
+    addIntervalSamples(boundedSamples, { ...before, usedPercent: peak - delta },
+      { ...after, usedPercent: peak }, schedule, nowMs);
+  }
+  for (const sample of boundedSamples) {
+    for (const entry of sample.dailyDeltas) {
+      const day = days.get(entry.day) || { used: 0, hours: 0 };
+      day.used += entry.delta;
+      days.set(entry.day, day);
+    }
+    for (const entry of sample.dailyHours) {
+      const day = days.get(entry.day) || { used: 0, hours: 0 };
+      day.hours += entry.hours;
+      days.set(entry.day, day);
+    }
+  }
+  const covered = (day, value) => {
+    const [year, month, date] = day.split('-').map(Number);
+    const dayHours = (new Date(year, month - 1, date + 1) - new Date(year, month - 1, date)) / HOUR_MS;
+    return !uncertainDays.has(day) && value.hours >= dayHours * 0.75;
+  };
+  const adjusted = [];
+  for (const [day, resetAt] of candidates) {
+    const heavy = days.get(day);
+    if (!heavy || !covered(day, heavy)) continue;
+    const earliest = localDayKey(new Date(resetAt - 28 * DAY_MS));
+    const baseline = [...days].filter(([date, value]) => date < day && date >= earliest
+      && !candidates.has(date) && covered(date, value)).map(([, value]) => value.used / value.hours * heavy.hours);
+    if (baseline.length < 3) continue;
+    const typical = percentile(baseline, 0.5);
+    if (heavy.used >= Math.max(typical * 3, typical + 10)) adjusted.push({ day, resetAt });
+  }
+  return adjusted.length ? {
+    resetAt: new Date(Math.max(...adjusted.map((entry) => entry.resetAt))).toISOString(),
+    dates: adjusted.map((entry) => entry.day).sort(), weight: EARLY_RESET_DAY_WEIGHT,
+  } : null;
+}
+
+function forecastQuota(observations, options = {}) {
+  const ordinary = forecastQuotaWithLearning(observations, options);
+  if (ordinary.expired || ordinary.expectedRemaining == null) return ordinary;
+  const nowMs = options.now != null ? new Date(options.now).getTime() : Date.now();
+  const adjustment = earlyResetAdjustment(observations, options, nowMs);
+  if (!adjustment) return ordinary;
+  const adjusted = forecastQuotaWithLearning(observations, options,
+    new Map(adjustment.dates.map((day) => [day, adjustment.weight])));
+  // Normal-day expectations use the reduced influence. The heavier scenario
+  // keeps the complete observed workload, and can never be more optimistic
+  // than the adjusted expected curve at the same instant.
+  const heavy = ordinary.series.heavy.map((point, index) => ({ ...point,
+    remaining: Math.min(point.remaining, adjusted.series.expected[index]?.remaining ?? point.remaining) }));
+  const heavyRemaining = heavy.at(-1)?.remaining ?? ordinary.heavyRemaining;
+  const paceRiskThreshold = Number(options.paceRiskThreshold ?? 1.2);
+  const watchRemainingThreshold = Math.max(100 - Number(options.hardLimitThreshold ?? 90), adjusted.reservePercent);
+  const state = adjusted.expectedRemaining <= 0 ? 'critical'
+    : heavyRemaining <= 0 || adjusted.paceRatio > paceRiskThreshold ? 'risk'
+      : adjusted.expectedRemaining < watchRemainingThreshold || adjusted.paceRatio > paceRiskThreshold * 0.75 ? 'watch' : 'safe';
+  return { ...adjusted, state, heavyRemaining, heavyExhaustsAt: exhaustionTime(heavy),
+    series: { ...adjusted.series, heavy }, resetAdjustment: adjustment };
 }
 
 module.exports = { activeHoursBetween, deriveLearningSamples, exhaustionTime, forecastQuota, percentile, weightedPercentile };

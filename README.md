@@ -9,9 +9,9 @@ It imports local usage evidence, learns your real burn pattern, evaluates every 
 
 ## Install
 
-Use `AI-Usage-Setup-1.0.32-x64.exe` for a normal Windows installation. Running it over an existing installation upgrades in place and preserves the local database, settings, observations, and backups. Uninstalling first is neither required nor recommended. Install this version once to enable future updates through the app.
+Use `AI-Usage-Setup-1.0.33-x64.exe` for a normal Windows installation. Running it over an existing installation upgrades in place and preserves the local database, settings, observations, and backups. Uninstalling first is neither required nor recommended. Install this version once to enable future updates through the app.
 
-Use `AI-Usage-Portable-1.0.32-x64.exe` for a single executable that does not install the app. Windows SmartScreen may show an unknown-publisher warning because this personal build is not backed by a commercial code-signing certificate; verify the supplied SHA-256 hash before running it.
+Use `AI-Usage-Portable-1.0.33-x64.exe` for a single executable that does not install the app. Windows SmartScreen may show an unknown-publisher warning because this personal build is not backed by a commercial code-signing certificate; verify the supplied SHA-256 hash before running it.
 
 ## Personal private updates
 
@@ -71,6 +71,10 @@ Provider percentage rebounds within one reset window are handled with a monotoni
 
 When a successful official allowance reading shows a new window—or a clear allowance replenishment before its reset timestamp updates—the forecast starts a fresh cycle. External announcements and banked-credit availability are not treated as allowance state: the dashboard reports a banked personal reset credit separately, never assumes it was spent, and never consumes it automatically.
 
+If a clearly early replenishment follows an unusually heavy day, the expected forecast gives that completed local day **25% of its usual influence**. The detector needs closely spaced provider readings showing a drop of at least 20 percentage points to 2% used or less, well before the prior scheduled reset. It also needs reliable daily coverage and at least three earlier comparison days; the preceding day's use must be at least three times typical and at least 10 percentage points higher. An ordinary reset, sparse history, or a heavy day alone does not trigger this adjustment.
+
+This reduces the influence of that day's usage and observation time together; it does not pretend fewer tokens or allowance were consumed. Recorded usage, the provider balance, and the heavier-use scenario retain the real activity. A note on the provider card explains when the adjustment applies. Explicitly ignored dates still take precedence. The app recognises the observed replenishment pattern but does not infer whether a credit was redeemed or why the provider reset the allowance.
+
 The header verdict is built in the backend from every active primary, secondary, and model-specific window. A risky secondary window overrides a safe headline window. **All allowances on track** appears only when every expected source has sufficiently current evidence and every active window is safe; missing, stale, failed, or expired-only evidence produces an unknown verdict rather than a false all-clear. The verdict chip and the tray tooltip both carry the three headline percentages, and the tray icon carries a colour dot for the current state.
 
 Expired allowance readings are labelled as historical evidence while the app waits for a current reading. The **Current cycles** table pairs each cycle with its own allowance-window forecast; a shorter, more restrictive window can still drive the headline verdict without being shown as the weekly cycle's forecast.
@@ -78,6 +82,14 @@ Expired allowance readings are labelled as historical evidence while the app wai
 Each card also answers **Runs out**: the moment the expected projection first reaches zero, or the heavier projection's moment when only that one does. The same time is included in pace notifications.
 
 **Budget mode** (Settings → Forecast → *Keep in reserve*) sets a share of each allowance you want untouched at reset. The safe pace only spends what sits above the reserve, and a projection that would eat into it is shown as a watch state; the forecast itself still reports what will actually happen.
+
+### Estimated weekly token capacity
+
+Overview shows **Weekly token capacity** alongside the allowance forecasts. Each supported weekly window has its own estimated full-week token capacity, estimate range, confidence label, and tokens remaining at the displayed provider-reading timestamp. These figures describe the recorded model and token mix; they are not a provider-declared token entitlement. Overall and model-specific windows can share allowance and must not be added together. Providers without any allowance reading are omitted from the panel, and a weekly pool with no token scope (such as OAuth apps) is hidden when a supported weekly window exists.
+
+The estimate matches recorded tokens to positive changes between provider-reported percentages within the same reset cycle. It needs at least three usable intervals, each covering at least five percentage points, and learns from up to 45 days of history. Plateaus are accumulated until the percentage moves enough; resets, corrections, future records, unknown bucket membership, and intervals crossing ignored dates are excluded. Token categories are counted once: cached input is already part of Codex input, reasoning is already part of output, and cache-write durations are subdivisions of the cache-write total. API prices and imported desktop conversation estimates do not determine capacity.
+
+Expand a window's details to see the recorded model mix, input/cache/output split, calibration evidence, and limitations. The range reflects variation in the usable observations with an uncertainty margin, not a guaranteed bound or statistical confidence interval. Confidence describes consistency in the available local evidence and stays conservative because web, cloud, desktop, and other-device activity may be missing. Missing activity can make apparent capacity too low; a changed model or token mix can change it substantially. An expired window or provider reading older than 24 hours cannot supply a current tokens-remaining estimate. Ignored days affect learning only and still consume actual allowance.
 
 ## Notifications
 
@@ -191,7 +203,7 @@ Linting uses oxlint (typescript-eslint does not yet support the TypeScript 7 com
 ## Publish future private updates
 
 1. Update `package.json`, both root versions in `package-lock.json`, the current installer names in this README, the version contract test, and `CHANGELOG.md`. Keep the GitHub repository private and retain the matching `updateFeed` and `build.publish` settings in `package.json`; the separate `updateFeed` survives packaging so the installed app can verify its destination.
-2. Complete the checks above, review the changes, and merge them. Create and push the matching version tag, for example `v1.0.32` for version `1.0.32`.
+2. Complete the checks above, review the changes, and merge them. Create and push the matching version tag, for example `v1.0.33` for version `1.0.33`.
 3. The **Private Windows release** GitHub Actions workflow builds Windows x64 packages, checks the manifest and packaged contents, and creates a draft release. It uploads the Setup installer, portable executable, installer block map, `latest.yml`, and `SHA256SUMS.txt`, verifies each remote asset's size and SHA-256 digest, then publishes the release as latest. The normal pull-request CI job is unchanged.
 
 The release workflow can also be started manually with an existing version tag. It refuses a mismatched version, a public or different destination, a tag whose commit is not already on `main`, an existing release for that tag, or a version older than an existing stable release. If an upload fails, any created release stays a draft for inspection and is not offered to the app. Review and remove that incomplete draft before retrying; the workflow never overwrites existing release assets.
