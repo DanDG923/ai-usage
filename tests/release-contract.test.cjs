@@ -15,7 +15,7 @@ test('release metadata, dependency pin, package exclusions, and docs agree', () 
   const readme = readText('README.md');
   const changelog = readText('CHANGELOG.md');
 
-  assert.equal(pkg.version, '1.0.33');
+  assert.equal(pkg.version, '1.0.34');
   assert.equal(lock.version, pkg.version);
   assert.equal(lock.packages[''].version, pkg.version);
   assert.equal(pkg.dependencies['@anthropic-ai/claude-agent-sdk'], '0.3.251');
@@ -24,7 +24,16 @@ test('release metadata, dependency pin, package exclusions, and docs agree', () 
   // files; the only runtime dependencies are the SDK and the updater.
   assert.deepEqual(Object.keys(pkg.dependencies).sort(), ['@anthropic-ai/claude-agent-sdk', 'electron-updater']);
   for (const name of ['react', 'react-dom', 'lucide-react']) assert.ok(pkg.devDependencies[name], `${name} is a devDependency`);
-  assert.equal(pkg.scripts.lint, 'oxlint');
+  // The release tooling and these tests load js-yaml and @electron/asar
+  // directly, so they must be declared rather than borrowed from
+  // electron-builder's transitive tree.
+  for (const [name, version] of [['js-yaml', '4.3.2'], ['@electron/asar', '3.4.1']]) {
+    assert.equal(pkg.devDependencies[name], version, `${name} is an exactly pinned devDependency`);
+    assert.equal(lock.packages[''].devDependencies[name], version);
+    assert.equal(lock.packages[`node_modules/${name}`].version, version);
+  }
+  assert.equal(pkg.allowScripts, undefined);
+  assert.equal(pkg.scripts.lint, 'oxlint --deny-warnings');
   assert.match(pkg.scripts['format:check'], /prettier --check/);
   assert.equal(pkg.scripts.typecheck, 'tsc -b');
   assert.equal(pkg.build.publish.provider, 'github');
@@ -43,10 +52,10 @@ test('release metadata, dependency pin, package exclusions, and docs agree', () 
   assert.match(releaseAudit, /SHA256SUMS\.txt/);
   assert.match(releaseAudit, /source map/i);
   assert.match(releaseAudit, /private local data/i);
-  assert.match(readme, /AI-Usage-Setup-1.0.33-x64\.exe/);
+  assert.match(readme, /AI-Usage-Setup-1.0.34-x64\.exe/);
   assert.match(readme, /actual local Fable token activity/i);
   assert.match(readme, /experimental/i);
-  assert.match(changelog, /^# Changelog\s+## 1.0.33/m);
+  assert.match(changelog, /^# Changelog\s+## 1.0.34/m);
 });
 
 test('private releases build without credentials and publish complete verified assets', () => {
@@ -76,7 +85,25 @@ test('private releases build without credentials and publish complete verified a
   assert.match(publish.run, /Get-FileHash[\s\S]*SHA256/);
   assert.match(publish.run, /\.digest -cne "sha256:\$sha256"/);
   assert.match(publish.run, /--draft=false --latest/);
-  assert.match(readText('.github/workflows/ci.yml'), /jobs:\s+verify:/);
+  const ci = yaml.load(readText('.github/workflows/ci.yml'));
+  assert.ok(ci.jobs.verify, 'CI keeps the verify job');
+  // Packaging is exercised on every push so a broken ASAR or update feed is
+  // caught before a tag ever reaches the release workflow. The nsis target is
+  // the only Windows target for which electron-builder writes app-update.yml.
+  const pack = ci.jobs.package;
+  assert.equal(pack['runs-on'], 'windows-latest');
+  assert.equal(pack.needs, 'verify');
+  const packRuns = pack.steps.map((step) => step.run).filter(Boolean);
+  assert.ok(packRuns.includes('npm ci --ignore-scripts'));
+  assert.ok(packRuns.includes('node node_modules/electron/install.js'));
+  assert.ok(packRuns.includes('npm run build:web'));
+  assert.ok(packRuns.indexOf('npm run release:notes') < packRuns.findIndex((run) => run.includes('electron-builder')));
+  const builder = pack.steps.find((step) => /electron-builder --win nsis --x64 --publish never/.test(step.run || ''));
+  assert.equal(builder.env.CSC_IDENTITY_AUTO_DISCOVERY, 'false');
+  assert.equal(builder.env.GH_TOKEN, undefined);
+  assert.equal(builder.env.GITHUB_TOKEN, undefined);
+  assert.ok(packRuns.includes('node tools/audit-release.cjs --unpacked'));
+  assert.match(readText('tools/audit-release.cjs'), /--unpacked/);
 });
 
 test('the desktop window integrates native controls into the app header', () => {
@@ -86,8 +113,8 @@ test('the desktop window integrates native controls into the app header', () => 
 
   // Window chrome follows the theme: both palettes are declared once and the
   // overlay is re-applied whenever the effective theme changes.
-  assert.match(main, /dark:\s*\{\s*background:\s*'#0f1113',\s*symbol:\s*'#c8cbd0'\s*\}/);
-  assert.match(main, /light:\s*\{\s*background:\s*'#f5f5f6',\s*symbol:\s*'#3a3d43'\s*\}/);
+  assert.match(main, /dark:\s*\{\s*background:\s*'#0c1116',\s*symbol:\s*'#cbd3da'\s*\}/);
+  assert.match(main, /light:\s*\{\s*background:\s*'#f4f6f8',\s*symbol:\s*'#3b4854'\s*\}/);
   assert.match(main, /backgroundColor:\s*chrome\.background/);
   assert.match(main, /titleBarStyle:\s*'hidden'/);
   assert.match(main, /titleBarOverlay:\s*\{[^}]*color:\s*chrome\.background/s);

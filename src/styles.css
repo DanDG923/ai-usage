@@ -1275,6 +1275,19 @@ td small.path {
   color: var(--text-muted);
   margin-bottom: 14px;
 }
+/* Render failure: no rail exists, and the raw message is kept verbatim so it can be reported. */
+.app-shell:has(.error-fallback) {
+  padding-left: 0;
+}
+.error-fallback {
+  max-width: 760px;
+  margin: 26px auto;
+}
+.error-fallback p {
+  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
 
 /* Responsive */
 @media (max-width: 1400px) {

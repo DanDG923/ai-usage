@@ -1,6 +1,6 @@
 import { Search } from 'lucide-react';
 import { useDeferredValue, useMemo } from 'react';
-import { compactNumber, money, percent, sourceLabel } from '../lib';
+import { compactNumber, formatInt, money, percent, sourceLabel } from '../lib';
 import type { Snapshot } from '../types';
 import { CostChart } from './Charts';
 import { API_EQUIVALENT_EXPLAINER, InfoTip } from './InfoTip';
@@ -90,7 +90,7 @@ export function Costs({
           <small>
             {costs.isLowerBound
               ? `Lower bound; excludes ${unpriced || 'unpriced models'}`
-              : `${costs.requestCount.toLocaleString()} tracked usage updates`}
+              : `${formatInt(costs.requestCount)} tracked usage updates`}
           </small>
         </div>
         <dl>

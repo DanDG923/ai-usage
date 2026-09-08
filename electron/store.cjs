@@ -210,8 +210,43 @@ function dateKey(value, timeZone) {
 
 const WEEKDAY_INDEX = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
 
+// SQLITE_CORRUPT and SQLITE_NOTADB: the file exists but SQLite cannot read it.
+const UNREADABLE_DATABASE_CODES = new Set([11, 26]);
+
+function openDatabase(databasePath) {
+  const open = () => {
+    const db = new DatabaseSync(databasePath);
+    try {
+      db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
+      return db;
+    } catch (error) {
+      try { db.close(); } catch { /* Report the pragma failure, not the close. */ }
+      throw error;
+    }
+  };
+  try {
+    return { db: open(), recoveredFrom: null };
+  } catch (error) {
+    if (databasePath === ':memory:' || !UNREADABLE_DATABASE_CODES.has(Number(error?.errcode) & 0xff)) throw error;
+    // A file SQLite cannot read used to make every launch fatal. Set it aside
+    // under a dated name so the app can start again; the daily backups remain
+    // the way to get the history back.
+    const stamp = new Date().toISOString().replaceAll(/[:.]/g, '-');
+    const asideBase = `${databasePath}.corrupt-${stamp}`;
+    for (const suffix of ['', '-wal', '-shm']) {
+      try { fs.renameSync(`${databasePath}${suffix}`, `${asideBase}${suffix}`); } catch { /* No sidecar. */ }
+    }
+    return { db: open(), recoveredFrom: asideBase };
+  }
+}
+
 class UsageStore {
   constructor(databasePath, backupDirectory) {
+    // A relative path resolves against whatever directory happened to be
+    // current, which once produced a database literally named "-".
+    if (databasePath !== ':memory:' && !path.isAbsolute(databasePath)) {
+      throw new Error('The database path must be absolute.');
+    }
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
     fs.mkdirSync(backupDirectory, { recursive: true });
     this.databasePath = databasePath;
@@ -222,8 +257,10 @@ class UsageStore {
     this.tokenCapacityCache = new Map();
     this.tokenCapacityEvidenceCache = new Map();
     this.transactionDepth = 0;
-    this.db = new DatabaseSync(databasePath);
-    this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
+    const opened = openDatabase(databasePath);
+    this.db = opened.db;
+    // The path an unreadable database was moved to, or null on a normal open.
+    this.recoveredFrom = opened.recoveredFrom;
     this.migrate();
     this.seed();
   }
@@ -264,8 +301,11 @@ class UsageStore {
         UNIQUE(source_id, bucket_id, observed_at),
         FOREIGN KEY(source_id) REFERENCES sources(id)
       );
-      CREATE INDEX IF NOT EXISTS idx_quota_source_bucket_time
-        ON quota_observations(source_id, bucket_id, observed_at);
+      -- UNIQUE(source_id, bucket_id, observed_at) already provides this order;
+      -- the duplicate index only added write cost.
+      DROP INDEX IF EXISTS idx_quota_source_bucket_time;
+      CREATE INDEX IF NOT EXISTS idx_quota_source_bucket_reset
+        ON quota_observations(source_id, bucket_id, resets_at);
       CREATE TABLE IF NOT EXISTS usage_events (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         event_key TEXT NOT NULL UNIQUE,
@@ -584,9 +624,13 @@ class UsageStore {
       if (!validate) throw new Error(`Unknown setting: ${key}`);
       if (!validate(value)) throw new Error(`Invalid value for ${key}.`);
     }
-    for (const [key, value] of Object.entries(normalizedPatch)) {
-      statement.run(key, JSON.stringify(normalizedSetting(key, value)), iso());
-    }
+    // One transaction: a disk error part-way through cannot leave a validated
+    // patch half applied, and one fsync covers every key.
+    this.transaction(() => {
+      for (const [key, value] of Object.entries(normalizedPatch)) {
+        statement.run(key, JSON.stringify(normalizedSetting(key, value)), iso());
+      }
+    });
     return this.getSettings();
   }
 
@@ -1654,8 +1698,7 @@ class UsageStore {
     const stamp = new Date().toISOString().replaceAll(':', '-').replaceAll('.', '-');
     const databasePath = path.join(this.backupDirectory, `ai-usage-${stamp}.sqlite`);
     const exportPath = path.join(this.backupDirectory, `ai-usage-${stamp}.aiusage.json`);
-    const escaped = databasePath.replaceAll("'", "''");
-    this.db.exec(`VACUUM INTO '${escaped}'`);
+    this.db.prepare('VACUUM INTO ?').run(databasePath);
     const payload = {
       schemaVersion: 1,
       exportedAt: iso(),

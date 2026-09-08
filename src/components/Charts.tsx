@@ -1,15 +1,15 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { CostAnalytics, DailyUsage, Point } from '../types';
-import { compactNumber, money } from '../lib';
+import { LOCALE, compactNumber, formatInt, money } from '../lib';
 import type { ProviderView } from '../provider-view';
 import { spreadRunwayLabels } from './details/runway-labels';
 
 // Built once: the charts label dozens of ticks and re-render on every mouse
 // move, so constructing a formatter per label was the largest cost of a hover.
-const WEEKDAY_DAY = new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric' });
-const DAY_MONTH = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short' });
-const WEEKDAY_DAY_MONTH = new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
-const WEEKDAY_DAY_MONTH_TIME = new Intl.DateTimeFormat('en-GB', {
+const WEEKDAY_DAY = new Intl.DateTimeFormat(LOCALE, { weekday: 'short', day: 'numeric' });
+const DAY_MONTH = new Intl.DateTimeFormat(LOCALE, { day: 'numeric', month: 'short' });
+const WEEKDAY_DAY_MONTH = new Intl.DateTimeFormat(LOCALE, { weekday: 'short', day: 'numeric', month: 'short' });
+const WEEKDAY_DAY_MONTH_TIME = new Intl.DateTimeFormat(LOCALE, {
   weekday: 'short',
   day: 'numeric',
   month: 'short',
@@ -546,7 +546,7 @@ export function DailyUsageChart({ rows, days }: { rows: DailyUsage[]; days: numb
           className="forecast-tip"
           style={{ left: `${Math.min(84, Math.max(2, ((DAILY.left + hover * slot) / DAILY.width) * 100))}%` }}
         >
-          {dateLabel(hovered.date, WEEKDAY_DAY_MONTH)} · {hovered.tokens.toLocaleString()} tokens
+          {dateLabel(hovered.date, WEEKDAY_DAY_MONTH)} · {formatInt(hovered.tokens)} tokens
         </div>
       )}
     </div>

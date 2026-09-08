@@ -1,4 +1,13 @@
-import { dateTimeLabel, percent, quotaWindows, resetDistance, whenLabel } from '../lib';
+import {
+  dateTimeLabel,
+  displayedRemaining,
+  isEstimated,
+  percent,
+  quotaWindows,
+  resetDistance,
+  whenLabel,
+  windowLabel,
+} from '../lib';
 import type { ProviderView } from '../provider-view';
 
 const STATE_WORD: Record<ProviderView['state'], string> = {
@@ -41,6 +50,36 @@ function ForecastAdjustmentNotes({ view }: { view: ProviderView }) {
         <strong>{window.bucketName}:</strong> Heavy usage before an early reset has less influence on the expected
         forecast.
         <small>Recorded usage is kept; the heavier case still includes it.</small>
+      </p>
+    );
+  });
+}
+
+/**
+ * Shorter windows under the headline allowance. A five-hour Claude session can
+ * be running warm while the weekly plan is on track; both facts belong on the
+ * card, each with its own state.
+ */
+function SessionWindows({ view, nowMs }: { view: ProviderView; nowMs: number }) {
+  return view.secondaryWindows.map((window) => {
+    const remaining = Math.max(0, Math.min(100, displayedRemaining(window)));
+    const expected = window.forecast.expectedRemaining;
+    const outlook = window.forecast.exhaustsAt
+      ? `runs out ${whenLabel(window.forecast.exhaustsAt, nowMs)}`
+      : expected != null
+        ? `${percent(Math.max(0, Math.min(100, expected)))} expected at reset`
+        : 'learning';
+    return (
+      <p className="provider-session" key={window.bucketId}>
+        <span className={`state-pill ${window.forecast.state}`}>{STATE_WORD[window.forecast.state]}</span>
+        <strong>
+          {isEstimated(window) ? '~' : ''}
+          {Math.round(remaining)}%
+        </strong>
+        <span>{windowLabel(window.windowMinutes)} session</span>
+        <small title={dateTimeLabel(window.resetsAt)}>
+          {outlook} · resets in {resetDistance(window.resetsAt)}
+        </small>
       </p>
     );
   });
@@ -101,6 +140,7 @@ export function ProviderSummary({ view, nowMs }: { view: ProviderView; nowMs: nu
         <span>{view.estimated ? 'Estimated balance' : 'Current balance'}</span>
         <span title={dateTimeLabel(view.resetAt!)}>Resets in {resetDistance(view.resetAt!)}</span>
       </div>
+      <SessionWindows view={view} nowMs={nowMs} />
       <ForecastAdjustmentNotes view={view} />
     </article>
   );

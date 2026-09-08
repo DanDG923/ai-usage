@@ -16,6 +16,11 @@ const artifactNames = [
   'latest.yml',
 ];
 const archivePath = path.join(releaseDirectory, 'win-unpacked', 'resources', 'app.asar');
+// `--unpacked` audits only release/win-unpacked; the installer, manifest, and
+// checksum checks need the full portable + nsis build. The unpacked tree must
+// still come from a build that includes the nsis target, because a plain
+// `--dir` build never writes resources/app-update.yml.
+const unpackedOnly = process.argv.slice(2).includes('--unpacked');
 
 function fail(message) {
   throw new Error(`Release audit failed: ${message}`);
@@ -96,6 +101,17 @@ async function main() {
   const entries = normalizedEntries();
   assertArchive(entries);
   assertPrivateFeed();
+  if (unpackedOnly) {
+    process.stdout.write(`${JSON.stringify({
+      mode: 'unpacked',
+      version: pkg.version,
+      asarEntries: entries.length,
+      sourceMaps: 0,
+      bundledClaudeBinaries: 0,
+      privateLocalData: 0,
+    })}\n`);
+    return;
+  }
   const updateManifest = await auditManifest(releaseDirectory, pkg.version);
   const result = await auditArtifacts();
   process.stdout.write(`${JSON.stringify({

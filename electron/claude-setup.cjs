@@ -9,9 +9,9 @@ const { findClaudeBinary, providerProcessOptions } = require('./provider-executa
 // from the renderer. The native installer needs no npm or administrator rights.
 const INSTALL_COMMAND = "$ErrorActionPreference='Stop'; & ([scriptblock]::Create((Invoke-RestMethod -Uri 'https://claude.ai/install.ps1' -TimeoutSec 60))) stable";
 
-function runCommand(file, args, { timeoutMs = 15000, acceptExitOne = false } = {}) {
+function runCommand(file, args, { timeoutMs = 15000, acceptExitOne = false, environment = process.env } = {}) {
   return new Promise((resolve, reject) => {
-    execFile(file, args, { ...providerProcessOptions(file), windowsHide: true, timeout: timeoutMs, maxBuffer: 1024 * 1024 }, (error, stdout) => {
+    execFile(file, args, { ...providerProcessOptions(file, environment), windowsHide: true, timeout: timeoutMs, maxBuffer: 1024 * 1024 }, (error, stdout) => {
       if (error && !(acceptExitOne && error.code === 1)) {
         reject(new Error(error.killed ? 'Claude setup timed out. Check your connection and try again.' : 'Claude could not complete this step. Please try again.'));
       } else resolve(stdout);
@@ -19,7 +19,9 @@ function runCommand(file, args, { timeoutMs = 15000, acceptExitOne = false } = {
   });
 }
 
-function createClaudeSetup({ statePath, findBinary = findClaudeBinary, run = runCommand, launch = spawn, installHelper, uninstallHelper, helperInstalled = () => false } = {}) {
+// `environment` is the one the app was launched with: the update check
+// removes GitHub tokens from process.env, and Claude must not inherit that.
+function createClaudeSetup({ statePath, findBinary = findClaudeBinary, run = runCommand, launch = spawn, installHelper, uninstallHelper, helperInstalled = () => false, environment = process.env } = {}) {
   let busy = false;
   let child = null;
   let cancelPending = null;
@@ -37,7 +39,7 @@ function createClaudeSetup({ statePath, findBinary = findClaudeBinary, run = run
     let auth = 'unavailable';
     if (binary) {
       try {
-        const account = JSON.parse(await run(binary, ['auth', 'status'], { acceptExitOne: true }));
+        const account = JSON.parse(await run(binary, ['auth', 'status'], { acceptExitOne: true, environment }));
         if (typeof account.loggedIn === 'boolean') auth = account.loggedIn ? 'signed-in' : 'signed-out';
       } catch { /* Report an unavailable check separately from a signed-out account. */ }
     }
@@ -57,7 +59,7 @@ function createClaudeSetup({ statePath, findBinary = findClaudeBinary, run = run
     return new Promise((resolve, reject) => {
       // Claude opens the user's browser itself. Discard its output so OAuth
       // URLs, codes and account details never enter app logs or the renderer.
-      child = launch(file, args, { ...providerProcessOptions(file), windowsHide: true, stdio: 'ignore' });
+      child = launch(file, args, { ...providerProcessOptions(file, environment), windowsHide: true, stdio: 'ignore' });
       const active = child;
       const timer = setTimeout(() => cancel(), timeoutMs);
       let settled = false;
