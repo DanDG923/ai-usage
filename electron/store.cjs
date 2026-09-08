@@ -6,6 +6,7 @@ const { DatabaseSync } = require('node:sqlite');
 const { buildDashboardVerdict } = require('./dashboard-decision.cjs');
 const { forecastQuota } = require('./forecast.cjs');
 const { TaskUsage } = require('./task-usage.cjs');
+const { estimateTokenCapacity, LOOKBACK_MS: TOKEN_CAPACITY_LOOKBACK_MS, STALENESS_MS: TOKEN_CAPACITY_STALENESS_MS } = require('./token-capacity.cjs');
 const { MAX_QUOTA_RESET_AHEAD_MS, QUOTA_CLOCK_SKEW_MS, FORECAST_LOOKBACK_MS, validQuotaTime } = require('./quota-time.cjs');
 
 const SOURCE_DEFINITIONS = [
@@ -218,6 +219,8 @@ class UsageStore {
     this.statements = new Map();
     this.costAnalyticsCache = new Map();
     this.cycleHistoryCache = new Map();
+    this.tokenCapacityCache = new Map();
+    this.tokenCapacityEvidenceCache = new Map();
     this.transactionDepth = 0;
     this.db = new DatabaseSync(databasePath);
     this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
@@ -669,16 +672,26 @@ class UsageStore {
       this.prepare(`DELETE FROM quota_observations
         WHERE source_id = 'codex' AND bucket_id IN ('manual-weekly', 'codex:weekly')`).run();
     }
+    // Values and provenance describe one reading and must be replaced together.
+    // A generated estimate cannot displace a same-time official anchor.
     this.prepare(`
       INSERT INTO quota_observations(
         source_id, bucket_id, bucket_name, observed_at, used_percent, remaining_percent,
         resets_at, window_minutes, plan_type, provenance, confidence, metadata_json
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(source_id, bucket_id, observed_at) DO UPDATE SET
+        bucket_name = excluded.bucket_name,
         used_percent = excluded.used_percent,
         remaining_percent = excluded.remaining_percent,
         resets_at = excluded.resets_at,
+        window_minutes = excluded.window_minutes,
+        plan_type = excluded.plan_type,
+        provenance = excluded.provenance,
+        confidence = excluded.confidence,
         metadata_json = excluded.metadata_json
+      WHERE NOT (excluded.provenance = 'derived-tokens' AND quota_observations.provenance IN (
+        'official', 'local-official', 'manual-official', 'official-claude-usage', 'official-statusline'
+      ))
     `).run(
       observation.sourceId,
       observation.bucketId,
@@ -902,6 +915,9 @@ class UsageStore {
         provenance: latest.provenance,
         metadata: json(latest.metadata_json, {}),
         forecast,
+        tokenCapacity: Number(latest.window_minutes) === 10_080
+          ? this.getTokenCapacity(sourceId, bucketId, observations, settings, nowMs)
+          : null,
       };
     });
     const now = nowMs;
@@ -930,6 +946,68 @@ class UsageStore {
     });
     const primary = windows[0];
     return { ...primary, windows };
+  }
+
+  tokenCapacityEvidence(sourceId, nowMs) {
+    // Claude and Fable share the same local ledger. Read each source's bounded
+    // token history once, independent of API prices and the selected Costs period.
+    const revision = this.prepare(`SELECT COALESCE(SUM(revision), 0) AS value
+      FROM analytics_revisions WHERE domain = 'usage' AND source_id = ?`).get(sourceId).value;
+    const cached = this.transactionDepth === 0 ? this.tokenCapacityEvidenceCache.get(sourceId) : null;
+    if (cached && cached.revision === revision && nowMs >= cached.evaluatedAt && nowMs < cached.expiresAt) return cached;
+    const rows = this.prepare(`SELECT event_key, source_id, occurred_at, model,
+      input_tokens, cached_input_tokens, cache_write_input_tokens,
+      cache_write_5m_input_tokens, cache_write_1h_input_tokens,
+      output_tokens, reasoning_output_tokens, metadata_json
+      FROM usage_events WHERE source_id = ? AND occurred_at >= ? AND occurred_at <= ?
+      ORDER BY occurred_at, event_key`).all(sourceId, iso(nowMs - TOKEN_CAPACITY_LOOKBACK_MS), iso(nowMs));
+    const next = this.prepare(`SELECT MIN(occurred_at) AS at FROM usage_events
+      WHERE source_id = ? AND occurred_at > ?`).get(sourceId, iso(nowMs)).at;
+    // Writes bump the usage revision (triggers cover every connection), so the
+    // only time-driven changes are the oldest row ageing out of the learning
+    // horizon and a future-dated row arriving. No wall-clock cap is needed.
+    const expiresAt = Math.min(
+      rows.length ? Date.parse(rows[0].occurred_at) + TOKEN_CAPACITY_LOOKBACK_MS + 1 : Infinity,
+      next ? Date.parse(next) : Infinity,
+    );
+    const result = { rows, revision, evaluatedAt: nowMs, expiresAt };
+    if (this.transactionDepth === 0) this.tokenCapacityEvidenceCache.set(sourceId, result);
+    return result;
+  }
+
+  getTokenCapacity(sourceId, bucketId, observations, settings, nowMs) {
+    const ledgerSource = sourceId === 'claude-fable' ? 'claude' : sourceId;
+    const evidence = this.tokenCapacityEvidence(ledgerSource, nowMs);
+    const quotaRevision = this.prepare(`SELECT COALESCE(SUM(revision), 0) AS value
+      FROM analytics_revisions WHERE domain = 'quota' AND source_id = ? AND bucket_id = ?`).get(sourceId, bucketId).value;
+    const excludedDates = settings.forecastExcludedDates || [];
+    const key = JSON.stringify([sourceId, bucketId]);
+    const exclusions = JSON.stringify(excludedDates);
+    const cached = this.transactionDepth === 0 ? this.tokenCapacityCache.get(key) : null;
+    if (cached && cached.usageRevision === evidence.revision && cached.quotaRevision === quotaRevision
+      && cached.exclusions === exclusions && nowMs >= cached.evaluatedAt && nowMs < cached.expiresAt) return cached.value;
+
+    const value = estimateTokenCapacity({ sourceId, bucketId, observations, events: evidence.rows, nowMs, excludedDates });
+    let expiresAt = evidence.expiresAt;
+    // Time can change eligibility without a write: future readings arrive,
+    // history leaves the learning horizon, and current allowance expires.
+    for (const row of observations) {
+      const observed = Date.parse(row.observed_at);
+      for (const boundary of [observed, observed + TOKEN_CAPACITY_LOOKBACK_MS + 1, Date.parse(row.resets_at)]) {
+        if (Number.isFinite(boundary) && boundary > nowMs) expiresAt = Math.min(expiresAt, boundary);
+      }
+    }
+    if (value.remainingAsOf) {
+      expiresAt = Math.min(expiresAt, Date.parse(value.remainingAsOf) + TOKEN_CAPACITY_STALENESS_MS + 1);
+    }
+    if (this.transactionDepth === 0) {
+      // Bucket names are provider-controlled; stale buckets need not retain
+      // unbounded cached results for the lifetime of the application.
+      if (this.tokenCapacityCache.size >= 64 && !this.tokenCapacityCache.has(key)) this.tokenCapacityCache.delete(this.tokenCapacityCache.keys().next().value);
+      this.tokenCapacityCache.set(key, { value, usageRevision: evidence.revision, quotaRevision,
+        exclusions, evaluatedAt: nowMs, expiresAt });
+    }
+    return value;
   }
 
   // Analytics runs resolve the same handful of model names thousands of times.

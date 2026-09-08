@@ -608,3 +608,35 @@ test('small reset timestamp drift remains in the observed chart cycle', () => {
   ], { now: '2026-08-29T09:00:00Z' });
   assert.equal(result.series.observed.length, 2);
 });
+
+test('a fresh window\'s first late-evening burst is not extrapolated across every remaining night', () => {
+  // Mirrors the live weekly Codex window on 7 September 2026 (Europe/London):
+  // reset at 08:39, quiet all day, then 19% spent between 22:09 and 23:28,
+  // the last 9% of it after the 22:00 active-hours boundary. With only an
+  // hour of elapsed off-schedule exposure, that burst is not a night rate.
+  const reset = '2026-09-14T07:40:08.000Z';
+  const row = (observedAt, usedPercent) => ({
+    observedAt, usedPercent, remainingPercent: 100 - usedPercent, resetsAt: reset,
+    windowMinutes: 10_080, provenance: 'official',
+  });
+  const observations = [row('2026-09-07T07:39:07Z', 0), row('2026-09-07T07:45:32Z', 1), row('2026-09-07T14:39:27Z', 2)];
+  const burstStart = Date.parse('2026-09-07T20:09:34Z');
+  for (let step = 0; step < 20; step += 1) {
+    observations.push(row(new Date(burstStart + step * 4 * 60_000).toISOString(), 3 + step));
+  }
+  observations.push(row('2026-09-07T21:28:24Z', 22), row('2026-09-07T22:09:11Z', 22));
+  const now = '2026-09-07T22:11:58Z';
+  const result = forecastQuota(observations, {
+    now, schedule: { activeDays: [1, 2, 3, 4, 5, 6, 0], startHour: 8, endHour: 22 },
+    fallbackRate: 0.35, paceRiskThreshold: 1.2, hardLimitThreshold: 90,
+  });
+  const nextMorning = Date.parse('2026-09-08T07:00:00Z');
+  const atMorning = result.series.expected.find((point) => point.at >= nextMorning);
+  assert.ok(atMorning && atMorning.remaining > 60, `overnight remaining ${atMorning?.remaining}`);
+  assert.ok(result.exhaustsAt == null || Date.parse(result.exhaustsAt) - Date.parse(now) > 36 * 3_600_000,
+    `exhausts ${result.exhaustsAt}`);
+  // A day of real spending at this rate still cannot last the week; the
+  // warning is kept, only its overnight cliff is removed.
+  assert.ok(result.expectedRemaining < 50, `expected ${result.expectedRemaining}`);
+  assert.ok(['risk', 'critical'].includes(result.state), `state ${result.state}`);
+});

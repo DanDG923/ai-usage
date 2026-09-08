@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.33 — 8 September 2026
+
+- Add estimated weekly token capacity and remaining tokens for supported Codex, Claude, and Fable allowance windows, with evidence, model and token mix, uncertainty ranges, and conservative confidence labels.
+- Reduce an unusually heavy day's influence on the expected forecast when well-supported readings show an early allowance replenishment. Keep recorded usage and the heavier scenario intact, and temper early off-schedule bursts while a new window is still learning.
+- Preserve official allowance readings when generated estimates share their timestamp, and keep observation values and provenance together when replacing readings.
+- Improve forecast chart labels and responsive layout, and preserve local history, settings, observations, and backups during an in-place update.
+
 ## 1.0.32 — 7 September 2026
 
 - Add ignored forecast days in Settings so unusual days can be excluded from learned usage patterns. Dates are reversible, use your local timezone, and persist in settings and backups without removing recorded usage or costs.

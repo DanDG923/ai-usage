@@ -1,4 +1,4 @@
-import type { CycleRow, Forecast, Quota, Snapshot } from '../types';
+import type { CycleRow, Forecast, Quota, Snapshot, TokenCapacityEstimate } from '../types';
 
 const now = Date.now();
 const day = 86_400_000;
@@ -39,6 +39,38 @@ function forecast(remaining: number, expected: number, heavy: number, seed: numb
   };
 }
 
+// Synthetic browser-preview examples only, never an account token allowance.
+function exampleCapacity(name: string, remaining: number): TokenCapacityEstimate {
+  const learning = name === 'Fable 5';
+  const weeklyTokens = name === 'Codex' ? 18_200_000 : 9_600_000;
+  const factor = remaining / 100;
+  return {
+    status: learning ? 'learning' : 'available',
+    reason: learning ? 'More matching official weekly readings and local usage are needed for this estimate.' : null,
+    weeklyTokens: learning ? null : weeklyTokens,
+    weeklyRange: learning ? null : { low: weeklyTokens * 0.7, high: weeklyTokens * 1.35 },
+    remainingTokens: learning ? null : weeklyTokens * factor,
+    remainingRange: learning ? null : { low: weeklyTokens * 0.7 * factor, high: weeklyTokens * 1.35 * factor },
+    remainingAsOf: learning ? null : new Date(now - 4 * 60_000).toISOString(),
+    confidence: name === 'Codex' ? 'medium' : 'low',
+    intervals: learning ? 1 : 12,
+    cycles: learning ? 1 : 3,
+    observedPercent: learning ? 6 : 92,
+    calibratedAt: new Date(now - 4 * 60_000).toISOString(),
+    modelMix: learning
+      ? [{ model: 'claude-fable-5', share: 1 }]
+      : [
+          { model: name === 'Codex' ? 'gpt-6-astra' : 'claude-opus-5', share: 0.7 },
+          { model: name === 'Codex' ? 'gpt-5.6-sol' : 'claude-sonnet-5', share: 0.3 },
+        ],
+    tokenMix: { input: 0.22, cacheRead: 0.62, cacheWrite: 0.04, output: 0.12 },
+    warnings: [
+      'Synthetic preview figures, not your actual account capacity.',
+      'Local usage may omit other devices and apps.',
+    ],
+  };
+}
+
 function quota(
   name: string,
   remaining: number,
@@ -48,7 +80,7 @@ function quota(
   seed: number,
 ): Quota {
   const q = {
-    bucketId: `${name.toLowerCase()}-weekly`,
+    bucketId: name === 'Codex' ? 'codex:weekly' : `${name.toLowerCase()}-weekly`,
     bucketName: `${name} weekly`,
     observedAt: new Date(now - 4 * 60_000).toISOString(),
     usedPercent: 100 - remaining,
@@ -59,6 +91,7 @@ function quota(
     provenance: 'preview',
     metadata: {},
     forecast: forecast(remaining, expected, heavy, seed, resetDays),
+    tokenCapacity: exampleCapacity(name, remaining),
   };
   return { ...q, windows: [q] };
 }
