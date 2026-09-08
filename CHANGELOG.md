@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.36 — 8 September 2026
+
+- Keep the main Codex account allowance separate from GPT-5.3-Codex-Spark limits. Preserve model names in stored readings, diagnostics, and allowance alerts.
+- Put separate model allowances in expandable details, automatically opening them when a model window needs attention. Unused Spark windows say no usage is reported instead of displaying a misleading second Codex forecast.
+- Keep the main Codex balance selected in the dashboard and tray regardless of the order in which model-specific limits arrive. Existing usage, allowance history, prices, and settings remain intact.
+
 ## 1.0.35 — 8 September 2026
 
 - Stop a restore immediately on a storage failure so later records cannot escape a rolled-back transaction. Keep malformed-record skipping for readable exports.

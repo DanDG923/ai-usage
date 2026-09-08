@@ -353,3 +353,26 @@ test('session logs the OS refused to read degrade the Codex status instead of pa
   assert.match(statuses[0][2], /could not be scanned/);
   assert.match(statuses[0][3].localWarning, /2 Codex session logs could not be read \(EBUSY\)/);
 });
+
+test('main Pro weekly and separate Spark windows keep their identity for existing stored observations', (t) => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { UsageStore } = require('../electron/store.cjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-spark-labels-'));
+  const store = new UsageStore(path.join(root, 'usage.sqlite'), path.join(root, 'Backups'));
+  t.after(() => { store.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const now = Date.now();
+  const rawWindow = (minutes, usedPercent) => ({ usedPercent, windowDurationMins: minutes, resetsAt: Math.floor((now + minutes * 60_000) / 1000) });
+  recordRateLimit(store, { limitId: 'codex', planType: 'pro', primary: rawWindow(10080, 2), secondary: null }, new Date(now).toISOString(), 'official');
+  recordRateLimit(store, { limitId: 'codex_bengalfox', limitName: 'GPT-5.3-Codex-Spark', planType: 'pro', primary: rawWindow(300, 0), secondary: rawWindow(10080, 0) }, new Date(now).toISOString(), 'official');
+  assert.equal(store.db.prepare("SELECT bucket_name FROM quota_observations WHERE bucket_id = 'codex_bengalfox:primary'").get().bucket_name, 'GPT-5.3-Codex-Spark · Five hour');
+  // Simulate names stored by 1.0.35: fixing the display must not require rewriting history.
+  store.db.exec("UPDATE quota_observations SET bucket_name = 'Weekly' WHERE bucket_id = 'codex_bengalfox:secondary'");
+  const quota = store.getQuota('codex', store.getSettings(), now);
+  assert.equal(quota.bucketId, 'codex:primary');
+  assert.equal(quota.remainingPercent, 98);
+  assert.equal(quota.windows.filter(w => w.metadata.limitId === 'codex').length, 1);
+  assert.equal(quota.windows.find(w => w.bucketId === 'codex_bengalfox:secondary').bucketName, 'GPT-5.3-Codex-Spark · Weekly');
+  assert.equal(store.db.prepare("SELECT bucket_name FROM quota_observations WHERE bucket_id = 'codex_bengalfox:secondary'").get().bucket_name, 'Weekly');
+});

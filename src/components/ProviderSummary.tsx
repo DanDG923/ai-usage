@@ -1,12 +1,13 @@
 import {
+  allowanceWindowLabel,
   dateTimeLabel,
   displayedRemaining,
   isEstimated,
+  modelAllowanceName,
   percent,
   quotaWindows,
   resetDistance,
   whenLabel,
-  windowLabel,
 } from '../lib';
 import type { ProviderView } from '../provider-view';
 
@@ -61,14 +62,17 @@ function ForecastAdjustmentNotes({ view }: { view: ProviderView }) {
  * card, each with its own state.
  */
 function SessionWindows({ view, nowMs }: { view: ProviderView; nowMs: number }) {
-  return view.secondaryWindows.map((window) => {
+  const renderWindow = (window: (typeof view.secondaryWindows)[number]) => {
     const remaining = Math.max(0, Math.min(100, displayedRemaining(window)));
     const expected = window.forecast.expectedRemaining;
-    const outlook = window.forecast.exhaustsAt
-      ? `runs out ${whenLabel(window.forecast.exhaustsAt, nowMs)}`
-      : expected != null
-        ? `${percent(Math.max(0, Math.min(100, expected)))} expected at reset`
-        : 'learning';
+    const outlook =
+      modelAllowanceName(window) && window.usedPercent === 0 && expected === 100
+        ? 'No usage reported in this window'
+        : window.forecast.exhaustsAt
+          ? `runs out ${whenLabel(window.forecast.exhaustsAt, nowMs)}`
+          : expected != null
+            ? `${percent(Math.max(0, Math.min(100, expected)))} expected at reset`
+            : 'learning';
     return (
       <p className="provider-session" key={window.bucketId}>
         <span className={`state-pill ${window.forecast.state}`}>{STATE_WORD[window.forecast.state]}</span>
@@ -76,13 +80,29 @@ function SessionWindows({ view, nowMs }: { view: ProviderView; nowMs: number }) 
           {isEstimated(window) ? '~' : ''}
           {Math.round(remaining)}%
         </strong>
-        <span>{windowLabel(window.windowMinutes)} session</span>
+        <span>{allowanceWindowLabel(window)}</span>
         <small title={dateTimeLabel(window.resetsAt)}>
           {outlook} · resets in {resetDistance(window.resetsAt)}
         </small>
       </p>
     );
-  });
+  };
+  const modelWindows = view.secondaryWindows.filter((window) => modelAllowanceName(window));
+  return (
+    <>
+      {view.secondaryWindows.filter((window) => !modelAllowanceName(window)).map(renderWindow)}
+      {modelWindows.length > 0 && (
+        <details
+          className="provider-model-allowances"
+          open={modelWindows.some((window) => ['critical', 'risk', 'watch'].includes(window.forecast.state))}
+        >
+          <summary>Separate model allowances</summary>
+          <p>These apply only to the named model and are separate from your main Codex allowance.</p>
+          {modelWindows.map(renderWindow)}
+        </details>
+      )}
+    </>
+  );
 }
 
 export function ProviderSummary({ view, nowMs }: { view: ProviderView; nowMs: number }) {
