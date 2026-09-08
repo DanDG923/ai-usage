@@ -63,7 +63,7 @@ function sourceFacts(source: Source): Fact[] {
       {
         label: 'Transcripts',
         value: transcripts
-          ? `${text(transcripts.filesFound)} files found · ${text(transcripts.importedFiles)} changed · ${text(transcripts.usageEvents)} messages · ${text(transcripts.fableEvents)} Fable${Number(transcripts.rejectedRows) > 0 ? ` · ${text(transcripts.rejectedRows)} rejected (${text(transcripts.lastRejection)})` : ''}`
+          ? `${text(transcripts.filesFound)} files found · ${text(transcripts.importedFiles)} changed · ${text(transcripts.usageEvents)} messages · ${text(transcripts.fableEvents)} Fable${Number(transcripts.rejectedRows) > 0 ? ` · ${text(transcripts.rejectedRows)} rejected (${text(transcripts.lastRejection)})` : ''}${Number(transcripts.readErrors) > 0 ? ` · ${text(transcripts.readErrors)} read errors (${text(transcripts.lastReadError)})` : ''}`
           : '—',
       },
       {

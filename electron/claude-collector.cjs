@@ -937,8 +937,8 @@ async function refreshClaude(store, inboxPath, options = {}) {
           : fableTracking.activity.requests
             ? `Imported ${fableTracking.activity.requests} actual local Fable usage event${fableTracking.activity.requests === 1 ? '' : 's'}; the provider did not return a model-scoped allowance.`
             : 'Waiting for actual local Fable activity or a provider model-scoped allowance.';
-  const fableScanSucceeded = providerCurrent || fableAuto
-    || (!providerStale && (providerScanSucceeded || fableTracking.health.activitySource === 'current'));
+  const fableScanSucceeded = activityCurrent && (providerCurrent || fableAuto
+    || (!providerStale && (providerScanSucceeded || activityCurrent)));
   store.setSourceStatus('claude-fable', fableStatus, fableDetail, {
     sharedWithOverall: true,
     modelId: 'claude-fable-5',
@@ -952,7 +952,8 @@ async function refreshClaude(store, inboxPath, options = {}) {
       refreshedAt: fableTracking.refreshedAt,
     },
   }, { scanSucceeded: fableScanSucceeded });
-  return { binary, statusLine, transcripts, helperInstalled, helperUpdated, fableObserved, fableDerived, fableTracking };
+  return { binary, statusLine, transcripts, helperInstalled, helperUpdated, fableObserved, fableDerived, fableTracking,
+    ...(!activityCurrent ? { warning: fableTracking.health.detail || 'Local transcript activity is incomplete.' } : {}) };
 }
 
 module.exports = { deriveFableEstimate, epochToIso, findClaudeBinary, importClaudeInbox, importClaudeTranscripts, installClaudeHelper, isClaudeHelperInstalled, makeHelperScript, refreshClaude, uninstallClaudeHelper };

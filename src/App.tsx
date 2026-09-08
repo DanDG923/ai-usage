@@ -254,7 +254,7 @@ export default function App() {
       commitSnapshot(result.snapshot);
       const { settings: settingCount, observations, usageEvents, dailyUsage, prices, skipped } = result.result;
       setNotice(
-        `Added ${observations} observations, ${usageEvents} token records, ${dailyUsage} daily totals, ${prices} prices and ${result.result.desktopEstimates ?? 0} chat estimates; records already held were left as they were. ${settingCount} settings were replaced by the export's.${skipped ? ` ${skipped} unusable records were skipped.` : ''}`,
+        `Restored ${observations} observations, ${usageEvents} token records, ${dailyUsage} daily totals, ${prices} prices and ${result.result.desktopEstimates ?? 0} chat estimates. Existing usage and edited prices were kept. ${settingCount} settings were replaced by the export's.${skipped ? ` ${skipped} unusable records were skipped.` : ''}`,
       );
     } catch (error) {
       failWith('That backup could not be restored.')(error);

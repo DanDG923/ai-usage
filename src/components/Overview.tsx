@@ -197,7 +197,7 @@ export function Overview({
 }) {
   const nowMs = Date.parse(snapshot.generatedAt);
   const views = providerViews(snapshot);
-  const verdict = verdictSentence(snapshot.dashboardVerdict, snapshot.quotas);
+  const verdict = verdictSentence(snapshot.dashboardVerdict, snapshot.quotas, snapshot.sources);
   const attention = insights(views, snapshot, nowMs);
   const unknown = views.filter((view) => !hasForecast(view));
   const waiting = views.every((view) => !view.current || view.current.forecast.expired);
