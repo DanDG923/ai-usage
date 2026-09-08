@@ -728,3 +728,49 @@ test('subscription fee settings are validated like every other numeric setting',
   assert.throws(() => store.updateSettings({ codexPlanUsdPerMonth: -1 }), /codexPlanUsdPerMonth/);
   assert.throws(() => store.updateSettings({ claudePlanUsdPerMonth: 'free' }), /claudePlanUsdPerMonth/);
 }));
+
+test('the store refuses a relative database path', () => {
+  assert.throws(() => new UsageStore('-', path.join(os.tmpdir(), 'ai-usage-backups')), /must be absolute/);
+  assert.throws(() => new UsageStore('relative/ai-usage.sqlite', path.join(os.tmpdir(), 'ai-usage-backups')), /must be absolute/);
+});
+
+test('an unreadable database file is set aside under a dated name and a fresh one is opened', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-corrupt-'));
+  const databasePath = path.join(root, 'ai-usage.sqlite');
+  fs.writeFileSync(databasePath, Buffer.from('definitely not a SQLite file, but long enough to be opened as one........'));
+  fs.writeFileSync(`${databasePath}-wal`, 'stale wal');
+  const store = new UsageStore(databasePath, path.join(root, 'Backups'));
+  try {
+    assert.match(store.recoveredFrom, /ai-usage\.sqlite\.corrupt-\d{4}-\d{2}-\d{2}T/);
+    assert.equal(fs.existsSync(store.recoveredFrom), true, 'the unreadable file is preserved');
+    assert.equal(fs.readFileSync(store.recoveredFrom, 'utf8').startsWith('definitely not'), true);
+    assert.equal(store.getSettings().theme, 'system', 'the replacement is a seeded, working database');
+    assert.equal(store.db.prepare('SELECT COUNT(*) AS count FROM usage_events').get().count, 0);
+  } finally {
+    store.close();
+  }
+  // A healthy database opens as before and reports no recovery.
+  const reopened = new UsageStore(databasePath, path.join(root, 'Backups'));
+  try { assert.equal(reopened.recoveredFrom, null); } finally { reopened.close(); }
+});
+
+test('settings patches are written atomically', () => withStore((store) => {
+  const original = store.updateSettings;
+  // Validation passes; the write itself fails after the first key.
+  let calls = 0;
+  const prepare = store.prepare.bind(store);
+  store.prepare = (sql) => {
+    const statement = prepare(sql);
+    if (!/INSERT INTO settings/.test(sql)) return statement;
+    return { run: (...args) => { calls += 1; if (calls === 2) throw new Error('disk full'); return statement.run(...args); } };
+  };
+  try {
+    assert.throws(() => store.updateSettings({ theme: 'dark', reservePercent: 25 }), /disk full/);
+  } finally {
+    store.prepare = prepare;
+    store.updateSettings = original;
+  }
+  const settings = store.getSettings();
+  assert.equal(settings.theme, 'system', 'the first key of a failed patch is rolled back');
+  assert.equal(settings.reservePercent, 0);
+}));

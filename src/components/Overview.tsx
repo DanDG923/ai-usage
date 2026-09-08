@@ -1,7 +1,16 @@
 import { AlertTriangle, CheckCircle2, Gauge, ShieldCheck } from 'lucide-react';
-import { compactNumber, dateTimeLabel, money, percent, shortDate, verdictSentence, whenLabel } from '../lib';
+import {
+  compactNumber,
+  dateTimeLabel,
+  money,
+  percent,
+  shortDate,
+  verdictSentence,
+  whenLabel,
+  windowLabel,
+} from '../lib';
 import { providerViews, type ProviderView } from '../provider-view';
-import type { Snapshot } from '../types';
+import type { QuotaWindow, Snapshot } from '../types';
 import { CombinedRunwayChart } from './Charts';
 import { API_EQUIVALENT_EXPLAINER, InfoTip } from './InfoTip';
 import { ProviderSummary } from './ProviderSummary';
@@ -24,30 +33,50 @@ function names(views: ProviderView[]) {
   return views.map((view) => view.name).join(', ');
 }
 
+// Every active window earns its own line: the weekly headline and any shorter
+// session window are separate allowances with separate resets.
+function windowInsights(name: string, window: QuotaWindow, nowMs: number): Insight[] {
+  const forecast = window.forecast;
+  if (forecast.expired) return [];
+  if (forecast.exhaustsAt) {
+    return [
+      {
+        tone: 'hot',
+        title: `${name} is expected to run out`,
+        detail: `${whenLabel(forecast.exhaustsAt, nowMs)}, before its ${dateTimeLabel(window.resetsAt)} reset.`,
+      },
+    ];
+  }
+  if (forecast.heavyExhaustsAt) {
+    return [
+      {
+        tone: 'warm',
+        title: `${name} could run out under heavier usage`,
+        detail: `Expected usage leaves ${percent(forecast.expectedRemaining)}; the heavier case reaches zero ${whenLabel(forecast.heavyExhaustsAt, nowMs)}.`,
+      },
+    ];
+  }
+  if (forecast.paceRatio > 1.05) {
+    const reduction = Math.max(0, Math.round((1 - 1 / forecast.paceRatio) * 100));
+    return [
+      {
+        tone: forecast.paceRatio > 1.2 ? 'warm' : 'neutral',
+        title: `${name} is above its safe pace`,
+        detail: `${forecast.paceRatio.toFixed(1)}× the sustainable pace. Reduce active usage by about ${reduction}% to return to plan.`,
+      },
+    ];
+  }
+  return [];
+}
+
 function insights(views: ProviderView[], snapshot: Snapshot, nowMs: number): Insight[] {
   const rows: Insight[] = [];
   for (const view of views) {
     const forecast = view.current?.forecast;
-    if (!forecast || forecast.expired) continue;
-    if (forecast.exhaustsAt) {
-      rows.push({
-        tone: 'hot',
-        title: `${view.name} is expected to run out`,
-        detail: `${whenLabel(forecast.exhaustsAt, nowMs)}, before its ${dateTimeLabel(view.resetAt!)} reset.`,
-      });
-    } else if (forecast.heavyExhaustsAt) {
-      rows.push({
-        tone: 'warm',
-        title: `${view.name} could run out under heavier usage`,
-        detail: `Expected usage leaves ${percent(forecast.expectedRemaining)}; the heavier case reaches zero ${whenLabel(forecast.heavyExhaustsAt, nowMs)}.`,
-      });
-    } else if (forecast.paceRatio > 1.05) {
-      const reduction = Math.max(0, Math.round((1 - 1 / forecast.paceRatio) * 100));
-      rows.push({
-        tone: forecast.paceRatio > 1.2 ? 'warm' : 'neutral',
-        title: `${view.name} is above its safe pace`,
-        detail: `${forecast.paceRatio.toFixed(1)}× the sustainable pace. Reduce active usage by about ${reduction}% to return to plan.`,
-      });
+    if (!view.current || !forecast || forecast.expired) continue;
+    rows.push(...windowInsights(view.name, view.current, nowMs));
+    for (const window of view.secondaryWindows) {
+      rows.push(...windowInsights(`${view.name} ${windowLabel(window.windowMinutes)} session`, window, nowMs));
     }
     if (view.stale) {
       rows.push({
@@ -114,8 +143,8 @@ function RecentCycles({ views, snapshot }: { views: ProviderView[]; snapshot: Sn
           <tbody>
             {views.map((view) => {
               const rows = snapshot.cycles[view.id] ?? [];
-              // Cycle history follows the backend's primary bucket, while the
-              // summary card can headline a different, riskier window.
+              // Cycle history follows the backend's primary bucket, which is
+              // also the longest window the summary card headlines.
               const quota = view.quota && !view.quota.forecast.expired ? view.quota : null;
               const cycle = quota
                 ? rows.find(

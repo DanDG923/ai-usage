@@ -254,3 +254,102 @@ test('one malformed Codex token count is rejected without stopping the session l
     process.env.USERPROFILE = oldProfile;
   }
 });
+
+test('two Codex token counts in the same millisecond are both kept, and a rescan assigns the same keys', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { UsageStore } = require('../electron/store.cjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-codex-'));
+  const oldProfile = process.env.USERPROFILE;
+  process.env.USERPROFILE = root;
+  const sessions = path.join(root, '.codex', 'sessions', '2026', '08');
+  fs.mkdirSync(sessions, { recursive: true });
+  const tokenCount = (timestamp, usage) => ({
+    type: 'event_msg', timestamp, payload: { type: 'token_count', info: { last_token_usage: usage } },
+  });
+  const usage = (output) => ({ input_tokens: 100, cached_input_tokens: 0, output_tokens: output, reasoning_output_tokens: 0 });
+  const lines = [
+    { type: 'session_meta', timestamp: '2026-08-29T09:00:00.000Z', payload: { id: 'session-1', cwd: 'C:/work/demo' } },
+    { type: 'turn_context', timestamp: '2026-08-29T09:00:01.000Z', payload: { model: 'gpt-5.6-sol' } },
+    tokenCount('2026-08-29T09:01:00.000Z', usage(10)),
+    // Parallel tool turns: a different count reported at the same instant.
+    tokenCount('2026-08-29T09:01:00.000Z', usage(25)),
+    tokenCount('2026-08-29T09:02:00.000Z', usage(7)),
+  ];
+  fs.writeFileSync(path.join(sessions, 'rollout.jsonl'), `${lines.map(JSON.stringify).join('\n')}\n`);
+  const store = new UsageStore(path.join(root, 'test.sqlite'), path.join(root, 'Backups'));
+  try {
+    assert.equal(importLocalSessions(store).events, 3);
+    const rows = () => store.db.prepare('SELECT event_key, output_tokens FROM usage_events ORDER BY event_key').all();
+    const first = rows();
+    assert.deepEqual(first.map((row) => row.output_tokens), [10, 25, 7]);
+    assert.deepEqual(first.map((row) => row.event_key), [
+      'codex:session-1:2026-08-29T09:01:00.000Z', 'codex:session-1:2026-08-29T09:01:00.000Z#1', 'codex:session-1:2026-08-29T09:02:00.000Z',
+    ]);
+    // Forgetting the cursor forces a rescan from the start of the file. The
+    // ordinal is derived from file order, so nothing is duplicated.
+    store.forgetImportedFile(path.join(sessions, 'rollout.jsonl'));
+    importLocalSessions(store);
+    assert.deepEqual(rows(), first);
+    // An appended record after the cursor continues the same numbering.
+    fs.appendFileSync(path.join(sessions, 'rollout.jsonl'), `${JSON.stringify(tokenCount('2026-08-29T09:02:00.000Z', usage(3)))}\n`);
+    assert.equal(importLocalSessions(store).events, 1);
+    assert.equal(rows().at(-1).event_key, 'codex:session-1:2026-08-29T09:02:00.000Z#1');
+  } finally {
+    store.close();
+    process.env.USERPROFILE = oldProfile;
+  }
+});
+
+test('CODEX_HOME relocates the session scan and a relative override is ignored', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { UsageStore } = require('../electron/store.cjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-codex-home-'));
+  const previous = { USERPROFILE: process.env.USERPROFILE, CODEX_HOME: process.env.CODEX_HOME };
+  const home = path.join(root, 'relocated-codex');
+  const sessions = path.join(home, 'sessions', '2026', '08');
+  fs.mkdirSync(sessions, { recursive: true });
+  fs.mkdirSync(path.join(root, 'profile'), { recursive: true });
+  const lines = [
+    { type: 'session_meta', timestamp: '2026-08-29T09:00:00Z', payload: { id: 'session-2', cwd: 'C:/work/demo' } },
+    { type: 'event_msg', timestamp: '2026-08-29T09:01:00Z', payload: { type: 'token_count', info: { last_token_usage: { input_tokens: 5, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } } } },
+  ];
+  fs.writeFileSync(path.join(sessions, 'rollout.jsonl'), `${lines.map(JSON.stringify).join('\n')}\n`);
+  const store = new UsageStore(path.join(root, 'test.sqlite'), path.join(root, 'Backups'));
+  try {
+    process.env.USERPROFILE = path.join(root, 'profile');
+    process.env.CODEX_HOME = home;
+    assert.equal(importLocalSessions(store).events, 1);
+    store.forgetImportedFile(path.join(sessions, 'rollout.jsonl'));
+    process.env.CODEX_HOME = 'relocated-codex';
+    assert.equal(importLocalSessions(store).events, 0, 'a relative override must not resolve against the launch directory');
+    delete process.env.CODEX_HOME;
+    delete process.env.USERPROFILE;
+    assert.deepEqual(importLocalSessions(store), {
+      importedFiles: 0, events: 0, observations: 0, rejected: 0, lastRejection: null,
+      duplicateEvents: 0, reconciledEvents: 0, reconciliationBackup: null, readErrors: 0, lastReadError: null,
+    });
+  } finally {
+    store.close();
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});
+
+test('session logs the OS refused to read degrade the Codex status instead of passing silently', async () => {
+  const statuses = [];
+  await refreshCodex({
+    setSourceStatus: (...args) => statuses.push(args),
+  }, {
+    findBinary: () => 'codex.exe',
+    importSessions: () => ({ importedFiles: 3, events: 9, observations: 1, readErrors: 2, lastReadError: 'EBUSY' }),
+    collectAppServer: async () => ({ observations: 1, dailyBuckets: 0, resetCredits: null, usageWarning: null }),
+  });
+  assert.equal(statuses[0][1], 'degraded');
+  assert.match(statuses[0][2], /could not be scanned/);
+  assert.match(statuses[0][3].localWarning, /2 Codex session logs could not be read \(EBUSY\)/);
+});

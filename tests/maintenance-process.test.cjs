@@ -160,3 +160,37 @@ test('real worker backs up, exports and restores without blocking parent timers 
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('a maintenance request that never answers times out and the wedged worker is replaced', async () => {
+  const workers = [];
+  const host = createMaintenanceHost({
+    requestTimeoutMs: 20,
+    createWorker: () => {
+      const worker = new EventEmitter();
+      worker.sent = [];
+      worker.terminated = 0;
+      worker.postMessage = (message) => worker.sent.push(message);
+      worker.terminate = async () => { worker.terminated += 1; };
+      workers.push(worker);
+      return worker;
+    },
+  });
+  const stalled = host.request('create-backup');
+  const sibling = host.request('scheduled-backup');
+  await assert.rejects(stalled, /did not respond in time \(create-backup\)/);
+  await assert.rejects(sibling, /did not respond in time/);
+  assert.equal(workers[0].terminated, 1);
+  assert.equal(host.running, false);
+  // A late reply from the abandoned worker is ignored; the next request gets a fresh one.
+  const next = host.request('scheduled-backup');
+  assert.equal(workers.length, 2);
+  workers[0].emit('message', { id: workers[1].sent[0].id, ok: true, result: 'stale' });
+  workers[1].emit('message', { id: workers[1].sent[0].id, ok: true, result: null });
+  assert.equal(await next, null);
+  // Close carries no timer: it is bounded by the caller's shutdown deadline.
+  const closing = host.close();
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(workers[1].terminated, 0);
+  workers[1].emit('message', { id: workers[1].sent[1].id, ok: true, result: { closed: true } });
+  assert.deepEqual(await closing, { closed: true });
+});

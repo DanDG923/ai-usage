@@ -640,3 +640,41 @@ test('a fresh window\'s first late-evening burst is not extrapolated across ever
   assert.ok(result.expectedRemaining < 50, `expected ${result.expectedRemaining}`);
   assert.ok(['risk', 'critical'].includes(result.state), `state ${result.state}`);
 });
+
+test('exhaustion time is interpolated inside the hour from the unclamped projection', () => {
+  const { exhaustionTime } = require('../electron/forecast.cjs');
+  const hour = 3_600_000;
+  // 2% left and projected to end the hour at -8%: the crossing is 12 minutes in.
+  assert.equal(exhaustionTime([{ at: 0, remaining: 2 }, { at: hour, remaining: 0, projected: -8 }]), new Date(hour * 0.2).toISOString());
+  // A series without projections can only snap to the first zero sample.
+  assert.equal(exhaustionTime([{ at: 0, remaining: 2 }, { at: hour, remaining: 0 }]), new Date(hour).toISOString());
+  // Already empty at the start: the run-out is the first sample.
+  assert.equal(exhaustionTime([{ at: 0, remaining: 0 }, { at: hour, remaining: 0, projected: -5 }]), new Date(0).toISOString());
+  assert.equal(exhaustionTime([{ at: 0, remaining: 40 }, { at: hour, remaining: 30, projected: 30 }]), null);
+});
+
+test('a forecast that runs out mid-hour reports the run-out inside that hour, not at its end', () => {
+  const reset = '2026-09-03T21:00:00.000Z';
+  const observations = [];
+  // Four days of steady 24%-a-day consumption; 95% used with three days left.
+  for (let day = 0; day < 4; day += 1) {
+    for (const [hour, used] of [[8, 5 + day * 24], [12, 13 + day * 24], [16, 21 + day * 24], [18, 24 + day * 24]]) {
+      observations.push({
+        observedAt: `2026-08-${28 + day}T${String(hour).padStart(2, '0')}:00:00.000Z`,
+        usedPercent: Math.min(used, 95), remainingPercent: 100 - Math.min(used, 95), resetsAt: reset, provenance: 'official',
+      });
+    }
+  }
+  const result = forecastQuota(observations, {
+    now: '2026-08-31T18:00:00.000Z',
+    schedule: { activeDays: [1, 2, 3, 4, 5, 6, 0], startHour: 8, endHour: 18 },
+  });
+  const expected = result.series.expected;
+  const zero = expected.findIndex((point, index) => index > 0 && point.remaining <= 0);
+  assert.ok(zero > 0, `the projection should run out before the reset; ended at ${result.expectedRemaining}`);
+  assert.ok(expected[zero].projected < 0, 'the first zero sample keeps its unclamped projection');
+  const runOut = Date.parse(result.exhaustsAt);
+  assert.ok(runOut > expected[zero - 1].at && runOut < expected[zero].at,
+    `${result.exhaustsAt} should fall strictly inside the hour ending ${new Date(expected[zero].at).toISOString()}`);
+  for (const point of result.series.heavy) assert.equal(typeof point.projected, 'number');
+});

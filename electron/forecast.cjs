@@ -442,8 +442,8 @@ function buildSeries(expectedStart, heavyStart, startMs, endMs, schedule, sample
   const points = Math.ceil(Math.max(0, endMs - startMs) / HOUR_MS) + 1;
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs)
     || endMs - startMs > MAX_PROJECTION_MS || points > MAX_SERIES_POINTS) return null;
-  const expected = [{ at: startMs, remaining: clamp(expectedStart, 0, 100) }];
-  const heavy = [{ at: startMs, remaining: clamp(heavyStart, 0, 100) }];
+  const expected = [{ at: startMs, remaining: clamp(expectedStart, 0, 100), projected: expectedStart }];
+  const heavy = [{ at: startMs, remaining: clamp(heavyStart, 0, 100), projected: heavyStart }];
   const learnedRate = createRateLookup(samples);
   const hasOffScheduleSamples = samples.some((sample) => sample.phase === 'off-schedule');
   let expectedRemaining = expectedStart;
@@ -478,8 +478,10 @@ function buildSeries(expectedStart, heavyStart, startMs, endMs, schedule, sample
         + Math.max(0, phaseRates.heavy - heavyBaseline) * phaseRates.heavyWeight;
       heavyRemaining -= heavyRate * duration;
     }
-    expected.push({ at: next, remaining: clamp(expectedRemaining, 0, 100) });
-    heavy.push({ at: next, remaining: clamp(heavyRemaining, 0, 100) });
+    // The displayed value is clamped; the projected value keeps how far past
+    // zero the hour ran so the run-out instant can be placed inside the hour.
+    expected.push({ at: next, remaining: clamp(expectedRemaining, 0, 100), projected: expectedRemaining });
+    heavy.push({ at: next, remaining: clamp(heavyRemaining, 0, 100), projected: heavyRemaining });
     cursor = next;
   }
   return { expected, heavy };
@@ -497,15 +499,17 @@ function unknownForecast({ expired = false, observed = [], staleHours = 0 } = {}
 }
 
 // The instant a projected series first touches zero, interpolated inside the
-// hour it happens. The series is clamped at zero, so the crossing point is the
-// first zero sample; the previous sample says how far into that hour it fell.
+// hour it happens. The displayed series is clamped at zero, which hides how far
+// past zero that hour ran; the unclamped `projected` value on the first zero
+// sample restores the slope. A series without it snaps to the end of the hour.
 function exhaustionTime(series) {
   for (let index = 1; index < series.length; index += 1) {
     const point = series[index];
     if (point.remaining > 0) continue;
     const previous = series[index - 1];
     if (previous.remaining <= 0) return new Date(previous.at).toISOString();
-    const fraction = previous.remaining / Math.max(previous.remaining - point.remaining, Number.EPSILON);
+    const overshoot = Number.isFinite(point.projected) ? Math.min(point.projected, point.remaining) : point.remaining;
+    const fraction = previous.remaining / Math.max(previous.remaining - overshoot, Number.EPSILON);
     return new Date(previous.at + (point.at - previous.at) * clamp(fraction, 0, 1)).toISOString();
   }
   return null;
@@ -838,8 +842,12 @@ function forecastQuota(observations, options = {}) {
   // Normal-day expectations use the reduced influence. The heavier scenario
   // keeps the complete observed workload, and can never be more optimistic
   // than the adjusted expected curve at the same instant.
-  const heavy = ordinary.series.heavy.map((point, index) => ({ ...point,
-    remaining: Math.min(point.remaining, adjusted.series.expected[index]?.remaining ?? point.remaining) }));
+  const heavy = ordinary.series.heavy.map((point, index) => {
+    const bound = adjusted.series.expected[index];
+    return { ...point,
+      remaining: Math.min(point.remaining, bound?.remaining ?? point.remaining),
+      projected: Math.min(point.projected ?? point.remaining, bound?.projected ?? bound?.remaining ?? point.remaining) };
+  });
   const heavyRemaining = heavy.at(-1)?.remaining ?? ordinary.heavyRemaining;
   const paceRiskThreshold = Number(options.paceRiskThreshold ?? 1.2);
   const watchRemainingThreshold = Math.max(100 - Number(options.hardLimitThreshold ?? 90), adjusted.reservePercent);

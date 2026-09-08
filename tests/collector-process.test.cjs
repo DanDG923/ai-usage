@@ -188,3 +188,17 @@ test('a failed queued run does not block the next one for that source', async ()
   const second = await service.handle({ type: 'refresh-claude' });
   assert.deepEqual(second.claude, { status: 'fulfilled', value: { calls: 2 } });
 });
+
+test('the host forwards fork options so the collector child inherits the launch environment', () => {
+  const forks = [];
+  const host = createCollectorHost({
+    fork: (modulePath, args, options) => { forks.push(options); return fakeChild(); },
+    modulePath: 'collector-service.cjs',
+    config: { databasePath: 'db' },
+    forkOptions: { env: { GH_TOKEN: 'kept-for-providers', PATH: 'C:\\Windows' } },
+  });
+  void host.refreshAll().catch(() => {});
+  assert.equal(forks[0].serviceName, 'AI Usage collectors');
+  assert.deepEqual(forks[0].env, { GH_TOKEN: 'kept-for-providers', PATH: 'C:\\Windows' });
+  host.stop();
+});

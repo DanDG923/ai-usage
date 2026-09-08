@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const readline = require('node:readline');
 const { spawn } = require('node:child_process');
-const { findCodexBinary, providerProcessOptions } = require('./provider-executable.cjs');
+const { findCodexBinary, providerProcessOptions, providerHome } = require('./provider-executable.cjs');
 const { planIncrementalRead, readCompleteLines } = require('./incremental-file.cjs');
 const { epochToIso } = require('./time.cjs');
 const { codexAgentMetadata, textId } = require('./task-usage.cjs');
@@ -292,10 +292,25 @@ function* sessionEntries(lines, state, onRejected = () => {}) {
   }
 }
 
+// Rollout timestamps have millisecond resolution, and parallel tool turns can
+// report two different token counts in the same millisecond. Keying on the
+// timestamp alone upserted the second over the first, silently dropping its
+// tokens. The ordinal lives in the cursor state, so a resumed read and a
+// rescan from the start of the file assign every record the same key.
+function eventKeyFor(state, timestamp) {
+  if (state.lastEventAt === timestamp) state.sameInstantEvents = (state.sameInstantEvents || 0) + 1;
+  else {
+    state.lastEventAt = timestamp;
+    state.sameInstantEvents = 0;
+  }
+  const base = `codex:${state.sessionId}:${timestamp}`;
+  return state.sameInstantEvents ? `${base}#${state.sameInstantEvents}` : base;
+}
+
 function codexUsageEvent(entry, state) {
   const usage = entry.payload.info.last_token_usage;
   return {
-    eventKey: `codex:${state.sessionId}:${entry.timestamp}`,
+    eventKey: eventKeyFor(state, entry.timestamp),
     sourceId: 'codex', occurredAt: entry.timestamp, sessionId: state.sessionId,
     model: state.model, project: state.project,
     inputTokens: usage.input_tokens, cachedInputTokens: usage.cached_input_tokens,
@@ -363,7 +378,14 @@ function needsDuplicateBackup(store, lines, initialState) {
 // earlier lines than the token counts that need them. That context is kept in
 // the import cursor's state so an appended chunk can be parsed on its own.
 function importLocalSessions(store, days = 120) {
-  const root = path.join(process.env.USERPROFILE || '', '.codex', 'sessions');
+  // CODEX_HOME relocates the whole Codex directory; honour it the way the
+  // CLI does. Without an absolute home there is nothing safe to scan.
+  const home = providerHome('CODEX_HOME', '.codex');
+  if (!home) {
+    return { importedFiles: 0, events: 0, observations: 0, rejected: 0, lastRejection: null,
+      duplicateEvents: 0, reconciledEvents: 0, reconciliationBackup: null, readErrors: 0, lastReadError: null };
+  }
+  const root = path.join(home, 'sessions');
   // The live scan has a lookback, but a one-time accounting repair must also
   // reach older ledger records whose original, previously imported logs still
   // exist. Do not expand collection to brand-new ancient transcripts.
@@ -384,6 +406,10 @@ function importLocalSessions(store, days = 120) {
   let duplicateEvents = 0;
   let reconciledEvents = 0;
   let reconciliationBackup = null;
+  // A rollout the OS refused to open (antivirus scan, OneDrive hydration) is
+  // retried next refresh; counting it keeps "connected" honest meanwhile.
+  let readErrors = 0;
+  let lastReadError = null;
 
   for (const { fullPath, stat } of files) {
     const previous = store.getImportedFile(fullPath);
@@ -399,7 +425,9 @@ function importLocalSessions(store, days = 120) {
     let chunk;
     try {
       chunk = readCompleteLines(fullPath, startOffset, stat.size);
-    } catch {
+    } catch (error) {
+      readErrors += 1;
+      lastReadError = error?.code || (error instanceof Error ? error.message : String(error));
       continue;
     }
     // VACUUM-backed safety copies must happen outside the file transaction.
@@ -453,7 +481,7 @@ function importLocalSessions(store, days = 120) {
     });
     importedFiles += 1;
   }
-  return { importedFiles, events, observations, rejected, lastRejection, duplicateEvents, reconciledEvents, reconciliationBackup };
+  return { importedFiles, events, observations, rejected, lastRejection, duplicateEvents, reconciledEvents, reconciliationBackup, readErrors, lastReadError };
 }
 
 async function refreshCodex(store, {
@@ -466,6 +494,9 @@ async function refreshCodex(store, {
   let localWarning = null;
   try {
     local = importSessions(store);
+    if (local.readErrors > 0) {
+      localWarning = `${local.readErrors} Codex session log${local.readErrors === 1 ? '' : 's'} could not be read (${local.lastReadError || 'unknown error'}); they will be retried.`;
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error || 'Unknown local error.');
     localWarning = `Codex local session scan failed: ${message}`;

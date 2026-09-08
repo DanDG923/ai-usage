@@ -6,7 +6,7 @@
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10 * 60_000;
 
-function createCollectorHost({ fork, modulePath, config, requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS, onLog = () => {} }) {
+function createCollectorHost({ fork, modulePath, config, requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS, forkOptions = {}, onLog = () => {} }) {
   let child = null;
   let nextId = 1;
   const pending = new Map();
@@ -24,7 +24,7 @@ function createCollectorHost({ fork, modulePath, config, requestTimeoutMs = DEFA
   }
 
   function spawn() {
-    const spawned = fork(modulePath, [JSON.stringify(config)], { serviceName: 'AI Usage collectors' });
+    const spawned = fork(modulePath, [JSON.stringify(config)], { serviceName: 'AI Usage collectors', ...forkOptions });
     spawned.on('message', (message) => {
       const entry = pending.get(message?.id);
       if (!entry) return;

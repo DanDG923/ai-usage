@@ -3,7 +3,14 @@
 const path = require('node:path');
 const { Worker } = require('node:worker_threads');
 
-function createMaintenanceHost({ databasePath, backupDirectory, createWorker = (modulePath, options) => new Worker(modulePath, options) }) {
+// Restores and desktop imports are bounded by the 64 MB export cap; a backup
+// of a large ledger onto a slow disk is the longest legitimate job.
+const DEFAULT_REQUEST_TIMEOUT_MS = 5 * 60_000;
+
+function createMaintenanceHost({
+  databasePath, backupDirectory, requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+  createWorker = (modulePath, options) => new Worker(modulePath, options),
+}) {
   let worker = null;
   let closing = false;
   let closePromise;
@@ -14,8 +21,18 @@ function createMaintenanceHost({ databasePath, backupDirectory, createWorker = (
     for (const [id, entry] of pending) {
       if (entry.worker !== owner) continue;
       pending.delete(id);
+      clearTimeout(entry.timer);
       entry.reject(error);
     }
+  }
+
+  // A request that never answers is a wedged worker: every later refresh
+  // waits behind the exclusive queue for it. Drop the worker so the next
+  // request starts a fresh one; SQLite rolls back whatever it was writing.
+  function abandon(target, reason) {
+    if (worker === target) worker = null;
+    failPending(target, reason);
+    try { void target.terminate?.(); } catch { /* Already gone. */ }
   }
 
   function getWorker() {
@@ -27,6 +44,7 @@ function createMaintenanceHost({ databasePath, backupDirectory, createWorker = (
       const entry = pending.get(message?.id);
       if (!entry || entry.worker !== spawned) return;
       pending.delete(message.id);
+      clearTimeout(entry.timer);
       if (message.ok) entry.resolve(message.result);
       else entry.reject(new Error(message.error?.message || 'Storage maintenance failed.'));
     });
@@ -47,13 +65,21 @@ function createMaintenanceHost({ databasePath, backupDirectory, createWorker = (
     return new Promise((resolve, reject) => {
       const target = getWorker();
       const id = nextId++;
-      pending.set(id, { resolve, reject, worker: target });
+      // Close is serialised behind active jobs by the worker itself and is
+      // bounded by the caller's shutdown deadline, so it carries no timer.
+      const timer = type === 'close' || !(requestTimeoutMs > 0) ? null : setTimeout(() => {
+        if (!pending.has(id)) return;
+        abandon(target, new Error(`Storage maintenance did not respond in time (${type}).`));
+      }, requestTimeoutMs);
+      timer?.unref?.();
+      pending.set(id, { resolve, reject, worker: target, timer });
       try {
         // Worker ports do not have a browser target origin.
         // oxlint-disable-next-line unicorn/require-post-message-target-origin
         target.postMessage({ id, type, payload });
       } catch (error) {
         pending.delete(id);
+        clearTimeout(timer);
         reject(error);
       }
     });

@@ -1,4 +1,4 @@
-import { shortDate } from '../../lib';
+import { formatInt, shortDate } from '../../lib';
 import type { Snapshot, Source } from '../../types';
 import { SectionHeading } from './fields';
 import { sourceMark } from './SourcesSection';
@@ -12,12 +12,12 @@ function record(value: unknown): Record<string, unknown> | null {
 function text(value: unknown, fallback = '—') {
   if (value == null || value === '') return fallback;
   if (typeof value === 'boolean') return value ? 'yes' : 'no';
-  if (typeof value === 'number') return Number.isFinite(value) ? value.toLocaleString() : fallback;
+  if (typeof value === 'number') return Number.isFinite(value) ? formatInt(value) : fallback;
   return String(value);
 }
 
 function milliseconds(value: unknown) {
-  return typeof value === 'number' && Number.isFinite(value) ? `${value.toLocaleString()} ms` : '—';
+  return typeof value === 'number' && Number.isFinite(value) ? `${formatInt(value)} ms` : '—';
 }
 
 function sourceFacts(source: Source): Fact[] {

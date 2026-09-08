@@ -140,3 +140,16 @@ test('login returns its single verification result and holds the lock during ver
     assert.equal(result.busy, false);
   } finally { f.clean(); }
 });
+
+test('the launch environment is handed to every Claude command rather than the mutated process environment', async () => {
+  const seen = [];
+  const environment = Object.freeze({ PATH: 'C:\\Windows', GH_TOKEN: 'kept-for-claude' });
+  const f = fixture({ run: async (_file, args, options) => { seen.push([args, options]); return JSON.stringify({ loggedIn: true }); }, environment });
+  try {
+    await f.setup.status();
+    assert.deepEqual(seen[0][0], ['auth', 'status']);
+    assert.equal(seen[0][1].environment, environment);
+  } finally {
+    f.clean();
+  }
+});

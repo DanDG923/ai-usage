@@ -20,6 +20,7 @@ export type ProviderView = {
   estimated: boolean;
   stale: boolean;
   notes: string[];
+  /** Active windows shorter than the headline one, such as a five-hour session. */
   secondaryWindows: QuotaWindow[];
 };
 
@@ -151,7 +152,9 @@ function buildProviderViews(snapshot: Snapshot): ProviderView[] {
       ),
       notes: providerNotes(id, current, source),
       secondaryWindows: current
-        ? quotaWindows(quota).filter((entry) => entry !== current && !entry.forecast.expired)
+        ? quotaWindows(quota)
+            .filter((entry) => entry !== current && !entry.forecast.expired)
+            .sort((a, b) => (b.windowMinutes ?? 0) - (a.windowMinutes ?? 0))
         : [],
     };
   });

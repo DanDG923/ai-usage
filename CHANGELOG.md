@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.34 — 8 September 2026
+
+- Headline each provider's weekly allowance so the balance on a card matches the provider's own usage summary, and list shorter session windows beneath it with their own state, balance, and reset. A five-hour session running warm no longer replaces the weekly figure on the card or the runway chart; it keeps its own line under what needs attention.
+- Report an expected run-out time to the minute instead of rounding it up to the end of the hour, and show a reset countdown of less than a day as hours and minutes.
+- Keep both Codex token counts when two are recorded in the same millisecond. The second previously replaced the first, losing its tokens from recorded usage and costs.
+- Start with a new database when the local one cannot be read, keeping the unreadable file under a dated name, rather than failing to launch. Restore the most recent export from Settings to bring the history back.
+- Keep the dashboard usable when storage maintenance stalls, when the renderer hits an error, and while the database is briefly unavailable during an update.
+- Give Claude and Codex the environment AI Usage was started with, honour `CODEX_HOME` and `CLAUDE_CONFIG_DIR`, report local logs Windows refused to read instead of counting them as scanned, and register launch-at-login against the portable executable that was actually run.
+- Match the window title bar to the dashboard palette, and use one date and number format throughout.
+- Preserve local usage history, settings, observations, and backups during an in-place update.
+
 ## 1.0.33 — 8 September 2026
 
 - Add estimated weekly token capacity and remaining tokens for supported Codex, Claude, and Fable allowance windows, with evidence, model and token mix, uncertainty ranges, and conservative confidence labels.
