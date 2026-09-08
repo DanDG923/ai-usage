@@ -1110,3 +1110,31 @@ test('one malformed transcript message is rejected without stopping the file or 
     process.env.USERPROFILE = oldProfile;
   }
 });
+
+test('CLAUDE_CONFIG_DIR relocates the transcript scan', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-claude-home-'));
+  const previous = { USERPROFILE: process.env.USERPROFILE, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
+  const home = path.join(root, 'relocated-claude');
+  const project = path.join(home, 'projects', 'test-project');
+  fs.mkdirSync(project, { recursive: true });
+  fs.mkdirSync(path.join(root, 'profile'), { recursive: true });
+  fs.writeFileSync(path.join(project, 'session.jsonl'), `${JSON.stringify(assistantRow({
+    id: 'message-9', uuid: 'final', timestamp: '2026-08-29T10:00:02Z', model: 'claude-opus-5', input: 2, cacheRead: 100, cacheWrite: 10, output: 12,
+  }))}\n`);
+  const store = new UsageStore(path.join(root, 'test.sqlite'), path.join(root, 'Backups'));
+  try {
+    process.env.USERPROFILE = path.join(root, 'profile');
+    process.env.CLAUDE_CONFIG_DIR = home;
+    const result = importClaudeTranscripts(store);
+    assert.equal(result.usageEvents, 1);
+    assert.equal(result.readErrors, 0);
+    delete process.env.CLAUDE_CONFIG_DIR;
+    delete process.env.USERPROFILE;
+    assert.equal(importClaudeTranscripts(store).filesFound, 0);
+  } finally {
+    store.close();
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});

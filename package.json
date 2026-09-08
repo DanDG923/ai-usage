@@ -1,6 +1,6 @@
 {
   "name": "ai-usage",
-  "version": "1.0.33",
+  "version": "1.0.34",
   "private": true,
   "description": "Local-first AI subscription usage, runway forecasting, and API-equivalent cost dashboard.",
   "main": "electron/main.cjs",
@@ -20,7 +20,7 @@
     "release:notes": "node tools/release-notes.cjs",
     "pack": "npm run build:web && electron-builder --dir --publish never",
     "test": "cross-env TZ=Europe/London node --test tests/*.test.cjs",
-    "lint": "oxlint",
+    "lint": "oxlint --deny-warnings",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\"",
     "typecheck": "tsc -b",
@@ -31,6 +31,7 @@
     "electron-updater": "6.8.9"
   },
   "devDependencies": {
+    "@electron/asar": "3.4.1",
     "@types/node": "24.13.3",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.5",
@@ -39,6 +40,7 @@
     "cross-env": "10.1.0",
     "electron": "44.0.0",
     "electron-builder": "26.15.3",
+    "js-yaml": "4.3.2",
     "lucide-react": "1.37.0",
     "oxlint": "1.81.0",
     "prettier": "3.9.6",
@@ -94,8 +96,5 @@
       "repo": "ai-usage",
       "private": true
     }
-  },
-  "allowScripts": {
-    "electron@44.0.0": true
   }
 }

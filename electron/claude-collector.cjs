@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const { claudeAgentMetadata } = require('./task-usage.cjs');
 const path = require('node:path');
-const { findClaudeBinary } = require('./provider-executable.cjs');
+const { findClaudeBinary, providerHome } = require('./provider-executable.cjs');
 const { createClaudeAgentSdkUsagePort } = require('./claude-agent-usage.cjs');
 const { createFableUsageTracker, OFFICIAL_PROVENANCES } = require('./fable-tracker.cjs');
 const { planIncrementalRead, readCompleteLines } = require('./incremental-file.cjs');
@@ -207,13 +207,18 @@ function listTranscriptFiles(root, cutoffMs) {
 }
 
 function importClaudeTranscripts(store, days = 120) {
-  const root = path.join(process.env.USERPROFILE || '', '.claude', 'projects');
+  // CLAUDE_CONFIG_DIR relocates Claude Code's directory, projects included.
+  const home = providerHome('CLAUDE_CONFIG_DIR', '.claude');
+  if (!home) return { importedFiles: 0, usageEvents: 0, fableEvents: 0, filesFound: 0, rejectedRows: 0, lastRejection: null, readErrors: 0, lastReadError: null };
+  const root = path.join(home, 'projects');
   const files = listTranscriptFiles(root, Date.now() - days * 24 * 60 * 60 * 1000);
   let importedFiles = 0;
   let usageEvents = 0;
   let fableEvents = 0;
   let rejectedRows = 0;
   let lastRejection = null;
+  let readErrors = 0;
+  let lastReadError = null;
 
   for (const { fullPath, stat } of files) {
     const previous = store.getImportedFile(fullPath);
@@ -225,7 +230,10 @@ function importClaudeTranscripts(store, days = 120) {
     let chunk;
     try {
       chunk = readCompleteLines(fullPath, plan.startOffset, stat.size);
-    } catch {
+    } catch (error) {
+      // Retried next refresh; counted so the status can say data is missing.
+      readErrors += 1;
+      lastReadError = error?.code || (error instanceof Error ? error.message : String(error));
       continue;
     }
     const latestByMessage = new Map();
@@ -298,7 +306,7 @@ function importClaudeTranscripts(store, days = 120) {
     });
     importedFiles += 1;
   }
-  return { importedFiles, usageEvents, fableEvents, filesFound: files.length, rejectedRows, lastRejection };
+  return { importedFiles, usageEvents, fableEvents, filesFound: files.length, rejectedRows, lastRejection, readErrors, lastReadError };
 }
 
 const FABLE_BUCKET = 'fable_seven_day';

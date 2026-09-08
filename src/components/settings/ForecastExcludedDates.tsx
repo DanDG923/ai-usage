@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
+import { LOCALE } from '../../lib';
 import type { Settings, Snapshot } from '../../types';
 
-const dateFormatter = new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeZone: 'UTC' });
+const dateFormatter = new Intl.DateTimeFormat(LOCALE, { dateStyle: 'medium', timeZone: 'UTC' });
 
 function localDate(timezone: string) {
-  const parts = new Intl.DateTimeFormat('en-GB', {
+  const parts = new Intl.DateTimeFormat(LOCALE, {
     timeZone: timezone,
     year: 'numeric',
     month: '2-digit',

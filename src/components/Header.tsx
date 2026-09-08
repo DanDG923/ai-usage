@@ -77,7 +77,6 @@ export function Header({
         role="tab"
         id={`tab-${item.id}`}
         aria-selected={tab === item.id}
-        aria-controls={`panel-${item.id}`}
         tabIndex={tab === item.id ? 0 : -1}
         onClick={() => onTab(item.id)}
         onKeyDown={(event) => onKeyDown(event, index)}

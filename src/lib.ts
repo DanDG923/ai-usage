@@ -1,32 +1,39 @@
 import type { DashboardVerdict, ForecastState, Quota, QuotaWindow, Snapshot } from './types';
 
+/**
+ * Every formatter in the renderer uses this locale rather than the OS one, so
+ * numbers and dates read the same way in every table and in the tests.
+ */
+export const LOCALE = 'en-GB';
+
 // Intl formatters are expensive to construct and these run once per table
 // cell, so each shape is built once and reused.
-const COMPACT = new Intl.NumberFormat('en-GB', { notation: 'compact', maximumFractionDigits: 1 });
-const SHORT_DATE = new Intl.DateTimeFormat('en-GB', {
+const COMPACT = new Intl.NumberFormat(LOCALE, { notation: 'compact', maximumFractionDigits: 1 });
+const INTEGER = new Intl.NumberFormat(LOCALE, { maximumFractionDigits: 0 });
+const SHORT_DATE = new Intl.DateTimeFormat(LOCALE, {
   day: 'numeric',
   month: 'short',
   hour: '2-digit',
   minute: '2-digit',
 });
-const DAY_DATE = new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
-const WEEKDAY_TIME = new Intl.DateTimeFormat('en-GB', { weekday: 'short', hour: '2-digit', minute: '2-digit' });
-const DATE_TIME = new Intl.DateTimeFormat('en-GB', {
+const DAY_DATE = new Intl.DateTimeFormat(LOCALE, { weekday: 'short', day: 'numeric', month: 'short' });
+const WEEKDAY_TIME = new Intl.DateTimeFormat(LOCALE, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+const DATE_TIME = new Intl.DateTimeFormat(LOCALE, {
   weekday: 'short',
   day: 'numeric',
   month: 'short',
   hour: '2-digit',
   minute: '2-digit',
 });
-const TIME = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit' });
+const TIME = new Intl.DateTimeFormat(LOCALE, { hour: '2-digit', minute: '2-digit' });
 const moneyFormats = new Map<string, Intl.NumberFormat>();
 
-export function money(value: number, currency = 'GBP') {
+export function money(value: number, currency: string) {
   const minimumFractionDigits = value >= 100 ? 0 : 2;
   const key = `${currency}|${minimumFractionDigits}`;
   let format = moneyFormats.get(key);
   if (!format) {
-    format = new Intl.NumberFormat('en-GB', {
+    format = new Intl.NumberFormat(LOCALE, {
       style: 'currency',
       currency,
       minimumFractionDigits,
@@ -41,28 +48,52 @@ export function compactNumber(value: number) {
   return COMPACT.format(value);
 }
 
+/** Whole numbers with grouping ("12,345"), for counts. */
+export function formatInt(value: number) {
+  return INTEGER.format(value);
+}
+
+/**
+ * A parsed instant, or null when the value is not a date. Intl throws a
+ * RangeError on an invalid Date, which would take the whole dashboard down
+ * for one malformed timestamp in the database.
+ */
+function parseDate(value: string | number) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
 export function shortDate(value?: string | number | null) {
   if (!value) return 'Not observed yet';
-  return SHORT_DATE.format(new Date(value));
+  const date = parseDate(value);
+  return date ? SHORT_DATE.format(date) : '—';
 }
 
 export function dayDate(value?: string | number | null) {
   if (!value) return '—';
-  return DAY_DATE.format(new Date(value));
+  const date = parseDate(value);
+  return date ? DAY_DATE.format(date) : '—';
 }
 
 /** "Thu 14:00" for something inside the coming week, otherwise a dated form. */
 export function whenLabel(value?: string | number | null, nowMs = Date.now()) {
   if (!value) return '—';
-  const date = new Date(value);
+  const date = parseDate(value);
+  if (!date) return '—';
   const withinWeek = Math.abs(date.getTime() - nowMs) < 7 * 86_400_000;
   return (withinWeek ? WEEKDAY_TIME : SHORT_DATE).format(date);
 }
 
 export function resetDistance(value?: string | null) {
   if (!value) return 'Reset unknown';
-  const hours = Math.max(0, (new Date(value).getTime() - Date.now()) / 3_600_000);
-  if (hours < 24) return `${Math.ceil(hours)} hours`;
+  const date = parseDate(value);
+  if (!date) return 'Reset unknown';
+  const hours = Math.max(0, (date.getTime() - Date.now()) / 3_600_000);
+  // Under a day the provider shows minutes, so rounding 4h 18m up to
+  // "5 hours" read as a disagreement with it.
+  const minutes = Math.round(hours * 60);
+  if (minutes < 60) return `${Math.max(1, minutes)} min`;
+  if (hours < 24) return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
   // Round the total first so 47.6h reads "1 day 24h" never; it is "2 days 0h".
   const whole = Math.round(hours);
   const days = Math.floor(whole / 24);
@@ -72,13 +103,15 @@ export function resetDistance(value?: string | null) {
 /** "Wed 10 Sept, 03:21": a reset or run-out instant in full. */
 export function dateTimeLabel(value?: string | number | null) {
   if (!value) return '—';
-  return DATE_TIME.format(new Date(value));
+  const date = parseDate(value);
+  return date ? DATE_TIME.format(date) : '—';
 }
 
 /** "20:05" for an instant on the same local day as `nowMs`, otherwise a dated form. */
 export function timeLabel(value?: string | number | null, nowMs = Date.now()) {
   if (!value) return '—';
-  const date = new Date(value);
+  const date = parseDate(value);
+  if (!date) return '—';
   const now = new Date(nowMs);
   const sameDay =
     date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
@@ -118,14 +151,21 @@ export function quotaWindows(quota: Quota | null | undefined): QuotaWindow[] {
   return quota.windows?.length ? quota.windows : [quota];
 }
 
-/** The window that should headline a card: the worst active one, or the worst at all. */
+/**
+ * The window that headlines a card: the longest active one, so every provider
+ * shows the same kind of allowance (the weekly plan) and its figure matches
+ * the provider's own summary. Headlining the riskiest window instead made a
+ * Claude card read "79% left" while the weekly allowance stood at 93%.
+ * Shorter session windows are listed beneath the headline with their own
+ * state; the dashboard verdict still weighs every window.
+ */
 export function primaryWindow(quota: Quota | null | undefined): QuotaWindow | null {
   const all = quotaWindows(quota);
   const active = all.filter((entry) => !entry.forecast.expired);
   const candidates = active.length ? active : all;
   if (!candidates.length) return null;
-  return candidates.reduce((worst, entry) =>
-    STATE_RANK[entry.forecast.state] > STATE_RANK[worst.forecast.state] ? entry : worst,
+  return candidates.reduce((longest, entry) =>
+    (entry.windowMinutes ?? 0) > (longest.windowMinutes ?? 0) ? entry : longest,
   );
 }
 
@@ -166,6 +206,7 @@ export function verdictSentence(verdict: DashboardVerdict, quotas: Snapshot['quo
 
 export function windowLabel(minutes: number | null) {
   if (minutes == null) return 'allowance window';
+  if (minutes >= 40_320) return 'monthly';
   if (minutes >= 10_080) return 'weekly';
   if (minutes >= 1_440) return `${Math.round(minutes / 1_440)}-day`;
   return `${Math.round(minutes / 60)}-hour`;

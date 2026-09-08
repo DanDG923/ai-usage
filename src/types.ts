@@ -351,7 +351,8 @@ export type Bridge = {
     enableHelper: boolean,
   ): Promise<ClaudeSetupStatus>;
   cancelClaudeSetup(): Promise<void>;
-  getSnapshot(days?: number): Promise<Snapshot>;
+  /** Null while storage is closed for an update; the previous snapshot stays valid. */
+  getSnapshot(days?: number): Promise<Snapshot | null>;
   getTasks(options: SessionPageOptions): Promise<TaskPage>;
   getSessions(options: SessionPageOptions): Promise<SessionPage>;
   refresh(): Promise<{
