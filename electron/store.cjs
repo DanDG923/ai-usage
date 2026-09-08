@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 const { buildDashboardVerdict } = require('./dashboard-decision.cjs');
+const { codexQuotaLabel } = require('./codex-quota-label.cjs');
 const { forecastQuota } = require('./forecast.cjs');
 const { TaskUsage } = require('./task-usage.cjs');
 const { estimateTokenCapacity, LOOKBACK_MS: TOKEN_CAPACITY_LOOKBACK_MS, STALENESS_MS: TOKEN_CAPACITY_STALENESS_MS } = require('./token-capacity.cjs');
@@ -940,6 +941,7 @@ class UsageStore {
     };
     const windows = [...grouped.entries()].map(([bucketId, observations]) => {
       const latest = observations.at(-1);
+      const metadata = json(latest.metadata_json, {});
       const forecast = forecastQuota(observations, {
         now: nowMs,
         schedule,
@@ -951,7 +953,9 @@ class UsageStore {
       });
       return {
         bucketId,
-        bucketName: latest.bucket_name || bucketId,
+        bucketName: sourceId === 'codex'
+          ? codexQuotaLabel(latest.bucket_name || bucketId, latest.window_minutes, metadata)
+          : latest.bucket_name || bucketId,
         observedAt: latest.observed_at,
         usedPercent: latest.used_percent,
         remainingPercent: latest.remaining_percent,
@@ -959,7 +963,7 @@ class UsageStore {
         windowMinutes: latest.window_minutes,
         planType: latest.plan_type,
         provenance: latest.provenance,
-        metadata: json(latest.metadata_json, {}),
+        metadata,
         forecast,
         tokenCapacity: Number(latest.window_minutes) === 10_080
           ? this.getTokenCapacity(sourceId, bucketId, observations, settings, nowMs)

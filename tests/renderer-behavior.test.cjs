@@ -318,3 +318,28 @@ test('reset distance under a day shows hours and minutes like the provider does'
   assert.equal(lib.resetDistance(new Date(now + 59.8 * 60_000).toISOString()), '1h 0m');
   assert.equal(lib.resetDistance(new Date(now + 47.6 * 3_600_000).toISOString()), '2 days 0h');
 });
+
+test('Spark limits are separate from the main Pro allowance and do not look like Codex sessions', () => {
+  const snapshot = structuredClone(demoSnapshot);
+  const main = { ...snapshot.quotas.codex.windows[0], bucketId: 'codex:primary', remainingPercent: 98,
+    metadata: { limitId: 'codex' }, forecast: { ...snapshot.quotas.codex.forecast, state: 'safe', expectedRemaining: 49 } };
+  const spark = { ...structuredClone(main), bucketId: 'codex_bengalfox:secondary', usedPercent: 0, remainingPercent: 100,
+    metadata: { limitId: 'codex_bengalfox', limitName: 'GPT-5.3-Codex-Spark' },
+    forecast: { ...main.forecast, state: 'safe', expectedRemaining: 100, exhaustsAt: null, heavyExhaustsAt: null, paceRatio: 0, currentIsEstimated: false } };
+  const fiveHour = { ...structuredClone(spark), bucketId: 'codex_bengalfox:primary', windowMinutes: 300 };
+  snapshot.quotas.codex = { ...main, windows: [spark, fiveHour, main] };
+  let view = providerViews(snapshot)[0];
+  assert.equal(view.current.bucketId, 'codex:primary', 'main quota wins regardless of endpoint ordering');
+  let html = render(ProviderSummary, { view, nowMs: Date.parse(snapshot.generatedAt) });
+  assert.match(text(html), /49% expected at reset/);
+  assert.match(html, /<details class="provider-model-allowances">/);
+  assert.match(text(html), /GPT-5.3-Codex-Spark · weekly/);
+  assert.match(text(html), /GPT-5.3-Codex-Spark · 5-hour/);
+  assert.match(text(html), /No usage reported in this window/);
+  assert.doesNotMatch(text(html), /weekly session|5-hour session|100% expected at reset/);
+  const risky = structuredClone(snapshot);
+  risky.quotas.codex.windows[1].forecast.state = 'critical';
+  view = providerViews(risky)[0];
+  html = render(ProviderSummary, { view, nowMs: Date.parse(snapshot.generatedAt) });
+  assert.match(html, /<details class="provider-model-allowances" open="">/, 'model-specific risk is visible without expanding details');
+});
