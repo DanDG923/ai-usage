@@ -20,7 +20,7 @@ test.before(async () => {
     root: path.resolve(__dirname, '..'),
     configFile: false,
     plugins: [react()],
-    server: { middlewareMode: true, watch: null, hmr: false },
+    server: { middlewareMode: true, watch: null, hmr: false, ws: false },
     optimizeDeps: { noDiscovery: true, include: [] },
     appType: 'custom',
   });
@@ -195,4 +195,47 @@ test('a rejected active-day save releases the synchronous guard so the user can 
   await assert.rejects(buttons.get('Tue').onClick(), /Temporary local save failure/);
   await buttons.get('Tue').onClick();
   assert.equal(attempts, 2);
+});
+
+test('an applied early-reset adjustment explains reduced expected influence while preserving heavier-case context', () => {
+  const snapshot = structuredClone(demoSnapshot);
+  const weekly = snapshot.quotas.codex.windows[0];
+  weekly.forecast.resetAdjustment = {
+    resetAt: snapshot.generatedAt, dates: ['2026-09-06'], weight: 0.25,
+  };
+  const view = providerViews(snapshot)[0];
+  const html = render(ProviderSummary, { view, nowMs: Date.parse(snapshot.generatedAt) });
+  assert.match(text(html), /Codex weekly: Heavy usage before an early reset has less influence on the expected forecast/);
+  assert.match(text(html), /Recorded usage is kept; the heavier case still includes it/);
+  assert.doesNotMatch(text(html), /purchase|paid reset|credit redeemed/i);
+});
+
+test('a weekly reset adjustment stays visible when a five-hour window headlines the provider card', () => {
+  const snapshot = structuredClone(demoSnapshot);
+  const weekly = snapshot.quotas.codex.windows[0];
+  weekly.forecast.resetAdjustment = { resetAt: snapshot.generatedAt, dates: ['2026-09-06'], weight: 0.25 };
+  const shorter = { ...structuredClone(weekly), bucketId: 'five_hour', bucketName: 'Five hour', windowMinutes: 300 };
+  delete shorter.forecast.resetAdjustment;
+  shorter.forecast.state = 'critical';
+  snapshot.quotas.codex.windows = [shorter, weekly];
+  const view = providerViews(snapshot)[0];
+  assert.equal(view.current.bucketId, 'five_hour');
+  const html = render(ProviderSummary, { view, nowMs: Date.parse(snapshot.generatedAt) });
+  assert.match(text(html), /Codex weekly: Heavy usage before an early reset/);
+  assert.doesNotMatch(text(html), /Five hour: Heavy usage before an early reset/);
+});
+
+test('unchanged and expired forecasts do not claim an early-reset adjustment', () => {
+  const snapshot = structuredClone(demoSnapshot);
+  snapshot.quotas.codex.windows[0].forecast.resetAdjustment = {
+    resetAt: snapshot.generatedAt, dates: ['2026-09-06'], weight: 1,
+  };
+  let html = render(ProviderSummary, { view: providerViews(snapshot)[0], nowMs: Date.parse(snapshot.generatedAt) });
+  assert.doesNotMatch(html, /provider-adjustment-note/);
+  const expired = expiredSnapshot();
+  expired.quotas.codex.windows[0].forecast.resetAdjustment = {
+    resetAt: expired.generatedAt, dates: ['2026-09-06'], weight: 0.25,
+  };
+  html = render(ProviderSummary, { view: providerViews(expired)[0], nowMs: Date.parse(expired.generatedAt) });
+  assert.doesNotMatch(html, /provider-adjustment-note/);
 });

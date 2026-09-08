@@ -508,11 +508,15 @@ body {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 330px;
   gap: 18px;
-  align-items: start;
+  align-items: stretch;
   margin-top: 18px;
 }
 
+/* The chart fills whatever height the insights column beside it needs, so
+   the two columns share a bottom edge instead of the chart ending early. */
 .runway-panel {
+  display: flex;
+  flex-direction: column;
   padding-bottom: 8px;
 }
 
@@ -526,13 +530,26 @@ body {
 
 .combined-runway-wrap {
   position: relative;
+  display: flex;
+  flex: 1 0 auto;
+  flex-direction: column;
   margin: 4px 0 0;
 }
 
+/* Natural height keeps the chart's original proportions when nothing sits
+   beside it; extra flex space grows the plot and the viewBox follows. */
+.combined-runway-canvas {
+  position: relative;
+  flex: 1 0 auto;
+  aspect-ratio: 960 / 360;
+}
+
 .combined-runway-chart {
+  position: absolute;
+  inset: 0;
   display: block;
   width: 100%;
-  height: auto;
+  height: 100%;
   overflow: visible;
 }
 
@@ -1481,4 +1498,199 @@ tbody tr:hover td {
   .status-dot {
     forced-color-adjust: none;
   }
+}
+
+.token-capacity-panel {
+  margin-top: 18px;
+}
+
+.token-capacity-grid {
+  display: grid;
+  align-items: start;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 12px;
+  padding: 0 18px;
+}
+
+.token-capacity-card {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+
+.token-capacity-card > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.token-capacity-card h3 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.token-capacity-card header p,
+.token-capacity-card p,
+.token-capacity-values small {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.token-capacity-card header p {
+  margin: 3px 0 0;
+}
+
+.token-capacity-confidence {
+  padding: 3px 6px;
+  color: var(--text-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.token-capacity-values {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 15px 0 10px;
+}
+
+.token-capacity-values dt {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.token-capacity-values > div > small {
+  display: block;
+}
+
+.token-capacity-values dd {
+  margin: 3px 0;
+  font-size: 22px;
+  font-weight: 650;
+  line-height: 1.35;
+  font-variant-numeric: tabular-nums;
+}
+
+.token-capacity-values dd small {
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.token-capacity-values .token-capacity-pending {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.token-capacity-asof,
+.token-capacity-reason {
+  margin: 10px 0;
+}
+
+.token-capacity-details {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  color: var(--text-2);
+  font-size: 11.5px;
+}
+
+.token-capacity-details > summary {
+  cursor: pointer;
+}
+
+.token-capacity-details > summary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.token-capacity-details h4 {
+  margin: 12px 0 5px;
+  font-size: 11.5px;
+}
+
+.token-capacity-mix {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.token-capacity-mix > li,
+.token-capacity-mix > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 4px 0;
+}
+
+.token-capacity-mix span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.token-capacity-mix dd {
+  margin: 0;
+}
+
+.token-capacity-mix strong,
+.token-capacity-mix dd {
+  flex-shrink: 0;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.token-capacity-warnings {
+  padding-left: 16px;
+  margin: 12px 0 0;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.token-capacity-warnings li + li {
+  margin-top: 5px;
+}
+
+.token-capacity-caveat {
+  margin: 12px 18px 16px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+@media (max-width: 900px) {
+  .token-capacity-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.provider-adjustment-note {
+  margin: 10px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.provider-adjustment-note strong {
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+.provider-adjustment-note small {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
 }

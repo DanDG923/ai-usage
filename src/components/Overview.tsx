@@ -5,6 +5,7 @@ import type { Snapshot } from '../types';
 import { CombinedRunwayChart } from './Charts';
 import { API_EQUIVALENT_EXPLAINER, InfoTip } from './InfoTip';
 import { ProviderSummary } from './ProviderSummary';
+import { TokenCapacity } from './TokenCapacity';
 
 type Insight = { tone: 'neutral' | 'good' | 'warm' | 'hot'; title: string; detail: string };
 
@@ -323,6 +324,8 @@ export function Overview({
           </section>
         </aside>
       </div>
+
+      <TokenCapacity snapshot={snapshot} />
 
       <RecentCycles views={views} snapshot={snapshot} />
       <p className="overview-freshness">

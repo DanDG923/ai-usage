@@ -1,4 +1,4 @@
-import { useId, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { CostAnalytics, DailyUsage, Point } from '../types';
 import { compactNumber, money } from '../lib';
 import type { ProviderView } from '../provider-view';
@@ -95,7 +95,7 @@ type Anchor = 'start' | 'middle' | 'end';
  * the shared axis, the tick labels, and one path per series. Hover state
  * re-renders the component without recomputing any of it.
  */
-function runwayLayout(views: ProviderView[]) {
+function runwayLayout(views: ProviderView[], height: number) {
   const active = views.filter((view) => {
     const series = view.current?.forecast.series;
     return Boolean(series && (series.observed.length || series.expected.length || series.heavy.length));
@@ -118,7 +118,7 @@ function runwayLayout(views: ProviderView[]) {
   const historySpan = Math.min(48 * 3_600_000, Math.max(6 * 3_600_000, (maxAt - nowAt) * 0.22));
   const minAt = nowAt - historySpan;
   const plotWidth = RUNWAY.width - RUNWAY.left - RUNWAY.right;
-  const plotHeight = RUNWAY.height - RUNWAY.top - RUNWAY.bottom;
+  const plotHeight = height - RUNWAY.top - RUNWAY.bottom;
   const x = (at: number) => RUNWAY.left + ((at - minAt) / Math.max(1, maxAt - minAt)) * plotWidth;
   const y = (remaining: number) => RUNWAY.top + (1 - remaining / 100) * plotHeight;
   const scale = (points: Point[]) => points.map((point) => ({ x: x(point.at), y: y(point.remaining) }));
@@ -152,7 +152,31 @@ function runwayLayout(views: ProviderView[]) {
     RUNWAY.top + 12,
     RUNWAY.top + plotHeight - 15,
   );
-  return { series, labels, nowAt, minAt, maxAt, x, y, plotWidth, plotHeight, ticks, summary };
+  return { series, labels, nowAt, minAt, maxAt, x, y, plotWidth, plotHeight, ticks, summary, height };
+}
+
+/**
+ * The runway panel stretches to the height of the insights column beside it.
+ * Follow the canvas box with the viewBox so the plot fills that height with
+ * the x-axis on the panel's bottom edge, instead of letterboxing a fixed
+ * aspect ratio. Width stays fixed so text and strokes keep their scale.
+ */
+function useRunwayHeight(canvasRef: React.RefObject<HTMLDivElement | null>) {
+  const [height, setHeight] = useState(RUNWAY.height);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || typeof ResizeObserver === 'undefined') return undefined;
+    const measure = () => {
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width < 1) return;
+      setHeight(Math.max(RUNWAY.height, Math.round((rect.height / rect.width) * RUNWAY.width)));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  }, [canvasRef]);
+  return height;
 }
 
 /**
@@ -163,10 +187,12 @@ function runwayLayout(views: ProviderView[]) {
 export function CombinedRunwayChart({ views }: { views: ProviderView[] }) {
   const plotClipId = useId();
   const svgRef = useRef<SVGSVGElement>(null);
+  const canvasRef = useRef<HTMLDivElement>(null);
   const [hoverAt, setHoverAt] = useState<number | null>(null);
-  const layout = useMemo(() => runwayLayout(views), [views]);
+  const canvasHeight = useRunwayHeight(canvasRef);
+  const layout = useMemo(() => runwayLayout(views, canvasHeight), [views, canvasHeight]);
   if (!layout) return <div className="empty-chart tall">Runway appears after the first allowance observations.</div>;
-  const { series, labels, nowAt, minAt, maxAt, x, y, plotWidth, plotHeight, ticks, summary } = layout;
+  const { series, labels, nowAt, minAt, maxAt, x, y, plotWidth, plotHeight, ticks, summary, height } = layout;
   const labelX = RUNWAY.width - RUNWAY.right + 16;
 
   const moveHover = (event: React.MouseEvent<SVGSVGElement>) => {
@@ -182,81 +208,89 @@ export function CombinedRunwayChart({ views }: { views: ProviderView[] }) {
 
   return (
     <div className="combined-runway-wrap">
-      <svg
-        ref={svgRef}
-        className="combined-runway-chart"
-        viewBox={`0 0 ${RUNWAY.width} ${RUNWAY.height}`}
-        role="img"
-        aria-label={`Combined allowance runway on a shared calendar axis. ${summary}.`}
-        onMouseMove={moveHover}
-        onMouseLeave={() => setHoverAt(null)}
-      >
-        <defs>
-          <clipPath id={plotClipId}>
-            <rect x={RUNWAY.left} y={RUNWAY.top} width={plotWidth} height={plotHeight} />
-          </clipPath>
-        </defs>
-        {[0, 25, 50, 75, 100].map((value) => (
-          <g key={value}>
-            <line x1={RUNWAY.left} x2={RUNWAY.width - RUNWAY.right} y1={y(value)} y2={y(value)} className="grid-line" />
-            <text x="5" y={y(value) + 4}>
-              {value}%
-            </text>
-          </g>
-        ))}
-        {ticks.map((tick, index) => (
-          <text key={index} x={x(tick.at)} y={RUNWAY.height - 12} textAnchor={tick.anchor}>
-            {tick.label}
-          </text>
-        ))}
-        <line x1={x(nowAt)} x2={x(nowAt)} y1={RUNWAY.top} y2={RUNWAY.top + plotHeight} className="now-line" />
-        {series.map(({ view, observedPath, heavyPath, expectedPath, endpoint, heavyEndpoint }) => (
-          <g key={view.id} className={`combined-series ${view.id}`}>
-            <g clipPath={`url(#${plotClipId})`}>
-              <path d={observedPath} className="combined-observed" />
-              <path d={heavyPath} className="combined-heavy" />
-              <path d={expectedPath} className="combined-expected" />
-            </g>
-            {endpoint && (
-              <circle cx={x(endpoint.at)} cy={y(endpoint.remaining)} r="3.8" className="combined-endpoint" />
-            )}
-            {heavyEndpoint && (
-              <circle
-                cx={x(heavyEndpoint.at)}
-                cy={y(heavyEndpoint.remaining)}
-                r="2.8"
-                className="combined-heavy-endpoint"
+      <div className="combined-runway-canvas" ref={canvasRef}>
+        <svg
+          ref={svgRef}
+          className="combined-runway-chart"
+          viewBox={`0 0 ${RUNWAY.width} ${height}`}
+          role="img"
+          aria-label={`Combined allowance runway on a shared calendar axis. ${summary}.`}
+          onMouseMove={moveHover}
+          onMouseLeave={() => setHoverAt(null)}
+        >
+          <defs>
+            <clipPath id={plotClipId}>
+              <rect x={RUNWAY.left} y={RUNWAY.top} width={plotWidth} height={plotHeight} />
+            </clipPath>
+          </defs>
+          {[0, 25, 50, 75, 100].map((value) => (
+            <g key={value}>
+              <line
+                x1={RUNWAY.left}
+                x2={RUNWAY.width - RUNWAY.right}
+                y1={y(value)}
+                y2={y(value)}
+                className="grid-line"
               />
-            )}
-          </g>
-        ))}
-        {labels.map(({ view, endpoint, y: labelY }) => (
-          <g key={view.id} className={`combined-series ${view.id}`}>
-            <line
-              className="combined-label-connector"
-              x1={x(endpoint.at) + 6}
-              y1={y(endpoint.remaining)}
-              x2={labelX - 5}
-              y2={labelY + 2}
-            />
-            <text x={labelX} y={labelY} className="combined-end-label">
-              <tspan>{view.name}</tspan>
-              <tspan x={labelX} dy="13">
-                {Math.round(endpoint.remaining)}%
-              </tspan>
+              <text x="5" y={y(value) + 4}>
+                {value}%
+              </text>
+            </g>
+          ))}
+          {ticks.map((tick, index) => (
+            <text key={index} x={x(tick.at)} y={height - 12} textAnchor={tick.anchor}>
+              {tick.label}
             </text>
-          </g>
-        ))}
-        {hoverAt != null && (
-          <line
-            className="forecast-hover"
-            x1={x(hoverAt)}
-            x2={x(hoverAt)}
-            y1={RUNWAY.top}
-            y2={RUNWAY.top + plotHeight}
-          />
-        )}
-      </svg>
+          ))}
+          <line x1={x(nowAt)} x2={x(nowAt)} y1={RUNWAY.top} y2={RUNWAY.top + plotHeight} className="now-line" />
+          {series.map(({ view, observedPath, heavyPath, expectedPath, endpoint, heavyEndpoint }) => (
+            <g key={view.id} className={`combined-series ${view.id}`}>
+              <g clipPath={`url(#${plotClipId})`}>
+                <path d={observedPath} className="combined-observed" />
+                <path d={heavyPath} className="combined-heavy" />
+                <path d={expectedPath} className="combined-expected" />
+              </g>
+              {endpoint && (
+                <circle cx={x(endpoint.at)} cy={y(endpoint.remaining)} r="3.8" className="combined-endpoint" />
+              )}
+              {heavyEndpoint && (
+                <circle
+                  cx={x(heavyEndpoint.at)}
+                  cy={y(heavyEndpoint.remaining)}
+                  r="2.8"
+                  className="combined-heavy-endpoint"
+                />
+              )}
+            </g>
+          ))}
+          {labels.map(({ view, endpoint, y: labelY }) => (
+            <g key={view.id} className={`combined-series ${view.id}`}>
+              <line
+                className="combined-label-connector"
+                x1={x(endpoint.at) + 6}
+                y1={y(endpoint.remaining)}
+                x2={labelX - 5}
+                y2={labelY + 2}
+              />
+              <text x={labelX} y={labelY} className="combined-end-label">
+                <tspan>{view.name}</tspan>
+                <tspan x={labelX} dy="13">
+                  {Math.round(endpoint.remaining)}%
+                </tspan>
+              </text>
+            </g>
+          ))}
+          {hoverAt != null && (
+            <line
+              className="forecast-hover"
+              x1={x(hoverAt)}
+              x2={x(hoverAt)}
+              y1={RUNWAY.top}
+              y2={RUNWAY.top + plotHeight}
+            />
+          )}
+        </svg>
+      </div>
       {hoverAt != null && (
         <div className="combined-runway-tip" style={{ left: tipLeft }}>
           <strong>{hoverLabel}</strong>
