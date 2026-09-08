@@ -374,6 +374,46 @@ function needsDuplicateBackup(store, lines, initialState) {
   return false;
 }
 
+// Version 1.0.34 introduced ordinal keys without invalidating old cursors.
+// Before replaying a collision, verify every held row against its source group.
+// Conflicting/manual rows stay untouched, including the rest of that group.
+function collisionMigration(store, lines, initialState) {
+  const groups = new Map();
+  const state = { ...initialState };
+  for (const entry of sessionEntries(lines, state)) {
+    if (entry.type !== 'event_msg' || entry.payload?.type !== 'token_count' || !entry.payload?.info?.last_token_usage) continue;
+    const event = codexUsageEvent(entry, state);
+    const base = `codex:${state.sessionId}:${entry.timestamp}`;
+    if (!groups.has(base)) groups.set(base, []);
+    groups.get(base).push(event);
+  }
+  const blocked = new Set();
+  let backupNeeded = false;
+  for (const [base, events] of groups) {
+    if (events.length < 2) continue;
+    let held = false;
+    let conflict = false;
+    for (const event of events) {
+      if (!store.prepare('SELECT 1 FROM usage_events WHERE event_key = ?').get(event.eventKey)) continue;
+      held = true;
+      // An old unsuffixed row could contain any of the counts at this instant.
+      const candidates = event.eventKey === base ? events : [event];
+      if (!candidates.some((candidate) => {
+        try {
+          return store.prepare(`SELECT 1 FROM usage_events WHERE ${DUPLICATE_ROW_GUARD}`)
+            .get(...duplicateRowParameters({ ...candidate, eventKey: event.eventKey }));
+        } catch (error) {
+          if (error?.code) throw error;
+          return false;
+        }
+      })) conflict = true;
+    }
+    if (conflict) for (const event of events) blocked.add(event.eventKey);
+    else if (held) backupNeeded = true;
+  }
+  return { blocked, backupNeeded };
+}
+
 // A Codex rollout log carries its session id, working directory, and model in
 // earlier lines than the token counts that need them. That context is kept in
 // the import cursor's state so an appended chunk can be parsed on its own.
@@ -395,6 +435,7 @@ function importLocalSessions(store, days = 120) {
       AND CASE WHEN json_valid(state_json) THEN
         COALESCE(json_extract(state_json, '$.accountingVersion'), 0) != 1
         OR COALESCE(json_extract(state_json, '$.agentAttributionVersion'), 0) != 1
+        OR COALESCE(json_extract(state_json, '$.eventKeyVersion'), 0) != 1
         ELSE 1 END`).all(rootPrefix.length, rootPrefix)
     .map((row) => path.resolve(row.file_path).toLowerCase()));
   const files = listSessionFiles(root, Date.now() - days * 24 * 60 * 60 * 1000, legacyFiles);
@@ -413,7 +454,8 @@ function importLocalSessions(store, days = 120) {
 
   for (const { fullPath, stat } of files) {
     const previous = store.getImportedFile(fullPath);
-    const currentCursor = previous?.state?.agentAttributionVersion === 1 && previous.state.accountingVersion === 1;
+    const currentCursor = previous?.state?.agentAttributionVersion === 1 && previous.state.accountingVersion === 1
+      && previous.state.eventKeyVersion === 1;
     const plan = planIncrementalRead(currentCursor ? previous : null, stat);
     if (!plan) continue;
     // A cursor written before context was stored cannot resume mid-file.
@@ -421,7 +463,7 @@ function importLocalSessions(store, days = 120) {
     const startOffset = resumable ? plan.startOffset : 0;
     const state = resumable
       ? { ...previous.state }
-      : { sessionId: path.basename(fullPath, '.jsonl'), model: null, project: null, agentAttributionVersion: 1, accountingVersion: 1 };
+      : { sessionId: path.basename(fullPath, '.jsonl'), model: null, project: null, agentAttributionVersion: 1, accountingVersion: 1, eventKeyVersion: 1 };
     let chunk;
     try {
       chunk = readCompleteLines(fullPath, startOffset, stat.size);
@@ -433,7 +475,10 @@ function importLocalSessions(store, days = 120) {
     // VACUUM-backed safety copies must happen outside the file transaction.
     // This read-only pass runs only during accounting migration; a clean first
     // import makes no backup unless an exact historical duplicate exists.
-    if (!plan.resumed && !reconciliationBackup && needsDuplicateBackup(store, chunk.lines, state)) {
+    const migration = previous?.state?.eventKeyVersion !== 1
+      ? collisionMigration(store, chunk.lines, state) : { blocked: new Set(), backupNeeded: false };
+    if (!plan.resumed && !reconciliationBackup
+      && (migration.backupNeeded || needsDuplicateBackup(store, chunk.lines, state))) {
       reconciliationBackup = store.createBackup();
     }
     // One commit per file: the rows and the cursor that says they were read
@@ -448,7 +493,11 @@ function importLocalSessions(store, days = 120) {
           const previousSnapshot = state.lastTokenSnapshot;
           const duplicate = fingerprint && fingerprint === previousSnapshot?.fingerprint
             && retainedSnapshotExists(store, previousSnapshot.eventKey, event);
-          if (duplicate) {
+          if (migration.blocked.has(event.eventKey)) {
+            state.lastTokenSnapshot = null;
+            rejected += 1;
+            lastRejection = 'A same-time Codex record conflicts with its source log; its counts were preserved.';
+          } else if (duplicate) {
             duplicateEvents += 1;
             if (reconciliationBackup && event.eventKey !== previousSnapshot.eventKey) {
               reconciledEvents += store.prepare(`DELETE FROM usage_events WHERE ${DUPLICATE_ROW_GUARD}`)

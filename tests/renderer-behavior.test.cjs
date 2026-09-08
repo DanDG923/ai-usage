@@ -138,6 +138,27 @@ test('the card headlines the weekly allowance and lists a riskier five-hour sess
   assert.match(row, /forecast-outcome safe/);
 });
 
+test('provider reassurance checks shorter windows and stale evidence as well as the weekly headline', () => {
+  const snapshot = structuredClone(demoSnapshot);
+  for (const quota of Object.values(snapshot.quotas)) {
+    if (!quota) continue;
+    quota.windows = [{ ...quota, windows: undefined,
+      forecast: { ...quota.forecast, state: 'safe', staleHours: 0, expired: false } }];
+  }
+  const verdict = { state: 'critical', label: 'Codex will reach its limit', affected: ['Codex · Weekly'] };
+  const claude = snapshot.quotas.claude;
+  const shorter = { ...structuredClone(claude.windows[0]), bucketId: 'five_hour', windowMinutes: 300 };
+  shorter.forecast.state = 'risk';
+  claude.windows.push(shorter);
+  assert.equal(lib.verdictSentence(verdict, snapshot.quotas).secondary, 'Fable 5 is on track.');
+  shorter.forecast.state = 'safe';
+  shorter.forecast.staleHours = 2;
+  assert.equal(lib.verdictSentence(verdict, snapshot.quotas).secondary, 'Fable 5 is on track.');
+  shorter.forecast.staleHours = 0;
+  assert.equal(lib.verdictSentence(verdict, snapshot.quotas).secondary, 'Claude and Fable 5 are on track.');
+  assert.equal(lib.verdictSentence(verdict, snapshot.quotas, [{ id: 'claude', status: 'degraded' }]).secondary, 'Fable 5 is on track.');
+});
+
 test('current-cycle rows do not borrow totals from another reset or show expired history as current', () => {
   const snapshot = structuredClone(demoSnapshot);
   snapshot.cycles.codex = [{ ...snapshot.cycles.codex[0], resetsAt: '2026-01-01T00:00:00Z', current: true, cost: 987.65 }];

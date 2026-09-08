@@ -379,6 +379,8 @@ class UsageStore {
       this.prepare('DELETE FROM settings WHERE key = ?').run(oldKey);
     }
     const priceColumns = new Set(this.prepare('PRAGMA table_info(price_catalog)').all().map((row) => row.name));
+    // Existing prices are user-owned; only newly seeded defaults yield to restores.
+    if (!priceColumns.has('is_seed')) this.db.exec('ALTER TABLE price_catalog ADD COLUMN is_seed INTEGER NOT NULL DEFAULT 0;');
     this.addedOneHourPriceColumn = !priceColumns.has('cache_write_1h_usd_per_million');
     if (!priceColumns.has('cache_write_1h_usd_per_million')) this.db.exec('ALTER TABLE price_catalog ADD COLUMN cache_write_1h_usd_per_million REAL NOT NULL DEFAULT 0;');
     this.migrateAnalyticsRevisions();
@@ -494,8 +496,8 @@ class UsageStore {
       INSERT INTO price_catalog(
         model, input_usd_per_million, cache_write_usd_per_million,
         cache_write_1h_usd_per_million, cache_read_usd_per_million,
-        output_usd_per_million, effective_from, source_url
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        output_usd_per_million, effective_from, source_url, is_seed
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
       ON CONFLICT(model) DO NOTHING
     `);
     for (const row of PRICE_ROWS) {
@@ -1126,7 +1128,8 @@ class UsageStore {
         cache_read_usd_per_million = excluded.cache_read_usd_per_million,
         output_usd_per_million = excluded.output_usd_per_million,
         effective_from = excluded.effective_from,
-        source_url = excluded.source_url
+        source_url = excluded.source_url,
+        is_seed = 0
     `).run(model, ...values, effectiveFrom, sourceUrl);
     return this.getPriceCatalog();
   }
@@ -1767,10 +1770,8 @@ class UsageStore {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(event_key) DO NOTHING
     `);
-    // Both of these are DO NOTHING, unlike their live-collection counterparts
-    // `upsertDailyUsage` and `updatePrice`. Last-writer-wins is right for a
-    // collector and wrong for a merge: an old export must not roll back a
-    // newer daily total or discard a price the user edited by hand.
+    // Existing daily totals and user-owned prices win a merge. Freshly seeded
+    // defaults may yield to the export, so recovery restores catalogue edits.
     const insertDailyUsage = this.prepare(`
       INSERT INTO account_daily_usage(source_id, usage_date, tokens) VALUES (?, ?, ?)
       ON CONFLICT(source_id, usage_date) DO NOTHING
@@ -1780,7 +1781,21 @@ class UsageStore {
         cache_write_1h_usd_per_million, cache_read_usd_per_million,
         output_usd_per_million, effective_from, source_url)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(model) DO NOTHING
+      ON CONFLICT(model) DO UPDATE SET
+        input_usd_per_million = excluded.input_usd_per_million,
+        cache_write_usd_per_million = excluded.cache_write_usd_per_million,
+        cache_write_1h_usd_per_million = excluded.cache_write_1h_usd_per_million,
+        cache_read_usd_per_million = excluded.cache_read_usd_per_million,
+        output_usd_per_million = excluded.output_usd_per_million,
+        effective_from = excluded.effective_from, source_url = excluded.source_url
+      WHERE price_catalog.is_seed = 1 AND (
+        price_catalog.input_usd_per_million IS NOT excluded.input_usd_per_million
+        OR price_catalog.cache_write_usd_per_million IS NOT excluded.cache_write_usd_per_million
+        OR price_catalog.cache_write_1h_usd_per_million IS NOT excluded.cache_write_1h_usd_per_million
+        OR price_catalog.cache_read_usd_per_million IS NOT excluded.cache_read_usd_per_million
+        OR price_catalog.output_usd_per_million IS NOT excluded.output_usd_per_million
+        OR price_catalog.effective_from IS NOT excluded.effective_from
+        OR price_catalog.source_url IS NOT excluded.source_url)
     `);
     const setSetting = this.prepare(`
       INSERT INTO settings(key, value_json, updated_at) VALUES (?, ?, ?)
@@ -1866,7 +1881,10 @@ class UsageStore {
             windowMinutes, planType, provenance, confidence,
             typeof row.metadata_json === 'string' ? row.metadata_json : JSON.stringify(row.metadata_json ?? {}),
           ).changes;
-        } catch {
+        } catch (error) {
+          // Database errors may roll back the transaction. Continuing after
+          // one would autocommit later records outside the failed restore.
+          if (error?.code || !this.db.isTransaction) throw error;
           counts.skipped += 1;
         }
       }
@@ -1905,7 +1923,10 @@ class UsageStore {
           ).changes;
           counts.usageEvents += inserted;
           if (row.source_id === 'codex') restoredCodexEvents += inserted;
-        } catch {
+        } catch (error) {
+          // Database errors may roll back the transaction. Continuing after
+          // one would autocommit later records outside the failed restore.
+          if (error?.code || !this.db.isTransaction) throw error;
           counts.skipped += 1;
         }
       }
@@ -1926,7 +1947,10 @@ class UsageStore {
           if (!knownSources.has(row.source_id) || typeof row.usage_date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(row.usage_date)
             || !Number.isSafeInteger(tokens) || tokens < 0) throw unreadable();
           counts.dailyUsage += insertDailyUsage.run(row.source_id, row.usage_date, tokens).changes;
-        } catch {
+        } catch (error) {
+          // Database errors may roll back the transaction. Continuing after
+          // one would autocommit later records outside the failed restore.
+          if (error?.code || !this.db.isTransaction) throw error;
           counts.skipped += 1;
         }
       }
@@ -1944,7 +1968,11 @@ class UsageStore {
           if (!model || !effectiveFrom
             || values.some((value) => value == null || value < 0 || value > 1_000_000)) throw unreadable();
           counts.prices += insertPrice.run(model, ...values, effectiveFrom, sourceUrl).changes;
-        } catch {
+          this.prepare('UPDATE price_catalog SET is_seed = 0 WHERE model = ? AND is_seed = 1').run(model);
+        } catch (error) {
+          // Database errors may roll back the transaction. Continuing after
+          // one would autocommit later records outside the failed restore.
+          if (error?.code || !this.db.isTransaction) throw error;
           counts.skipped += 1;
         }
       }
