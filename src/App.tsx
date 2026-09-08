@@ -6,7 +6,16 @@ import { BrandMark, Header, TABS, type Tab } from './components/Header';
 import { Overview } from './components/Overview';
 import { Settings, type SettingsActions } from './components/Settings';
 import { demoSnapshot } from './data/demo';
+import { formatInt } from './lib';
 import type { ManualObservation, PriceRow, Settings as SettingsType, Snapshot, Theme } from './types';
+
+const BUSY_NOTICE = 'AI Usage is finishing an update; the dashboard will refresh shortly.';
+const NOTICE_LIFETIME_MS = 12_000;
+
+/** Failures stay on screen until dismissed; confirmations clear themselves. */
+function noticeIsSticky(notice: string) {
+  return notice.startsWith('Refresh completed with') || /failed|could not/i.test(notice);
+}
 
 function applyThemeAttribute(theme: Theme | undefined) {
   const root = document.documentElement;
@@ -55,6 +64,12 @@ export default function App() {
       try {
         const next = await window.aiUsage.getSnapshot(period);
         if (request !== loadRequest.current) return;
+        // The bridge answers null while storage is closed for an update. The
+        // last snapshot is still the truth, so it is kept rather than cleared.
+        if (!next) {
+          setNotice(BUSY_NOTICE);
+          return;
+        }
         // The selected period is committed with the data, never before it. A
         // rejected 90-day read therefore cannot relabel an existing 30-day view.
         commitSnapshot(next);
@@ -119,18 +134,30 @@ export default function App() {
     }
   };
 
-  // Keyboard shortcuts: 1/2/3/4 switch sections, R refreshes. Typing fields
-  // and modifier chords are left alone. The listener is registered once and
-  // reads the current refresh state through a ref instead of being removed
-  // and re-added on every render.
-  const shortcutState = useRef({ refresh, refreshing });
+  // Informational notices clear themselves; the timer restarts whenever the
+  // text changes so a newer message gets its full lifetime.
   useEffect(() => {
-    shortcutState.current = { refresh, refreshing };
+    if (!notice || noticeIsSticky(notice)) return;
+    const timer = window.setTimeout(() => setNotice(''), NOTICE_LIFETIME_MS);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
+  // Keyboard shortcuts: 1/2/3/4 switch sections, R refreshes, Escape dismisses
+  // the notice. Typing fields and modifier chords are left alone. The listener
+  // is registered once and reads the current refresh and notice state through
+  // a ref instead of being removed and re-added on every render.
+  const shortcutState = useRef({ refresh, refreshing, notice });
+  useEffect(() => {
+    shortcutState.current = { refresh, refreshing, notice };
   });
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented || document.querySelector('[role="dialog"][aria-modal="true"]')) return;
       if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (event.key === 'Escape') {
+        if (shortcutState.current.notice) setNotice('');
+        return;
+      }
       const target = event.target as HTMLElement | null;
       if (target && (target.closest('input, select, textarea, [contenteditable="true"]') || target.isContentEditable))
         return;
@@ -289,7 +316,7 @@ export default function App() {
       const result = await window.aiUsage.exportCsv(period);
       if (result.cancelled) return;
       setNotice(
-        `Exported ${result.rows?.toLocaleString() ?? ''} records from the last ${result.days} days to ${result.filePath}`,
+        `Exported ${result.rows == null ? '' : formatInt(result.rows)} records from the last ${result.days} days to ${result.filePath}`,
       );
     } catch (error) {
       failWith('The CSV export could not be written.')(error);

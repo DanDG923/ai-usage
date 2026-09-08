@@ -109,4 +109,15 @@ function providerProcessOptions(file, environment = process.env) {
   return { cwd: path.dirname(binary), env };
 }
 
-module.exports = { findClaudeBinary, findCodexBinary, providerProcessOptions };
+// The provider's configuration directory: an absolute override when the
+// user set one, otherwise the conventional folder under the profile. A
+// relative override or a missing profile yields null rather than a path
+// resolved against the launch directory.
+function providerHome(overrideName, conventionalFolder, environment = process.env) {
+  const override = absolutePath(environmentValue(environment, overrideName));
+  if (override) return override;
+  const profile = absolutePath(environmentValue(environment, 'USERPROFILE'));
+  return profile ? path.join(profile, conventionalFolder) : null;
+}
+
+module.exports = { findClaudeBinary, findCodexBinary, providerHome, providerProcessOptions };

@@ -105,3 +105,13 @@ test('provider launch options reject relative programs and strip every CWD-depen
 test('setup auth execution rejects a relative program before execFile', async () => {
   await assert.rejects(runCommand('claude.exe', ['auth', 'status']), /absolute local/);
 });
+
+test('providerHome honours an absolute override and otherwise derives the folder from the profile', () => {
+  const { providerHome } = require('../electron/provider-executable.cjs');
+  assert.equal(providerHome('CODEX_HOME', '.codex', { CODEX_HOME: 'D:\\tools\\codex', USERPROFILE: 'C:\\Users\\tester' }), 'D:\\tools\\codex');
+  assert.equal(providerHome('codex_home', '.codex', { Codex_Home: '"D:\\tools\\codex"' }), 'D:\\tools\\codex');
+  assert.equal(providerHome('CODEX_HOME', '.codex', { CODEX_HOME: 'relative\\codex', USERPROFILE: 'C:\\Users\\tester' }), 'C:\\Users\\tester\\.codex');
+  assert.equal(providerHome('CLAUDE_CONFIG_DIR', '.claude', { USERPROFILE: 'C:\\Users\\tester' }), 'C:\\Users\\tester\\.claude');
+  assert.equal(providerHome('CLAUDE_CONFIG_DIR', '.claude', { USERPROFILE: '\\\\server\\share' }), null);
+  assert.equal(providerHome('CLAUDE_CONFIG_DIR', '.claude', {}), null);
+});

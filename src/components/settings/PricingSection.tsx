@@ -1,5 +1,6 @@
 import { Save } from 'lucide-react';
 import { useState } from 'react';
+import { LOCALE } from '../../lib';
 import type { PriceRow, Settings, Snapshot } from '../../types';
 import { API_EQUIVALENT_EXPLAINER, InfoTip } from '../InfoTip';
 import { NumericSetting, SectionHeading } from './fields';
@@ -24,7 +25,7 @@ function catalogRowNote(row: PriceRow) {
   const candidateDate = new Date(`${row.effective_from}T00:00:00Z`);
   const effective =
     /^\d{4}-\d{2}-\d{2}$/.test(row.effective_from) && Number.isFinite(candidateDate.getTime())
-      ? new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }).format(
+      ? new Intl.DateTimeFormat(LOCALE, { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }).format(
           candidateDate,
         )
       : row.effective_from;

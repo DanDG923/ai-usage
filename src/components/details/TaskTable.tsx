@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { compactNumber, projectName, shortDate, sourceLabel } from '../../lib';
+import { compactNumber, formatInt, projectName, shortDate, sourceLabel } from '../../lib';
 import type { TaskCost, TaskPage, Snapshot, TaskUsageTotals } from '../../types';
 import { EquivalentValue, matchesQuery } from './Tables';
 
@@ -129,7 +129,7 @@ export function TaskTable({ snapshot, query }: { snapshot: Snapshot; query: stri
                 ) : null}
               </div>
               <p className="task-guidance">
-                {task.usageCount.toLocaleString()} usage records · Activity span: {activitySpan(task.activitySpanMs)}
+                {formatInt(task.usageCount)} usage records · Activity span: {activitySpan(task.activitySpanMs)}
                 {task.occurredAt ? ` · Last activity: ${shortDate(task.occurredAt)}` : ''}
                 <br />
                 Session: <code>{task.sessionId}</code>
@@ -176,7 +176,7 @@ export function TaskTable({ snapshot, query }: { snapshot: Snapshot; query: stri
                           {compactNumber(agent.outputTokens)}
                           <small>{compactNumber(agent.reasoningOutputTokens)} reasoning included</small>
                         </td>
-                        <td className="num">{agent.usageCount.toLocaleString()}</td>
+                        <td className="num">{formatInt(agent.usageCount)}</td>
                         <td className="num">
                           <EquivalentValue cost={agent.cost} coverage={agent.coverage} currency={costs.currency} />
                         </td>
@@ -217,7 +217,7 @@ export function TaskTable({ snapshot, query }: { snapshot: Snapshot; query: stri
           <span role="status">
             {loading
               ? 'Loading tasks…'
-              : `${first.toLocaleString()}–${last.toLocaleString()} of ${pagination.total.toLocaleString()} tasks / sessions`}
+              : `${formatInt(first)}–${formatInt(last)} of ${formatInt(pagination.total)} tasks / sessions`}
           </span>
           <div className="action-row compact" role="group" aria-label="Task pages">
             <button

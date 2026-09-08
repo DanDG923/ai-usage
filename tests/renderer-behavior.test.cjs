@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const React = require('react');
@@ -13,6 +14,8 @@ let ProviderSummary;
 let Overview;
 let Activity;
 let ForecastSection;
+let ErrorFallback;
+let lib;
 
 test.before(async () => {
   const [{ createServer }, { default: react }] = await Promise.all([import('vite'), import('@vitejs/plugin-react')]);
@@ -26,6 +29,7 @@ test.before(async () => {
   });
   [
     { demoSnapshot }, { providerViews }, { ProviderSummary }, { Overview }, { Activity }, { ForecastSection },
+    { ErrorFallback }, lib,
   ] = await Promise.all([
     server.ssrLoadModule('/src/data/demo.ts'),
     server.ssrLoadModule('/src/provider-view.ts'),
@@ -33,6 +37,8 @@ test.before(async () => {
     server.ssrLoadModule('/src/components/Overview.tsx'),
     server.ssrLoadModule('/src/components/Activity.tsx'),
     server.ssrLoadModule('/src/components/settings/ForecastSection.tsx'),
+    server.ssrLoadModule('/src/components/ErrorBoundary.tsx'),
+    server.ssrLoadModule('/src/lib.ts'),
   ]);
 });
 
@@ -97,7 +103,7 @@ test('Activity does not call a connected source current when its allowance windo
   assert.doesNotMatch(text(row), /Current|73%/);
 });
 
-test('current-cycle evidence and forecast use the same primary bucket even when another window is riskier', () => {
+test('the card headlines the weekly allowance and lists a riskier five-hour session beneath it', () => {
   const snapshot = structuredClone(demoSnapshot);
   const weekly = snapshot.quotas.codex.windows[0];
   weekly.forecast.state = 'safe';
@@ -108,9 +114,22 @@ test('current-cycle evidence and forecast use the same primary bucket even when 
   };
   shorter.forecast.state = 'critical';
   shorter.forecast.expectedRemaining = 0;
+  shorter.forecast.paceRatio = 1.5;
   snapshot.quotas.codex = { ...weekly, windows: [weekly, shorter] };
   snapshot.cycles.codex = [{ ...snapshot.cycles.codex[0], resetsAt: weekly.resetsAt, current: true, cost: 123.45 }];
-  assert.equal(providerViews(snapshot)[0].current.bucketId, 'five_hour', 'the summary still highlights the risky window');
+  const view = providerViews(snapshot)[0];
+  assert.equal(view.current.bucketId, weekly.bucketId, 'the headline is the weekly plan, as on the provider\'s own summary');
+  assert.equal(view.state, 'safe');
+  assert.deepEqual(view.secondaryWindows.map((window) => window.bucketId), ['five_hour']);
+  const card = render(ProviderSummary, { view, nowMs: Date.parse(snapshot.generatedAt) });
+  assert.match(text(card), /5-hour session/);
+  assert.match(card, /provider-session[\s\S]*state-pill critical/);
+  assert.match(text(card), /0% expected at reset · resets in (\d+ min|\d+h \d+m)/);
+  const overview = render(Overview, {
+    snapshot, refreshing: false, onRefresh: async () => {}, onSetupClaude: () => {}, onSources: () => {},
+  });
+  // The attention panel reports the session window under its own name.
+  assert.match(text(overview), /Codex 5-hour session is above its safe pace/);
   const row = currentCycleRow(snapshot);
   assert.match(text(row), /Codex weekly/);
   assert.match(text(row), /123\.45/);
@@ -210,7 +229,7 @@ test('an applied early-reset adjustment explains reduced expected influence whil
   assert.doesNotMatch(text(html), /purchase|paid reset|credit redeemed/i);
 });
 
-test('a weekly reset adjustment stays visible when a five-hour window headlines the provider card', () => {
+test('a weekly reset adjustment stays visible alongside a critical five-hour session window', () => {
   const snapshot = structuredClone(demoSnapshot);
   const weekly = snapshot.quotas.codex.windows[0];
   weekly.forecast.resetAdjustment = { resetAt: snapshot.generatedAt, dates: ['2026-09-06'], weight: 0.25 };
@@ -219,7 +238,8 @@ test('a weekly reset adjustment stays visible when a five-hour window headlines 
   shorter.forecast.state = 'critical';
   snapshot.quotas.codex.windows = [shorter, weekly];
   const view = providerViews(snapshot)[0];
-  assert.equal(view.current.bucketId, 'five_hour');
+  assert.equal(view.current.bucketId, weekly.bucketId);
+  assert.equal(view.secondaryWindows[0].bucketId, 'five_hour');
   const html = render(ProviderSummary, { view, nowMs: Date.parse(snapshot.generatedAt) });
   assert.match(text(html), /Codex weekly: Heavy usage before an early reset/);
   assert.doesNotMatch(text(html), /Five hour: Heavy usage before an early reset/);
@@ -238,4 +258,42 @@ test('unchanged and expired forecasts do not claim an early-reset adjustment', (
   };
   html = render(ProviderSummary, { view: providerViews(expired)[0], nowMs: Date.parse(expired.generatedAt) });
   assert.doesNotMatch(html, /provider-adjustment-note/);
+});
+
+test('the error fallback names the failure and offers a reload, and main.tsx mounts App inside the boundary', () => {
+  const html = render(ErrorFallback, { message: 'Cannot read properties of undefined (reading windows)' });
+  assert.match(html, /role="alert"/);
+  assert.match(text(html), /AI Usage hit a rendering error/);
+  assert.match(text(html), /Cannot read properties of undefined \(reading windows\)/);
+  assert.match(text(html), /Reload dashboard/);
+  const main = fs.readFileSync(path.resolve(__dirname, '../src/main.tsx'), 'utf8');
+  assert.match(main, /<ErrorBoundary>\s*<App \/>\s*<\/ErrorBoundary>/);
+});
+
+test('date formatters degrade to a dash on unparseable input instead of throwing', () => {
+  assert.equal(lib.shortDate('not a date'), '—');
+  assert.equal(lib.dayDate('not a date'), '—');
+  assert.equal(lib.dateTimeLabel('nope'), '—');
+  assert.equal(lib.timeLabel('nope'), '—');
+  assert.equal(lib.whenLabel('nope'), '—');
+  assert.equal(lib.resetDistance('nope'), 'Reset unknown');
+  assert.equal(lib.shortDate('2026-09-08T09:30:00Z'), '8 Sept, 10:30');
+});
+
+test('formatInt follows the fixed renderer locale and windowLabel names monthly windows', () => {
+  assert.equal(lib.LOCALE, 'en-GB');
+  assert.equal(lib.formatInt(1234567.8), '1,234,568');
+  assert.equal(lib.windowLabel(300), '5-hour');
+  assert.equal(lib.windowLabel(10_080), 'weekly');
+  assert.equal(lib.windowLabel(40_320), 'monthly');
+  assert.equal(lib.windowLabel(43_200), 'monthly');
+});
+
+test('reset distance under a day shows hours and minutes like the provider does', () => {
+  const now = Date.now();
+  assert.equal(lib.resetDistance(new Date(now + (4 * 60 + 18) * 60_000 + 20_000).toISOString()), '4h 18m');
+  assert.equal(lib.resetDistance(new Date(now + 25 * 60_000).toISOString()), '25 min');
+  assert.equal(lib.resetDistance(new Date(now + 10_000).toISOString()), '1 min');
+  assert.equal(lib.resetDistance(new Date(now + 59.8 * 60_000).toISOString()), '1h 0m');
+  assert.equal(lib.resetDistance(new Date(now + 47.6 * 3_600_000).toISOString()), '2 days 0h');
 });

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { compactNumber, projectName, shortDate, sourceLabel } from '../../lib';
+import { compactNumber, formatInt, projectName, shortDate, sourceLabel } from '../../lib';
 import type { SessionPage, Snapshot } from '../../types';
 import { EquivalentValue, matchesQuery } from './Tables';
 
@@ -151,7 +151,7 @@ export function SessionTable({ snapshot, query }: { snapshot: Snapshot; query: s
           <span role="status">
             {loading
               ? 'Loading sessions…'
-              : `${first.toLocaleString()}–${last.toLocaleString()} of ${pagination.total.toLocaleString()} results`}
+              : `${formatInt(first)}–${formatInt(last)} of ${formatInt(pagination.total)} results`}
           </span>
           <div className="action-row compact" role="group" aria-label="Session pages">
             <button

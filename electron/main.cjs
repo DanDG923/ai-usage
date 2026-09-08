@@ -30,6 +30,12 @@ const {
 
 const pkg = require('../package.json');
 
+// The environment the app was launched with, taken before anything runs. The
+// update check deletes GH_TOKEN and GITHUB_TOKEN from process.env so that
+// electron-updater cannot prefer them to the GitHub CLI sign-in; the Claude
+// and Codex executables the app spawns must still see the user's own values.
+const launchEnvironment = Object.freeze({ ...process.env });
+
 if (process.env.AI_USAGE_DISABLE_GPU === '1') app.disableHardwareAcceleration();
 
 let window;
@@ -65,9 +71,11 @@ const EMPTY_SESSION_PAGE = Object.freeze({ rows: [], total: 0, page: 1, pageSize
 
 // Window chrome follows the theme the renderer paints, so the native caption
 // buttons never sit on a strip of the other palette.
+// Values follow --header-bg and --text-2 in src/professional.css, the
+// stylesheet that wins; a mismatch shows as a strip of the wrong shade.
 const CHROME = {
-  dark: { background: '#0f1113', symbol: '#c8cbd0' },
-  light: { background: '#f5f5f6', symbol: '#3a3d43' },
+  dark: { background: '#0c1116', symbol: '#cbd3da' },
+  light: { background: '#f4f6f8', symbol: '#3b4854' },
 };
 
 const appIconPath = path.join(__dirname, '..', 'build', 'icon.png');
@@ -103,6 +111,12 @@ function saveNotificationState(state) {
 function log(message) {
   if (process.env.AI_USAGE_DEBUG === '1') process.stderr.write(`[ai-usage] ${message}\n`);
 }
+
+// Every promise chain here is caught; this is the last resort so a missed one
+// is logged rather than surfaced by Electron as a modal dialog.
+process.on('unhandledRejection', (reason) => {
+  log(`Unhandled rejection: ${reason instanceof Error ? reason.message : String(reason)}`);
+});
 
 // A failed update used to leave no trace once the app had quit. Stage changes
 // and the sanitised failure messages the updater already shows are appended
@@ -358,12 +372,28 @@ function scheduleAutomaticRefresh() {
 // Every setting whose effect lives outside the database is reconciled here, so
 // the two write paths — the settings screen and a restore — cannot diverge, and
 // so a value repaired at startup takes effect rather than only being displayed.
+// The portable build runs from a temporary extraction directory, so
+// process.execPath would register an autostart entry that is gone by the next
+// boot; the launcher the user actually ran is what belongs there. The registry
+// write is skipped when nothing changed: this runs on every settings save.
+let appliedLoginItem = null;
+
+function applyLoginItem(enabled) {
+  const executable = launchEnvironment.PORTABLE_EXECUTABLE_FILE || process.execPath;
+  const key = `${enabled}|${executable}`;
+  if (appliedLoginItem === key) return;
+  appliedLoginItem = key;
+  try {
+    app.setLoginItemSettings({ openAtLogin: enabled, path: executable });
+  } catch { /* A refused registry write must not fail the settings save. */ }
+}
+
 function applySettingsEffects() {
   // Accepted settings or restore jobs may finish while shutdown drains them.
   // Apply their saved settings on the next launch without restarting timers.
   if (isQuitting) return;
   const settings = store.getSettings();
-  app.setLoginItemSettings({ openAtLogin: Boolean(settings.launchAtLogin), path: process.execPath });
+  applyLoginItem(Boolean(settings.launchAtLogin));
   applyTheme(settings.theme);
   scheduleAutomaticRefresh();
   updateChecker?.start();
@@ -391,6 +421,7 @@ function createCollectors() {
     fork: (modulePath, args, options) => utilityProcess.fork(modulePath, args, options),
     modulePath: path.join(__dirname, 'collector-service.cjs'),
     config,
+    forkOptions: { env: { ...launchEnvironment } },
     onLog: log,
   });
 }
@@ -528,8 +559,9 @@ function registerIpc() {
     setPeriodDays(days);
     return snapshot();
   });
-  handleIpc('dashboard:get-sessions', (_event, options) => (storageClosing() ? EMPTY_SESSION_PAGE : store.getSessionPage(options)));
-  handleIpc('dashboard:get-tasks', (_event, options) => (storageClosing() ? EMPTY_SESSION_PAGE : store.getTaskPage(options)));
+  const pageOptions = (options) => (options && typeof options === 'object' ? options : {});
+  handleIpc('dashboard:get-sessions', (_event, options) => (storageClosing() ? EMPTY_SESSION_PAGE : store.getSessionPage(pageOptions(options))));
+  handleIpc('dashboard:get-tasks', (_event, options) => (storageClosing() ? EMPTY_SESSION_PAGE : store.getTaskPage(pageOptions(options))));
   handleIpc('dashboard:refresh', () => refreshAll());
   handleIpc('dashboard:update-settings', (_event, patch) => databaseJobs.run(() => {
     const settings = store.updateSettings(patch || {});
@@ -817,6 +849,7 @@ if (isPrimaryInstance) {
         installHelper: () => installClaudeHelper(getInboxPath()),
         uninstallHelper: uninstallClaudeHelper,
         helperInstalled: isClaudeHelperInstalled,
+        environment: launchEnvironment,
       });
       collectors = createCollectors();
       notificationState = loadNotificationState();
@@ -845,6 +878,15 @@ if (isPrimaryInstance) {
       createWindow();
       createTray();
       updateTray(snapshot());
+      if (store.recoveredFrom) {
+        log(`Storage: unreadable database moved to ${store.recoveredFrom}.`);
+        void dialog.showMessageBox({
+          type: 'warning',
+          title: 'AI Usage started with an empty database',
+          message: 'The local database could not be read, so it was set aside and a new one was created.',
+          detail: `The unreadable file was moved to:\n${store.recoveredFrom}\n\nRestore your latest export from Settings to bring the history back.`,
+        });
+      }
       nativeTheme.on('updated', () => applyWindowChrome());
       deferredWindowReveal.markReady();
       // A launch always earns one collection, whether or not automatic collection
