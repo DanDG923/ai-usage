@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.35 — 8 September 2026
+
+- Stop a restore immediately on a storage failure so later records cannot escape a rolled-back transaction. Keep malformed-record skipping for readable exports.
+- Recover custom model prices into a fresh database while preserving prices already edited or restored locally.
+- Recheck older Codex import cursors and repair source-verified same-millisecond token collisions after a safety backup. Preserve conflicting records and retry unreadable logs.
+- Show incomplete Claude transcript scans as degraded, retain the last good scan time, and report file-read failures in Diagnostics and refresh messages.
+- Detect resets within each allowance window, keep weekly balances consistent across the dashboard and tray, and retain alerts for shorter windows.
+- Only describe a provider as on track when every active allowance window has a safe forecast and current evidence.
+- Preserve local usage history, settings, observations, and backups during an in-place update.
+
 ## 1.0.34 — 8 September 2026
 
 - Headline each provider's weekly allowance so the balance on a card matches the provider's own usage summary, and list shorter session windows beneath it with their own state, balance, and reset. A five-hour session running warm no longer replaces the weekly figure on the card or the runway chart; it keeps its own line under what needs attention.

@@ -22,18 +22,20 @@ function emptyState() {
   };
 }
 
-const STATE_RANK = { critical: 5, risk: 4, watch: 3, unknown: 2, safe: 1 };
+function quotaWindows(quota) {
+  if (!quota) return [];
+  return Array.isArray(quota.windows) && quota.windows.length ? quota.windows : [quota];
+}
 
-// The same rule the renderer uses (src/lib.ts primaryWindow): the worst active
-// window headlines, so the tray, the digest, and the header chip agree.
+// The longest active window headlines, matching the dashboard weekly card.
 function primaryWindow(quota) {
   if (!quota) return null;
-  const windows = Array.isArray(quota.windows) && quota.windows.length ? quota.windows : [quota];
+  const windows = quotaWindows(quota);
   const active = windows.filter((window) => !window?.forecast?.expired);
   const candidates = active.length ? active : windows;
   if (!candidates.length) return null;
-  return candidates.reduce((worst, window) =>
-    (STATE_RANK[window?.forecast?.state] || 0) > (STATE_RANK[worst?.forecast?.state] || 0) ? window : worst);
+  return candidates.reduce((longest, window) =>
+    (window?.windowMinutes || 0) > (longest?.windowMinutes || 0) ? window : longest);
 }
 
 function displayedRemaining(window) {
@@ -127,7 +129,7 @@ function decideNotifications({ previous, current, state = emptyState(), nowMs = 
     if (!repeated && !coolingDown) {
       next.lastRiskSignature = signature;
       next.lastRiskNotifiedAt = nowMs;
-      const runsOut = SOURCES.map((source) => primaryWindow(current.quotas?.[source.key]))
+      const runsOut = SOURCES.flatMap((source) => quotaWindows(current.quotas?.[source.key]).filter((window) => !window.forecast?.expired))
         .map((window) => window?.forecast?.exhaustsAt)
         .filter(Boolean)
         .map((at) => Date.parse(at))
@@ -159,26 +161,30 @@ function decideNotifications({ previous, current, state = emptyState(), nowMs = 
     }
   }
 
-  // Resets: a primary window whose reset moved forward, or whose provider
-  // percentage fell back to the floor, is a fresh allowance.
+  // Compare each bucket only with itself. Changing the riskiest window is not
+  // a reset. Legacy per-provider signatures safely reseed without an alert.
+  const resetSignatures = {};
   for (const source of SOURCES) {
-    const window = primaryWindow(current?.quotas?.[source.key]);
-    if (!window?.resetsAt) continue;
-    const signature = `${window.bucketId}|${window.resetsAt}`;
-    const before = previous ? primaryWindow(previous.quotas?.[source.key]) : null;
-    const known = next.lastResetSignatures[source.key];
-    next.lastResetSignatures[source.key] = signature;
-    if (!before || !known || known === signature) continue;
-    const movedForward = Date.parse(window.resetsAt) - Date.parse(before.resetsAt) > 60 * 60 * 1000;
-    const replenished = Number(before.usedPercent) >= 5 && Number(window.usedPercent) <= 2;
-    if (!movedForward && !replenished) continue;
-    if (!settings.notifyResets || snoozed) continue;
-    notifications.push({
-      kind: 'reset',
-      title: `${source.label} allowance has reset`,
-      body: `${Math.round(window.remainingPercent)}% is available in the new ${window.bucketName || 'window'}, which resets in ${resetDistance(window.resetsAt, nowMs)}.`,
-    });
+    for (const window of quotaWindows(current?.quotas?.[source.key])) {
+      if (!window?.resetsAt) continue;
+      const key = JSON.stringify([source.key, window.bucketId]);
+      const signature = JSON.stringify([window.resetsAt, Number(window.usedPercent) <= 2]);
+      const before = quotaWindows(previous?.quotas?.[source.key]).find((entry) => entry.bucketId === window.bucketId);
+      const known = next.lastResetSignatures[key];
+      resetSignatures[key] = signature;
+      if (!before || !known || known === signature || window.forecast?.expired) continue;
+      const movedForward = Date.parse(window.resetsAt) - Date.parse(before.resetsAt) > 60 * 60 * 1000;
+      const replenished = Number(before.usedPercent) >= 5 && Number(window.usedPercent) <= 2;
+      if (!movedForward && !replenished) continue;
+      if (!settings.notifyResets || snoozed) continue;
+      notifications.push({
+        kind: 'reset',
+        title: `${source.label} allowance has reset`,
+        body: `${Math.round(window.remainingPercent)}% is available in the new ${window.bucketName || 'window'}, which resets in ${resetDistance(window.resetsAt, nowMs)}.`,
+      });
+    }
   }
+  next.lastResetSignatures = resetSignatures;
 
   // Fallback: a collector that was healthy and is now serving cached data.
   const health = new Map((current?.sources || []).map((source) => [source.id, source]));

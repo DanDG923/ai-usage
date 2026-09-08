@@ -69,6 +69,60 @@ function legacyCursor(store, file) {
   });
 }
 
+test('ordinal migration repairs an old completed cursor only after a backup, then remains idempotent', (t) => {
+  const { store, write } = fixture(t);
+  const first = tokenRecord(1);
+  const second = tokenRecord(1, 3);
+  second.payload.info.last_token_usage = tokens(2);
+  const file = write('.codex/sessions/rollout.jsonl', [...context, first, second]);
+  seedOldEvent(store, second);
+  const stat = fs.statSync(file);
+  store.markImportedFile(file, stat.mtimeMs, stat.size, {
+    sessionId: 'session-a', model: 'gpt-5.6-sol', agentAttributionVersion: 1, accountingVersion: 1,
+  });
+  const result = importLocalSessions(store);
+  assert.ok(result.reconciliationBackup);
+  const backup = JSON.parse(fs.readFileSync(result.reconciliationBackup.exportPath, 'utf8'));
+  assert.equal(backup.usageEvents.length, 1);
+  assert.equal(backup.usageEvents[0].input_tokens, 200);
+  assert.deepEqual(store.prepare('SELECT input_tokens FROM usage_events ORDER BY event_key').all().map((row) => row.input_tokens), [100, 200]);
+  assert.equal(store.getImportedFile(file).state.eventKeyVersion, 1);
+  assert.equal(importLocalSessions(store).events, 0);
+  fs.appendFileSync(file, `${JSON.stringify(tokenRecord(2, 4))}\n`);
+  assert.equal(importLocalSessions(store).events, 1);
+  assert.equal(store.prepare('SELECT SUM(input_tokens) AS total FROM usage_events').get().total, 400);
+});
+
+test('ordinal migration preserves a conflicting collision group and imports unrelated records', (t) => {
+  const { store, write } = fixture(t);
+  const first = tokenRecord(1);
+  const second = tokenRecord(1, 3);
+  second.payload.info.last_token_usage = tokens(2);
+  const file = write('.codex/sessions/rollout.jsonl', [...context, first, second, tokenRecord(2, 4)]);
+  seedOldEvent(store, second, { inputTokens: 777, metadata: { source: 'manual' } });
+  legacyCursor(store, file);
+  const result = importLocalSessions(store);
+  assert.equal(result.rejected, 2);
+  assert.equal(result.events, 1);
+  assert.equal(store.prepare('SELECT COUNT(*) AS count, SUM(input_tokens) AS tokens FROM usage_events').get().tokens, 877);
+  assert.equal(result.reconciliationBackup, null);
+});
+
+test('an ordinal repair whose safety backup fails leaves the old ledger and cursor intact', (t) => {
+  const { store, write } = fixture(t);
+  const first = tokenRecord(1);
+  const second = tokenRecord(1, 3);
+  second.payload.info.last_token_usage = tokens(2);
+  const file = write('.codex/sessions/rollout.jsonl', [...context, first, second]);
+  seedOldEvent(store, second);
+  legacyCursor(store, file);
+  const before = store.getImportedFile(file);
+  store.createBackup = () => { throw new Error('backup disk unavailable'); };
+  assert.throws(() => importLocalSessions(store), /backup disk unavailable/);
+  assert.equal(store.prepare('SELECT SUM(input_tokens) AS tokens FROM usage_events').get().tokens, 200);
+  assert.deepEqual(store.getImportedFile(file), before);
+});
+
 test('Codex skips repeated cumulative snapshots across refreshes while preserving quotas and identical new requests', (t) => {
   const { store, write } = fixture(t);
   const file = write('.codex/sessions/rollout.jsonl', [...context, tokenRecord(1)]);

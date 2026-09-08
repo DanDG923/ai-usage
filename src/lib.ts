@@ -184,7 +184,11 @@ export function isEstimated(entry: QuotaWindow) {
  * The verdict's affected entries look like "Fable 5 · Fable 5 weekly"; the
  * provider name is the part before the separator.
  */
-export function verdictSentence(verdict: DashboardVerdict, quotas: Snapshot['quotas']) {
+export function verdictSentence(
+  verdict: DashboardVerdict,
+  quotas: Snapshot['quotas'],
+  sources: Snapshot['sources'] = [],
+) {
   const providers: { name: string; quota: Quota | null }[] = [
     { name: 'Codex', quota: quotas.codex },
     { name: 'Claude', quota: quotas.claude },
@@ -195,7 +199,22 @@ export function verdictSentence(verdict: DashboardVerdict, quotas: Snapshot['quo
     names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
   const others = providers
     .filter((entry) => !affectedNames.includes(entry.name))
-    .filter((entry) => primaryWindow(entry.quota)?.forecast.state === 'safe')
+    .filter(
+      (entry) =>
+        !sources.some(
+          (source) => sourceLabel(source.id) === entry.name && ['error', 'stale', 'degraded'].includes(source.status),
+        ),
+    )
+    .filter((entry) => {
+      const active = quotaWindows(entry.quota).filter((window) => !window.forecast.expired);
+      return (
+        active.length > 0 &&
+        active.every((window) => {
+          const freshnessHours = Math.min(24, Math.max(0.5, ((window.windowMinutes ?? 7200) / 60) * 0.2));
+          return window.forecast.state === 'safe' && (window.forecast.staleHours ?? Infinity) <= freshnessHours;
+        })
+      );
+    })
     .map((entry) => entry.name);
   const secondary = others.length ? `${join(others)} ${others.length === 1 ? 'is' : 'are'} on track.` : '';
   return {

@@ -400,9 +400,12 @@ function createFableUsageTracker({ store, usagePort, activityReader, clock = () 
     const activity = localFableActivity(store, nowMs, allowance);
     let activitySource = 'current';
     let activityLastSuccessfulAt = previousActivitySuccess(store);
-    if (activityResult.status === 'rejected') {
+    const partialRead = activityResult.status === 'fulfilled' && Number(activityResult.value?.readErrors) > 0;
+    if (activityResult.status === 'rejected' || partialRead) {
       activitySource = activity.requests ? 'stale' : 'temporarily-unavailable';
-      details.push(activityResult.reason?.message || String(activityResult.reason || 'Local activity import failed'));
+      details.push(partialRead
+        ? `${activityResult.value.readErrors} transcript file(s) could not be read (${activityResult.value.lastReadError || 'unknown error'}); they will be retried.`
+        : activityResult.reason?.message || String(activityResult.reason || 'Local activity import failed'));
       if (state === 'current') state = 'degraded';
     } else {
       activityLastSuccessfulAt = refreshedAt;
