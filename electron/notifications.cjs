@@ -34,7 +34,8 @@ function primaryWindow(quota) {
   const active = windows.filter((window) => !window?.forecast?.expired);
   const candidates = active.length ? active : windows;
   if (!candidates.length) return null;
-  return candidates.reduce((longest, window) =>
+  const mainCodex = candidates.filter((window) => window.metadata?.limitId === 'codex' || /^codex:(primary|secondary|weekly)$/.test(window.bucketId));
+  return (mainCodex.length ? mainCodex : candidates).reduce((longest, window) =>
     (window?.windowMinutes || 0) > (longest?.windowMinutes || 0) ? window : longest);
 }
 

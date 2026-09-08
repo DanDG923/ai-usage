@@ -1675,6 +1675,21 @@ tbody tr:hover td {
   }
 }
 
+.provider-model-allowances {
+  margin-top: 12px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.provider-model-allowances summary {
+  cursor: pointer;
+}
+
+.provider-model-allowances > p {
+  margin: 8px 0 0;
+}
+
 .provider-session {
   display: flex;
   align-items: center;

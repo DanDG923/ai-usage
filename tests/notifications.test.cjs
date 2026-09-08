@@ -192,3 +192,10 @@ test('a same-bucket replenishment is detected even before its reset timestamp ad
   assert.equal(result.notifications.length, 1);
   assert.equal(result.notifications[0].kind, 'reset');
 });
+
+test('the tray keeps the main Codex balance when Spark windows arrive first', () => {
+  const main = window({ bucketId: 'codex:primary', remainingPercent: 98, metadata: { limitId: 'codex' } });
+  const spark = window({ bucketId: 'codex_bengalfox:secondary', remainingPercent: 100, metadata: { limitId: 'codex_bengalfox' } });
+  const current = snapshot({ quotas: { codex: { ...main, windows: [spark, main] }, claude: null, fable: null } });
+  assert.match(buildTrayTooltip(current), /Codex 98%/);
+});

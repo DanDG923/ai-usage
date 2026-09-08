@@ -1,5 +1,6 @@
 import { AlertTriangle, CheckCircle2, Gauge, ShieldCheck } from 'lucide-react';
 import {
+  allowanceWindowLabel,
   compactNumber,
   dateTimeLabel,
   money,
@@ -7,7 +8,6 @@ import {
   shortDate,
   verdictSentence,
   whenLabel,
-  windowLabel,
 } from '../lib';
 import { providerViews, type ProviderView } from '../provider-view';
 import type { QuotaWindow, Snapshot } from '../types';
@@ -76,7 +76,7 @@ function insights(views: ProviderView[], snapshot: Snapshot, nowMs: number): Ins
     if (!view.current || !forecast || forecast.expired) continue;
     rows.push(...windowInsights(view.name, view.current, nowMs));
     for (const window of view.secondaryWindows) {
-      rows.push(...windowInsights(`${view.name} ${windowLabel(window.windowMinutes)} session`, window, nowMs));
+      rows.push(...windowInsights(`${view.name} ${allowanceWindowLabel(window)}`, window, nowMs));
     }
     if (view.stale) {
       rows.push({

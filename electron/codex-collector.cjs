@@ -7,6 +7,7 @@ const { spawn } = require('node:child_process');
 const { findCodexBinary, providerProcessOptions, providerHome } = require('./provider-executable.cjs');
 const { planIncrementalRead, readCompleteLines } = require('./incremental-file.cjs');
 const { epochToIso } = require('./time.cjs');
+const { codexQuotaLabel } = require('./codex-quota-label.cjs');
 const { codexAgentMetadata, textId } = require('./task-usage.cjs');
 
 // Read from the manifest so the version reported to Codex cannot drift.
@@ -147,7 +148,8 @@ function recordRateLimit(store, raw, observedAt, provenance, extra = {}, { onRej
     const observation = {
       sourceId,
       bucketId: `${limitId}:${label}`,
-      bucketName: window.windowMinutes >= 10_000 ? 'Weekly' : window.windowMinutes >= 240 ? 'Five hour' : limitName,
+      bucketName: codexQuotaLabel(window.windowMinutes >= 10_000 ? 'Weekly' : window.windowMinutes >= 240 ? 'Five hour' : limitName,
+        window.windowMinutes, { limitId, limitName }),
       observedAt,
       usedPercent: window.usedPercent,
       remainingPercent: 100 - window.usedPercent,

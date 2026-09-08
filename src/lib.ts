@@ -151,6 +151,21 @@ export function quotaWindows(quota: Quota | null | undefined): QuotaWindow[] {
   return quota.windows?.length ? quota.windows : [quota];
 }
 
+export function modelAllowanceName(window: QuotaWindow): string | null {
+  const { limitId, limitName } = window.metadata || {};
+  return typeof limitId === 'string' && limitId !== 'codex'
+    ? typeof limitName === 'string' && limitName.trim()
+      ? limitName
+      : limitId
+    : null;
+}
+
+export function allowanceWindowLabel(window: QuotaWindow): string {
+  const model = modelAllowanceName(window);
+  const duration = windowLabel(window.windowMinutes);
+  return model ? `${model} · ${duration}` : `${duration} ${window.windowMinutes === 300 ? 'session' : 'allowance'}`;
+}
+
 /**
  * The window that headlines a card: the longest active one, so every provider
  * shows the same kind of allowance (the weekly plan) and its figure matches
@@ -164,7 +179,10 @@ export function primaryWindow(quota: Quota | null | undefined): QuotaWindow | nu
   const active = all.filter((entry) => !entry.forecast.expired);
   const candidates = active.length ? active : all;
   if (!candidates.length) return null;
-  return candidates.reduce((longest, entry) =>
+  const mainCodex = candidates.filter(
+    (entry) => entry.metadata?.limitId === 'codex' || /^codex:(primary|secondary|weekly)$/.test(entry.bucketId),
+  );
+  return (mainCodex.length ? mainCodex : candidates).reduce((longest, entry) =>
     (entry.windowMinutes ?? 0) > (longest.windowMinutes ?? 0) ? entry : longest,
   );
 }

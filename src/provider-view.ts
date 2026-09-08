@@ -1,4 +1,12 @@
-import { compactNumber, displayedRemaining, isEstimated, primaryWindow, quotaWindows, windowLabel } from './lib';
+import {
+  compactNumber,
+  displayedRemaining,
+  isEstimated,
+  modelAllowanceName,
+  primaryWindow,
+  quotaWindows,
+  windowLabel,
+} from './lib';
 import type { ForecastState, Quota, QuotaWindow, Snapshot, Source } from './types';
 
 export type ProviderId = 'codex' | 'claude' | 'fable';
@@ -79,7 +87,7 @@ function providerSubtitle(id: ProviderId, current: QuotaWindow | null, source: S
     if (source && ['stale', 'degraded', 'error'].includes(source.status))
       measurement = `Stale ${measurement.toLowerCase()}`;
   }
-  return `${sentence(measurement)} · ${sentence(windowLabel(current.windowMinutes))}`;
+  return `${sentence(measurement)} · ${modelAllowanceName(current) ? `${modelAllowanceName(current)} · ` : ''}${sentence(windowLabel(current.windowMinutes))}`;
 }
 
 function providerNotes(id: ProviderId, current: QuotaWindow | null, source: Source | null) {
