@@ -1,4 +1,4 @@
-import { dateTimeLabel, percent, resetDistance, whenLabel } from '../lib';
+import { dateTimeLabel, percent, quotaWindows, resetDistance, whenLabel } from '../lib';
 import type { ProviderView } from '../provider-view';
 
 const STATE_WORD: Record<ProviderView['state'], string> = {
@@ -28,6 +28,22 @@ function consequence(view: ProviderView, nowMs: number) {
   if (forecast.paceRatio > 1.05) return `${forecast.paceRatio.toFixed(1)}× safe pace`;
   if (view.expectedRemaining != null) return `${percent(view.expectedRemaining)} expected at reset`;
   return 'Learning from recent usage';
+}
+
+function ForecastAdjustmentNotes({ view }: { view: ProviderView }) {
+  // Include a weekly adjustment even when the card headlines a more urgent
+  // five-hour window. The bucket label keeps the explanation attached to its forecast.
+  return quotaWindows(view.quota).map((window) => {
+    const adjustment = window.forecast.resetAdjustment;
+    if (window.forecast.expired || !adjustment?.dates.length || adjustment.weight >= 1) return null;
+    return (
+      <p className="provider-adjustment-note" key={window.bucketId}>
+        <strong>{window.bucketName}:</strong> Heavy usage before an early reset has less influence on the expected
+        forecast.
+        <small>Recorded usage is kept; the heavier case still includes it.</small>
+      </p>
+    );
+  });
 }
 
 export function ProviderSummary({ view, nowMs }: { view: ProviderView; nowMs: number }) {
@@ -85,6 +101,7 @@ export function ProviderSummary({ view, nowMs }: { view: ProviderView; nowMs: nu
         <span>{view.estimated ? 'Estimated balance' : 'Current balance'}</span>
         <span title={dateTimeLabel(view.resetAt!)}>Resets in {resetDistance(view.resetAt!)}</span>
       </div>
+      <ForecastAdjustmentNotes view={view} />
     </article>
   );
 }

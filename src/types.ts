@@ -24,7 +24,27 @@ export type Forecast = {
   /** When the heavier projection first reaches zero, if it does before reset. */
   heavyExhaustsAt?: string | null;
   reservePercent?: number;
+  /** Historical days with reduced influence on the expected forecast after an early reset. */
+  resetAdjustment?: { resetAt: string; dates: string[]; weight: number };
   series: { observed: Point[]; expected: Point[]; heavy: Point[] };
+};
+
+export type TokenCapacityEstimate = {
+  status: 'available' | 'learning' | 'unavailable';
+  reason: string | null;
+  weeklyTokens: number | null;
+  weeklyRange: { low: number; high: number } | null;
+  remainingTokens: number | null;
+  remainingRange: { low: number; high: number } | null;
+  remainingAsOf: string | null;
+  confidence: 'low' | 'medium' | 'high';
+  intervals: number;
+  cycles: number;
+  observedPercent: number;
+  calibratedAt: string | null;
+  modelMix: { model: string; share: number }[];
+  tokenMix: { input: number; cacheRead: number; cacheWrite: number; output: number };
+  warnings: string[];
 };
 
 export type QuotaWindow = {
@@ -39,6 +59,8 @@ export type QuotaWindow = {
   provenance: string;
   metadata: Record<string, unknown>;
   forecast: Forecast;
+  /** Approximate token capacity at the observed workload mix, never a provider token quota. */
+  tokenCapacity?: TokenCapacityEstimate | null;
 };
 
 export type Quota = QuotaWindow & { windows: QuotaWindow[] };
