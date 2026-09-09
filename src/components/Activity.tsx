@@ -16,7 +16,12 @@ function sourceState(status: string, expired: boolean) {
 
 export function Activity({ snapshot, days }: { snapshot: Snapshot; days: number }) {
   const views = providerViews(snapshot);
-  const cycleCount = Object.values(snapshot.cycles).reduce((total, rows) => total + rows.length, 0);
+  const visibleCycles = {
+    codex: snapshot.settings.showCodexSubscription !== false ? snapshot.cycles.codex : [],
+    claude: snapshot.settings.showClaudeSubscription !== false ? snapshot.cycles.claude : [],
+    fable: snapshot.settings.showClaudeSubscription !== false ? snapshot.cycles.fable : [],
+  };
+  const cycleCount = Object.values(visibleCycles).reduce((total, rows) => total + rows.length, 0);
   return (
     <main
       className="page activity-page"
@@ -33,68 +38,78 @@ export function Activity({ snapshot, days }: { snapshot: Snapshot; days: number 
         <div className="page-fact">
           <History aria-hidden="true" />
           <span>
-            {cycleCount} reset cycle{cycleCount === 1 ? '' : 's'} retained
+            {cycleCount} reset cycle{cycleCount === 1 ? '' : 's'} shown
           </span>
         </div>
       </section>
 
-      <section className="panel evidence-panel">
-        <div className="panel-heading">
-          <div>
-            <h2>Source evidence</h2>
-            <p>Balances are never presented as current when their local source or observation is stale.</p>
+      {views.length > 0 ? (
+        <section className="panel evidence-panel">
+          <div className="panel-heading">
+            <div>
+              <h2>Source evidence</h2>
+              <p>Balances are never presented as current when their local source or observation is stale.</p>
+            </div>
           </div>
-        </div>
-        <div className="table-scroll compact-table-scroll">
-          <table className="evidence-table">
-            <thead>
-              <tr>
-                <th>Provider</th>
-                <th>Status</th>
-                <th>Last observation</th>
-                <th>Provenance</th>
-                <th className="num">Current</th>
-                <th className="num">Expected at reset</th>
-              </tr>
-            </thead>
-            <tbody>
-              {views.map((view) => {
-                const state = sourceState(view.source?.status ?? 'waiting', view.expired);
-                const Icon = state.icon;
-                return (
-                  <tr key={view.id}>
-                    <td>
-                      <span className={`source-dot ${view.id}`} aria-hidden="true" />
-                      <strong>{view.name}</strong>
-                      <small>{view.subtitle}</small>
-                    </td>
-                    <td>
-                      <span className={`evidence-state ${state.tone}`}>
-                        <Icon aria-hidden="true" />
-                        {state.label}
-                      </span>
-                    </td>
-                    <td>
-                      {view.current ? dateTimeLabel(view.current.observedAt) : 'Not observed'}
-                      <small>
-                        {view.source?.last_success_at
-                          ? `Source succeeded ${shortDate(view.source.last_success_at)}`
-                          : 'No successful source reading yet'}
-                      </small>
-                    </td>
-                    <td>{view.provenance.replaceAll('-', ' ')}</td>
-                    <td className="num">
-                      {view.remaining == null ? '—' : `${view.estimated ? '~' : ''}${percent(view.remaining)}`}
-                      {view.expired && <small>Window expired</small>}
-                    </td>
-                    <td className="num">{percent(view.expectedRemaining)}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </section>
+          <div className="table-scroll compact-table-scroll">
+            <table className="evidence-table">
+              <thead>
+                <tr>
+                  <th>Provider</th>
+                  <th>Status</th>
+                  <th>Last observation</th>
+                  <th>Provenance</th>
+                  <th className="num">Current</th>
+                  <th className="num">Expected at reset</th>
+                </tr>
+              </thead>
+              <tbody>
+                {views.map((view) => {
+                  const state = sourceState(view.source?.status ?? 'waiting', view.expired);
+                  const Icon = state.icon;
+                  return (
+                    <tr key={view.id}>
+                      <td>
+                        <span className={`source-dot ${view.id}`} aria-hidden="true" />
+                        <strong>{view.name}</strong>
+                        <small>{view.subtitle}</small>
+                      </td>
+                      <td>
+                        <span className={`evidence-state ${state.tone}`}>
+                          <Icon aria-hidden="true" />
+                          {state.label}
+                        </span>
+                      </td>
+                      <td>
+                        {view.current ? dateTimeLabel(view.current.observedAt) : 'Not observed'}
+                        <small>
+                          {view.source?.last_success_at
+                            ? `Source succeeded ${shortDate(view.source.last_success_at)}`
+                            : 'No successful source reading yet'}
+                        </small>
+                      </td>
+                      <td>{view.provenance.replaceAll('-', ' ')}</td>
+                      <td className="num">
+                        {view.remaining == null ? '—' : `${view.estimated ? '~' : ''}${percent(view.remaining)}`}
+                        {view.expired && <small>Window expired</small>}
+                      </td>
+                      <td className="num">{percent(view.expectedRemaining)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : (
+        <section className="panel status-panel">
+          <h2>No subscriptions shown</h2>
+          <p>
+            Show a subscription in Settings to see its allowance evidence and reset cycles. Your saved history is
+            retained.
+          </p>
+        </section>
+      )}
 
       <div className="activity-grid">
         {snapshot.costs.activityGrid ? (
@@ -109,20 +124,22 @@ export function Activity({ snapshot, days }: { snapshot: Snapshot; days: number 
             <p>Hourly activity appears after local token records have been collected.</p>
           </section>
         )}
-        <section className="panel table-panel daily-usage-panel activity-daily-panel">
-          <div className="panel-heading">
-            <div>
-              <h2>Daily Codex usage</h2>
-              <p>
-                Official daily token totals from the local Codex service over the current {days}-day analysis period.
-              </p>
+        {snapshot.settings.showCodexSubscription !== false && (
+          <section className="panel table-panel daily-usage-panel activity-daily-panel">
+            <div className="panel-heading">
+              <div>
+                <h2>Daily Codex usage</h2>
+                <p>
+                  Official daily token totals from the local Codex service over the current {days}-day analysis period.
+                </p>
+              </div>
             </div>
-          </div>
-          <DailyUsageChart rows={snapshot.dailyUsage || []} days={days} />
-        </section>
+            <DailyUsageChart rows={snapshot.dailyUsage || []} days={days} />
+          </section>
+        )}
       </div>
 
-      <CycleHistory cycles={snapshot.cycles} currency={snapshot.costs.currency} />
+      {views.length > 0 && <CycleHistory cycles={visibleCycles} currency={snapshot.costs.currency} />}
     </main>
   );
 }

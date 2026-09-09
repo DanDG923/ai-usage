@@ -24,6 +24,8 @@ const OPENAI_LONG_CONTEXT_THRESHOLD = 272_000;
 const OPENAI_LONG_CONTEXT_MODELS = new Set(['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
 
 const DEFAULT_SETTINGS = {
+  showCodexSubscription: true,
+  showClaudeSubscription: true,
   currency: 'GBP',
   usdToCurrency: 0.736,
   activeDays: [1, 2, 3, 4, 5, 6, 0],
@@ -69,6 +71,8 @@ function normalizedSetting(key, value) {
 }
 
 const SETTING_VALIDATORS = {
+  showCodexSubscription: (value) => typeof value === 'boolean',
+  showClaudeSubscription: (value) => typeof value === 'boolean',
   currency: (value) => ['GBP', 'USD', 'EUR'].includes(value),
   usdToCurrency: (value) => Number.isFinite(value) && value > 0 && value <= 10_000,
   activeDays: (value) => Array.isArray(value)
@@ -178,6 +182,13 @@ function json(value, fallback = null) {
   } catch {
     return fallback;
   }
+}
+
+// Quota metadata is an object even when its JSON text parses successfully.
+// Keep the generic JSON decoder unchanged for settings and cursor values.
+function quotaMetadata(value) {
+  const decoded = typeof value === 'string' ? json(value) : value;
+  return decoded && typeof decoded === 'object' && !Array.isArray(decoded) ? decoded : null;
 }
 
 function round(value, digits = 2) {
@@ -941,7 +952,9 @@ class UsageStore {
     };
     const windows = [...grouped.entries()].map(([bucketId, observations]) => {
       const latest = observations.at(-1);
-      const metadata = json(latest.metadata_json, {});
+      // Old backups may already have persisted invalid metadata; keep the
+      // reading usable without rewriting the original historical evidence.
+      const metadata = quotaMetadata(latest.metadata_json) || {};
       const forecast = forecastQuota(observations, {
         now: nowMs,
         schedule,
@@ -975,7 +988,9 @@ class UsageStore {
     // model-scoped or OAuth-app bucket, so the tray and cycle history follow
     // the overall weekly even when every window was recorded in one scan.
     const overall = (window) => {
-      if (sourceId === 'codex') return window.metadata?.limitId === 'codex' || window.bucketId === 'codex:weekly';
+      // Manual and older restored readings may lack limitId. Keep the same
+      // canonical bucket fallback used by the cards and tray.
+      if (sourceId === 'codex') return window.metadata?.limitId === 'codex' || /^codex:(primary|secondary|weekly)$/.test(window.bucketId);
       if (sourceId === 'claude') {
         const scope = window.metadata?.scope;
         if (scope) return scope === 'overall';
@@ -1516,15 +1531,23 @@ class UsageStore {
       GROUP BY resets_at
       ORDER BY resets_at DESC
     `).iterate(sourceId, bucketId);
-    // Rounding jitter in reset timestamps splits one window into neighbours a
-    // few seconds apart; merge anything within a minute of the previous row.
+    // Before its first use, an idle allowance can roll its reset forward with
+    // every poll. Fold those unused readings into the subsequently pinned
+    // window as well as merging ordinary sub-minute timestamp jitter.
     // Apply the limit to merged windows, not timestamps: a busy current window
     // can have hundreds of jittered timestamps and must not hide older cycles.
     const merged = [];
     for (const row of rows) {
       const previous = merged.at(-1);
       const resetMs = new Date(row.resets_at).getTime();
-      if (previous && Math.abs(new Date(previous.resets_at).getTime() - resetMs) <= 60_000) {
+      const previousReset = previous ? Date.parse(previous.resets_at) : NaN;
+      const previousStart = previousReset - Number(previous?.window_minutes || 10_080) * 60_000;
+      const sameDuration = previous && previous.window_minutes === row.window_minutes;
+      const idleRoll = sameDuration && row.peak_used === 0 && resetMs < previousReset
+        && row.last_observed_at < previous.first_observed_at
+        && resetMs > previousStart
+        && previousStart >= Date.parse(row.first_observed_at) - QUOTA_CLOCK_SKEW_MS;
+      if (sameDuration && (Math.abs(previousReset - resetMs) <= 60_000 || idleRoll)) {
         previous.peak_used = Math.max(previous.peak_used, row.peak_used);
         previous.first_observed_at = row.first_observed_at < previous.first_observed_at ? row.first_observed_at : previous.first_observed_at;
         previous.last_observed_at = row.last_observed_at > previous.last_observed_at ? row.last_observed_at : previous.last_observed_at;
@@ -1537,16 +1560,23 @@ class UsageStore {
     const rate = Number(settings.usdToCurrency || 1);
     const eventSource = sourceId === 'codex' ? 'codex' : 'claude';
     const modelFilter = sourceId === 'claude-fable' ? "AND LOWER(COALESCE(model, '')) LIKE '%fable%'" : '';
-    const windows = merged.slice(0, limit).map((row) => {
+    const windows = merged.slice(0, limit).map((row, index) => {
       const resetMs = new Date(row.resets_at).getTime();
       const windowMinutes = Number(row.window_minutes) > 0 ? Number(row.window_minutes) : 10_080;
       const startMs = resetMs - windowMinutes * 60_000;
+      // A replacement cycle can begin before the old scheduled reset (for
+      // example after a banked reset credit). The old cycle must stop there,
+      // and the half-open intervals assign boundary usage only to the new one.
+      const newer = merged[index - 1];
+      const newerStart = newer ? Date.parse(newer.resets_at) - Number(newer.window_minutes || 10_080) * 60_000 : Infinity;
+      const endMs = Math.min(resetMs, newerStart);
       return {
         row,
         resetMs,
+        endMs,
         windowMinutes,
         startIso: iso(startMs),
-        endIso: iso(Math.min(resetMs, nowMs)),
+        endIso: iso(Math.min(endMs, nowMs)),
         usd: 0,
         tokens: 0,
       };
@@ -1581,15 +1611,16 @@ class UsageStore {
         }
       });
     }
-    return windows.map(({ row, resetMs, windowMinutes, startIso, usd, tokens }) => ({
+    return windows.map(({ row, endMs, windowMinutes, startIso, usd, tokens }) => ({
       resetsAt: row.resets_at,
+      endsAt: iso(endMs),
       startsAt: startIso,
       windowMinutes,
       peakUsedPercent: round(Number(row.peak_used), 1),
       readings: Number(row.readings),
       firstObservedAt: row.first_observed_at,
       lastObservedAt: row.last_observed_at,
-      current: resetMs > nowMs,
+      current: endMs > nowMs,
       cost: round(usd * rate, 2),
       tokens,
     }));
@@ -1673,14 +1704,17 @@ class UsageStore {
       claude: this.getQuota('claude', settings, nowMs),
       fable: this.getQuota('claude-fable', settings, nowMs),
     };
-    const resetCredits = quotas.codex?.metadata?.resetCredits ?? 0;
+    const reportedResetCredits = quotas.codex?.metadata?.resetCredits;
+    // The renderer compares and formats this count. Never coerce imported JSON.
+    const resetCredits = Number.isSafeInteger(reportedResetCredits) && reportedResetCredits >= 0
+      ? reportedResetCredits : 0;
     return {
       generatedAt: iso(nowMs),
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       settings,
       sources,
       quotas,
-      dashboardVerdict: buildDashboardVerdict({ quotas, sources }),
+      dashboardVerdict: buildDashboardVerdict({ quotas, sources, settings }),
       resetCredits,
       priceCatalog: this.getPriceCatalog(),
       costs: this.getCostAnalytics(days, settings, nowMs),
@@ -1879,11 +1913,13 @@ class UsageStore {
           // authority to enable Max-only shared-pool arithmetic after restore.
           const planType = provenance === 'official-statusline'
             ? null : typeof row.plan_type === 'string' ? row.plan_type : null;
+          const metadata = quotaMetadata(row.metadata_json ?? {});
+          if (!metadata) throw unreadable();
           counts.observations += insertObservation.run(
             row.source_id, row.bucket_id, typeof row.bucket_name === 'string' ? row.bucket_name : null,
             observedAt, usedPercent, remainingPercent, resetsAt,
             windowMinutes, planType, provenance, confidence,
-            typeof row.metadata_json === 'string' ? row.metadata_json : JSON.stringify(row.metadata_json ?? {}),
+            JSON.stringify(metadata),
           ).changes;
         } catch (error) {
           // Database errors may roll back the transaction. Continuing after

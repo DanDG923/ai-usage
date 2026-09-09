@@ -14,7 +14,7 @@ function CycleBars({ rows }: { rows: CycleRow[] }) {
         <div
           key={row.resetsAt}
           className={`cycle-bar${row.current ? ' current' : ''}`}
-          title={`${dayDate(row.resetsAt)}: ${percent(row.peakUsedPercent)} used`}
+          title={`${dayDate(row.endsAt ?? row.resetsAt)}: ${percent(row.peakUsedPercent)} used`}
         >
           <i style={{ height: `${Math.max(3, Math.min(100, row.peakUsedPercent))}%` }} />
         </div>
@@ -67,7 +67,8 @@ export function CycleHistory({ cycles, currency }: { cycles: Snapshot['cycles'];
                     {cycles[key].map((row) => (
                       <tr key={row.resetsAt} className={row.current ? 'current' : ''}>
                         <td>
-                          {dayDate(row.resetsAt)}
+                          {dayDate(row.endsAt ?? row.resetsAt)}
+                          {row.endsAt && row.endsAt !== row.resetsAt ? <small>Reset early</small> : null}
                           {row.current ? <small> current</small> : null}
                         </td>
                         <td className="num">{percent(row.peakUsedPercent)}</td>

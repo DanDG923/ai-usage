@@ -1,5 +1,8 @@
 'use strict';
 
+const { subscriptionVisible } = require('./dashboard-decision.cjs');
+const visibleSources = (snapshot) => SOURCES.filter((source) => subscriptionVisible(snapshot?.settings, source.key));
+
 const { localDayKey } = require('./time.cjs');
 
 // One ongoing risk episode is worth one notification, not one per refresh.
@@ -58,7 +61,7 @@ function resetDistance(resetsAt, nowMs) {
 // and "copy summary" all read from this so they can never disagree.
 function buildSummaryLines(snapshot, nowMs = Date.now()) {
   const lines = [];
-  for (const source of SOURCES) {
+  for (const source of visibleSources(snapshot)) {
     const window = primaryWindow(snapshot?.quotas?.[source.key]);
     if (!window) {
       lines.push(`${source.label}: no allowance reading yet`);
@@ -96,7 +99,7 @@ function buildSummaryText(snapshot, nowMs = Date.now()) {
 
 function buildTrayTooltip(snapshot, nowMs = Date.now()) {
   const verdict = snapshot?.dashboardVerdict?.label || 'AI Usage';
-  const compact = SOURCES.map((source) => {
+  const compact = visibleSources(snapshot).map((source) => {
     const window = primaryWindow(snapshot?.quotas?.[source.key]);
     if (!window || window.forecast?.expired) return `${source.label} —`;
     const remaining = displayedRemaining(window);
@@ -130,7 +133,7 @@ function decideNotifications({ previous, current, state = emptyState(), nowMs = 
     if (!repeated && !coolingDown) {
       next.lastRiskSignature = signature;
       next.lastRiskNotifiedAt = nowMs;
-      const runsOut = SOURCES.flatMap((source) => quotaWindows(current.quotas?.[source.key]).filter((window) => !window.forecast?.expired))
+      const runsOut = visibleSources(current).flatMap((source) => quotaWindows(current.quotas?.[source.key]).filter((window) => !window.forecast?.expired))
         .map((window) => window?.forecast?.exhaustsAt)
         .filter(Boolean)
         .map((at) => Date.parse(at))
@@ -165,7 +168,7 @@ function decideNotifications({ previous, current, state = emptyState(), nowMs = 
   // Compare each bucket only with itself. Changing the riskiest window is not
   // a reset. Legacy per-provider signatures safely reseed without an alert.
   const resetSignatures = {};
-  for (const source of SOURCES) {
+  for (const source of visibleSources(current)) {
     for (const window of quotaWindows(current?.quotas?.[source.key])) {
       if (!window?.resetsAt) continue;
       const key = JSON.stringify([source.key, window.bucketId]);
@@ -190,7 +193,7 @@ function decideNotifications({ previous, current, state = emptyState(), nowMs = 
   // Fallback: a collector that was healthy and is now serving cached data.
   const health = new Map((current?.sources || []).map((source) => [source.id, source]));
   const previousHealth = new Map((previous?.sources || []).map((source) => [source.id, source]));
-  for (const source of SOURCES) {
+  for (const source of visibleSources(current)) {
     const now = health.get(source.healthId);
     if (!now) continue;
     const signature = `${source.healthId}|${now.status}`;
@@ -208,7 +211,7 @@ function decideNotifications({ previous, current, state = emptyState(), nowMs = 
   }
 
   // Digest: once per local day, at or after the configured hour.
-  if (settings.notifyDigest && !snoozed) {
+  if (settings.notifyDigest && !snoozed && visibleSources(current).length) {
     const today = localDayKey(nowMs);
     const hour = new Date(nowMs).getHours();
     if (next.lastDigestDay !== today && hour >= Number(settings.digestHour ?? 9)) {

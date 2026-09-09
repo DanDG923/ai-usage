@@ -90,27 +90,34 @@ class TaskUsage {
     this.rows.set(key, row);
   }
 
-  rootFor(row) {
+  rootFor(row, roots = new Map()) {
     if (row.rootSessionId) return row.rootSessionId;
     const seen = new Set();
     let current = row.sessionId;
+    // null marks ancestry that reaches a cycle, not any one session's fallback.
+    let root = null;
     while (current) {
-      if (seen.has(current)) return row.sessionId; // Corrupt cycles must never hang the dashboard.
-      seen.add(current);
-      const parent = this.parents.get(JSON.stringify([row.sourceId, current]));
-      if (!parent) return current;
+      const key = JSON.stringify([row.sourceId, current]);
+      if (roots.has(key)) { root = roots.get(key); break; }
+      if (seen.has(key)) break;
+      seen.add(key);
+      const parent = this.parents.get(key);
+      if (!parent) { root = current; break; }
       current = parent;
     }
-    return row.sessionId;
+    for (const key of seen) roots.set(key, root);
+    return root ?? row.sessionId;
   }
 
   finish(rate) {
     const tasks = new Map();
+    // Resolve each source/session once per pass; later add() calls may change parents.
+    const roots = new Map();
     const convert = (row) => ({ ...row, cost: row.costUsd * rate,
       coverage: row.totalTokens ? row.coveredTokens / row.totalTokens : 0,
       activitySpanMs: row.usageCount > 1 ? Date.parse(row.occurredAt) - Date.parse(row.startedAt) : null });
     for (const row of this.rows.values()) {
-      const sessionId = this.rootFor(row);
+      const sessionId = this.rootFor(row, roots);
       const key = JSON.stringify([row.sourceId, sessionId, row.taskId]);
       const task = tasks.get(key) || { ...emptyUsage(), key, sourceId: row.sourceId, sessionId,
         taskId: row.taskId, project: row.project, agents: new Map(), subagents: new Set(),
