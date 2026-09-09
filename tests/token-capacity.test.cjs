@@ -241,6 +241,62 @@ test('backward corrections and rebounds do not make duplicate quota consumption'
   assert.equal(result.weeklyTokens, 10_000_000);
 });
 
+test('lagging Codex transcript snapshots cannot continually erase live calibration progress', () => {
+  const start = NOW - 15 * HOUR;
+  const live = Array.from({ length: 16 }, (_, index) => observation(start + index * HOUR, 10 + index));
+  const input = fixture({ observations: live.flatMap((row, index) => index === 15 ? [row] : [row,
+    observation(Date.parse(row.observed_at) + HOUR / 2, row.used_percent - 1, { provenance: 'local-official' })]),
+  events: live.slice(1).map((row) => event(Date.parse(row.observed_at), 200_000)) });
+  const result = estimateTokenCapacity(input);
+  const baseline = estimateTokenCapacity({ ...input, observations: live });
+  assert.equal(result.status, 'available');
+  assert.equal(result.intervals, 3);
+  assert.equal(result.observedPercent, 15);
+  assert.equal(result.weeklyTokens, 20_000_000);
+  assert.equal(result.remainingTokens, baseline.remainingTokens);
+  assert.deepEqual(result.modelMix, baseline.modelMix);
+  assert.ok(result.warnings.some((warning) => /overlapping transcript/.test(warning)));
+  assert.ok(!result.warnings.some((warning) => /Quota corrections/.test(warning)));
+});
+
+test('transcript-only Codex history still calibrates without a live account connection', () => {
+  const input = fixture();
+  input.observations = input.observations.map((row) => ({ ...row, provenance: 'local-official' }));
+  assert.deepEqual(estimateTokenCapacity(input), estimateTokenCapacity(fixture()));
+});
+
+test('live and transcript calibration never bridge a source handoff and preserve uncovered history', () => {
+  const start = NOW - 10 * HOUR;
+  const used = [0, 10, 20, 30, 45, 55, 65, 75, 80, 90, 100];
+  const input = fixture({ observations: used.map((percent, index) => observation(start + index * HOUR, percent,
+    { provenance: index >= 4 && index <= 7 ? 'official' : 'local-official' })),
+  events: used.slice(1).map((_, index) => event(start + (index + 1) * HOUR,
+    index === 3 || index === 7 ? 99_000_000 : 1_000_000)) });
+  const result = estimateTokenCapacity(input);
+  assert.equal(result.status, 'available');
+  assert.equal(result.intervals, 8);
+  assert.equal(result.cycles, 1);
+  assert.equal(result.observedPercent, 80);
+  assert.equal(result.weeklyTokens, 10_000_000);
+  assert.equal(result.remainingAsOf, iso(NOW), 'latest transcript reading still anchors the dated balance');
+  assert.ok(!result.warnings.some((warning) => /inconsistent/.test(warning)));
+});
+
+test('overlapping transcripts cannot bypass a genuine live quota correction', () => {
+  const percentages = [10, 20, 19, 20, 21, 31, 41];
+  const start = NOW - 6 * HOUR;
+  const input = fixture({ observations: percentages.flatMap((used, index) => [
+    observation(start + index * HOUR, used),
+    observation(start + index * HOUR, used + 1, { provenance: 'local-official' }),
+  ]), events: percentages.slice(1).map((_, index) => event(start + (index + 1) * HOUR,
+    index >= 1 && index <= 3 ? 99_000_000 : 1_000_000)) });
+  const result = estimateTokenCapacity(input);
+  assert.equal(result.intervals, 3);
+  assert.equal(result.observedPercent, 30);
+  assert.equal(result.weeklyTokens, 10_000_000);
+  assert.ok(result.warnings.some((warning) => /Quota corrections/.test(warning)));
+});
+
 test('plan changes exclude old-plan calibration and do not bridge the change', () => {
   const input = fixture();
   const old = [0, 1, 2, 3].map((index) => observation(NOW - (7 - index) * HOUR, index * 10, { plan_type: 'old-plan' }));

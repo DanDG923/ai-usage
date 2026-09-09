@@ -13,6 +13,32 @@ function withStore(run) {
   try { return run(store); } finally { store.close(); }
 }
 
+test('subscription visibility persists across reopening and backup restore without deleting usage', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-visibility-'));
+  const dbPath = path.join(root, 'test.sqlite');
+  let store = new UsageStore(dbPath, path.join(root, 'Backups'));
+  try {
+    assert.equal(store.getSettings().showCodexSubscription, true);
+    assert.equal(store.getSettings().showClaudeSubscription, true);
+    store.recordUsageEvent({ eventKey: 'keep-hidden-history', sourceId: 'claude', model: 'claude-opus-5',
+      occurredAt: new Date().toISOString(), inputTokens: 1_000 });
+    const before = store.getCostAnalytics(30);
+    store.updateSettings({ showCodexSubscription: false, showClaudeSubscription: false });
+    assert.throws(() => store.updateSettings({ showClaudeSubscription: 'false' }));
+    assert.equal(store.getDashboardSnapshot().dashboardVerdict.label, 'No subscriptions shown');
+    assert.deepEqual(store.getCostAnalytics(30), before);
+    store.close();
+    store = new UsageStore(dbPath, path.join(root, 'Backups'));
+    assert.equal(store.getSettings().showCodexSubscription, false);
+    assert.equal(store.getSettings().showClaudeSubscription, false);
+    const restored = store.restoreFromExport({ schemaVersion: 1,
+      settings: { showCodexSubscription: true, showClaudeSubscription: true } });
+    assert.equal(restored.settings, 2);
+    assert.equal(store.getSettings().showClaudeSubscription, true);
+    assert.deepEqual(store.getCostAnalytics(30), before);
+  } finally { store.close(); }
+});
+
 test('model categories preserve per-request context tiers, cache subsets and currency conversion', () => withStore((store) => {
   store.updateSettings({ currency: 'GBP', usdToCurrency: 0.8 });
   for (const [key, input] of [['short', 100_000], ['long', 300_000]]) {

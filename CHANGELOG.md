@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.37 — 9 September 2026
+
+- Choose which subscriptions appear in Settings. Hiding Codex or Claude removes it from the dashboard, activity evidence, cycle history, token capacity, tray tooltip, summaries, and alerts, while its saved usage, costs, and background collection continue unchanged.
+- Keep GPT-5.3-Codex-Spark tokens out of the main Codex capacity estimate, and prefer live Codex readings over overlapping transcript snapshots when learning capacity so lagging snapshots no longer discard calibration.
+- End a reset cycle where its replacement begins when an allowance resets early, label that cycle in history, and fold an idle allowance's rolling reset readings into the window they belong to.
+- Reject restored readings whose stored quota metadata is not a readable object, ignore an unusable banked reset-credit count, and keep the main Codex weekly balance selected for manual and older readings that carry no limit identity.
+- Resolve task ancestry once per refresh so deep or repeated session chains stay responsive, and let a single shown subscription use the full card width.
+- Preserve local usage history, settings, observations, and backups during an in-place update.
+
 ## 1.0.36 — 8 September 2026
 
 - Keep the main Codex account allowance separate from GPT-5.3-Codex-Spark limits. Preserve model names in stored readings, diagnostics, and allowance alerts.

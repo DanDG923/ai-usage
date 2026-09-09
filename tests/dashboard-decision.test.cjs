@@ -18,6 +18,22 @@ function quota(...windows) {
   return { ...windows[0], windows };
 }
 
+test('hidden subscriptions contribute neither risk nor missing-data warnings', () => {
+  const snapshot = {
+    settings: { showClaudeSubscription: false },
+    quotas: { codex: quota(window('weekly', 'safe')), claude: null, fable: quota(window('weekly', 'critical')) },
+  };
+  const verdict = buildDashboardVerdict(snapshot);
+  assert.equal(verdict.state, 'safe');
+  assert.equal(verdict.windowsChecked, 1);
+  snapshot.settings.showClaudeSubscription = true;
+  assert.equal(buildDashboardVerdict(snapshot).state, 'critical');
+  snapshot.settings.showCodexSubscription = false;
+  snapshot.settings.showClaudeSubscription = false;
+  assert.equal(buildDashboardVerdict(snapshot).state, 'unknown');
+  assert.equal(buildDashboardVerdict(snapshot).label, 'No subscriptions shown');
+});
+
 test('the verdict reports a risky secondary window even when the primary window is safe', () => {
   const verdict = buildDashboardVerdict({
     quotas: {

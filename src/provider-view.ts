@@ -1,3 +1,4 @@
+import { subscriptionVisible } from '../electron/dashboard-decision.mjs';
 import {
   compactNumber,
   displayedRemaining,
@@ -127,7 +128,7 @@ export function providerViews(snapshot: Snapshot): ProviderView[] {
 }
 
 function buildProviderViews(snapshot: Snapshot): ProviderView[] {
-  return PROVIDERS.map(({ id, name, sourceId }) => {
+  return PROVIDERS.filter(({ id }) => subscriptionVisible(snapshot.settings, id)).map(({ id, name, sourceId }) => {
     const quota = snapshot.quotas[id];
     const current = primaryWindow(quota);
     const expired = Boolean(current?.forecast.expired);

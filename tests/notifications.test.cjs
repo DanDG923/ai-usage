@@ -6,6 +6,23 @@ const { buildSummaryText, buildTrayTooltip, decideNotifications, emptyState } = 
 
 const NOW = Date.parse('2026-09-01T10:30:00Z');
 
+test('hidden subscriptions are omitted from summaries, reset and fallback reminders', () => {
+  const previous = snapshot();
+  const initial = decideNotifications({ previous: null, current: previous, nowMs: NOW });
+  const current = structuredClone(previous);
+  current.settings.showClaudeSubscription = false;
+  current.quotas.claude.windows[0].resetsAt = '2026-09-12T08:00:00.000Z';
+  current.sources.find((source) => source.id === 'claude').status = 'error';
+  current.sources.find((source) => source.id === 'claude-fable').status = 'error';
+  assert.doesNotMatch(buildSummaryText(current, NOW), /Claude|Fable/);
+  assert.doesNotMatch(buildTrayTooltip(current, NOW), /Claude|Fable/);
+  const result = decideNotifications({ previous, current, state: initial.state, nowMs: NOW + 60_000 });
+  assert.deepEqual(result.notifications, []);
+  current.settings.showCodexSubscription = false;
+  current.settings.notifyDigest = true;
+  assert.deepEqual(decideNotifications({ previous, current, nowMs: NOW }).notifications, []);
+});
+
 function window(overrides = {}) {
   return {
     bucketId: 'seven_day',

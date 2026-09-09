@@ -222,6 +222,8 @@ export type CostAnalytics = {
 
 export type CycleRow = {
   resetsAt: string;
+  /** Actual cycle end when an early reset supersedes the scheduled reset. */
+  endsAt?: string;
   startsAt: string;
   windowMinutes: number;
   peakUsedPercent: number;
@@ -238,6 +240,8 @@ export type DailyUsage = { sourceId: string; date: string; tokens: number };
 export type Theme = 'system' | 'dark' | 'light';
 
 export type Settings = {
+  showCodexSubscription: boolean;
+  showClaudeSubscription: boolean;
   currency: string;
   usdToCurrency: number;
   activeDays: number[];
