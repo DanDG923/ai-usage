@@ -181,6 +181,8 @@ export const demoSnapshot: Snapshot = {
     },
   ],
   settings: {
+    showCodexSubscription: true,
+    showClaudeSubscription: true,
     currency: 'GBP',
     usdToCurrency: 0.736,
     activeDays: [1, 2, 3, 4, 5, 6, 0],

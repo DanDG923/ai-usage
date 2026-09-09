@@ -1,3 +1,4 @@
+import { subscriptionVisible } from '../../electron/dashboard-decision.mjs';
 import { compactNumber, percent, quotaWindows, shortDate } from '../lib';
 import type { QuotaWindow, Snapshot, TokenCapacityEstimate } from '../types';
 
@@ -182,7 +183,9 @@ function CapacityCard({
 export function TokenCapacity({ snapshot }: { snapshot: Snapshot }) {
   // A provider with no allowance reading at all has nothing to estimate yet;
   // the provider strip already explains how to connect it.
-  const providers = PROVIDERS.filter((provider) => snapshot.quotas[provider.id]);
+  const providers = PROVIDERS.filter(
+    (provider) => subscriptionVisible(snapshot.settings, provider.id) && snapshot.quotas[provider.id],
+  );
   if (!providers.length) return null;
   return (
     <section className="panel token-capacity-panel" aria-labelledby="token-capacity-heading">

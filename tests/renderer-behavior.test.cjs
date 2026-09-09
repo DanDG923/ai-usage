@@ -47,6 +47,32 @@ test.after(async () => { await server?.close(); });
 const render = (Component, props) => renderToStaticMarkup(React.createElement(Component, props));
 const text = (html) => html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 
+test('subscription visibility removes allowance surfaces and restores them without changing history', () => {
+  const { buildDashboardVerdict } = require('../electron/dashboard-decision.cjs');
+  const snapshot = structuredClone(demoSnapshot);
+  const original = structuredClone(snapshot);
+  const props = { refreshing: false, onRefresh: async () => {}, onSetupClaude: () => {}, onSources: () => {} };
+  snapshot.settings.showClaudeSubscription = false;
+  snapshot.dashboardVerdict = buildDashboardVerdict(snapshot);
+  assert.deepEqual(providerViews(snapshot).map((view) => view.id), ['codex']);
+  const overview = render(Overview, { ...props, snapshot }).replace(/<span role="tooltip"[^>]*>[\s\S]*?<\/span>/g, '');
+  assert.doesNotMatch(text(overview), /Claude|Fable/);
+  assert.doesNotMatch(text(render(Activity, { snapshot, days: 30 })), /Claude|Fable/);
+  const none = { ...snapshot, settings: { ...snapshot.settings, showCodexSubscription: false } };
+  none.dashboardVerdict = buildDashboardVerdict(none);
+  const empty = text(render(Overview, { ...props, snapshot: none }));
+  assert.match(empty, /No subscriptions shown.*Choose subscriptions/);
+  assert.doesNotMatch(empty, /on track|Waiting for allowance/);
+  const activity = text(render(Activity, { snapshot: none, days: 30 }));
+  assert.match(activity, /No subscriptions shown.*saved history is retained/);
+  assert.doesNotMatch(activity, /0 reset cycles retained|Reset history appears once/);
+  const restored = { ...snapshot, settings: { ...snapshot.settings, showClaudeSubscription: true } };
+  assert.deepEqual(providerViews(restored).map((view) => view.id), ['codex', 'claude', 'fable']);
+  assert.deepEqual(snapshot.quotas, original.quotas);
+  assert.deepEqual(snapshot.costs, original.costs);
+  assert.deepEqual(snapshot.cycles, original.cycles);
+});
+
 function expiredSnapshot() {
   const snapshot = structuredClone(demoSnapshot);
   const resetsAt = new Date(Date.parse(snapshot.generatedAt) - 3_600_000).toISOString();
@@ -77,6 +103,42 @@ function currentCycleRow(snapshot) {
   assert.ok(table, 'the actual Overview rendered its current-cycle table');
   return table.match(/<tbody><tr>[\s\S]*?<\/tr>/)?.[0];
 }
+
+test('manual Codex reading keeps rendered current cycles aligned with the main card', () => {
+  const { UsageStore } = require('../electron/store.cjs');
+  const store = new UsageStore(':memory:', require('node:os').tmpdir());
+  try {
+    const now = Date.now(), hour = 3_600_000;
+    const record = (bucketId, usedPercent, at, reset, metadata, provenance = 'official') => store.recordObservation({
+      sourceId: 'codex', bucketId, bucketName: 'Weekly', usedPercent, observedAt: new Date(at).toISOString(),
+      resetsAt: new Date(reset).toISOString(), metadata, provenance, windowMinutes: 10080,
+    });
+    record('codex:primary', 60, now - 2 * hour, now + 24 * hour, { limitId: 'codex' });
+    record('codex_bengalfox:secondary', 0, now - 2 * hour, now + 144 * hour,
+      { limitId: 'codex_bengalfox', limitName: 'GPT-5.3-Codex-Spark' });
+    record(store.getManualBucketId('codex'), 61, now - hour, now + 24 * hour,
+      { note: 'Manual reading', sharedWithOverall: false }, 'manual-official');
+    store.updateSettings({ showClaudeSubscription: false });
+    const snapshot = store.getDashboardSnapshot(30, now);
+    assert.equal(providerViews(snapshot)[0].current.bucketId, 'codex:primary');
+    const row = text(currentCycleRow(snapshot));
+    assert.match(row, /61%/);
+    assert.doesNotMatch(row, /Spark/);
+    assert.match(row, new RegExp(lib.dateTimeLabel(new Date(now + 24 * hour).toISOString())));
+  } finally { store.close(); }
+});
+
+test('Activity renders the actual early cycle end and marks only the replacement current', async () => {
+  const { CycleHistory } = await server.ssrLoadModule('/src/components/details/CycleHistory.tsx');
+  const current = { ...demoSnapshot.cycles.codex[0], current: true,
+    resetsAt: '2026-09-16T12:00:00Z', endsAt: '2026-09-16T12:00:00Z' };
+  const ended = { ...current, current: false, resetsAt: '2026-09-14T12:00:00Z', endsAt: '2026-09-09T12:00:00Z' };
+  const html = render(CycleHistory, { cycles: { codex: [current, ended], claude: [], fable: [] }, currency: 'GBP' });
+  assert.equal((html.match(/<tr class="current">/g) || []).length, 1);
+  assert.match(text(html), /Reset early/);
+  assert.ok(text(html).includes(lib.dayDate(ended.endsAt)));
+  assert.ok(!text(html).includes(lib.dayDate(ended.resetsAt)));
+});
 
 test('expired allowance cards retain history without presenting a current balance or countdown', () => {
   const snapshot = expiredSnapshot();

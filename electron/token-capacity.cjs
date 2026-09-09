@@ -35,7 +35,10 @@ function scopeFor(sourceId, bucketId) {
     return (model) => pattern.test(model || '');
   };
   if (sourceId === 'codex' && ['codex:weekly', 'codex:primary', 'codex:secondary'].includes(bucketId)) {
-    return { eventSource: 'codex', modelMatches: () => true, kind: 'overall' };
+    // Spark is metered separately. Its tokens remain in the ledger but cannot
+    // explain movement in the main Codex allowance or increase its capacity.
+    return { eventSource: 'codex', modelMatches: (model) =>
+      !/^gpt-5\.3-codex-spark(?:$|-(?:\d{8}|\d{4}-\d{2}-\d{2})$)/i.test(typeof model === 'string' ? model.trim() : ''), kind: 'overall' };
   }
   if (sourceId === 'claude-fable' && ['fable_seven_day', 'fable:seven_day_fable'].includes(bucketId)) {
     return { eventSource: 'claude', modelMatches: family('fable'), kind: 'model' };
@@ -82,7 +85,8 @@ function normalizeObservation(row, sourceId, bucketId, scope, nowMs) {
   if ((metadata.scope && metadata.scope !== scope.kind)
     || (sourceId === 'codex' && metadata.limitId != null && metadata.limitId !== 'codex')) return null;
   return { at, reset, used, plan: typeof row.plan_type === 'string' ? row.plan_type.trim().toLowerCase() || null : null,
-    official: OFFICIAL_PROVENANCES.has(row.provenance), manual: row.provenance === 'manual-official' };
+    official: OFFICIAL_PROVENANCES.has(row.provenance), manual: row.provenance === 'manual-official',
+    provenance: row.provenance };
 }
 
 function normalizeEvent(row, scope, nowMs) {
@@ -158,11 +162,21 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
     result.warnings.push('Earlier readings from a different plan were excluded.');
   }
   result.status = 'learning';
+  // Transcript quota snapshots can lag the live account readings. Interleaving
+  // them creates apparent corrections at every percentage step and continually
+  // throws away the accumulating calibration interval. Prefer live readings
+  // over the period they cover; retain transcript-only history outside it.
+  const liveReadings = sourceId === 'codex' ? readings.filter((row) => row.provenance === 'official') : [];
+  const calibrationReadings = liveReadings.length >= 2 ? readings.filter((row) =>
+    row.provenance !== 'local-official' || row.at < liveReadings[0].at || row.at > liveReadings.at(-1).at) : readings;
+  if (calibrationReadings.length < readings.length) {
+    result.warnings.push('Live Codex readings take priority over overlapping transcript snapshots for calibration.');
+  }
   const excluded = excludedIntervals(excludedDates);
   const intervals = [];
-  let anchor = readings[0], highWater = anchor.used, cycleReset = anchor.reset, cycle = 0, recovering = false;
+  let anchor = calibrationReadings[0], highWater = anchor.used, cycleReset = anchor.reset, cycle = 0, recovering = false;
   let excludedCount = 0, corrected = false, closeResets = false;
-  for (const after of readings.slice(1)) {
+  for (const after of calibrationReadings.slice(1)) {
     // The first reset stays fixed for the entire cluster: chained small reset
     // shifts must not merge unrelated windows across a long observation gap.
     const resetChanged = Math.abs(after.reset - cycleReset) > RESET_TOLERANCE_MS;
@@ -170,6 +184,11 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
     if (resetChanged || rebased) {
       if (resetChanged && Math.abs(after.reset - cycleReset) < DAY_MS) closeResets = true;
       anchor = after; highWater = after.used; cycleReset = after.reset; cycle += 1; recovering = false;
+      continue;
+    }
+    if (sourceId === 'codex' && (anchor.provenance === 'local-official') !== (after.provenance === 'local-official')) {
+      // A source handoff has no known delay, so never match tokens across it.
+      anchor = after; highWater = after.used; recovering = false;
       continue;
     }
     if (excluded(anchor.at, after.at)) {

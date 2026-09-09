@@ -1,3 +1,4 @@
+import { buildDashboardVerdict } from '../electron/dashboard-decision.mjs';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Activity } from './components/Activity';
 import { ClaudeSetup } from './components/ClaudeSetup';
@@ -185,7 +186,11 @@ export default function App() {
   const settings = async (patch: Partial<SettingsType>) => {
     try {
       if (!window.aiUsage) {
-        setSnapshot((current) => (current ? { ...current, settings: { ...current.settings, ...patch } } : current));
+        setSnapshot((current) => {
+          if (!current) return current;
+          const next = { ...current, settings: { ...current.settings, ...patch } };
+          return { ...next, dashboardVerdict: buildDashboardVerdict(next) };
+        });
         return;
       }
       const result = await window.aiUsage.updateSettings(patch);
@@ -423,7 +428,9 @@ export default function App() {
   return (
     <div className="app-shell">
       <Header snapshot={snapshot} tab={tab} onTab={setTab} refreshing={refreshing} onRefresh={refresh} />
-      <ClaudeSetup requested={setupRequested} onClose={() => setSetupRequested(false)} onRefresh={refresh} />
+      {(snapshot.settings.showClaudeSubscription !== false || setupRequested) && (
+        <ClaudeSetup requested={setupRequested} onClose={() => setSetupRequested(false)} onRefresh={refresh} />
+      )}
       {tab === 'overview' && (
         <Overview
           snapshot={snapshot}

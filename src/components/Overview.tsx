@@ -103,7 +103,7 @@ function insights(views: ProviderView[], snapshot: Snapshot, nowMs: number): Ins
       detail: 'A balance is available, but there is not enough evidence to say how much will remain at reset.',
     });
   }
-  if (snapshot.resetCredits > 0) {
+  if (snapshot.settings.showCodexSubscription !== false && snapshot.resetCredits > 0) {
     rows.push({
       tone: 'neutral',
       title: `${snapshot.resetCredits} Codex reset credit${snapshot.resetCredits === 1 ? '' : 's'} banked`,
@@ -197,11 +197,41 @@ export function Overview({
 }) {
   const nowMs = Date.parse(snapshot.generatedAt);
   const views = providerViews(snapshot);
-  const verdict = verdictSentence(snapshot.dashboardVerdict, snapshot.quotas, snapshot.sources);
+  const verdict = verdictSentence(
+    snapshot.dashboardVerdict,
+    {
+      codex: snapshot.settings.showCodexSubscription !== false ? snapshot.quotas.codex : null,
+      claude: snapshot.settings.showClaudeSubscription !== false ? snapshot.quotas.claude : null,
+      fable: snapshot.settings.showClaudeSubscription !== false ? snapshot.quotas.fable : null,
+    },
+    snapshot.sources,
+  );
   const attention = insights(views, snapshot, nowMs);
   const unknown = views.filter((view) => !hasForecast(view));
   const waiting = views.every((view) => !view.current || view.current.forecast.expired);
   const needsReadings = unknown.length > 0 || views.some((view) => view.stale);
+  if (!views.length) {
+    return (
+      <main
+        className="page overview-page"
+        id="panel-overview"
+        role="tabpanel"
+        aria-labelledby="tab-overview"
+        tabIndex={-1}
+      >
+        <section className="panel status-panel">
+          <h1>No subscriptions shown</h1>
+          <p>
+            Choose a subscription in Settings to show its allowances and forecasts. Your saved usage and cost history is
+            still available.
+          </p>
+          <button className="secondary-button" onClick={onSources}>
+            Choose subscriptions
+          </button>
+        </section>
+      </main>
+    );
+  }
   const headline = waiting
     ? 'Waiting for allowance readings'
     : snapshot.dashboardVerdict.state === 'safe' && unknown.length
@@ -307,11 +337,13 @@ export function Overview({
                 <button className="secondary-button" onClick={onSources}>
                   View sources
                 </button>
-                {!snapshot.quotas.claude && !snapshot.isPreview && (
-                  <button className="secondary-button" onClick={onSetupClaude}>
-                    Set up Claude
-                  </button>
-                )}
+                {snapshot.settings.showClaudeSubscription !== false &&
+                  !snapshot.quotas.claude &&
+                  !snapshot.isPreview && (
+                    <button className="secondary-button" onClick={onSetupClaude}>
+                      Set up Claude
+                    </button>
+                  )}
               </div>
             )}
           </section>

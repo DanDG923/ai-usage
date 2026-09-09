@@ -8,6 +8,7 @@ import { ForecastSection } from './settings/ForecastSection';
 import { ManualSection } from './settings/ManualSection';
 import { PricingSection } from './settings/PricingSection';
 import { SourcesSection } from './settings/SourcesSection';
+import { SubscriptionsSection } from './settings/SubscriptionsSection';
 import { StorageSection } from './settings/StorageSection';
 
 export type SettingsActions = {
@@ -69,6 +70,7 @@ export function Settings({ snapshot, actions }: { snapshot: Snapshot; actions: S
               <p>Choose which local sources contribute to your allowance view.</p>
             </div>
           </div>
+          <SubscriptionsSection snapshot={snapshot} update={update} />
           <SourcesSection
             onSetupClaude={actions.onSetupClaude}
             snapshot={snapshot}
