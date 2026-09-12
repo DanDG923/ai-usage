@@ -1,5 +1,7 @@
 'use strict';
 
+const { asIso } = require('./time.cjs');
+
 const FABLE_SOURCE_ID = 'claude-fable';
 const FABLE_BUCKET_ID = 'fable_seven_day';
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -16,14 +18,6 @@ const PROVIDER_WINDOW_DESCRIPTORS = [
 
 function isRecord(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-function asIso(value) {
-  if (typeof value !== 'string' || !value.trim()) return null;
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return null;
-  const year = new Date(timestamp).getUTCFullYear();
-  return year >= 2020 && year <= 2100 ? new Date(timestamp).toISOString() : null;
 }
 
 function asUtilization(value) {
@@ -184,11 +178,10 @@ function normalizeUsagePayload(payload, observedAt) {
 }
 
 function recordProviderWindows(store, normalized, observedAt) {
-  // UsageStore's writes are synchronous. A transaction makes validation plus
-  // persistence all-or-nothing without exposing transaction choreography to
-  // the tracker caller.
-  store.db.exec('BEGIN IMMEDIATE');
-  try {
+  // UsageStore's writes are synchronous. The store's transaction makes
+  // validation plus persistence all-or-nothing without exposing transaction
+  // choreography to the tracker caller.
+  return store.transaction(() => {
     let overallWindowsRecorded = 0;
     for (const window of normalized.overall) {
       if (Date.parse(window.resetsAt) <= Date.parse(observedAt)) continue;
@@ -232,12 +225,8 @@ function recordProviderWindows(store, normalized, observedAt) {
         },
       });
     }
-    store.db.exec('COMMIT');
     return overallWindowsRecorded;
-  } catch (error) {
-    try { store.db.exec('ROLLBACK'); } catch { /* Preserve the original write error. */ }
-    throw error;
-  }
+  });
 }
 
 function getLastCurrentOfficial(store, nowMs) {

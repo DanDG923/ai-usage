@@ -2,7 +2,9 @@ export function subscriptionVisible(settings, providerId) {
   return settings?.[providerId === 'codex' ? 'showCodexSubscription' : 'showClaudeSubscription'] !== false;
 }
 
-const SOURCES = [
+// The subscriptions the dashboard, tray and notifications all reason about,
+// in display order: snapshot quota key, source-health id, and label.
+export const SOURCES = [
   { id: 'codex', healthId: 'codex', label: 'Codex' },
   { id: 'claude', healthId: 'claude', label: 'Claude' },
   { id: 'fable', healthId: 'claude-fable', label: 'Fable 5' },

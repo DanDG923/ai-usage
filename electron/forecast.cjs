@@ -23,20 +23,6 @@ function percentile(values, fraction) {
   return sorted[lower] + (sorted[upper] - sorted[lower]) * (index - lower);
 }
 
-function weightedPercentile(entries, fraction) {
-  if (!entries.length) return 0;
-  const sorted = [...entries].sort((a, b) => a.value - b.value);
-  const total = sorted.reduce((sum, entry) => sum + Math.max(0, entry.weight), 0);
-  if (total <= 0) return percentile(sorted.map((entry) => entry.value), fraction);
-  const target = total * clamp(fraction, 0, 1);
-  let cumulative = 0;
-  for (const entry of sorted) {
-    cumulative += Math.max(0, entry.weight);
-    if (cumulative >= target) return entry.value;
-  }
-  return sorted.at(-1).value;
-}
-
 function weightedMean(entries) {
   let numerator = 0;
   let denominator = 0;
@@ -897,4 +883,4 @@ function forecastQuota(observations, options = {}) {
     series: { ...adjusted.series, heavy }, resetAdjustment: adjustment };
 }
 
-module.exports = { activeHoursBetween, deriveLearningSamples, exhaustionTime, forecastQuota, percentile, weightedPercentile };
+module.exports = { activeHoursBetween, deriveLearningSamples, exhaustionTime, forecastQuota, percentile };

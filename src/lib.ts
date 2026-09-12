@@ -1,4 +1,4 @@
-import type { DashboardVerdict, ForecastState, Quota, QuotaWindow, Snapshot } from './types';
+import type { DashboardVerdict, Quota, QuotaWindow, Snapshot } from './types';
 
 /**
  * Every formatter in the renderer uses this locale rather than the OS one, so
@@ -118,15 +118,6 @@ export function timeLabel(value?: string | number | null, nowMs = Date.now()) {
   return sameDay ? TIME.format(date) : shortDate(value);
 }
 
-/** Distance between two instants as "2d 5h" or "3h", for run-out timing. */
-export function durationLabel(fromMs: number, toMs: number) {
-  const hours = Math.max(0, (toMs - fromMs) / 3_600_000);
-  if (hours < 1) return 'under an hour';
-  if (hours < 24) return `${Math.round(hours)}h`;
-  const whole = Math.round(hours);
-  return `${Math.floor(whole / 24)}d ${whole % 24}h`;
-}
-
 export function percent(value: number | null | undefined, digits = 0) {
   return value == null ? '—' : `${value.toFixed(digits)}%`;
 }
@@ -142,8 +133,6 @@ export function projectName(project: string | null | undefined) {
   const segments = trimmed.split(/[\\/]/).filter(Boolean);
   return segments.at(-1) || trimmed;
 }
-
-export const STATE_RANK: Record<ForecastState, number> = { critical: 5, risk: 4, watch: 3, unknown: 2, safe: 1 };
 
 /** Every window of a quota, active ones first; the quota itself when it carries none. */
 export function quotaWindows(quota: Quota | null | undefined): QuotaWindow[] {

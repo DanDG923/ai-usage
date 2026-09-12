@@ -2,6 +2,7 @@ import { useCallback, useId, useMemo, useRef, useState } from 'react';
 import type { CostAnalytics, DailyUsage, Point } from '../types';
 import { LOCALE, compactNumber, formatInt, money } from '../lib';
 import type { ProviderView } from '../provider-view';
+import { recentDayKeys } from './details/cost-math';
 import { spreadRunwayLabels } from './details/runway-labels';
 
 // Built once: the charts label dozens of ticks and re-render on every mouse
@@ -22,24 +23,11 @@ function linePath(points: { x: number; y: number }[]) {
   return points.map((point, index) => `${index ? 'L' : 'M'}${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(' ');
 }
 
-function localDateKey(date: Date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-}
-
 /** Local noon today, as a stable number the memoised layouts can key on. */
 function todayNoon() {
   const today = new Date();
   today.setHours(12, 0, 0, 0);
   return today.getTime();
-}
-
-function periodDates(days: number, todayMs: number) {
-  const today = new Date(todayMs);
-  return Array.from({ length: days }, (_, index) => {
-    const date = new Date(today);
-    date.setDate(today.getDate() - (days - 1 - index));
-    return localDateKey(date);
-  });
 }
 
 function dateLabel(key: string, format: Intl.DateTimeFormat) {
@@ -324,7 +312,7 @@ const COST = { width: 880, height: 270, left: 56, right: 44, top: 20, bottom: 44
 function costLayout(costs: CostAnalytics, todayMs: number) {
   if (!costs.chart.length) return null;
   const byDate = new Map(costs.chart.map((point) => [point.date, point]));
-  const points = periodDates(costs.periodDays, todayMs).map(
+  const points = recentDayKeys(costs.periodDays, todayMs).map(
     (date) => byDate.get(date) || { date, codex: 0, claude: 0 },
   );
   const max = Math.max(...points.map((point) => point.codex + point.claude), 1) * 1.15;
@@ -474,7 +462,7 @@ function dailyLayout(rows: DailyUsage[], days: number, todayMs: number) {
   if (!rows.length) return null;
   const totals = new Map<string, number>();
   for (const row of rows) totals.set(row.date, (totals.get(row.date) || 0) + Number(row.tokens || 0));
-  const points = periodDates(days, todayMs).map((date) => ({ date, tokens: totals.get(date) || 0 }));
+  const points = recentDayKeys(days, todayMs).map((date) => ({ date, tokens: totals.get(date) || 0 }));
   const max = Math.max(...points.map((point) => point.tokens), 1);
   const plotWidth = DAILY.width - DAILY.left - DAILY.right;
   const plotHeight = DAILY.height - DAILY.top - DAILY.bottom;
