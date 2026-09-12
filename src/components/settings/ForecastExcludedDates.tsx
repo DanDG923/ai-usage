@@ -4,13 +4,22 @@ import type { Settings, Snapshot } from '../../types';
 
 const dateFormatter = new Intl.DateTimeFormat(LOCALE, { dateStyle: 'medium', timeZone: 'UTC' });
 
+// One formatter per zone, kept for the life of the page: this runs on every
+// render of the section, which includes each keystroke in the date field.
+const localDateFormatters = new Map<string, Intl.DateTimeFormat>();
+
 function localDate(timezone: string) {
-  const parts = new Intl.DateTimeFormat(LOCALE, {
-    timeZone: timezone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(new Date());
+  let formatter = localDateFormatters.get(timezone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat(LOCALE, {
+      timeZone: timezone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    localDateFormatters.set(timezone, formatter);
+  }
+  const parts = formatter.formatToParts(new Date());
   const part = (type: string) => parts.find((item) => item.type === type)?.value;
   return `${part('year')}-${part('month')}-${part('day')}`;
 }

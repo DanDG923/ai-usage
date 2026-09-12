@@ -21,13 +21,20 @@ const FIELD_LABELS: Record<Field, string> = {
   output_usd_per_million: 'output price',
 };
 
+// Built once: every catalogue row formats its effective date on every render
+// of the Settings page, and constructing a formatter per row was the cost.
+const EFFECTIVE_DATE = new Intl.DateTimeFormat(LOCALE, {
+  day: 'numeric',
+  month: 'short',
+  year: 'numeric',
+  timeZone: 'UTC',
+});
+
 function catalogRowNote(row: PriceRow) {
   const candidateDate = new Date(`${row.effective_from}T00:00:00Z`);
   const effective =
     /^\d{4}-\d{2}-\d{2}$/.test(row.effective_from) && Number.isFinite(candidateDate.getTime())
-      ? new Intl.DateTimeFormat(LOCALE, { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }).format(
-          candidateDate,
-        )
+      ? EFFECTIVE_DATE.format(candidateDate)
       : row.effective_from;
   let source = 'local/manual source';
   if (row.source_url) {
