@@ -1043,16 +1043,21 @@ class UsageStore {
   // window of the source on the way past; this is an indexed probe that
   // walks newest-first and stops at the first usable row, or at the first
   // row older than the freshness bound, since everything after it is older.
+  // For active windows, only each bucket's latest usable reading counts:
+  // a corrected reset must supersede an older, apparently still-active one.
   hasUsableObservation(sourceId, nowMs = Date.now(), { activeWithinMs = null } = {}) {
-    const rows = this.prepare(`SELECT observed_at, resets_at, window_minutes FROM quota_observations
+    const rows = this.prepare(`SELECT bucket_id, observed_at, resets_at, window_minutes FROM quota_observations
       WHERE source_id = ? AND observed_at <= ? ORDER BY observed_at DESC, id DESC`)
       .iterate(sourceId, iso(nowMs + QUOTA_CLOCK_SKEW_MS));
+    const seenBuckets = new Set();
     for (const row of rows) {
       const observedMs = Date.parse(row.observed_at);
       const resetMs = Date.parse(row.resets_at);
       if (!validQuotaTime(observedMs, resetMs, row.window_minutes, nowMs)) continue;
       if (activeWithinMs == null) return true;
       if (nowMs - observedMs >= activeWithinMs) return false;
+      if (seenBuckets.has(row.bucket_id)) continue;
+      seenBuckets.add(row.bucket_id);
       if (resetMs > nowMs) return true;
     }
     return false;
