@@ -87,6 +87,9 @@ function createClaudeSetup({ statePath, findBinary = findClaudeBinary, run = run
   }
   return {
     status,
+    // The full status spawns the Claude CLI; a window that only needs to know
+    // whether the guide was dismissed reads the one saved flag instead.
+    dismissed,
     install: () => exclusive(async () => {
       if (findBinary()) return;
       await interactiveCommand(powershell, ['-NoProfile', '-NonInteractive', '-Command', INSTALL_COMMAND], 12 * 60_000);

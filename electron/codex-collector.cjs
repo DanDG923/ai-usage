@@ -238,14 +238,6 @@ function listSessionFiles(root, cutoffMs, legacyFiles = new Set()) {
   return result;
 }
 
-function readSessionLines(fullPath, readFile = fs.readFileSync) {
-  try {
-    return readFile(fullPath, 'utf8').split(/\r?\n/);
-  } catch {
-    return null;
-  }
-}
-
 // Rate-limit notifications repeat the last request's usage without advancing
 // the cumulative counters. Only complete, valid counter snapshots establish
 // that identity; older logs without totals retain their per-record behaviour.
@@ -596,7 +588,6 @@ module.exports = { stderrExcerpt,
   JsonLineClient,
   findCodexBinary,
   importLocalSessions,
-  readSessionLines,
   recordRateLimit,
   refreshCodex,
 };

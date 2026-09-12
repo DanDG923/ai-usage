@@ -2,37 +2,32 @@
 
 const fs = require('node:fs');
 const path = require('node:path').win32;
+const { absolutePath, environmentValue, launchDirectory } = require('./windows-paths.cjs');
 
-function environmentValue(environment, name) {
-  const key = Object.keys(environment).find((candidate) => candidate.toLowerCase() === name.toLowerCase());
-  return key ? environment[key] : undefined;
-}
-
-// Match the updater's local, absolute-path policy. Never resolve a relative
-// environment value against the directory from which the dashboard was opened.
-function absolutePath(value) {
-  if (typeof value !== 'string') return null;
-  const unquoted = value.trim().replace(/^"(.*)"$/, '$1');
-  if (!/^[a-z]:[\\/]/i.test(unquoted) || /["<>|?*]/.test(unquoted)
-    || [...unquoted].some((character) => character.charCodeAt(0) < 32)
-    || unquoted.slice(2).includes(':')) return null;
-  return path.normalize(unquoted);
-}
+// Every binary lookup and every provider spawn walks PATH, two or three times
+// per refresh, and each walk realpaths and stats every entry. The result is
+// remembered briefly: long enough to serve one refresh, short enough that a
+// directory the setup flow has just created is seen on the next lookup.
+const PATH_CACHE_MS = 30_000;
+let pathCache = null;
 
 function pathDirectories(environment = process.env) {
-  let launchDirectory;
-  try { launchDirectory = fs.realpathSync(process.cwd()).toLowerCase(); } catch { return []; }
+  const launch = launchDirectory();
+  if (!launch) return [];
+  const key = `${launch}\n${String(environmentValue(environment, 'PATH') || '')}`;
+  if (pathCache && pathCache.key === key && Date.now() - pathCache.at < PATH_CACHE_MS) return [...pathCache.directories];
   const directories = new Set();
-  for (const entry of String(environmentValue(environment, 'PATH') || '').split(';')) {
+  for (const entry of key.slice(launch.length + 1).split(';')) {
     const directory = absolutePath(entry);
     if (!directory) continue;
     try {
       // Canonicalize before comparing: junctions, short names, case and dot
       // components must not turn the inherited CWD into an accepted PATH root.
       const real = absolutePath(fs.realpathSync(directory));
-      if (real && real.toLowerCase() !== launchDirectory && fs.statSync(real).isDirectory()) directories.add(real);
+      if (real && real.toLowerCase() !== launch && fs.statSync(real).isDirectory()) directories.add(real);
     } catch { /* Ignore unavailable PATH entries. */ }
   }
+  pathCache = { key, at: Date.now(), directories: [...directories] };
   return [...directories];
 }
 
@@ -48,7 +43,7 @@ function findOnPath(name) {
     if (file) {
       // A file link from a PATH directory must not lead back into the launch CWD.
       try {
-        if (path.dirname(fs.realpathSync(file)).toLowerCase() === fs.realpathSync(process.cwd()).toLowerCase()) continue;
+        if (path.dirname(fs.realpathSync(file)).toLowerCase() === launchDirectory()) continue;
       } catch { continue; }
       return file;
     }
