@@ -1,17 +1,15 @@
 'use strict';
 
-const { subscriptionVisible } = require('./dashboard-decision.cjs');
-const visibleSources = (snapshot) => SOURCES.filter((source) => subscriptionVisible(snapshot?.settings, source.key));
-
+const { SOURCES: SUBSCRIPTION_SOURCES, subscriptionVisible } = require('./dashboard-decision.cjs');
 const { localDayKey } = require('./time.cjs');
+
+// The same subscription list the dashboard verdict uses; this module has
+// always addressed the snapshot quota key as `key`.
+const SOURCES = SUBSCRIPTION_SOURCES.map(({ id, ...source }) => ({ key: id, ...source }));
+const visibleSources = (snapshot) => SOURCES.filter((source) => subscriptionVisible(snapshot?.settings, source.key));
 
 // One ongoing risk episode is worth one notification, not one per refresh.
 const RISK_COOLDOWN_MS = 6 * 60 * 60 * 1000;
-const SOURCES = [
-  { key: 'codex', healthId: 'codex', label: 'Codex' },
-  { key: 'claude', healthId: 'claude', label: 'Claude' },
-  { key: 'fable', healthId: 'claude-fable', label: 'Fable 5' },
-];
 const HEALTHY = new Set(['connected', 'ready', 'observing', 'estimating', 'activity-only']);
 const FALLEN_BACK = new Set(['stale', 'degraded', 'error']);
 

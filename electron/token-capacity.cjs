@@ -1,8 +1,12 @@
 'use strict';
 
+const { FORECAST_LOOKBACK_MS } = require('./quota-time.cjs');
+
 const DAY_MS = 86_400_000;
 const WEEK_MS = 7 * DAY_MS;
-const LOOKBACK_MS = 45 * DAY_MS;
+// The same learning horizon as the forecast, by construction rather than by
+// keeping two numbers in step.
+const LOOKBACK_MS = FORECAST_LOOKBACK_MS;
 const STALENESS_MS = DAY_MS;
 const RESET_TOLERANCE_MS = 60_000;
 const MIN_INTERVAL_PERCENT = 5;

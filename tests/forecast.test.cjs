@@ -2,17 +2,11 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { deriveLearningSamples, forecastQuota, percentile, weightedPercentile } = require('../electron/forecast.cjs');
+const { deriveLearningSamples, forecastQuota, percentile } = require('../electron/forecast.cjs');
 
 test('percentile interpolates a distribution', () => {
   assert.equal(percentile([1, 2, 3, 4, 5], 0.5), 3);
   assert.equal(percentile([], 0.8), 0);
-});
-
-test('weighted percentile gives long, well-covered intervals more influence', () => {
-  assert.equal(weightedPercentile([
-    { value: 1, weight: 10 }, { value: 20, weight: 0.1 }, { value: 2, weight: 10 },
-  ], 0.82), 2);
 });
 
 test('learned high usage produces a lower heavy projection', () => {

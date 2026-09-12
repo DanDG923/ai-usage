@@ -4,6 +4,7 @@ import { Activity } from './components/Activity';
 import { ClaudeSetup } from './components/ClaudeSetup';
 import { Costs } from './components/Costs';
 import { BrandMark, Header, TABS, type Tab } from './components/Header';
+import { NoticeToast, createNoticeChannel } from './components/NoticeToast';
 import { Overview } from './components/Overview';
 import { Settings, type SettingsActions } from './components/Settings';
 import { demoSnapshot } from './data/demo';
@@ -11,12 +12,6 @@ import { formatInt } from './lib';
 import type { ManualObservation, PriceRow, Settings as SettingsType, Snapshot, Theme } from './types';
 
 const BUSY_NOTICE = 'AI Usage is finishing an update; the dashboard will refresh shortly.';
-const NOTICE_LIFETIME_MS = 12_000;
-
-/** Failures stay on screen until dismissed; confirmations clear themselves. */
-function noticeIsSticky(notice: string) {
-  return notice.startsWith('Refresh completed with') || /failed|could not/i.test(notice);
-}
 
 function applyThemeAttribute(theme: Theme | undefined) {
   const root = document.documentElement;
@@ -35,7 +30,9 @@ export default function App() {
   // starts empty so a failed local read can never masquerade as real usage.
   const [snapshot, setSnapshot] = useState<Snapshot | null>(() => (isBrowserPreview ? demoSnapshot : null));
   const [refreshing, setRefreshing] = useState(Boolean(window.aiUsage));
-  const [notice, setNotice] = useState('');
+  // Notices are published to the toast, not held as App state: see NoticeToast.
+  const [notices] = useState(createNoticeChannel);
+  const setNotice = notices.show;
   const [loadError, setLoadError] = useState('');
   const loadRequest = useRef(0);
 
@@ -83,7 +80,7 @@ export default function App() {
         if (request === loadRequest.current) setRefreshing(false);
       }
     },
-    [commitSnapshot, isBrowserPreview],
+    [commitSnapshot, isBrowserPreview, setNotice],
   );
 
   // This effect synchronises with the desktop bridge (an external system):
@@ -135,28 +132,20 @@ export default function App() {
     }
   };
 
-  // Informational notices clear themselves; the timer restarts whenever the
-  // text changes so a newer message gets its full lifetime.
-  useEffect(() => {
-    if (!notice || noticeIsSticky(notice)) return;
-    const timer = window.setTimeout(() => setNotice(''), NOTICE_LIFETIME_MS);
-    return () => window.clearTimeout(timer);
-  }, [notice]);
-
   // Keyboard shortcuts: 1/2/3/4 switch sections, R refreshes, Escape dismisses
   // the notice. Typing fields and modifier chords are left alone. The listener
-  // is registered once and reads the current refresh and notice state through
-  // a ref instead of being removed and re-added on every render.
-  const shortcutState = useRef({ refresh, refreshing, notice });
+  // is registered once and reads the current refresh state through a ref
+  // instead of being removed and re-added on every render.
+  const shortcutState = useRef({ refresh, refreshing });
   useEffect(() => {
-    shortcutState.current = { refresh, refreshing, notice };
+    shortcutState.current = { refresh, refreshing };
   });
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented || document.querySelector('[role="dialog"][aria-modal="true"]')) return;
       if (event.ctrlKey || event.metaKey || event.altKey) return;
       if (event.key === 'Escape') {
-        if (shortcutState.current.notice) setNotice('');
+        if (notices.current()) notices.show('');
         return;
       }
       const target = event.target as HTMLElement | null;
@@ -176,7 +165,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [notices]);
 
   const changeDays = (period: number) => {
     if (!window.aiUsage) return;
@@ -455,14 +444,7 @@ export default function App() {
         />
       )}
       {tab === 'settings' && <Settings snapshot={snapshot} actions={actions} />}
-      {notice && (
-        <div className="toast" role="status" aria-live="polite">
-          <span>{notice}</span>
-          <button aria-label="Dismiss message" onClick={() => setNotice('')}>
-            ×
-          </button>
-        </div>
-      )}
+      <NoticeToast channel={notices} />
     </div>
   );
 }

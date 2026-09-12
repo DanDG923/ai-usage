@@ -1,85 +1,34 @@
-import { useEffect, useState } from 'react';
 import { compactNumber, formatInt, projectName, shortDate, sourceLabel } from '../../lib';
-import type { TaskCost, TaskPage, Snapshot, TaskUsageTotals } from '../../types';
+import type { SessionPageOptions, Snapshot, TaskCost, TaskUsageTotals } from '../../types';
+import { Pagination, usePagedQuery } from './paging';
 import { EquivalentValue, matchesQuery } from './Tables';
 
-const PAGE_SIZE = 10;
 const EMPTY_TASKS: TaskCost[] = [];
 
-type Result = { key: string; selectionKey: string; data?: TaskPage; error?: string };
+// Module-level so the query hook can hold them as stable dependencies.
+const matchesTask = (row: TaskCost, filter: string) =>
+  matchesQuery(filter, [
+    row.sourceId,
+    sourceLabel(row.sourceId),
+    row.project,
+    row.sessionId,
+    row.taskId,
+    ...row.agents.flatMap((agent) => [agent.agentId, agent.agentName, agent.agentRole, agent.model]),
+  ]);
+const fetchTasks = (options: SessionPageOptions) => window.aiUsage?.getTasks?.(options);
 
 export function TaskTable({ snapshot, query }: { snapshot: Snapshot; query: string }) {
   const { costs } = snapshot;
-  const days = costs.periodDays;
-  const filter = query.trim();
-  const selectionKey = `${days}:${filter}`;
-  const [selection, setSelection] = useState({ key: selectionKey, page: 1 });
-  if (selection.key !== selectionKey) setSelection({ key: selectionKey, page: 1 });
-  const page = selection.key === selectionKey ? selection.page : 1;
-  const [retry, setRetry] = useState(0);
-  const [result, setResult] = useState<Result | null>(null);
-  const requestKey = JSON.stringify([selectionKey, page, snapshot.generatedAt, costs.currency, retry]);
-  const preview = Boolean(snapshot.isPreview);
-  const examples = costs.tasks ?? EMPTY_TASKS;
-
-  useEffect(() => {
-    let cancelled = false;
-    // Give typing a short settling window before querying the local history.
-    const timer = window.setTimeout(() => {
-      const load = async (): Promise<TaskPage> => {
-        if (preview && !window.aiUsage) {
-          const matching = examples.filter((row) =>
-            matchesQuery(filter, [
-              row.sourceId,
-              sourceLabel(row.sourceId),
-              row.project,
-              row.sessionId,
-              row.taskId,
-              ...row.agents.flatMap((agent) => [agent.agentId, agent.agentName, agent.agentRole, agent.model]),
-            ]),
-          );
-          const totalPages = Math.ceil(matching.length / PAGE_SIZE);
-          const currentPage = Math.min(page, Math.max(1, totalPages));
-          return {
-            rows: matching.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE),
-            total: matching.length,
-            page: currentPage,
-            pageSize: PAGE_SIZE,
-            totalPages,
-          };
-        }
-        if (!window.aiUsage?.getTasks)
-          throw new Error('Task history could not be loaded. Restart the app to reconnect.');
-        return window.aiUsage.getTasks({ days, query: filter, page, pageSize: PAGE_SIZE });
-      };
-      void load().then(
-        (data) => {
-          if (!cancelled) setResult({ key: requestKey, selectionKey, data });
-        },
-        (error: unknown) => {
-          if (!cancelled)
-            setResult({
-              key: requestKey,
-              selectionKey,
-              error: error instanceof Error ? error.message : 'Task history could not be loaded.',
-            });
-        },
-      );
-    }, 150);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [days, examples, filter, page, preview, requestKey, selectionKey]);
-
-  // A response belongs only to the exact period, filter, page and snapshot
-  // requested. An older response can never relabel the current search.
-  const current = result?.key === requestKey ? result : null;
-  const data = current?.data;
-  const loading = !current;
-  const pagination = data ?? (result?.selectionKey === selectionKey ? result.data : undefined);
-  const first = data && data.total ? (data.page - 1) * data.pageSize + 1 : 0;
-  const last = data ? Math.min(data.page * data.pageSize, data.total) : 0;
+  const state = usePagedQuery({
+    snapshot,
+    query,
+    examples: costs.tasks ?? EMPTY_TASKS,
+    matches: matchesTask,
+    fetch: fetchTasks,
+    unavailable: 'Task history could not be loaded. Restart the app to reconnect.',
+    failed: 'Task history could not be loaded.',
+  });
+  const { days, filter, preview, selectionKey, data, loading, error } = state;
   return (
     <section className="panel task-panel" aria-busy={loading} aria-labelledby="tasks-heading">
       <div className="panel-heading">
@@ -196,10 +145,10 @@ export function TaskTable({ snapshot, query }: { snapshot: Snapshot; query: stri
         <div className="empty-cell">
           {loading ? (
             <span role="status">Loading tasks…</span>
-          ) : current?.error ? (
+          ) : error ? (
             <div className="session-error">
-              <span role="alert">{current.error}</span>
-              <button className="secondary-button" onClick={() => setRetry((value) => value + 1)}>
+              <span role="alert">{error}</span>
+              <button className="secondary-button" onClick={state.retry}>
                 Try again
               </button>
             </div>
@@ -212,38 +161,7 @@ export function TaskTable({ snapshot, query }: { snapshot: Snapshot; query: stri
           )}
         </div>
       )}
-      {pagination && pagination.total > 0 ? (
-        <div className="session-pagination">
-          <span role="status">
-            {loading
-              ? 'Loading tasks…'
-              : `${formatInt(first)}–${formatInt(last)} of ${formatInt(pagination.total)} tasks / sessions`}
-          </span>
-          <div className="action-row compact" role="group" aria-label="Task pages">
-            <button
-              className="secondary-button"
-              disabled={loading || pagination.page <= 1}
-              onClick={() => {
-                if (data) setSelection({ key: selectionKey, page: data.page - 1 });
-              }}
-            >
-              Previous
-            </button>
-            <span>
-              Page {pagination.page} of {pagination.totalPages}
-            </span>
-            <button
-              className="secondary-button"
-              disabled={loading || pagination.page >= pagination.totalPages}
-              onClick={() => {
-                if (data) setSelection({ key: selectionKey, page: data.page + 1 });
-              }}
-            >
-              Next
-            </button>
-          </div>
-        </div>
-      ) : null}
+      <Pagination state={state} groupLabel="Task pages" loadingLabel="Loading tasks…" unit="tasks / sessions" />
     </section>
   );
 }

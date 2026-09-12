@@ -16,9 +16,21 @@ function epochToIso(value) {
     ? date.toISOString() : null;
 }
 
+// An ISO string for a provider timestamp that is already text. Unlike
+// epochToIso, a numeric string is not a timestamp here: the Claude usage
+// payload reports ISO text, and honouring "1700000000" in it would paper
+// over a malformed field rather than reject it.
+function asIso(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return null;
+  const year = new Date(timestamp).getUTCFullYear();
+  return year >= 2020 && year <= 2100 ? new Date(timestamp).toISOString() : null;
+}
+
 function localDayKey(value) {
   const date = value instanceof Date ? value : new Date(value);
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
-module.exports = { epochToIso, localDayKey };
+module.exports = { asIso, epochToIso, localDayKey };

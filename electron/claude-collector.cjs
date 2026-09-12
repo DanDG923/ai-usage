@@ -348,7 +348,7 @@ function allowanceProfile(model) {
 }
 
 function allowancePressure(store, modelLike, sinceIso, untilIso) {
-  const rows = store.db.prepare(`
+  const rows = store.prepare(`
     SELECT * FROM usage_events
     WHERE source_id = 'claude' AND occurred_at >= ? AND occurred_at < ?
       ${modelLike == null ? '' : "AND LOWER(COALESCE(model, '')) LIKE ?"}
@@ -864,16 +864,16 @@ async function refreshClaude(store, inboxPath, options = {}) {
   let helperInstalled = false;
   try { helperInstalled = isClaudeHelperInstalled(); } catch { /* Unreadable settings cannot confirm an active helper. */ }
   const helperUpdated = helperInstalled ? updateManagedHelper(helperPath, inboxPath) : false;
-  const claudeQuota = store.getQuota('claude');
-  const hasQuota = Boolean(claudeQuota && new Date(claudeQuota.resetsAt).getTime() > Date.now()
-    && Date.now() - new Date(claudeQuota.observedAt).getTime() < 8 * 24 * 60 * 60 * 1000);
+  // Existence probes, not getQuota: the status text needs a yes or no, and
+  // getQuota forecasts every window of the source to produce one.
+  const hasQuota = store.hasUsableObservation('claude', Date.now(), { activeWithinMs: 8 * 24 * 60 * 60 * 1000 });
   const providerScanSucceeded = Boolean(fableTracking.provider?.attemptSucceeded
     && ['observed', 'unavailable'].includes(fableTracking.provider.kind));
   const activityCurrent = fableTracking.health.activitySource === 'current';
   const hasFreshClaudeEvidence = statusLine.claudeObservations > 0
     || Number(fableTracking.provider?.overallWindowsRecorded || 0) > 0;
   const claudeScanSucceeded = (hasFreshClaudeEvidence || providerScanSucceeded) && activityCurrent;
-  const fableObserved = Boolean(store.getQuota('claude-fable'));
+  const fableObserved = store.hasUsableObservation('claude-fable');
   const extraUsage = fableTracking.provider?.extraUsage;
   let extraUsageDetail = '';
   if (extraUsage) {

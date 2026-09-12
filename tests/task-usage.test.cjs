@@ -169,3 +169,17 @@ test('Claude nested and legacy agent transcripts retain identities through repea
   assert.equal(task.subagent.totalTokens, 3300);
   assert.ok(!JSON.stringify(store.db.prepare('SELECT * FROM usage_events').all()).includes('PRIVATE CONTENT'));
 });
+
+test('agent identifiers containing framing characters never merge with absent or other identifiers', (t) => {
+  const store = fixture(t);
+  // Each of these must stay its own agent row: an absent id, and ids that
+  // contain the separator, a length-prefix lookalike, or a sentinel character.
+  const ids = [null, '~', '1:a', 'a|b', '\u0001'];
+  ids.forEach((agentId, index) => add(store, `event-${index}`, {
+    sessionId: 'shared', metadata: { agentKind: 'subagent', agentId, parentSessionId: null, rootSessionId: 'shared' },
+  }));
+  const [task] = store.getTaskPage({ days: 30 }, NOW).rows;
+  assert.equal(task.agents.length, ids.length);
+  for (const agent of task.agents) assert.equal(agent.usageCount, 1);
+  assert.deepEqual(new Set(task.agents.map((agent) => agent.agentId)), new Set(ids));
+});

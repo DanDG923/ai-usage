@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path').win32;
 const { execFile } = require('node:child_process');
+const { absolutePath: absoluteDirectory, environmentValue, launchDirectory } = require('./windows-paths.cjs');
 
 const AUTH_REQUIRED_MESSAGE = 'Private updates need GitHub CLI signed in to github.com with access to DanDG923/ai-usage. Sign in with gh auth login, then check again.';
 const COMMAND_TIMEOUT_MS = 8_000;
@@ -14,27 +15,8 @@ function authRequired() {
   return error;
 }
 
-function environmentValue(environment, name) {
-  const key = Object.keys(environment).find((candidate) => candidate.toLowerCase() === name.toLowerCase());
-  return key ? environment[key] : undefined;
-}
-
-function absoluteDirectory(value) {
-  if (typeof value !== 'string') return null;
-  const unquoted = value.trim().replace(/^"(.*)"$/, '$1');
-  // Require a local drive and reject rooted, drive-relative, UNC and device
-  // paths. A relative PATH entry must never select a CLI beside the app.
-  if (!/^[a-z]:[\\/]/i.test(unquoted) || /["<>|?*]/.test(unquoted) || [...unquoted].some((character) => character.charCodeAt(0) < 32) || unquoted.slice(2).includes(':')) return null;
-  return path.normalize(unquoted);
-}
-
-// The launch directory is where a shortcut, a downloaded archive or an
-// Explorer "open with" placed the process. Even when it also appears in PATH
-// as an absolute entry it must not be searched for gh.exe or handed to it.
-function launchDirectory(realpath) {
-  try { return path.normalize(realpath(process.cwd())).toLowerCase(); } catch { return null; }
-}
-
+// Unlike the provider lookup, entries are kept in PATH order and are not
+// required to exist: this list is handed to gh.exe as its own PATH.
 function trustedPathDirectories(environment, realpath) {
   const launch = launchDirectory(realpath);
   const directories = [];

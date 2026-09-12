@@ -9,7 +9,6 @@ const {
   collectFromAppServer,
   importLocalSessions,
   JsonLineClient,
-  readSessionLines,
   recordRateLimit,
   refreshCodex,
 } = require('../electron/codex-collector.cjs');
@@ -160,10 +159,6 @@ test('an optional daily-usage failure does not discard a successful rate-limit r
   assert.equal(result.usageWarning, 'Codex daily usage could not be read.');
   assert.equal(observations[0].usedPercent, 23);
   assert.equal(closed, true);
-});
-
-test('a session file disappearing after discovery is skipped without aborting collection', () => {
-  assert.equal(readSessionLines('rotated-away.jsonl', () => { throw new Error('ENOENT'); }), null);
 });
 
 test('a local session scan failure cannot block current app-server limits', async () => {

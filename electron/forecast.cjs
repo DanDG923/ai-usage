@@ -23,20 +23,6 @@ function percentile(values, fraction) {
   return sorted[lower] + (sorted[upper] - sorted[lower]) * (index - lower);
 }
 
-function weightedPercentile(entries, fraction) {
-  if (!entries.length) return 0;
-  const sorted = [...entries].sort((a, b) => a.value - b.value);
-  const total = sorted.reduce((sum, entry) => sum + Math.max(0, entry.weight), 0);
-  if (total <= 0) return percentile(sorted.map((entry) => entry.value), fraction);
-  const target = total * clamp(fraction, 0, 1);
-  let cumulative = 0;
-  for (const entry of sorted) {
-    cumulative += Math.max(0, entry.weight);
-    if (cumulative >= target) return entry.value;
-  }
-  return sorted.at(-1).value;
-}
-
 function weightedMean(entries) {
   let numerator = 0;
   let denominator = 0;
@@ -258,15 +244,27 @@ function splitWindowUsage(rows, schedule, nowMs, startMs, endMs, used, excluded 
   };
 }
 
+// Parsing the two ISO timestamps was two thirds of a forecast's CPU time,
+// because every pass (ordinary learning, the early-reset check, and the
+// re-weighted learning) normalised the same raw rows again. A row is marked
+// once it is normalised, and the mark survives object spread, so the later
+// passes and the sample derivation inside them return it unchanged.
+const NORMALISED = Symbol('normalised');
+
 function normaliseObservation(row) {
+  if (row[NORMALISED]) return row;
   const windowMinutes = row.windowMinutes ?? row.window_minutes;
   return {
+    [NORMALISED]: true,
     observedAt: new Date(row.observedAt ?? row.observed_at).getTime(),
     resetsAt: new Date(row.resetsAt ?? row.resets_at).getTime(),
     usedPercent: Number(row.usedPercent ?? row.used_percent),
     remainingPercent: Number(row.remainingPercent ?? row.remaining_percent),
     windowMinutes: windowMinutes == null ? null : Number(windowMinutes),
     provenance: row.provenance || 'official',
+    // Judged on the provenance as supplied: an absent one is not evidence of
+    // a reset, even though it reads as 'official' everywhere else.
+    resetEvidence: RESET_EVIDENCE_PROVENANCES.has(row.provenance),
     sourceId: row.sourceId ?? row.source_id,
     bucketId: row.bucketId ?? row.bucket_id,
   };
@@ -600,11 +598,15 @@ function forecastQuotaWithLearning(observations, options = {}, dayWeights = null
   // After a reset the fresh window has no history of its own, so the most
   // recent prior window's average pace carries forward as weaker evidence
   // instead of letting while-working burst rates run unchecked until reset.
-  const priorEvidence = clusters
-    .filter((entry) => entry !== currentCluster && entry.rows.length >= 2)
-    .map((entry) => windowPaceOf(entry.rows, schedule, entry.observedResetAt, nowMs, excluded, dayWeights))
-    .filter((entry) => entry && entry.evidenceActiveHours >= 6)
-    .at(-1) ?? null;
+  // Only the most recent qualifying window is used, so scan backwards and
+  // stop there rather than pacing every historical cluster first.
+  let priorEvidence = null;
+  for (let index = clusters.length - 1; index >= 0 && !priorEvidence; index -= 1) {
+    const entry = clusters[index];
+    if (entry === currentCluster || entry.rows.length < 2) continue;
+    const pace = windowPaceOf(entry.rows, schedule, entry.observedResetAt, nowMs, excluded, dayWeights);
+    if (pace && pace.evidenceActiveHours >= 6) priorEvidence = pace;
+  }
   const windowWeight = windowPace == null ? 0 : clamp(anchorActiveHours / 30, 0, 0.9);
   const priorWeight = priorEvidence ? clamp(priorEvidence.activeHours / 30, 0, 0.85) * (1 - windowWeight) : 0;
   const anchorWeight = clamp(windowWeight + priorWeight, 0, 0.9);
@@ -752,7 +754,7 @@ function forecastQuotaWithLearning(observations, options = {}, dayWeights = null
 }
 
 function earlyResetAdjustment(observations, options, nowMs) {
-  const rows = observations.map((row) => ({ ...normaliseObservation(row), resetEvidence: RESET_EVIDENCE_PROVENANCES.has(row.provenance) }))
+  const rows = observations.map(normaliseObservation)
     .filter((row) => validQuotaTime(row.observedAt, row.resetsAt, row.windowMinutes, nowMs)
       && row.observedAt >= nowMs - FORECAST_LOOKBACK_MS && Number.isFinite(row.usedPercent))
     .sort((a, b) => a.observedAt - b.observedAt);
@@ -852,12 +854,14 @@ function earlyResetAdjustment(observations, options, nowMs) {
 }
 
 function forecastQuota(observations, options = {}) {
-  const ordinary = forecastQuotaWithLearning(observations, options);
+  // Normalise once; each pass below would otherwise re-parse every timestamp.
+  const rows = observations.map(normaliseObservation);
+  const ordinary = forecastQuotaWithLearning(rows, options);
   if (ordinary.expired || ordinary.expectedRemaining == null) return ordinary;
   const nowMs = options.now != null ? new Date(options.now).getTime() : Date.now();
-  const adjustment = earlyResetAdjustment(observations, options, nowMs);
+  const adjustment = earlyResetAdjustment(rows, options, nowMs);
   if (!adjustment) return ordinary;
-  const adjusted = forecastQuotaWithLearning(observations, options,
+  const adjusted = forecastQuotaWithLearning(rows, options,
     new Map(adjustment.dates.map((day) => [day, adjustment.weight])));
   // Normal-day expectations use the reduced influence. The heavier scenario
   // keeps the complete observed workload, and can never be more optimistic
@@ -879,4 +883,4 @@ function forecastQuota(observations, options = {}) {
     series: { ...adjusted.series, heavy }, resetAdjustment: adjustment };
 }
 
-module.exports = { activeHoursBetween, deriveLearningSamples, exhaustionTime, forecastQuota, percentile, weightedPercentile };
+module.exports = { activeHoursBetween, deriveLearningSamples, exhaustionTime, forecastQuota, percentile };
