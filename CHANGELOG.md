@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.39 — 12 September 2026
+
+- Refresh the dashboard faster as history grows. Forecasts parse each allowance reading once instead of three times, the cost ledger shares one local-time conversion per quarter hour, and the Claude refresh checks for an existing reading with an indexed lookup instead of forecasting every window. A cold dashboard snapshot dropped from 221 ms to 160 ms on a live database, and a 120,000-record ledger aggregates in less than half the time. Figures, forecasts and totals are unchanged.
+- Let the runway chart fill its panel from the first observations. On a fresh install it stayed at its minimum height until the tab was reopened.
+- Stop status messages re-rendering the whole page, and stop the Settings page rebuilding date formatters for every price row and every keystroke in the ignored-days field.
+- Stop the setup guide running the Claude command-line check on every window open once the guide has been dismissed.
+- Preserve local usage history, settings, observations, and backups during an in-place update.
+
 ## 1.0.38 — 12 September 2026
 
 - Stop the heavier-usage forecast from repeating the busiest learned day for every remaining day. A fresh weekly allowance after an early reset no longer starts the week flagged at risk with a heavier case that reaches zero; the busiest day still counts in full for the first day ahead, and the margin above the expected path then grows with the square root of elapsed days.
