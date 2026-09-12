@@ -350,6 +350,8 @@ export type Bridge = {
   }>;
   clearDesktopEstimates(): Promise<{ cancelled: boolean; snapshot: Snapshot }>;
   getClaudeSetup(): Promise<ClaudeSetupStatus>;
+  /** The saved dismissal flag alone; unlike getClaudeSetup it runs no Claude command. */
+  isClaudeSetupDismissed(): Promise<boolean>;
   configureClaude(
     action: 'install' | 'login' | 'finish' | 'check' | 'skip',
     enableHelper: boolean,

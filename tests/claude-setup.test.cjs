@@ -153,3 +153,16 @@ test('the launch environment is handed to every Claude command rather than the m
     f.clean();
   }
 });
+
+test('the dismissal probe reads the saved flag without running the Claude CLI', async () => {
+  let runs = 0;
+  const f = fixture({ run: async () => { runs++; return JSON.stringify({ loggedIn: true }); } });
+  try {
+    assert.equal(f.setup.dismissed(), false);
+    f.setup.skip();
+    assert.equal(f.setup.dismissed(), true);
+    assert.equal(runs, 0);
+    assert.equal((await f.setup.status()).dismissed, true);
+    assert.equal(runs, 1);
+  } finally { f.clean(); }
+});

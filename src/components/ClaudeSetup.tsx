@@ -32,10 +32,21 @@ export function ClaudeSetup({
     if (busy) dialog.current?.focus();
   }, [busy]);
   useEffect(() => {
+    const bridge = window.aiUsage;
+    if (!bridge) return;
     let active = true;
-    window.aiUsage
-      ?.getClaudeSetup()
-      .then((next) => {
+    // The full status check spawns the Claude CLI. A window that is only
+    // deciding whether to show the guide asks for the saved dismissal first,
+    // and once the guide has been dismissed nothing is spawned at all.
+    const skip = requested ? Promise.resolve(false) : bridge.isClaudeSetupDismissed();
+    skip
+      .then(async (dismissed) => {
+        if (!active) return;
+        if (dismissed) {
+          setHidden(true);
+          return;
+        }
+        const next = await bridge.getClaudeSetup();
         if (active) {
           setStatus(next);
           setHidden(next.dismissed && !requested);

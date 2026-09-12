@@ -542,6 +542,7 @@ function hardenWebContents(contents) {
 
 function registerIpc() {
   handleIpc('claude-setup:status', () => claudeSetup.status());
+  handleIpc('claude-setup:dismissed', () => claudeSetup.dismissed());
   handleIpc('claude-setup:cancel', () => { claudeSetup.cancel(); });
   handleIpc('claude-setup:configure', async (_event, action, enableHelper) => {
     switch (action) {
