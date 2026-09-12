@@ -46,16 +46,22 @@ function metadataOf(event) {
 }
 
 // Per-event map keys. Serialising a small array as JSON for every ledger row
-// was a measurable share of the aggregation. Every part is an identifier
-// string or absent, so a control-character join is unambiguous; null and
-// undefined share one marker, exactly as they did inside a JSON array. The
-// task and agent keys the renderer receives keep their JSON form; those are
-// built once per group in finish(), not once per event.
-const KEY_SEPARATOR = '\u0000';
-const KEY_ABSENT = '\u0001';
+// was a measurable share of the aggregation. Each present part is written
+// with its length in front, so the encoding is unambiguous whatever the
+// identifier contains (a separator character inside a transcript id cannot be
+// mistaken for framing); null and undefined share one marker, exactly as they
+// did inside a JSON array. The task and agent keys the renderer receives keep
+// their JSON form; those are built once per group in finish(), not per event.
 function usageKey(...parts) {
   let key = '';
-  for (const part of parts) key += `${part == null ? KEY_ABSENT : part}${KEY_SEPARATOR}`;
+  for (const part of parts) {
+    if (part == null) {
+      key += '~|';
+    } else {
+      const text = String(part);
+      key += `${text.length}:${text}|`;
+    }
+  }
   return key;
 }
 
