@@ -66,3 +66,46 @@ test('the freshness bound requires a running window observed within the bound', 
     store.close();
   }
 });
+
+test('a corrected expired reset supersedes older active readings of the same bucket', () => {
+  const store = openStore();
+  const now = Date.parse('2026-09-12T12:00:00Z');
+  const hour = 3_600_000;
+  const fresh = { activeWithinMs: 8 * DAY_MS };
+  try {
+    record(store, 'claude', now - 4 * hour, now + hour);
+    record(store, 'claude', now - 3 * hour, now - hour);
+    const quota = store.getQuota('claude', store.getSettings(), now);
+    assert.equal(quota.forecast.expired, true);
+    assert.equal(store.hasUsableObservation('claude', now, fresh), false);
+    assert.equal(store.hasUsableObservation('claude', now), true, 'expired history still exists');
+
+    // Superseding a bucket must not hide a separate, still-active window,
+    // even when its latest reading predates both rows in the expired bucket.
+    record(store, 'claude', now - 5 * hour, now + 2 * hour, 'model_scoped_opus');
+    assert.equal(store.hasUsableObservation('claude', now, fresh), true);
+  } finally {
+    store.close();
+  }
+});
+
+test('an invalid latest row cannot supersede the latest usable reading', () => {
+  const store = openStore();
+  const now = Date.parse('2026-09-12T12:00:00Z');
+  const hour = 3_600_000;
+  const fresh = { activeWithinMs: 8 * DAY_MS };
+  try {
+    record(store, 'claude', now - 4 * hour, now + hour);
+    record(store, 'claude', now - 2 * hour, now + 2 * hour);
+    // Simulate malformed data persisted by an older build or backup.
+    store.prepare('UPDATE quota_observations SET resets_at = ? WHERE observed_at = ?')
+      .run('invalid', new Date(now - 2 * hour).toISOString());
+    assert.equal(store.hasUsableObservation('claude', now, fresh), true);
+
+    record(store, 'claude', now - 3 * hour, now - hour);
+    assert.equal(store.getQuota('claude', store.getSettings(), now).forecast.expired, true);
+    assert.equal(store.hasUsableObservation('claude', now, fresh), false);
+  } finally {
+    store.close();
+  }
+});
