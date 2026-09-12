@@ -75,7 +75,7 @@ for (const phase of ['active', 'off-schedule']) {
   });
 }
 
-test('a week of repeated busy days still predicts heavy exhaustion', () => {
+test('a week of repeated busy days keeps the heavier case close to exhaustion', () => {
   const hour = 3_600_000;
   const reset = new Date(2026, 8, 7).getTime();
   const observations = [];
@@ -98,9 +98,70 @@ test('a week of repeated busy days still predicts heavy exhaustion', () => {
     schedule: { activeDays: [0, 1, 2, 3, 4, 5, 6], startHour: 0, endHour: 24 },
   });
   assert.ok(result.expectedRemaining > 20, `expected ${result.expectedRemaining}`);
-  assert.equal(result.heavyRemaining, 0);
-  assert.ok(result.heavyExhaustsAt);
-  assert.equal(result.state, 'risk');
+  // Six busy days out of six justify a heavier week well below the expected
+  // path, but the heavier case no longer assumes the busiest day repeats for
+  // every remaining day, so a fresh week is not written off before it starts.
+  assert.ok(result.heavyRemaining > 0 && result.heavyRemaining < 20, `heavy ${result.heavyRemaining}`);
+  assert.ok(result.heavyRemaining < result.expectedRemaining - 10, 'heavier use must still reduce the buffer');
+  assert.equal(result.heavyExhaustsAt, null);
+});
+
+test('a stale reading projects the same heavier reset balance whenever it is viewed', () => {
+  // The square-root margin is measured from the reading, not from the moment
+  // of the refresh, so catching up to now and projecting onward form one
+  // continuous curve. Merely advancing the clock cannot move the reset value.
+  const hour = 3_600_000;
+  const observedAt = Date.UTC(2026, 8, 5, 12);
+  const observations = [heavyHistoryRow(new Date(observedAt).toISOString(), 0, new Date(observedAt + 168 * hour).toISOString())];
+  const options = { fallbackRate: 0.3, schedule: { activeDays: [0, 1, 2, 3, 4, 5, 6], startHour: 0, endHour: 24 } };
+  const results = [0, 3, 6].map((day) => forecastQuota(observations, { ...options, now: observedAt + day * 24 * hour }));
+  for (const result of results) {
+    assert.ok(Math.abs(result.expectedRemaining - results[0].expectedRemaining) < 1e-6, `expected ${result.expectedRemaining}`);
+    assert.ok(Math.abs(result.heavyRemaining - results[0].heavyRemaining) < 1e-6, `heavy ${result.heavyRemaining} vs ${results[0].heavyRemaining}`);
+    assert.ok(result.heavyRemaining < result.expectedRemaining);
+  }
+});
+
+test('a fresh weekly window after a mixed week is not projected to exhaust under heavier use', () => {
+  // Mirrors a live report: seven days of learned daily use ranging from
+  // near-idle to about 14%, then an early reset to a full allowance with seven
+  // days ahead. The heavier case previously repeated the busiest learned day
+  // for every remaining day and reached zero at the reset.
+  const hour = 3_600_000;
+  const reset = new Date(2026, 8, 12, 12).getTime();
+  const observations = [];
+  const dailyUse = [2, 14, 11, 3, 9, 1, 7];
+  dailyUse.forEach((used, day) => {
+    const start = reset - (7 - day) * 24 * hour;
+    observations.push(
+      heavyHistoryRow(start, 0, start + 24 * hour, 1440),
+      heavyHistoryRow(start + 12 * hour, used, start + 24 * hour, 1440),
+      heavyHistoryRow(start + 24 * hour, used, start + 24 * hour, 1440),
+    );
+  });
+  observations.push(
+    heavyHistoryRow(reset, 0, reset + 168 * hour),
+    heavyHistoryRow(reset + 0.25 * hour, 0, reset + 168 * hour),
+  );
+  const result = forecastQuota(observations, {
+    now: reset + 0.25 * hour,
+    schedule: { activeDays: [0, 1, 2, 3, 4, 5, 6], startHour: 8, endHour: 22 },
+  });
+  assert.ok(result.expectedRemaining > 40, `expected ${result.expectedRemaining}`);
+  assert.ok(result.heavyRemaining > 20, `heavy ${result.heavyRemaining}`);
+  assert.equal(result.heavyExhaustsAt, null);
+  assert.equal(result.state, 'safe');
+  // The margin above the expected path grows with the square root of elapsed
+  // days after the first day: one busy day counts in full, seven do not.
+  const margin = (index) => result.series.expected.at(index).remaining - result.series.heavy.at(index).remaining;
+  const day = margin(24);
+  const week = margin(-1);
+  assert.ok(day > 0);
+  assert.ok(week > 2 * day && week < 3 * day, `week ${week} vs day ${day}`);
+  for (let index = 1; index < result.series.heavy.length; index += 1) {
+    assert.ok(result.series.heavy[index].remaining <= result.series.heavy[index - 1].remaining);
+    assert.ok(result.series.heavy[index].remaining <= result.series.expected[index].remaining);
+  }
 });
 
 test('empty history is explicitly unknown', () => {
