@@ -436,7 +436,25 @@ function recentRate(samples, nowMs, phase, fallbackRate) {
   return contextualRate(recent, fallbackRate, (sample) => Math.exp(-(nowMs - sample.observedAt) / (8 * HOUR_MS)));
 }
 
-function buildSeries(expectedStart, heavyStart, startMs, endMs, schedule, samples, rates) {
+// Cumulative heavier-than-expected burn is a sum of independent busy-or-quiet
+// days: its spread grows with the square root of the horizon, not linearly.
+// One busy day is repeated in full; beyond that the busiest learned day is
+// not assumed for every remaining day, so a fresh week is not projected as
+// seven consecutive peak days. Returns the dampened share of one interval's
+// full-rate overage, expressed through elapsed days since the projection
+// origin. The origin is the latest reading, shared by the catch-up and future
+// segments, so a stale reading projects the same reset balance whenever it is
+// viewed instead of restarting the full-strength first day at every refresh.
+function heavyOverageShare(fromMs, toMs, originMs) {
+  const pace = (ms) => {
+    const days = (ms - originMs) / DAY_MS;
+    return days <= 1 ? days : Math.sqrt(days);
+  };
+  const span = (toMs - fromMs) / DAY_MS;
+  return span > 0 ? clamp((pace(toMs) - pace(fromMs)) / span, 0, 1) : 1;
+}
+
+function buildSeries(expectedStart, heavyStart, startMs, endMs, schedule, samples, rates, originMs = startMs) {
   // Reject unsupported work before allocation. Never turn a distant reset into
   // a shorter, apparently valid forecast (including an already empty allowance).
   const points = Math.ceil(Math.max(0, endMs - startMs) / HOUR_MS) + 1;
@@ -476,7 +494,8 @@ function buildSeries(expectedStart, heavyStart, startMs, endMs, schedule, sample
       const heavyBaseline = expectedRate * 1.22;
       const heavyRate = heavyBaseline
         + Math.max(0, phaseRates.heavy - heavyBaseline) * phaseRates.heavyWeight;
-      heavyRemaining -= heavyRate * duration;
+      heavyRemaining -= expectedRate * duration
+        + Math.max(0, heavyRate - expectedRate) * duration * heavyOverageShare(cursor, next, originMs);
     }
     // The displayed value is clamped; the projected value keeps how far past
     // zero the hour ran so the run-out instant can be placed inside the hour.
@@ -676,7 +695,7 @@ function forecastQuotaWithLearning(observations, options = {}, dayWeights = null
   if (!catchUp) return unknownForecast({ observed, staleHours });
   const estimatedCurrent = catchUp.expected.at(-1)?.remaining ?? remaining;
   const heavyCurrent = catchUp.heavy.at(-1)?.remaining ?? remaining;
-  const future = buildSeries(estimatedCurrent, heavyCurrent, nowMs, resetMs, schedule, samples, rates);
+  const future = buildSeries(estimatedCurrent, heavyCurrent, nowMs, resetMs, schedule, samples, rates, current.observedAt);
   if (!future) return unknownForecast({ observed, staleHours });
   const expectedRemaining = future.expected.at(-1)?.remaining ?? estimatedCurrent;
   const heavyRemaining = future.heavy.at(-1)?.remaining ?? heavyCurrent;
@@ -717,7 +736,8 @@ function forecastQuotaWithLearning(observations, options = {}, dayWeights = null
   const watchRemainingThreshold = Math.max(100 - hardLimitThreshold, reservePercent);
   const state = expectedRemaining <= 0 ? 'critical'
     : heavyRemaining <= 0 || paceRatio > paceRiskThreshold ? 'risk'
-      : expectedRemaining < watchRemainingThreshold || paceRatio > watchPaceThreshold ? 'watch' : 'safe';
+      : expectedRemaining < watchRemainingThreshold || heavyRemaining < watchRemainingThreshold
+        || paceRatio > watchPaceThreshold ? 'watch' : 'safe';
 
   return {
     state, expectedRemaining, heavyRemaining, confidence, learnedSamples: modelSamples.length,
@@ -853,7 +873,8 @@ function forecastQuota(observations, options = {}) {
   const watchRemainingThreshold = Math.max(100 - Number(options.hardLimitThreshold ?? 90), adjusted.reservePercent);
   const state = adjusted.expectedRemaining <= 0 ? 'critical'
     : heavyRemaining <= 0 || adjusted.paceRatio > paceRiskThreshold ? 'risk'
-      : adjusted.expectedRemaining < watchRemainingThreshold || adjusted.paceRatio > paceRiskThreshold * 0.75 ? 'watch' : 'safe';
+      : adjusted.expectedRemaining < watchRemainingThreshold || heavyRemaining < watchRemainingThreshold
+        || adjusted.paceRatio > paceRiskThreshold * 0.75 ? 'watch' : 'safe';
   return { ...adjusted, state, heavyRemaining, heavyExhaustsAt: exhaustionTime(heavy),
     series: { ...adjusted.series, heavy }, resetAdjustment: adjustment };
 }

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.38 — 12 September 2026
+
+- Stop the heavier-usage forecast from repeating the busiest learned day for every remaining day. A fresh weekly allowance after an early reset no longer starts the week flagged at risk with a heavier case that reaches zero; the busiest day still counts in full for the first day ahead, and the margin above the expected path then grows with the square root of elapsed days.
+- Put an allowance on watch when its heavier case would end below the hard-limit margin, so a near miss under heavier use still needs attention without being called a run-out.
+- Preserve local usage history, settings, observations, and backups during an in-place update.
+
 ## 1.0.37 — 9 September 2026
 
 - Choose which subscriptions appear in Settings. Hiding Codex or Claude removes it from the dashboard, activity evidence, cycle history, token capacity, tray tooltip, summaries, and alerts, while its saved usage, costs, and background collection continue unchanged.
