@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.40 — 12 September 2026
+
+- Correct the Claude source status after an allowance reset time is revised. Only the latest usable reading for each window can keep it active; an older reading no longer overrides a newer expired reset.
+- Keep other active allowance windows and valid history available when a stored reading is malformed.
+- Preserve local usage history, settings, observations, and backups during an in-place update.
+
 ## 1.0.39 — 12 September 2026
 
 - Refresh the dashboard faster as history grows. Forecasts parse each allowance reading once instead of three times, the cost ledger shares one local-time conversion per quarter hour, and the Claude refresh checks for an existing reading with an indexed lookup instead of forecasting every window. A cold dashboard snapshot dropped from 221 ms to 160 ms on a live database, and a 120,000-record ledger aggregates in less than half the time. Figures, forecasts and totals are unchanged.
