@@ -9,9 +9,9 @@ It imports local usage evidence, learns your real burn pattern, evaluates every 
 
 ## Install
 
-Use `AI-Usage-Setup-1.0.37-x64.exe` for a normal Windows installation. Running it over an existing installation upgrades in place and preserves the local database, settings, observations, and backups. Uninstalling first is neither required nor recommended. Install this version once to enable future updates through the app.
+Use `AI-Usage-Setup-1.0.38-x64.exe` for a normal Windows installation. Running it over an existing installation upgrades in place and preserves the local database, settings, observations, and backups. Uninstalling first is neither required nor recommended. Install this version once to enable future updates through the app.
 
-Use `AI-Usage-Portable-1.0.37-x64.exe` for a single executable that does not install the app. Windows SmartScreen may show an unknown-publisher warning because this personal build is not backed by a commercial code-signing certificate; verify the supplied SHA-256 hash before running it.
+Use `AI-Usage-Portable-1.0.38-x64.exe` for a single executable that does not install the app. Windows SmartScreen may show an unknown-publisher warning because this personal build is not backed by a commercial code-signing certificate; verify the supplied SHA-256 hash before running it.
 
 ## Personal private updates
 
@@ -65,7 +65,7 @@ Codex, overall Claude, and Fable each have an independent learner. Repeated poll
 - recent working pace and hourly shape without projecting one burst across every future hour;
 - matching hours and weekdays from observed history;
 - your configured active-day schedule; and
-- the busy end of learned daily use for the **Heavier** scenario, phased in across seven historical days separately for scheduled and off-schedule use. Until that history accumulates, the scenario stays closer to its baseline of 22% above expected consumption; the latest observed day does not count as a completed historical day.
+- the busy end of learned daily use for the **Heavier** scenario, phased in across seven historical days separately for scheduled and off-schedule use. Until that history accumulates, the scenario stays closer to its baseline of 22% above expected consumption; the latest observed day does not count as a completed historical day. The busiest learned day is repeated in full for the first day ahead; beyond that, the margin above the expected path grows with the square root of elapsed days, because a heavier week is not seven consecutive peak days. A heavier case that would leave less than the hard-limit margin at reset puts the window on watch.
 
 Provider percentage rebounds within one reset window are handled with a monotonic high-water mark, so rounding jitter cannot spend the same allowance twice. Sparse intervals are allocated by local day, reset boundaries are not mixed, and off-schedule use remains part of the measured burn. An isolated late-night step is duty-cycled across the off-schedule hours observed over whole days; it is not treated as continuous usage throughout every remaining night. This keeps the safe active-hour pace meaningful after an intentionally heavy session.
 
@@ -203,7 +203,7 @@ Linting uses oxlint (typescript-eslint does not yet support the TypeScript 7 com
 ## Publish future private updates
 
 1. Update `package.json`, both root versions in `package-lock.json`, the current installer names in this README, the version contract test, and `CHANGELOG.md`. Keep the GitHub repository private and retain the matching `updateFeed` and `build.publish` settings in `package.json`; the separate `updateFeed` survives packaging so the installed app can verify its destination.
-2. Complete the checks above, review the changes, and merge them. Create and push the matching version tag, for example `v1.0.37` for version `1.0.37`.
+2. Complete the checks above, review the changes, and merge them. Create and push the matching version tag, for example `v1.0.38` for version `1.0.38`.
 3. The **Private Windows release** GitHub Actions workflow builds Windows x64 packages, checks the manifest and packaged contents, and creates a draft release. It uploads the Setup installer, portable executable, installer block map, `latest.yml`, and `SHA256SUMS.txt`, verifies each remote asset's size and SHA-256 digest, then publishes the release as latest. The normal pull-request CI job is unchanged.
 
 The release workflow can also be started manually with an existing version tag. It refuses a mismatched version, a public or different destination, a tag whose commit is not already on `main`, an existing release for that tag, or a version older than an existing stable release. If an upload fails, any created release stays a draft for inspection and is not offered to the app. Review and remove that incomplete draft before retrying; the workflow never overwrites existing release assets.

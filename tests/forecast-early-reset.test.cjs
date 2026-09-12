@@ -67,16 +67,18 @@ test('weighting the heavy day preserves known quiet window exposure before the f
   assert.equal(adjusted.estimatedCurrentRemaining, 100);
 });
 
-test('the adjustment keeps a heavy-case exhaustion warning and consistent curves', () => {
+test('the adjustment keeps a heavy-case warning and consistent curves', () => {
   const { observations, options } = fixture({ heavy: 65 });
   const adjusted = forecastQuota(observations, options);
   const ordinary = forecastQuota(unqualified(observations), options);
   assert.ok(adjusted.resetAdjustment);
   assert.ok(adjusted.expectedRemaining > 0);
-  assert.equal(ordinary.heavyRemaining, 0);
-  assert.equal(adjusted.heavyRemaining, 0);
+  // The heavier case keeps the complete workload: the adjustment never makes
+  // it more optimistic, and one 65% day leaves it under the watch margin.
+  assert.ok(ordinary.heavyRemaining < 10, `heavy ${ordinary.heavyRemaining}`);
+  close(adjusted.heavyRemaining, ordinary.heavyRemaining, 'the heavier case retains the full workload');
   assert.equal(adjusted.heavyExhaustsAt, ordinary.heavyExhaustsAt);
-  assert.equal(adjusted.state, 'risk');
+  assert.equal(adjusted.state, 'watch');
   assert.equal(adjusted.exhaustsAt, null);
   adjusted.series.heavy.forEach((point, index) => assert.ok(point.remaining <= adjusted.series.expected[index].remaining));
 });
