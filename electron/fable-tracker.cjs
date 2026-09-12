@@ -242,14 +242,12 @@ function recordProviderWindows(store, normalized, observedAt) {
 
 function getLastCurrentOfficial(store, nowMs) {
   const placeholders = OFFICIAL_PROVENANCES.map(() => '?').join(', ');
-  const row = store.db.prepare(`
+  return store.prepare(`
     SELECT * FROM quota_observations
     WHERE source_id = ? AND bucket_id = ? AND provenance IN (${placeholders})
       AND resets_at > ?
     ORDER BY observed_at DESC LIMIT 1
-  `).get(FABLE_SOURCE_ID, FABLE_BUCKET_ID, ...OFFICIAL_PROVENANCES, new Date(nowMs).toISOString());
-  if (!row) return null;
-  return row;
+  `).get(FABLE_SOURCE_ID, FABLE_BUCKET_ID, ...OFFICIAL_PROVENANCES, new Date(nowMs).toISOString()) ?? null;
 }
 
 function allowanceFromRow(row) {
@@ -272,7 +270,7 @@ function localFableActivity(store, nowMs, allowance) {
   const sinceMs = Number.isFinite(resetMs) ? resetMs - WEEK_MS : nowMs - WEEK_MS;
   const since = new Date(sinceMs).toISOString();
   const through = new Date(nowMs).toISOString();
-  const row = store.db.prepare(`
+  const row = store.prepare(`
     SELECT COUNT(*) AS requests,
       COALESCE(SUM(input_tokens), 0) AS input_tokens,
       COALESCE(SUM(cached_input_tokens), 0) AS cached_input_tokens,
@@ -302,7 +300,7 @@ function localFableActivity(store, nowMs, allowance) {
 
 function previousActivitySuccess(store) {
   try {
-    const row = store.db.prepare("SELECT metadata_json FROM sources WHERE id = 'claude-fable'").get();
+    const row = store.prepare("SELECT metadata_json FROM sources WHERE id = 'claude-fable'").get();
     const metadata = JSON.parse(row?.metadata_json || '{}');
     const value = metadata?.automatic?.health?.activityLastSuccessfulAt;
     return asIso(value);
@@ -370,7 +368,9 @@ function createFableUsageTracker({ store, usagePort, activityReader, clock = () 
     const details = [];
 
     if (!providerFailure && normalized.kind === 'observed') {
-      allowance = allowanceFromRow(getLastCurrentOfficial(store, nowMs));
+      // `cached` was read after this refresh's windows were recorded, so it
+      // is already the row a second query would return.
+      allowance = allowanceFromRow(cached);
       officialSource = 'connected';
       state = 'current';
     } else if (cached) {

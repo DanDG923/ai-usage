@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useId, useMemo, useRef, useState } from 'react';
 import type { CostAnalytics, DailyUsage, Point } from '../types';
 import { LOCALE, compactNumber, formatInt, money } from '../lib';
 import type { ProviderView } from '../provider-view';
@@ -161,10 +161,14 @@ function runwayLayout(views: ProviderView[], height: number) {
  * the x-axis on the panel's bottom edge, instead of letterboxing a fixed
  * aspect ratio. Width stays fixed so text and strokes keep their scale.
  */
-function useRunwayHeight(canvasRef: React.RefObject<HTMLDivElement | null>) {
+function useRunwayHeight(): [number, React.RefCallback<HTMLDivElement>] {
   const [height, setHeight] = useState(RUNWAY.height);
-  useEffect(() => {
-    const canvas = canvasRef.current;
+  // A callback ref rather than an effect over a ref object: the canvas is not
+  // rendered until the first observations exist, and an effect keyed on the
+  // ref object ran once, saw no element, and never looked again. Attaching
+  // when the element actually appears observes it whenever that happens, and
+  // the returned cleanup disconnects when it goes away.
+  const attach = useCallback<React.RefCallback<HTMLDivElement>>((canvas) => {
     if (!canvas || typeof ResizeObserver === 'undefined') return undefined;
     const measure = () => {
       const rect = canvas.getBoundingClientRect();
@@ -175,8 +179,8 @@ function useRunwayHeight(canvasRef: React.RefObject<HTMLDivElement | null>) {
     const observer = new ResizeObserver(measure);
     observer.observe(canvas);
     return () => observer.disconnect();
-  }, [canvasRef]);
-  return height;
+  }, []);
+  return [height, attach];
 }
 
 /**
@@ -187,9 +191,8 @@ function useRunwayHeight(canvasRef: React.RefObject<HTMLDivElement | null>) {
 export function CombinedRunwayChart({ views }: { views: ProviderView[] }) {
   const plotClipId = useId();
   const svgRef = useRef<SVGSVGElement>(null);
-  const canvasRef = useRef<HTMLDivElement>(null);
   const [hoverAt, setHoverAt] = useState<number | null>(null);
-  const canvasHeight = useRunwayHeight(canvasRef);
+  const [canvasHeight, canvasRef] = useRunwayHeight();
   const layout = useMemo(() => runwayLayout(views, canvasHeight), [views, canvasHeight]);
   if (!layout) return <div className="empty-chart tall">Runway appears after the first allowance observations.</div>;
   const { series, labels, nowAt, minAt, maxAt, x, y, plotWidth, plotHeight, ticks, summary, height } = layout;

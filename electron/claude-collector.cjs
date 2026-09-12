@@ -348,7 +348,7 @@ function allowanceProfile(model) {
 }
 
 function allowancePressure(store, modelLike, sinceIso, untilIso) {
-  const rows = store.db.prepare(`
+  const rows = store.prepare(`
     SELECT * FROM usage_events
     WHERE source_id = 'claude' AND occurred_at >= ? AND occurred_at < ?
       ${modelLike == null ? '' : "AND LOWER(COALESCE(model, '')) LIKE ?"}
