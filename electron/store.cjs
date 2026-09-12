@@ -220,6 +220,26 @@ function dateKey(value, timeZone) {
   return `${values.year}-${values.month}-${values.day}`;
 }
 
+// The ledger is read in time order, so consecutive events nearly always fall
+// in the same quarter hour. Every zone offset is a multiple of fifteen
+// minutes, so a quarter-hour slot never straddles a local hour, day or DST
+// boundary and one formatted answer serves the whole slot. Formatting was
+// otherwise a third of the aggregation.
+const QUARTER_HOUR_MS = 15 * 60_000;
+function createLocalPartsLookup(timeZone) {
+  let slot = null;
+  let parts = null;
+  return (value) => {
+    const ms = typeof value === 'number' ? value : Date.parse(value);
+    const current = Math.floor(ms / QUARTER_HOUR_MS);
+    if (current !== slot || parts === null) {
+      parts = localParts(ms, timeZone);
+      slot = current;
+    }
+    return parts;
+  };
+}
+
 const WEEKDAY_INDEX = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
 
 // SQLITE_CORRUPT and SQLITE_NOTADB: the file exists but SQLite cannot read it.
@@ -1315,6 +1335,7 @@ class UsageStore {
     const sessionMap = new Map();
     const taskUsage = new TaskUsage();
     const activityUsd = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0));
+    const localPartsOf = createLocalPartsLookup(timeZone);
     let actualUsd = 0;
     let withoutCacheUsd = 0;
     let coveredTokens = 0;
@@ -1382,7 +1403,7 @@ class UsageStore {
       byModelMap.set(key, model);
 
       // The chart and activity grid share one local-time conversion per row.
-      const parts = localParts(event.occurred_at, timeZone);
+      const parts = localPartsOf(event.occurred_at);
       const day = `${parts.year}-${parts.month}-${parts.day}`;
       const dayRow = byDayMap.get(day) || { date: day, codexUsd: 0, claudeUsd: 0 };
       if (event.source_id === 'codex') dayRow.codexUsd += cost.actualUsd;

@@ -38,10 +38,25 @@ function claudeAgentMetadata(row, fullPath) {
 }
 
 function metadataOf(event) {
+  if (!event.metadata_json || event.metadata_json === '{}') return {};
   try {
     const value = JSON.parse(event.metadata_json);
     return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   } catch { return {}; }
+}
+
+// Per-event map keys. Serialising a small array as JSON for every ledger row
+// was a measurable share of the aggregation. Every part is an identifier
+// string or absent, so a control-character join is unambiguous; null and
+// undefined share one marker, exactly as they did inside a JSON array. The
+// task and agent keys the renderer receives keep their JSON form; those are
+// built once per group in finish(), not once per event.
+const KEY_SEPARATOR = '\u0000';
+const KEY_ABSENT = '\u0001';
+function usageKey(...parts) {
+  let key = '';
+  for (const part of parts) key += `${part == null ? KEY_ABSENT : part}${KEY_SEPARATOR}`;
+  return key;
 }
 
 function emptyUsage() {
@@ -67,12 +82,12 @@ class TaskUsage {
     const metadata = metadataOf(event);
     const sessionId = event.session_id || event.event_key;
     const parent = textId(metadata.parentSessionId);
-    if (parent && parent !== sessionId) this.parents.set(JSON.stringify([event.source_id, sessionId]), parent);
-    const kind = ['main', 'subagent'].includes(metadata.agentKind) ? metadata.agentKind : 'unknown';
+    if (parent && parent !== sessionId) this.parents.set(usageKey(event.source_id, sessionId), parent);
+    const kind = metadata.agentKind === 'main' || metadata.agentKind === 'subagent' ? metadata.agentKind : 'unknown';
     const agentId = textId(metadata.agentId);
     const taskId = textId(metadata.taskId);
     const rootSessionId = textId(metadata.rootSessionId);
-    const key = JSON.stringify([event.source_id, sessionId, taskId, agentId, kind, event.model, rootSessionId]);
+    const key = usageKey(event.source_id, sessionId, taskId, agentId, kind, event.model, rootSessionId);
     const row = this.rows.get(key) || {
       ...emptyUsage(), sourceId: event.source_id, sessionId, taskId, rootSessionId,
       agentId, agentKind: kind, parentSessionId: parent,
@@ -97,7 +112,7 @@ class TaskUsage {
     // null marks ancestry that reaches a cycle, not any one session's fallback.
     let root = null;
     while (current) {
-      const key = JSON.stringify([row.sourceId, current]);
+      const key = usageKey(row.sourceId, current);
       if (roots.has(key)) { root = roots.get(key); break; }
       if (seen.has(key)) break;
       seen.add(key);
