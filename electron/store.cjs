@@ -338,6 +338,10 @@ class UsageStore {
       DROP INDEX IF EXISTS idx_quota_source_bucket_time;
       CREATE INDEX IF NOT EXISTS idx_quota_source_bucket_reset
         ON quota_observations(source_id, bucket_id, resets_at);
+      -- Source-wide reads by time (the forecast candidates and the collector's
+      -- existence probes) otherwise sort every row of the source.
+      CREATE INDEX IF NOT EXISTS idx_quota_source_time
+        ON quota_observations(source_id, observed_at);
       CREATE TABLE IF NOT EXISTS usage_events (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         event_key TEXT NOT NULL UNIQUE,
@@ -1031,6 +1035,27 @@ class UsageStore {
     });
     const primary = windows[0];
     return { ...primary, windows };
+  }
+
+  // Collector status text only needs to know whether a source has a usable
+  // reading at all and, with `activeWithinMs`, whether one is still running
+  // and was taken recently. getQuota answers that too, but forecasts every
+  // window of the source on the way past; this is an indexed probe that
+  // walks newest-first and stops at the first usable row, or at the first
+  // row older than the freshness bound, since everything after it is older.
+  hasUsableObservation(sourceId, nowMs = Date.now(), { activeWithinMs = null } = {}) {
+    const rows = this.prepare(`SELECT observed_at, resets_at, window_minutes FROM quota_observations
+      WHERE source_id = ? AND observed_at <= ? ORDER BY observed_at DESC, id DESC`)
+      .iterate(sourceId, iso(nowMs + QUOTA_CLOCK_SKEW_MS));
+    for (const row of rows) {
+      const observedMs = Date.parse(row.observed_at);
+      const resetMs = Date.parse(row.resets_at);
+      if (!validQuotaTime(observedMs, resetMs, row.window_minutes, nowMs)) continue;
+      if (activeWithinMs == null) return true;
+      if (nowMs - observedMs >= activeWithinMs) return false;
+      if (resetMs > nowMs) return true;
+    }
+    return false;
   }
 
   tokenCapacityEvidence(sourceId, nowMs) {

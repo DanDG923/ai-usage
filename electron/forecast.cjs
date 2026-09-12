@@ -612,11 +612,15 @@ function forecastQuotaWithLearning(observations, options = {}, dayWeights = null
   // After a reset the fresh window has no history of its own, so the most
   // recent prior window's average pace carries forward as weaker evidence
   // instead of letting while-working burst rates run unchecked until reset.
-  const priorEvidence = clusters
-    .filter((entry) => entry !== currentCluster && entry.rows.length >= 2)
-    .map((entry) => windowPaceOf(entry.rows, schedule, entry.observedResetAt, nowMs, excluded, dayWeights))
-    .filter((entry) => entry && entry.evidenceActiveHours >= 6)
-    .at(-1) ?? null;
+  // Only the most recent qualifying window is used, so scan backwards and
+  // stop there rather than pacing every historical cluster first.
+  let priorEvidence = null;
+  for (let index = clusters.length - 1; index >= 0 && !priorEvidence; index -= 1) {
+    const entry = clusters[index];
+    if (entry === currentCluster || entry.rows.length < 2) continue;
+    const pace = windowPaceOf(entry.rows, schedule, entry.observedResetAt, nowMs, excluded, dayWeights);
+    if (pace && pace.evidenceActiveHours >= 6) priorEvidence = pace;
+  }
   const windowWeight = windowPace == null ? 0 : clamp(anchorActiveHours / 30, 0, 0.9);
   const priorWeight = priorEvidence ? clamp(priorEvidence.activeHours / 30, 0, 0.85) * (1 - windowWeight) : 0;
   const anchorWeight = clamp(windowWeight + priorWeight, 0, 0.9);
