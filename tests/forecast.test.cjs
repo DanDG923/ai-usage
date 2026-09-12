@@ -106,6 +106,22 @@ test('a week of repeated busy days keeps the heavier case close to exhaustion', 
   assert.equal(result.heavyExhaustsAt, null);
 });
 
+test('a stale reading projects the same heavier reset balance whenever it is viewed', () => {
+  // The square-root margin is measured from the reading, not from the moment
+  // of the refresh, so catching up to now and projecting onward form one
+  // continuous curve. Merely advancing the clock cannot move the reset value.
+  const hour = 3_600_000;
+  const observedAt = Date.UTC(2026, 8, 5, 12);
+  const observations = [heavyHistoryRow(new Date(observedAt).toISOString(), 0, new Date(observedAt + 168 * hour).toISOString())];
+  const options = { fallbackRate: 0.3, schedule: { activeDays: [0, 1, 2, 3, 4, 5, 6], startHour: 0, endHour: 24 } };
+  const results = [0, 3, 6].map((day) => forecastQuota(observations, { ...options, now: observedAt + day * 24 * hour }));
+  for (const result of results) {
+    assert.ok(Math.abs(result.expectedRemaining - results[0].expectedRemaining) < 1e-6, `expected ${result.expectedRemaining}`);
+    assert.ok(Math.abs(result.heavyRemaining - results[0].heavyRemaining) < 1e-6, `heavy ${result.heavyRemaining} vs ${results[0].heavyRemaining}`);
+    assert.ok(result.heavyRemaining < result.expectedRemaining);
+  }
+});
+
 test('a fresh weekly window after a mixed week is not projected to exhaust under heavier use', () => {
   // Mirrors a live report: seven days of learned daily use ranging from
   // near-idle to about 14%, then an early reset to a full allowance with seven
