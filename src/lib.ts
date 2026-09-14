@@ -1,3 +1,4 @@
+import { selectDisplayedWindows } from '../electron/quota-selection.mjs';
 import type { DashboardVerdict, Quota, QuotaWindow, Snapshot } from './types';
 
 /**
@@ -156,29 +157,15 @@ export function allowanceWindowLabel(window: QuotaWindow): string {
 }
 
 /**
- * The window that headlines a card: the longest active one, so every provider
- * shows the same kind of allowance (the weekly plan) and its figure matches
- * the provider's own summary. Headlining the riskiest window instead made a
- * Claude card read "79% left" while the weekly allowance stood at 93%.
+ * The window that headlines a card, by the same rule the store, tray and
+ * notifications use: the subscription's own weekly allowance, so the figure
+ * matches the provider's own summary. Headlining the riskiest window instead
+ * made a Claude card read "79% left" while the weekly allowance stood at 93%.
  * Shorter session windows are listed beneath the headline with their own
  * state; the dashboard verdict still weighs every window.
  */
 export function primaryWindow(quota: Quota | null | undefined): QuotaWindow | null {
-  const all = quotaWindows(quota);
-  const active = all.filter((entry) => !entry.forecast.expired);
-  const candidates = active.length ? active : all;
-  if (!candidates.length) return null;
-  const mainCodex = candidates.filter(
-    (entry) => entry.metadata?.limitId === 'codex' || /^codex:(primary|secondary|weekly)$/.test(entry.bucketId),
-  );
-  const mainClaude = candidates.filter(
-    (entry) =>
-      entry.metadata?.scope === 'overall' ||
-      (!entry.metadata?.scope && ['seven_day', 'five_hour'].includes(entry.bucketId)),
-  );
-  return (mainCodex.length ? mainCodex : mainClaude.length ? mainClaude : candidates).reduce((longest, entry) =>
-    (entry.windowMinutes ?? 0) > (longest.windowMinutes ?? 0) ? entry : longest,
-  );
+  return selectDisplayedWindows(quotaWindows(quota)).primary;
 }
 
 export function displayedRemaining(entry: QuotaWindow) {

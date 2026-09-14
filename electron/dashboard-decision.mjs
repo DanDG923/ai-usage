@@ -1,3 +1,5 @@
+import { selectDisplayedWindows } from './quota-selection.mjs';
+
 export function subscriptionVisible(settings, providerId) {
   return settings?.[providerId === 'codex' ? 'showCodexSubscription' : 'showClaudeSubscription'] !== false;
 }
@@ -16,11 +18,11 @@ const KNOWN_STATES = new Set([...ACTIONABLE_STATES, 'safe', 'unknown']);
 function quotaWindows(quota) {
   if (!quota) return [];
   const windows = Array.isArray(quota.windows) && quota.windows.length ? quota.windows : [quota];
-  const active = windows.filter((window) => !window?.forecast?.expired);
   // Historical buckets remain useful in Details, but only currently active
   // allowance windows can affect burn-rate safety. If every bucket is expired,
-  // keep one so the provider remains explicitly unknown rather than vanishing.
-  return active.length ? active : windows.slice(0, 1);
+  // keep the one the card headlines so the provider stays explicitly unknown.
+  const selection = selectDisplayedWindows(windows);
+  return selection.active.length ? selection.active : selection.primary ? [selection.primary] : [];
 }
 
 function windowState(window) {

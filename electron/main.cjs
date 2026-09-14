@@ -7,7 +7,7 @@ const {
   powerMonitor, session, shell, Tray, utilityProcess,
 } = require('electron');
 const { UsageStore } = require('./store.cjs');
-const { installClaudeHelper, uninstallClaudeHelper, isClaudeHelperInstalled, rederiveFableEstimate } = require('./claude-collector.cjs');
+const { installClaudeHelper, uninstallClaudeHelper, isClaudeHelperInstalled } = require('./claude-collector.cjs');
 const { createClaudeSetup } = require('./claude-setup.cjs');
 const { createCollectorHost, createInlineCollectorHost } = require('./collector-host.cjs');
 const { createCollectorService } = require('./collector-service.cjs');
@@ -565,13 +565,9 @@ function registerIpc() {
   handleIpc('dashboard:get-tasks', (_event, options) => (storageClosing() ? EMPTY_SESSION_PAGE : store.getTaskPage(pageOptions(options))));
   handleIpc('dashboard:refresh', () => refreshAll());
   handleIpc('dashboard:update-settings', (_event, patch) => databaseJobs.run(() => {
-    const claudeEntries = (settings) => JSON.stringify(settings.allowanceChanges.filter((entry) => entry.source === 'claude'));
-    const before = claudeEntries(store.getSettings());
     const settings = store.updateSettings(patch || {});
-    // Claude allowance changes rescale the history the local Fable estimate is
-    // built from; the persisted estimate must follow the setting immediately.
-    // Codex entries cannot move it, so they must not risk discarding it.
-    if (claudeEntries(settings) !== before) rederiveFableEstimate(store);
+    // The Fable estimate is projected when the snapshot is built, so a saved
+    // allowance change is reflected by the very next snapshot.
     invalidateSnapshot();
     applySettingsEffects();
     const current = snapshot();

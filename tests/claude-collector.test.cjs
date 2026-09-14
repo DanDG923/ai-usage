@@ -356,15 +356,20 @@ test('a single overall reading is not enough to derive anything', () => withStor
   assert.equal(result.reason, 'not-enough-overall-readings');
 }));
 
-test('an unchanged Fable estimate is deduplicated instead of appended', () => withStore((store) => {
+test('the Fable estimate is projected on demand and never written as a reading', () => withStore((store) => {
   overallReading(store, '2026-08-28T12:00:00.000Z', 10);
   usageEvent(store, 'f1', '2026-08-28T18:00:00.000Z', 'claude-fable-5', 1_000_000);
   overallReading(store, '2026-08-29T12:00:00.000Z', 20);
-  assert.equal(deriveFableEstimate(store, Date.parse('2026-08-29T13:00:00Z')).derived, true);
+  const first = deriveFableEstimate(store, Date.parse('2026-08-29T13:00:00Z'));
+  assert.equal(first.derived, true);
   const repeat = deriveFableEstimate(store, Date.parse('2026-08-29T14:00:00Z'));
-  assert.equal(repeat.derived, false);
-  assert.equal(repeat.reason, 'unchanged');
-  assert.equal(store.getRecentQuotaObservations('claude-fable', 'fable_seven_day', null, 10).length, 1);
+  assert.equal(repeat.derived, true);
+  assert.ok(Math.abs(repeat.usedPercent - first.usedPercent) < 0.01, 'idle time does not move the estimate');
+  assert.equal(store.getRecentQuotaObservations('claude-fable', 'fable_seven_day', null, 10).length, 0);
+  const quota = store.getQuota('claude-fable', store.getSettings(), Date.parse('2026-08-29T14:00:00Z'));
+  assert.equal(quota.provenance, 'derived-tokens');
+  assert.equal(quota.metadata.projected, true);
+  assert.ok(Math.abs(quota.usedPercent - first.usedPercent) < 0.01);
 }));
 
 test('an expired overall window derives nothing rather than a past reset', () => withStore((store) => {

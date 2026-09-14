@@ -4,6 +4,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 const { buildDashboardVerdict } = require('./dashboard-decision.cjs');
+const { isOfficialWindow, selectDisplayedWindows } = require('./quota-selection.cjs');
+const { FABLE_BUCKET, projectFableAllowance } = require('./fable-projection.cjs');
 const { codexQuotaLabel } = require('./codex-quota-label.cjs');
 const { forecastQuota } = require('./forecast.cjs');
 const { TaskUsage } = require('./task-usage.cjs');
@@ -292,6 +294,7 @@ class UsageStore {
     this.costAnalyticsCache = new Map();
     this.cycleHistoryCache = new Map();
     this.tokenCapacityCache = new Map();
+    this.fableProjectionCache = null;
     this.tokenCapacityEvidenceCache = new Map();
     this.transactionDepth = 0;
     const opened = openDatabase(databasePath);
@@ -459,6 +462,23 @@ class UsageStore {
         this.prepare("DELETE FROM quota_observations WHERE provenance = 'derived-tokens'").run();
         this.prepare('INSERT INTO settings(key, value_json, updated_at) VALUES (?, ?, ?)')
           .run(fablePlanEvidenceMigration, 'true', iso());
+        this.db.exec('COMMIT');
+      } catch (error) {
+        try { this.db.exec('ROLLBACK'); } catch { /* Preserve the migration failure. */ }
+        throw error;
+      }
+    }
+    const fableProjectionMigration = 'migration.fable-projection-v1';
+    if (!this.prepare('SELECT 1 FROM settings WHERE key = ?').get(fableProjectionMigration)) {
+      // The Fable estimate is projected when a snapshot is built and is no
+      // longer stored. Rows written by earlier versions were computed under
+      // settings and evidence that may since have changed; the projection
+      // rebuilds the current figure from official readings alone.
+      this.db.exec('BEGIN IMMEDIATE');
+      try {
+        this.prepare("DELETE FROM quota_observations WHERE provenance = 'derived-tokens'").run();
+        this.prepare('INSERT INTO settings(key, value_json, updated_at) VALUES (?, ?, ?)')
+          .run(fableProjectionMigration, 'true', iso());
         this.db.exec('COMMIT');
       } catch (error) {
         try { this.db.exec('ROLLBACK'); } catch { /* Preserve the migration failure. */ }
@@ -712,6 +732,9 @@ class UsageStore {
     }
     const bucketName = optionalText(observation.bucketName, 'Observation bucket name');
     const planType = optionalText(observation.planType, 'Observation plan type');
+    // The Fable estimate is a projection built with each snapshot; a stored
+    // copy would outlive the settings and evidence it was computed from.
+    if (observation.provenance === 'derived-tokens') throw new Error('Derived Fable estimates are projected, not stored.');
     const provenance = optionalText(observation.provenance, 'Observation provenance');
     let windowMinutes = null;
     if (observation.windowMinutes != null) {
@@ -776,9 +799,6 @@ class UsageStore {
         provenance = excluded.provenance,
         confidence = excluded.confidence,
         metadata_json = excluded.metadata_json
-      WHERE NOT (excluded.provenance = 'derived-tokens' AND quota_observations.provenance IN (
-        'official', 'local-official', 'manual-official', 'official-claude-usage', 'official-statusline'
-      ))
     `).run(
       observation.sourceId,
       observation.bucketId,
@@ -979,7 +999,8 @@ class UsageStore {
         if (usable(row)) { rows.push(row); break; }
       }
     }
-    if (!rows.length) return null;
+    // Fable may have no stored rows and still have a projected estimate.
+    if (!rows.length && sourceId !== 'claude-fable') return null;
 
     const grouped = new Map();
     for (const row of rows) {
@@ -991,22 +1012,23 @@ class UsageStore {
       startHour: settings.activeStartHour,
       endHour: settings.activeEndHour,
     };
-    const windows = [...grouped.entries()].map(([bucketId, observations]) => {
+    const forecastOptions = {
+      now: nowMs,
+      schedule,
+      fallbackRate: settings.forecastFallbackRate,
+      paceRiskThreshold: settings.paceRiskThreshold,
+      hardLimitThreshold: settings.hardLimitThreshold,
+      reservePercent: settings.reservePercent,
+      excludedDates: settings.forecastExcludedDates,
+      allowanceChanges: settings.allowanceChanges,
+      sourceId,
+    };
+    let windows = [...grouped.entries()].map(([bucketId, observations]) => {
       const latest = observations.at(-1);
       // Old backups may already have persisted invalid metadata; keep the
       // reading usable without rewriting the original historical evidence.
       const metadata = quotaMetadata(latest.metadata_json) || {};
-      const forecast = forecastQuota(observations, {
-        now: nowMs,
-        schedule,
-        fallbackRate: settings.forecastFallbackRate,
-        paceRiskThreshold: settings.paceRiskThreshold,
-        hardLimitThreshold: settings.hardLimitThreshold,
-        reservePercent: settings.reservePercent,
-        excludedDates: settings.forecastExcludedDates,
-        allowanceChanges: settings.allowanceChanges,
-        sourceId,
-      });
+      const forecast = forecastQuota(observations, forecastOptions);
       return {
         bucketId,
         bucketName: sourceId === 'codex'
@@ -1026,34 +1048,87 @@ class UsageStore {
           : null,
       };
     });
-    const now = nowMs;
-    // Codex: the account-wide limit; Claude: the shared pool rather than a
-    // model-scoped or OAuth-app bucket, so the tray and cycle history follow
-    // the overall weekly even when every window was recorded in one scan.
-    const overall = (window) => {
-      // Manual and older restored readings may lack limitId. Keep the same
-      // canonical bucket fallback used by the cards and tray.
-      if (sourceId === 'codex') return window.metadata?.limitId === 'codex' || /^codex:(primary|secondary|weekly)$/.test(window.bucketId);
-      if (sourceId === 'claude') {
-        const scope = window.metadata?.scope;
-        if (scope) return scope === 'overall';
-        return !String(window.bucketId).startsWith('model_scoped') && !/_(opus|sonnet|oauth_apps)$/.test(String(window.bucketId));
-      }
-      return true;
-    };
-    const official = (window) => String(window.provenance || '').startsWith('official') || window.provenance === 'local-official';
-    windows.sort((a, b) => {
-      const aExpired = new Date(a.resetsAt).getTime() <= now;
-      const bExpired = new Date(b.resetsAt).getTime() <= now;
-      return Number(aExpired) - Number(bExpired)
-        || Number(overall(b)) - Number(overall(a))
-        || (b.windowMinutes || 0) - (a.windowMinutes || 0)
-        || Number(official(b)) - Number(official(a))
-        || new Date(b.observedAt).getTime() - new Date(a.observedAt).getTime()
-        || a.bucketId.localeCompare(b.bucketId);
+    if (sourceId === 'claude-fable') {
+      // One window per bucket, as for every stored bucket: the projection is
+      // the bucket's current state and stands in for its expired reading,
+      // which remains in cycle history.
+      const projected = this.projectedFableWindow(windows, grouped.get(FABLE_BUCKET) || [], settings, forecastOptions, nowMs);
+      if (projected) windows = [...windows.filter((window) => window.bucketId !== FABLE_BUCKET), projected];
+    }
+    if (!windows.length) return null;
+    // The shared rule orders the windows and names the headline, so the tray,
+    // notifications, cycle history and cards follow the same window as the
+    // top-level fields here even when every window was recorded in one scan.
+    const selection = selectDisplayedWindows(windows, { nowMs });
+    return { ...selection.primary, windows: [...selection.active, ...selection.expired] };
+  }
+
+  // The Fable estimate as a window: built from the projection when no
+  // provider-backed Fable window is live, never stored. The forecast learns
+  // from the official rows plus the projection's own series, in the same row
+  // shape, so a helper-only machine keeps a learned pace without persisting
+  // estimates that would outlive the settings they were computed under.
+  projectedFableWindow(windows, bucketRows, settings, forecastOptions, nowMs) {
+    const current = selectDisplayedWindows(windows, { nowMs }).primary;
+    if (current && Date.parse(current.resetsAt) > nowMs && isOfficialWindow(current)) return null;
+    const projection = this.getFableProjection(settings, nowMs);
+    if (!projection.available) return null;
+    const point = (entry) => ({
+      source_id: 'claude-fable', bucket_id: FABLE_BUCKET, bucket_name: 'Fable 5 weekly',
+      observed_at: entry.observedAt, used_percent: entry.usedPercent, remaining_percent: 100 - entry.usedPercent,
+      resets_at: projection.resetsAt, window_minutes: projection.windowMinutes, plan_type: projection.planType,
+      provenance: 'derived-tokens', confidence: projection.confidence, metadata_json: '{}',
+      // Already expressed in the current allowance by the projection.
+      allowance_scaled: true,
     });
-    const primary = windows[0];
-    return { ...primary, windows };
+    const forecast = forecastQuota([...bucketRows, ...projection.series.map(point)], forecastOptions);
+    return {
+      bucketId: FABLE_BUCKET,
+      bucketName: 'Fable 5 weekly',
+      observedAt: iso(nowMs),
+      usedPercent: projection.usedPercent,
+      remainingPercent: 100 - projection.usedPercent,
+      resetsAt: projection.resetsAt,
+      windowMinutes: projection.windowMinutes,
+      planType: projection.planType,
+      provenance: 'derived-tokens',
+      metadata: { sharedWithOverall: true, projected: true, calibration: projection.calibration },
+      forecast,
+      tokenCapacity: this.getTokenCapacity('claude-fable', FABLE_BUCKET, bucketRows, settings, nowMs),
+    };
+  }
+
+  // Cached like token capacity: the inputs are Claude and Fable readings,
+  // Claude usage and the allowance-change setting, all of which bump a
+  // revision or change the key. The tail grows with wall time, so a value is
+  // good for a minute and never past the window reset or a pending change.
+  getFableProjection(settings, nowMs) {
+    if (this.db.isTransaction) return projectFableAllowance(this, nowMs);
+    const revision = this.prepare(`SELECT COALESCE(SUM(revision), 0) AS value FROM analytics_revisions
+      WHERE (domain = 'quota' AND source_id IN ('claude', 'claude-fable')) OR (domain = 'usage' AND source_id = 'claude')`).get().value;
+    const allowanceChanges = settings.allowanceChanges || [];
+    const key = JSON.stringify(allowanceChanges);
+    const cached = this.fableProjectionCache;
+    if (cached && cached.revision === revision && cached.key === key && nowMs >= cached.evaluatedAt && nowMs < cached.expiresAt) return cached.value;
+    const value = projectFableAllowance(this, nowMs);
+    let expiresAt = nowMs + 60_000;
+    if (value.available) expiresAt = Math.min(expiresAt, Date.parse(value.resetsAt));
+    for (const change of allowanceChanges) {
+      const at = Date.parse(change.at);
+      if (at > nowMs) expiresAt = Math.min(expiresAt, at);
+    }
+    // A future-dated event or reading is already in the revision but not yet
+    // in the projection; it enters at its own timestamp without a write.
+    const now = iso(nowMs);
+    for (const row of [
+      this.prepare("SELECT occurred_at AS at FROM usage_events WHERE source_id = 'claude' AND occurred_at > ? ORDER BY occurred_at ASC LIMIT 1").get(now),
+      this.prepare("SELECT observed_at AS at FROM quota_observations WHERE source_id IN ('claude', 'claude-fable') AND observed_at > ? ORDER BY observed_at ASC LIMIT 1").get(now),
+    ]) {
+      const at = row ? Date.parse(row.at) : Number.NaN;
+      if (Number.isFinite(at) && at > nowMs) expiresAt = Math.min(expiresAt, at);
+    }
+    this.fableProjectionCache = { value, revision, key, evaluatedAt: nowMs, expiresAt };
+    return value;
   }
 
   // Collector status text only needs to know whether a source has a usable
