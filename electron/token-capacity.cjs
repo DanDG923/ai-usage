@@ -177,9 +177,13 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
   const lastIncompatible = readings.findLastIndex((row) => row.plan && currentPlan && row.plan !== currentPlan);
   // A plan name changing is only a calibration break when nothing says how
   // the allowance moved. A recorded change inside that transition already
-  // rescaled the earlier readings, so their evidence stays comparable.
-  const transitionExplained = lastIncompatible >= 0 && scaler
-    && scaler(readings[lastIncompatible].at) !== scaler(readings[Math.min(lastIncompatible + 1, readings.length - 1)].at);
+  // rescaled the earlier readings, so their evidence stays comparable. The
+  // transition spans from the last old-plan reading to the first reading
+  // that names the current plan: status-line and manual readings carry no
+  // plan, and one of them in between must not hide the recorded change.
+  const firstCurrentPlan = readings.findIndex((row, index) => index > lastIncompatible && row.plan === currentPlan);
+  const transitionExplained = lastIncompatible >= 0 && firstCurrentPlan > lastIncompatible && scaler
+    && scaler(readings[lastIncompatible].at) !== scaler(readings[firstCurrentPlan].at);
   if (lastIncompatible >= 0 && !transitionExplained) {
     readings = readings.slice(lastIncompatible + 1);
     result.warnings.push('Earlier readings from a different plan were excluded.');

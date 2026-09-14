@@ -136,6 +136,14 @@ test('token capacity rescales earlier intervals to the current allowance and say
   assert.equal(carried.weeklyTokens, 10_000_000);
   assert.equal(carried.intervals, 4);
   assert.ok(!carried.warnings.some((warning) => /different plan/.test(warning)));
+  // A status-line or manual reading between the last old-plan reading and
+  // the change names no plan; the recorded change still explains the transition.
+  const planless = { ...upgraded, observations: upgraded.observations.map((reading, index) => (index === 3 ? { ...reading, plan_type: null } : reading)) };
+  assert.equal(estimateTokenCapacity(planless).status, 'learning');
+  const carriedAcrossPlanless = estimateTokenCapacity({ ...planless, allowanceChanges: [change({ at: iso(NOW - 1.5 * HOUR) })] });
+  assert.equal(carriedAcrossPlanless.status, 'available');
+  assert.equal(carriedAcrossPlanless.weeklyTokens, 10_000_000);
+  assert.equal(carriedAcrossPlanless.intervals, 4);
 });
 
 test('the store validates, normalizes, persists and applies allowance changes to forecasts and capacity', (t) => {
