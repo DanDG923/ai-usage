@@ -496,11 +496,24 @@ function allowanceAdjustedUsed(store, nowMs) {
 function rederiveFableEstimate(store, nowMs = Date.now()) {
   const latest = displayedFableReading(store, nowMs);
   if (!latest || latest.provenance !== 'derived-tokens') return { derived: false, reason: 'no-derived-estimate' };
+  let result;
   try {
-    return deriveFableEstimate(store, nowMs);
+    result = deriveFableEstimate(store, nowMs);
   } catch (error) {
     return { derived: false, reason: `derive-failed: ${error.message}` };
   }
+  const resetMs = Date.parse(latest.resets_at);
+  if (result.derived || result.reason === 'unchanged' || !(resetMs > nowMs)) return result;
+  // Under the new setting there is nothing to estimate from, so the figure
+  // computed under the old allowance has no replacement. A known-wrong
+  // percentage must not stay on the card: discard this live window's derived
+  // rows and let the card report the estimate as unavailable until evidence
+  // returns. An expired window is already labelled as history and stays, and
+  // official and manual readings are never touched.
+  const discarded = store.prepare(`DELETE FROM quota_observations WHERE source_id = 'claude-fable' AND bucket_id = ?
+    AND provenance = 'derived-tokens' AND resets_at >= ? AND resets_at <= ?`)
+    .run(FABLE_BUCKET, new Date(resetMs - 60_000).toISOString(), new Date(resetMs + 60_000).toISOString()).changes;
+  return { ...result, discarded: Number(discarded || 0) };
 }
 
 // The row the Fable card headlines: the newest reading that passes the same

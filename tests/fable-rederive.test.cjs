@@ -68,6 +68,8 @@ test('saving or removing an allowance change re-derives a stale Fable estimate a
   assert.equal(rows.at(-1).provenance, 'derived-tokens');
   assert.ok(Math.abs(result.snapshot.quotas.fable.usedPercent - 20) < 0.01, 'the returned snapshot already shows the new estimate');
 
+  assert.deepEqual(rederiveFableEstimate(context.store), { derived: false, reason: 'unchanged' });
+  assert.equal(context.fableRows().length, 2, 'an estimate that already matches is neither rewritten nor discarded');
   await context.updateSettings({ theme: 'light' });
   assert.equal(context.fableRows().length, 2, 'unrelated settings leave the estimate alone');
   await context.updateSettings({ allowanceChanges: [change] });
@@ -114,13 +116,23 @@ test('a newer malformed official row the card rejects does not hide the derived 
   assert.ok(Math.abs(context.store.getQuota('claude-fable').usedPercent - 20) < 0.01);
 });
 
-test('a derivation that cannot run leaves the setting saved and reports why', (t) => {
+test('a derivation that cannot run discards the outdated estimate instead of leaving it on the card', async (t) => {
   const context = fixture(t);
-  context.store.recordObservation({
-    sourceId: 'claude-fable', bucketId: 'fable_seven_day', bucketName: 'Fable 5 weekly', observedAt: iso(NOW - HOUR),
-    usedPercent: 12, remainingPercent: 88, resetsAt: RESET, windowMinutes: 10_080, provenance: 'derived-tokens',
+  const derived = (observedAt, usedPercent, resetsAt = RESET) => context.store.recordObservation({
+    sourceId: 'claude-fable', bucketId: 'fable_seven_day', bucketName: 'Fable 5 weekly', observedAt: iso(observedAt),
+    usedPercent, remainingPercent: 100 - usedPercent, resetsAt, windowMinutes: 10_080, provenance: 'derived-tokens',
     confidence: 0.5, metadata: {},
   });
-  assert.deepEqual(rederiveFableEstimate(context.store), { derived: false, reason: 'no-overall-reading' });
-  assert.equal(context.fableRows().length, 1);
+  // An earlier window's estimate is history, not the card, and stays.
+  derived(NOW - 9 * 24 * HOUR, 40, new Date(NOW - 5 * 24 * HOUR).toISOString());
+  derived(NOW - 2 * HOUR, 8);
+  derived(NOW - HOUR, 12);
+  assert.equal(context.store.getQuota('claude-fable').usedPercent, 12);
+  const result = await context.updateSettings({ allowanceChanges: [change] });
+  assert.deepEqual(context.fableRows().map((row) => row.used_percent), [40], 'only the displayed window\'s derived rows go');
+  assert.equal(result.snapshot.quotas.fable?.provenance, 'derived-tokens');
+  assert.equal(result.snapshot.quotas.fable?.usedPercent, 40, 'the card falls back to the expired estimate, which is labelled as such');
+  assert.deepEqual(rederiveFableEstimate(context.store), { derived: false, reason: 'no-overall-reading' },
+    'an expired window is history and is not discarded');
+  assert.deepEqual(context.fableRows().map((row) => row.used_percent), [40]);
 });

@@ -2,7 +2,7 @@
 
 ## 1.0.42 — 14 September 2026
 
-- Recompute the locally derived Fable 5 estimate as soon as an allowance change is saved or removed. A derived estimate that had already absorbed the allowance jump previously stayed on the Fable card until the next Claude refresh, indefinitely with refreshes set to only when you refresh. An official Fable reading is never displaced by the recomputation.
+- Recompute the locally derived Fable 5 estimate as soon as an allowance change is saved or removed. A derived estimate that had already absorbed the allowance jump previously stayed on the Fable card until the next Claude refresh, indefinitely with refreshes set to only when you refresh. When no estimate can be produced under the new entries, the outdated one is discarded rather than left on the card. An official Fable reading is never displaced or removed by the recomputation.
 - Preserve local usage history, settings, observations, and backups during an in-place update.
 
 ## 1.0.41 — 14 September 2026
