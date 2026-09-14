@@ -268,6 +268,9 @@ function normaliseObservation(row) {
     resetEvidence: RESET_EVIDENCE_PROVENANCES.has(row.provenance),
     sourceId: row.sourceId ?? row.source_id,
     bucketId: row.bucketId ?? row.bucket_id,
+    // A projected point is computed in the current allowance already; it
+    // must not be rescaled again as if it were a stored reading.
+    allowanceScaled: Boolean(row.allowanceScaled ?? row.allowance_scaled),
   };
 }
 
@@ -282,7 +285,7 @@ function rescaleObservations(rows, options) {
   const nowMs = options.now != null ? new Date(options.now).getTime() : Date.now();
   return rows.map((row) => {
     const sourceId = row.sourceId ?? options.sourceId;
-    if (!sourceId) return row;
+    if (!sourceId || row.allowanceScaled) return row;
     const bucketId = row.bucketId ?? options.bucketId;
     const windowMinutes = row.windowMinutes;
     const key = JSON.stringify([sourceId, bucketId, windowMinutes]);

@@ -1075,6 +1075,8 @@ class UsageStore {
       observed_at: entry.observedAt, used_percent: entry.usedPercent, remaining_percent: 100 - entry.usedPercent,
       resets_at: projection.resetsAt, window_minutes: projection.windowMinutes, plan_type: projection.planType,
       provenance: 'derived-tokens', confidence: projection.confidence, metadata_json: '{}',
+      // Already expressed in the current allowance by the projection.
+      allowance_scaled: true,
     });
     const forecast = forecastQuota([...bucketRows, ...projection.series.map(point)], forecastOptions);
     return {

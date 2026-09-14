@@ -100,6 +100,24 @@ test('the projection follows the allowance-change setting on the very next snaps
   assert.equal(context.fableRows(), 0, 'no refresh, no rows, no stale figure anywhere');
 });
 
+test('projected points are not rescaled a second time when an allowance change falls inside the window', (t) => {
+  const context = fixture(t);
+  // Ten boosted points, then the boost ends, then ten more of the current
+  // allowance. In today's terms the first step was fifteen points and the
+  // second ten, all of it Fable and doubled for the half cap.
+  context.overall(NOW - 25 * HOUR, 10);
+  context.usage('f1', NOW - 22 * HOUR, 'claude-fable-5', 4_000_000);
+  context.overall(NOW - 20 * HOUR, 20);
+  context.usage('f2', NOW - 10 * HOUR, 'claude-fable-5', 4_000_000);
+  context.overall(NOW - HOUR, 40);
+  context.store.updateSettings({ allowanceChanges: [{ source: 'claude', at: iso(NOW - 12 * HOUR), previousAllowancePercent: 150 }] });
+  const projection = projectFableAllowance(context.store, NOW);
+  assert.deepEqual(projection.series.map((point) => Math.round(point.usedPercent)), [30, 50, 50],
+    'the projection already expresses every point in the current allowance');
+  const observed = context.quota().forecast.series.observed.map((point) => Math.round(point.remaining));
+  assert.deepEqual(observed, [70, 50, 50], 'the forecast takes the projected points as they are, not scaled to 45 again');
+});
+
 test('a plan-less status-line row newer than the SDK reading cannot switch the projection off', (t) => {
   const context = fixture(t);
   fableWeek(context);
