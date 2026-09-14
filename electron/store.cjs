@@ -9,6 +9,7 @@ const { forecastQuota } = require('./forecast.cjs');
 const { TaskUsage } = require('./task-usage.cjs');
 const { estimateTokenCapacity, LOOKBACK_MS: TOKEN_CAPACITY_LOOKBACK_MS, STALENESS_MS: TOKEN_CAPACITY_STALENESS_MS } = require('./token-capacity.cjs');
 const { MAX_QUOTA_RESET_AHEAD_MS, QUOTA_CLOCK_SKEW_MS, FORECAST_LOOKBACK_MS, validQuotaTime } = require('./quota-time.cjs');
+const { isAllowanceChangeList, normalizeAllowanceChanges } = require('./allowance-changes.cjs');
 
 const SOURCE_DEFINITIONS = [
   ['codex', 'Codex', 'codex'],
@@ -36,6 +37,7 @@ const DEFAULT_SETTINGS = {
   hardLimitThreshold: 90,
   reservePercent: 0,
   forecastExcludedDates: [],
+  allowanceChanges: [],
   codexPlanUsdPerMonth: 0,
   claudePlanUsdPerMonth: 0,
   notifyDesktop: true,
@@ -67,7 +69,9 @@ function isForecastDate(value) {
 }
 
 function normalizedSetting(key, value) {
-  return key === 'forecastExcludedDates' ? [...new Set(value)].sort() : value;
+  if (key === 'forecastExcludedDates') return [...new Set(value)].sort();
+  if (key === 'allowanceChanges') return normalizeAllowanceChanges(value);
+  return value;
 }
 
 const SETTING_VALIDATORS = {
@@ -86,6 +90,7 @@ const SETTING_VALIDATORS = {
   hardLimitThreshold: (value) => Number.isFinite(value) && value >= 0 && value <= 100,
   reservePercent: (value) => Number.isFinite(value) && value >= 0 && value <= 50,
   forecastExcludedDates: (value) => Array.isArray(value) && value.length <= 366 && value.every(isForecastDate),
+  allowanceChanges: (value) => isAllowanceChangeList(value),
   codexPlanUsdPerMonth: (value) => Number.isFinite(value) && value >= 0 && value <= 100_000,
   claudePlanUsdPerMonth: (value) => Number.isFinite(value) && value >= 0 && value <= 100_000,
   notifyDesktop: (value) => typeof value === 'boolean',
@@ -987,6 +992,8 @@ class UsageStore {
         hardLimitThreshold: settings.hardLimitThreshold,
         reservePercent: settings.reservePercent,
         excludedDates: settings.forecastExcludedDates,
+        allowanceChanges: settings.allowanceChanges,
+        sourceId,
       });
       return {
         bucketId,
@@ -1096,13 +1103,15 @@ class UsageStore {
     const quotaRevision = this.prepare(`SELECT COALESCE(SUM(revision), 0) AS value
       FROM analytics_revisions WHERE domain = 'quota' AND source_id = ? AND bucket_id = ?`).get(sourceId, bucketId).value;
     const excludedDates = settings.forecastExcludedDates || [];
+    const allowanceChanges = settings.allowanceChanges || [];
     const key = JSON.stringify([sourceId, bucketId]);
-    const exclusions = JSON.stringify(excludedDates);
+    // Both learning settings change the estimate without touching a revision.
+    const exclusions = JSON.stringify([excludedDates, allowanceChanges]);
     const cached = this.transactionDepth === 0 ? this.tokenCapacityCache.get(key) : null;
     if (cached && cached.usageRevision === evidence.revision && cached.quotaRevision === quotaRevision
       && cached.exclusions === exclusions && nowMs >= cached.evaluatedAt && nowMs < cached.expiresAt) return cached.value;
 
-    const value = estimateTokenCapacity({ sourceId, bucketId, observations, events: evidence.rows, nowMs, excludedDates });
+    const value = estimateTokenCapacity({ sourceId, bucketId, observations, events: evidence.rows, nowMs, excludedDates, allowanceChanges });
     let expiresAt = evidence.expiresAt;
     // Time can change eligibility without a write: future readings arrive,
     // history leaves the learning horizon, and current allowance expires.

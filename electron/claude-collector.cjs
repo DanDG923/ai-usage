@@ -8,6 +8,7 @@ const { createClaudeAgentSdkUsagePort } = require('./claude-agent-usage.cjs');
 const { createFableUsageTracker, OFFICIAL_PROVENANCES } = require('./fable-tracker.cjs');
 const { planIncrementalRead, readCompleteLines } = require('./incremental-file.cjs');
 const { epochToIso } = require('./time.cjs');
+const { createAllowanceScaler } = require('./allowance-changes.cjs');
 
 const MAX_INBOX_BYTES = 2 * 1024 * 1024;
 
@@ -395,7 +396,7 @@ function allowancePressure(store, modelLike, sinceIso, untilIso) {
 // fixed allowance-pressure units, and their ratio is the rate. Pairs must share a reset — a delta
 // across a reset is meaningless — but a rate learned in one window carries
 // into the next, because it is a property of pricing and caps, not the week.
-function fablePairCalibration(store, nowMs) {
+function fablePairCalibration(store, nowMs, usedOf = rawUsedPercent) {
   const sinceIso = new Date(nowMs - 21 * 24 * 60 * 60 * 1000).toISOString();
   const readings = store.getOfficialObservations('claude-fable', FABLE_BUCKET, OFFICIAL_PROVENANCES, sinceIso);
   let deltaSum = 0;
@@ -406,7 +407,7 @@ function fablePairCalibration(store, nowMs) {
     const after = readings[index];
     if (Math.abs(new Date(after.resets_at).getTime() - new Date(before.resets_at).getTime()) > 60_000) continue;
     // Backward movement is a correction or a mistyped reading, not consumption.
-    const delta = Number(after.used_percent) - Number(before.used_percent);
+    const delta = usedOf(after) - usedOf(before);
     // Equal displayed readings are interval-censored: real use may have moved
     // by less than the provider's rounding precision. Treating them as a
     // measured zero rate would freeze every later estimate.
@@ -426,10 +427,10 @@ function fablePairCalibration(store, nowMs) {
 // caused it, in proportion to fixed allowance-pressure units. Each step is bounded
 // by two official readings, so only tokens between those readings matter — a
 // week of history this machine never saw cannot distort it.
-function fableStepsFromOverall(store, readings, fromMs, toMs) {
+function fableStepsFromOverall(store, readings, fromMs, toMs, usedOf = rawUsedPercent) {
   const steps = [];
   let rejectedCoverage = 0;
-  let highWater = Number(readings[0]?.used_percent);
+  let highWater = readings.length ? usedOf(readings[0]) : NaN;
   for (let index = 1; index < readings.length; index += 1) {
     const before = readings[index - 1];
     const after = readings[index];
@@ -437,7 +438,7 @@ function fableStepsFromOverall(store, readings, fromMs, toMs) {
     // Provider percentages jitter and correct backwards. Consumption is only a
     // new same-window high-water mark; a rebound to an already-seen value adds
     // nothing a second time.
-    const afterUsed = Number(after.used_percent);
+    const afterUsed = usedOf(after);
     if (!Number.isFinite(afterUsed) || !Number.isFinite(highWater)) continue;
     const priorHighWater = highWater;
     highWater = Math.max(highWater, afterUsed);
@@ -463,6 +464,24 @@ function fableStepsFromOverall(store, readings, fromMs, toMs) {
     });
   }
   return { steps, rejectedCoverage };
+}
+
+function rawUsedPercent(row) {
+  return Number(row.used_percent);
+}
+
+// Every percentage the derivation reads is expressed in the current Claude
+// allowance. Readings taken before a recorded allowance change are a share of
+// the earlier allowance; without the rescale the step at the change would be
+// calibrated as Fable consumption and the earlier pairs would run too cool.
+function allowanceAdjustedUsed(store) {
+  const scaler = createAllowanceScaler(store.getSettings().allowanceChanges, 'claude');
+  if (!scaler) return rawUsedPercent;
+  return (row) => {
+    const used = rawUsedPercent(row);
+    const observedMs = new Date(row.observed_at).getTime();
+    return Number.isFinite(used) && Number.isFinite(observedMs) ? used * scaler(observedMs) : used;
+  };
 }
 
 // When Claude does not expose a model-scoped Fable allowance, a labelled local
@@ -496,10 +515,11 @@ function deriveFableEstimate(store, nowMs = Date.now()) {
   if (planType !== 'max') {
     return { derived: false, reason: 'fable-not-confirmed-in-shared-plan' };
   }
+  const usedOf = allowanceAdjustedUsed(store);
   const resetMs = new Date(overallWindow.resets_at).getTime();
   const windowMinutes = Number(overallWindow.window_minutes) > 0 ? Number(overallWindow.window_minutes) : 10_080;
   const windowMs = windowMinutes * 60_000;
-  const overallUsed = Number(overallWindow.used_percent);
+  const overallUsed = usedOf(overallWindow);
   const overallObservedMs = new Date(overallWindow.observed_at).getTime();
   if (!Number.isFinite(resetMs) || !Number.isFinite(overallUsed) || !Number.isFinite(overallObservedMs)) {
     return { derived: false, reason: 'invalid-overall-reading' };
@@ -517,7 +537,7 @@ function deriveFableEstimate(store, nowMs = Date.now()) {
   const anchor = store.getRecentQuotaObservations('claude-fable', FABLE_BUCKET, OFFICIAL_PROVENANCES, 1)
     .find((row) => new Date(row.observed_at).getTime() >= windowStartMs
       && Math.abs(new Date(row.resets_at).getTime() - resetMs) <= 60_000) || null;
-  const baseUsed = anchor ? Number(anchor.used_percent) : 0;
+  const baseUsed = anchor ? usedOf(anchor) : 0;
   const baseAtMs = anchor ? new Date(anchor.observed_at).getTime() : windowStartMs;
 
   // Structural ceiling at the timestamp of the latest overall observation.
@@ -529,7 +549,7 @@ function deriveFableEstimate(store, nowMs = Date.now()) {
   // so when one exists it wins. The overall-share split is the fallback — and
   // it needs the overall figure to actually step, which an integer percentage
   // on a machine that mostly runs without the status line may never do.
-  const pair = fablePairCalibration(store, nowMs);
+  const pair = fablePairCalibration(store, nowMs, usedOf);
   let raw;
   let method;
   let steps = [];
@@ -565,7 +585,7 @@ function deriveFableEstimate(store, nowMs = Date.now()) {
   } else {
     if (readings.length < 2) return { derived: false, reason: 'not-enough-overall-readings' };
     method = 'overall-share';
-    const steppedResult = fableStepsFromOverall(store, readings, baseAtMs, nowMs);
+    const steppedResult = fableStepsFromOverall(store, readings, baseAtMs, nowMs, usedOf);
     steps = steppedResult.steps;
     stepped = steps.reduce((total, step) => total + step.deltaFable, 0);
     if (!anchor && steps.length === 0) return {

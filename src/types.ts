@@ -239,6 +239,15 @@ export type DailyUsage = { sourceId: string; date: string; tokens: number };
 
 export type Theme = 'system' | 'dark' | 'light';
 
+/** A recorded change in a subscription's allowance size; readings before `at` are rescaled. */
+export type AllowanceChange = {
+  source: 'claude' | 'codex';
+  /** ISO instant of the change, chosen between the last old-allowance reading and the first new one. */
+  at: string;
+  /** The earlier allowance as a percentage of the current one, e.g. 150 when a 50% boost ended. */
+  previousAllowancePercent: number;
+};
+
 export type Settings = {
   showCodexSubscription: boolean;
   showClaudeSubscription: boolean;
@@ -250,6 +259,8 @@ export type Settings = {
   forecastFallbackRate: number;
   /** Local calendar dates excluded from forecast learning, with usage history retained. */
   forecastExcludedDates: string[];
+  /** Allowance size changes, in time order; learning rescales earlier readings to the current allowance. */
+  allowanceChanges: AllowanceChange[];
   paceRiskThreshold: number;
   hardLimitThreshold: number;
   reservePercent: number;
