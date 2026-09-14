@@ -118,6 +118,20 @@ test('a newer malformed official row the card rejects does not hide the derived 
   assert.ok(Math.abs(context.store.getQuota('claude-fable').usedPercent - 20) < 0.01);
 });
 
+test('a derived row a few minutes ahead of the clock is retired so the replacement headlines', async (t) => {
+  const context = fixture(t);
+  boostedWeek(context);
+  // A small backwards clock correction leaves the last estimate in the future.
+  const ahead = deriveFableEstimate(context.store, NOW + 2 * 60_000);
+  assert.equal(ahead.derived, true);
+  assert.ok(Math.abs(context.store.getQuota('claude-fable').usedPercent - 30) < 0.01);
+  await context.updateSettings({ allowanceChanges: [change] });
+  const rows = context.fableRows();
+  assert.equal(rows.length, 1, 'the future-dated estimate is retired rather than left ahead of its replacement');
+  assert.ok(Math.abs(rows[0].used_percent - 20) < 0.01, `rescaled estimate ${rows[0].used_percent}`);
+  assert.ok(Math.abs(context.store.getQuota('claude-fable').usedPercent - 20) < 0.01, 'the card shows the replacement');
+});
+
 test('a derivation that cannot run discards the outdated estimate instead of leaving it on the card', async (t) => {
   const context = fixture(t);
   const derived = (observedAt, usedPercent, resetsAt = RESET) => context.store.recordObservation({

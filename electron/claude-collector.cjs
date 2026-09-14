@@ -503,7 +503,15 @@ function rederiveFableEstimate(store, nowMs = Date.now()) {
     return { derived: false, reason: `derive-failed: ${error.message}` };
   }
   const resetMs = Date.parse(latest.resets_at);
-  if (result.derived || result.reason === 'unchanged' || !(resetMs > nowMs)) return result;
+  if (result.derived) {
+    // Clock skew lets the displayed row sit a few minutes ahead of now. The
+    // replacement is written at now and would sort behind it, so the old
+    // figure would still headline: retire any future-dated derived rows.
+    const superseded = store.prepare(`DELETE FROM quota_observations WHERE source_id = 'claude-fable' AND bucket_id = ?
+      AND provenance = 'derived-tokens' AND observed_at > ?`).run(FABLE_BUCKET, new Date(nowMs).toISOString()).changes;
+    return superseded > 0 ? { ...result, superseded: Number(superseded) } : result;
+  }
+  if (result.reason === 'unchanged' || !(resetMs > nowMs)) return result;
   // Under the new setting there is nothing to estimate from, so the figure
   // computed under the old allowance has no replacement. A known-wrong
   // percentage must not stay on the card: discard this live window's derived
