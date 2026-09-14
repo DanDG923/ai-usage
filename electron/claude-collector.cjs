@@ -9,6 +9,7 @@ const { createFableUsageTracker, OFFICIAL_PROVENANCES } = require('./fable-track
 const { planIncrementalRead, readCompleteLines } = require('./incremental-file.cjs');
 const { epochToIso } = require('./time.cjs');
 const { createAllowanceScaler } = require('./allowance-changes.cjs');
+const { QUOTA_CLOCK_SKEW_MS, validQuotaTime } = require('./quota-time.cjs');
 
 const MAX_INBOX_BYTES = 2 * 1024 * 1024;
 
@@ -484,6 +485,57 @@ function allowanceAdjustedUsed(store, nowMs) {
     const observedMs = new Date(row.observed_at).getTime();
     return Number.isFinite(used) && Number.isFinite(observedMs) ? used * scaler(observedMs) : used;
   };
+}
+
+// A settings change that rescales Claude's history changes what the local
+// Fable estimate should say now, not at the next refresh: a derived row that
+// already absorbed an allowance jump would otherwise headline the Fable card
+// until then, indefinitely under "Only when I refresh". Re-derive at once,
+// but only when a derived row is what the card shows; an official reading
+// needs no local estimate and must not be displaced by one.
+function rederiveFableEstimate(store, nowMs = Date.now()) {
+  const latest = displayedFableReading(store, nowMs);
+  if (!latest || latest.provenance !== 'derived-tokens') return { derived: false, reason: 'no-derived-estimate' };
+  let result;
+  try {
+    result = deriveFableEstimate(store, nowMs);
+  } catch (error) {
+    return { derived: false, reason: `derive-failed: ${error.message}` };
+  }
+  const resetMs = Date.parse(latest.resets_at);
+  if (result.derived) {
+    // Clock skew lets the displayed row sit a few minutes ahead of now. The
+    // replacement is written at now and would sort behind it, so the old
+    // figure would still headline: retire any future-dated derived rows.
+    const superseded = store.prepare(`DELETE FROM quota_observations WHERE source_id = 'claude-fable' AND bucket_id = ?
+      AND provenance = 'derived-tokens' AND observed_at > ?`).run(FABLE_BUCKET, new Date(nowMs).toISOString()).changes;
+    return superseded > 0 ? { ...result, superseded: Number(superseded) } : result;
+  }
+  if (result.reason === 'unchanged' || !(resetMs > nowMs)) return result;
+  // Under the new setting there is nothing to estimate from, so the figure
+  // computed under the old allowance has no replacement. A known-wrong
+  // percentage must not stay on the card: discard this live window's derived
+  // rows and let the card report the estimate as unavailable until evidence
+  // returns. An expired window is already labelled as history and stays, and
+  // official and manual readings are never touched.
+  const discarded = store.prepare(`DELETE FROM quota_observations WHERE source_id = 'claude-fable' AND bucket_id = ?
+    AND provenance = 'derived-tokens' AND resets_at >= ? AND resets_at <= ?`)
+    .run(FABLE_BUCKET, new Date(resetMs - 60_000).toISOString(), new Date(resetMs + 60_000).toISOString()).changes;
+  return { ...result, discarded: Number(discarded || 0) };
+}
+
+// The row the Fable card headlines: the newest reading that passes the same
+// time checks getQuota applies. An upgraded or restored database can hold a
+// newer malformed official row the card rejects; it must not hide the derived
+// row the card actually shows.
+function displayedFableReading(store, nowMs) {
+  const rows = store.prepare(`SELECT provenance, observed_at, resets_at, window_minutes FROM quota_observations
+    WHERE source_id = 'claude-fable' AND bucket_id = ? AND observed_at <= ? ORDER BY observed_at DESC, id DESC`)
+    .iterate(FABLE_BUCKET, new Date(nowMs + QUOTA_CLOCK_SKEW_MS).toISOString());
+  for (const row of rows) {
+    if (validQuotaTime(Date.parse(row.observed_at), Date.parse(row.resets_at), row.window_minutes, nowMs)) return row;
+  }
+  return null;
 }
 
 // When Claude does not expose a model-scoped Fable allowance, a labelled local
@@ -978,4 +1030,4 @@ async function refreshClaude(store, inboxPath, options = {}) {
     ...(!activityCurrent ? { warning: fableTracking.health.detail || 'Local transcript activity is incomplete.' } : {}) };
 }
 
-module.exports = { deriveFableEstimate, epochToIso, findClaudeBinary, importClaudeInbox, importClaudeTranscripts, installClaudeHelper, isClaudeHelperInstalled, makeHelperScript, refreshClaude, uninstallClaudeHelper };
+module.exports = { deriveFableEstimate, epochToIso, findClaudeBinary, importClaudeInbox, importClaudeTranscripts, installClaudeHelper, isClaudeHelperInstalled, makeHelperScript, rederiveFableEstimate, refreshClaude, uninstallClaudeHelper };
