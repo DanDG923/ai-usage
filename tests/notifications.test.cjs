@@ -6,6 +6,18 @@ const { buildSummaryText, buildTrayTooltip, decideNotifications, emptyState } = 
 
 const NOW = Date.parse('2026-09-01T10:30:00Z');
 
+test('Claude summary, tray and digest prefer the overall weekly pool in any response order', () => {
+  const overall = window({ bucketId: 'seven_day', remainingPercent: 83, usedPercent: 17 });
+  const scoped = window({ bucketId: 'model_scoped:opus', remainingPercent: 12, usedPercent: 88, metadata: { scope: 'model' } });
+  for (const windows of [[scoped, overall], [overall, scoped]]) {
+    const current = snapshot({ quotas: { claude: { ...overall, windows } } });
+    assert.match(buildSummaryText(current, NOW), /Claude: 83% left/);
+    assert.match(buildTrayTooltip(current, NOW), /Claude 83%/);
+    current.settings.notifyDigest = true;
+    assert.match(decideNotifications({ current, nowMs: NOW }).notifications.find((entry) => entry.kind === 'digest').body, /Claude: 83% left/);
+  }
+});
+
 test('hidden subscriptions are omitted from summaries, reset and fallback reminders', () => {
   const previous = snapshot();
   const initial = decideNotifications({ previous: null, current: previous, nowMs: NOW });

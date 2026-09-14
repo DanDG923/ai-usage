@@ -14,7 +14,7 @@ import { StorageSection } from './settings/StorageSection';
 export type SettingsActions = {
   dataOperation: 'backup' | 'restore' | 'export' | null;
   onSetupClaude: () => void;
-  onSettings: (patch: Partial<SettingsType>) => Promise<void>;
+  onSettings: (patch: Partial<SettingsType>) => Promise<void | boolean>;
   onPrice: (row: PriceRow) => Promise<void>;
   onInstallClaude: () => Promise<void>;
   onUninstallClaude: () => Promise<void>;
@@ -33,7 +33,7 @@ export function Settings({ snapshot, actions }: { snapshot: Snapshot; actions: S
   const update = async (patch: Partial<SettingsType>) => {
     setSaving(true);
     try {
-      await actions.onSettings(patch);
+      return await actions.onSettings(patch);
     } finally {
       setSaving(false);
     }

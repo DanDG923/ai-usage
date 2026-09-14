@@ -13,6 +13,35 @@ function fixture(t) {
   return store;
 }
 const at = '2026-09-01T12:00:00.000Z';
+
+test('invalid token subsets cannot overwrite a good ledger row or enter through restore', (t) => {
+  const store = fixture(t);
+  const base = { eventKey: 'valid', sourceId: 'codex', occurredAt: at, inputTokens: 100, cachedInputTokens: 20 };
+  store.recordUsageEvent(base);
+  const original = store.prepare('SELECT * FROM usage_events').all();
+  for (const fields of [{ cachedInputTokens: 101 }, { inputTokens: false }, { inputTokens: '' }, { inputTokens: [] },
+    { cacheWriteInputTokens: 10, cacheWrite5mInputTokens: 8, cacheWrite1hInputTokens: 8 }]) {
+    assert.throws(() => store.recordUsageEvent({ ...base, ...fields }), /token|Cache write/);
+    assert.deepEqual(store.prepare('SELECT * FROM usage_events').all(), original);
+  }
+  const result = store.restoreFromExport({ schemaVersion: 1, usageEvents: [
+    { ...original[0], event_key: 'bad-cache', cached_input_tokens: 101 },
+    { ...original[0], event_key: 'bad-ttl', cache_write_input_tokens: 10, cache_write_5m_input_tokens: 8, cache_write_1h_input_tokens: 8 },
+    { ...original[0], event_key: 'good-copy' },
+  ] });
+  assert.equal(result.skipped, 2);
+  assert.equal(result.usageEvents, 1);
+});
+
+test('a partially specified cache duration infers only the remaining five-minute tokens', (t) => {
+  const store = fixture(t);
+  store.recordUsageEvent({ eventKey: 'ttl', sourceId: 'claude', occurredAt: at, model: 'claude-fable-5',
+    cacheWriteInputTokens: 300, cacheWrite1hInputTokens: 200 });
+  const saved = store.prepare('SELECT * FROM usage_events').get();
+  assert.equal(saved.cache_write_5m_input_tokens, 100);
+  assert.equal(saved.cache_write_1h_input_tokens, 200);
+  assert.equal(store.calculateCost(saved).actualUsd, 0.00525);
+});
 const cases = [
   ['usage_events', 'event_key', 'usageEvents', (key) => ({ event_key: key, source_id: 'codex', occurred_at: at, input_tokens: 10 })],
   ['quota_observations', 'bucket_id', 'observations', (key) => ({ source_id: 'codex', bucket_id: key,

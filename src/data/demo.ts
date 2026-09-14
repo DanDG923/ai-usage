@@ -190,6 +190,7 @@ export const demoSnapshot: Snapshot = {
     activeEndHour: 22,
     forecastFallbackRate: 0.35,
     forecastExcludedDates: [],
+    allowanceChanges: [],
     paceRiskThreshold: 1.2,
     hardLimitThreshold: 90,
     reservePercent: 0,
