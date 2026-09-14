@@ -173,19 +173,23 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
   if (rescaled) result.warnings.push('Readings before a recorded allowance change were rescaled to the current allowance.');
   let readings = allReadings.filter((row) => row.official);
   if (!readings.length) return { ...result, reason: 'No valid official seven-day readings are available for this limit.' };
-  const currentPlan = readings.findLast((row) => row.plan)?.plan;
-  const lastIncompatible = readings.findLastIndex((row) => row.plan && currentPlan && row.plan !== currentPlan);
   // A plan name changing is only a calibration break when nothing says how
   // the allowance moved. A recorded change inside that transition already
-  // rescaled the earlier readings, so their evidence stays comparable. The
-  // transition spans from the last old-plan reading to the first reading
-  // that names the current plan: status-line and manual readings carry no
-  // plan, and one of them in between must not hide the recorded change.
-  const firstCurrentPlan = readings.findIndex((row, index) => index > lastIncompatible && row.plan === currentPlan);
-  const transitionExplained = lastIncompatible >= 0 && firstCurrentPlan > lastIncompatible && scaler
-    && scaler(readings[lastIncompatible].at) !== scaler(readings[firstCurrentPlan].at);
-  if (lastIncompatible >= 0 && !transitionExplained) {
-    readings = readings.slice(lastIncompatible + 1);
+  // rescaled the earlier readings, so their evidence stays comparable. Each
+  // boundary is judged on its own, and history restarts after the latest
+  // one nothing explains. A boundary spans from the last reading naming the
+  // old plan to the first naming the new one: status-line and manual
+  // readings carry no plan, and one in between must not hide the change.
+  let cutoff = -1;
+  let previousPlanned = -1;
+  readings.forEach((row, index) => {
+    if (!row.plan) return;
+    if (previousPlanned >= 0 && row.plan !== readings[previousPlanned].plan
+      && !(scaler && scaler(readings[previousPlanned].at) !== scaler(row.at))) cutoff = index;
+    previousPlanned = index;
+  });
+  if (cutoff > 0) {
+    readings = readings.slice(cutoff);
     result.warnings.push('Earlier readings from a different plan were excluded.');
   }
   result.status = 'learning';

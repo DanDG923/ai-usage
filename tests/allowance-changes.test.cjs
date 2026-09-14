@@ -144,6 +144,14 @@ test('token capacity rescales earlier intervals to the current allowance and say
   assert.equal(carriedAcrossPlanless.status, 'available');
   assert.equal(carriedAcrossPlanless.weeklyTokens, 10_000_000);
   assert.equal(carriedAcrossPlanless.intervals, 4);
+  // Only the latest boundary is explained: history restarts after the earlier
+  // plan change that nothing accounts for, and the later one is kept.
+  const plans = ['pro', 'pro', 'team', 'team', 'max'];
+  const twoChanges = { ...upgraded, observations: upgraded.observations.map((reading, index) => ({ ...reading, plan_type: plans[index] })) };
+  const partial = estimateTokenCapacity({ ...twoChanges, allowanceChanges: [change({ at: iso(NOW - 1.5 * HOUR) })] });
+  assert.equal(partial.status, 'learning');
+  assert.equal(partial.intervals, 2, 'the team and max readings calibrate; the pro readings before the unexplained change do not');
+  assert.ok(partial.warnings.some((warning) => /different plan/.test(warning)));
 });
 
 test('the store validates, normalizes, persists and applies allowance changes to forecasts and capacity', (t) => {
