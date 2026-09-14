@@ -23,10 +23,14 @@ function coded(message, code) {
 function fileDigest(filePath) {
   return new Promise((resolve, reject) => {
     const hash = crypto.createHash('sha512');
+    let digest;
     fs.createReadStream(filePath)
       .on('error', reject)
       .on('data', (chunk) => hash.update(chunk))
-      .on('end', () => resolve(hash.digest('base64')));
+      .on('end', () => { digest = hash.digest('base64'); })
+      // Windows can keep the executable locked between end and close.
+      // Release our handle before callers launch or clean up the file.
+      .on('close', () => digest ? resolve(digest) : reject(new Error('Installer read ended before completion.')));
   });
 }
 

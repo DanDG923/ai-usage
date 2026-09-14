@@ -16,8 +16,24 @@ function fixture() {
   const bytes = crypto.randomBytes(64 * 1024 + 17);
   fs.writeFileSync(filePath, bytes);
   const sha512 = crypto.createHash('sha512').update(bytes).digest('base64');
-  return { root, filePath, sha512, clean: () => fs.rmSync(root, { recursive: true, force: true }) };
+  return { root, filePath, sha512, clean: () => fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }) };
 }
+
+test('installer verification releases its read handle before completing', async (t) => {
+  const f = fixture();
+  const createReadStream = fs.createReadStream;
+  let closed = false;
+  let closing;
+  t.mock.method(fs, 'createReadStream', (...args) => {
+    const stream = createReadStream(...args);
+    closing = new Promise((resolve) => stream.once('close', () => { closed = true; resolve(); }));
+    return stream;
+  });
+  try {
+    await verifyInstaller(f.filePath, f.sha512);
+    assert.equal(closed, true);
+  } finally { await closing; f.clean(); }
+});
 
 test('trusted installer gets the captured environment without changing update authentication', async () => {
   const f = fixture(), calls = [];
