@@ -486,6 +486,22 @@ function allowanceAdjustedUsed(store, nowMs) {
   };
 }
 
+// A settings change that rescales Claude's history changes what the local
+// Fable estimate should say now, not at the next refresh: a derived row that
+// already absorbed an allowance jump would otherwise headline the Fable card
+// until then, indefinitely under "Only when I refresh". Re-derive at once,
+// but only when a derived row is what the card shows; an official reading
+// needs no local estimate and must not be displaced by one.
+function rederiveFableEstimate(store, nowMs = Date.now()) {
+  const latest = store.getRecentQuotaObservations('claude-fable', FABLE_BUCKET, null, 1)[0];
+  if (!latest || latest.provenance !== 'derived-tokens') return { derived: false, reason: 'no-derived-estimate' };
+  try {
+    return deriveFableEstimate(store, nowMs);
+  } catch (error) {
+    return { derived: false, reason: `derive-failed: ${error.message}` };
+  }
+}
+
 // When Claude does not expose a model-scoped Fable allowance, a labelled local
 // estimate can be derived — but never from a guessed token rate. Two derivations exist, and
 // both use only intervals bounded by official readings, so history this
@@ -978,4 +994,4 @@ async function refreshClaude(store, inboxPath, options = {}) {
     ...(!activityCurrent ? { warning: fableTracking.health.detail || 'Local transcript activity is incomplete.' } : {}) };
 }
 
-module.exports = { deriveFableEstimate, epochToIso, findClaudeBinary, importClaudeInbox, importClaudeTranscripts, installClaudeHelper, isClaudeHelperInstalled, makeHelperScript, refreshClaude, uninstallClaudeHelper };
+module.exports = { deriveFableEstimate, epochToIso, findClaudeBinary, importClaudeInbox, importClaudeTranscripts, installClaudeHelper, isClaudeHelperInstalled, makeHelperScript, rederiveFableEstimate, refreshClaude, uninstallClaudeHelper };
