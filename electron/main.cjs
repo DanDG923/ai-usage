@@ -588,7 +588,7 @@ function registerIpc() {
     // Only the fields the renderer's form sends are accepted; bucket, window,
     // plan, and observation time are fixed here rather than taken from IPC.
     const note = typeof observation.note === 'string' ? observation.note.slice(0, 500) : null;
-    await databaseJobs.run(() => {
+    const current = await databaseJobs.run(() => {
       store.recordObservation({
         sourceId,
         bucketId: store.getManualBucketId(sourceId),
@@ -604,8 +604,15 @@ function registerIpc() {
         metadata: { note, sharedWithOverall: false },
       });
       invalidateSnapshot();
+      const saved = snapshot();
+      publishAfterWrite(saved);
+      return saved;
     });
-    return refreshClaudeOnly();
+    // The observation is committed. Provider availability must not turn that
+    // successful save into an error or hold the form open for a network call.
+    // Claude's derived view refreshes through the normal snapshot push.
+    if (sourceId !== 'codex') void refreshClaudeOnly().catch((error) => log(`Refresh after manual observation: ${error.message}`));
+    return current;
   });
   handleIpc('dashboard:install-claude-helper', async () => {
     const result = installClaudeHelper(getInboxPath());

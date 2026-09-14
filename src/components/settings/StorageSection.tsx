@@ -15,7 +15,7 @@ export function StorageSection({
 }: {
   dataOperation: 'backup' | 'restore' | 'export' | null;
   snapshot: Snapshot;
-  update: (patch: Partial<Settings>) => Promise<void>;
+  update: (patch: Partial<Settings>) => Promise<void | boolean>;
   onBackup: () => Promise<void>;
   onRestore: () => Promise<void>;
   onOpenBackups: () => Promise<void>;

@@ -159,7 +159,7 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
   // whole. Rescaling it to the current allowance keeps the tokens-per-point
   // ratio of every earlier interval comparable with intervals measured now,
   // and turns the step at the change into ordinary rounding.
-  const scaler = createAllowanceScaler(allowanceChanges, sourceId);
+  const scaler = createAllowanceScaler(allowanceChanges, sourceId, { bucketId, windowMinutes: 10_080, nowMs });
   let rescaled = false;
   const allReadings = (Array.isArray(observations) ? observations : [])
     .map((row) => normalizeObservation(row, sourceId, bucketId, scope, nowMs)).filter(Boolean)
@@ -185,7 +185,7 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
   readings.forEach((row, index) => {
     if (!row.plan) return;
     if (previousPlanned >= 0 && row.plan !== readings[previousPlanned].plan
-      && !(scaler && scaler(readings[previousPlanned].at) !== scaler(row.at))) cutoff = index;
+      && !scaler?.hasChangeBetween(readings[previousPlanned].at, row.at)) cutoff = index;
     previousPlanned = index;
   });
   if (cutoff > 0) {

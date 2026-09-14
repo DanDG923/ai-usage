@@ -11,7 +11,7 @@ export function ForecastSection({
   update,
 }: {
   snapshot: Snapshot;
-  update: (patch: Partial<Settings>) => Promise<void>;
+  update: (patch: Partial<Settings>) => Promise<void | boolean>;
 }) {
   const { settings } = snapshot;
   const [savingDays, setSavingDays] = useState(false);

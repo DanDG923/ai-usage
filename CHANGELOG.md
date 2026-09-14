@@ -2,7 +2,12 @@
 
 ## 1.0.41 — 14 September 2026
 
-- Record an allowance change in Settings → Forecast when a subscription's allowance changes size, such as the end of a promotional 50% boost, giving the earlier allowance as a percentage of the one that replaced it. Readings taken before the change are rescaled for learning, so the jump in the provider's percentage is not learned as a burst of usage, earlier weeks keep their true pace in today's terms, and estimated weekly token capacity calibrated on the old allowance is scaled to the new one. A Claude change also covers the Fable 5 window, which shares the weekly pool. Recorded usage, costs, cycle history, and the readings shown on the cards are unchanged, and the list is saved with settings and backups.
+- Record an allowance change in Settings → Forecast when a subscription's main weekly allowance changes size, such as the end of a promotional 50% boost, giving the earlier allowance as a percentage of the one that replaced it. Readings taken before the change are rescaled for learning, so the jump in the provider's percentage is not learned as a burst of usage, earlier weeks keep their true pace in today's terms, and estimated weekly token capacity calibrated on the old allowance is scaled to the new one. Entries affect the main weekly allowance and Claude’s shared Fable 5 pool; five-hour and other independent limits are unaffected. Recorded usage, costs, cycle history, and the readings shown on the cards are unchanged, and the list is saved with settings and backups.
+- Apply allowance changes only once their recorded time arrives, preserve calibration when successive changes cancel out, and accept fractional allowance ratios in Settings.
+- Keep Claude’s main allowance selected ahead of model-specific windows in cards, tray summaries, and digests, and label Claude Pro correctly.
+- Return saved manual readings promptly even when Claude is slow or unavailable. Manual Codex readings no longer trigger a Claude refresh.
+- Reject inconsistent token counts and cache-duration splits before they can distort costs, including during backup restore, while retaining support for older exports.
+- Show failed settings saves beside the affected fields and restore numeric fields to their saved values so an unsaved edit cannot appear successful.
 - Preserve local usage history, settings, observations, and backups during an in-place update.
 
 ## 1.0.40 — 12 September 2026

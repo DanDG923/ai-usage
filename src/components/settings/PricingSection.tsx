@@ -140,7 +140,7 @@ export function PricingSection({
   onPrice,
 }: {
   snapshot: Snapshot;
-  update: (patch: Partial<Settings>) => Promise<void>;
+  update: (patch: Partial<Settings>) => Promise<void | boolean>;
   onPrice: (row: PriceRow) => Promise<void>;
 }) {
   const { settings } = snapshot;

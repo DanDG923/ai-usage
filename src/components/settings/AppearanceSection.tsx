@@ -59,7 +59,7 @@ export function AppearanceSection({
   onCheckUpdates,
 }: {
   snapshot: Snapshot;
-  update: (patch: Partial<Settings>) => Promise<void>;
+  update: (patch: Partial<Settings>) => Promise<void | boolean>;
   onCheckUpdates: () => Promise<UpdateStatus | null>;
 }) {
   const [version, setVersion] = useState('');

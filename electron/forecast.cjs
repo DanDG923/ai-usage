@@ -279,11 +279,15 @@ function rescaleObservations(rows, options) {
   const changes = options.allowanceChanges;
   if (!Array.isArray(changes) || !changes.length) return rows;
   const scalers = new Map();
+  const nowMs = options.now != null ? new Date(options.now).getTime() : Date.now();
   return rows.map((row) => {
     const sourceId = row.sourceId ?? options.sourceId;
     if (!sourceId) return row;
-    if (!scalers.has(sourceId)) scalers.set(sourceId, createAllowanceScaler(changes, sourceId));
-    const scale = scalers.get(sourceId)?.(row.observedAt) ?? 1;
+    const bucketId = row.bucketId ?? options.bucketId;
+    const windowMinutes = row.windowMinutes;
+    const key = JSON.stringify([sourceId, bucketId, windowMinutes]);
+    if (!scalers.has(key)) scalers.set(key, createAllowanceScaler(changes, sourceId, { bucketId, windowMinutes, nowMs }));
+    const scale = scalers.get(key)?.(row.observedAt) ?? 1;
     if (scale === 1 || !Number.isFinite(row.usedPercent)) return row;
     const usedPercent = row.usedPercent * scale;
     return { ...row, usedPercent, remainingPercent: 100 - usedPercent };

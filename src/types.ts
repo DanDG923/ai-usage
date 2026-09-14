@@ -239,7 +239,7 @@ export type DailyUsage = { sourceId: string; date: string; tokens: number };
 
 export type Theme = 'system' | 'dark' | 'light';
 
-/** A recorded change in a subscription's allowance size; readings before `at` are rescaled. */
+/** A main weekly allowance change (including Claude's shared Fable pool); independent windows are unaffected. */
 export type AllowanceChange = {
   source: 'claude' | 'codex';
   /** ISO instant of the change, chosen between the last old-allowance reading and the first new one. */

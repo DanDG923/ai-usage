@@ -180,12 +180,14 @@ export default function App() {
           const next = { ...current, settings: { ...current.settings, ...patch } };
           return { ...next, dashboardVerdict: buildDashboardVerdict(next) };
         });
-        return;
+        return true;
       }
       const result = await window.aiUsage.updateSettings(patch);
       commitSnapshot(result.snapshot);
+      return true;
     } catch (error) {
       failWith('That setting could not be saved.')(error);
+      return false;
     }
   };
 

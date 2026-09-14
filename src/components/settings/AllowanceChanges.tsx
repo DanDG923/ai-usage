@@ -3,8 +3,8 @@ import { LOCALE } from '../../lib';
 import type { AllowanceChange, Settings, Snapshot } from '../../types';
 
 const SOURCE_LABELS: Record<AllowanceChange['source'], string> = {
-  claude: 'Claude (including Fable 5)',
-  codex: 'Codex',
+  claude: 'Claude weekly (including Fable 5)',
+  codex: 'Codex main weekly',
 };
 const MAX_CHANGES = 24;
 const DEFAULT_PREVIOUS_PERCENT = '150';
@@ -48,7 +48,7 @@ export function AllowanceChanges({
   update,
 }: {
   snapshot: Snapshot;
-  update: (patch: Partial<Settings>) => Promise<void>;
+  update: (patch: Partial<Settings>) => Promise<void | boolean>;
 }) {
   const now = localDateTime(snapshot.timezone);
   const [source, setSource] = useState<AllowanceChange['source']>('claude');
@@ -75,7 +75,7 @@ export function AllowanceChanges({
     setSaving(true);
     setError('');
     try {
-      await update({ allowanceChanges: next });
+      if ((await update({ allowanceChanges: next })) === false) throw new Error('Save failed');
     } catch {
       setError('The allowance changes could not be saved. Try again.');
     } finally {
@@ -88,10 +88,11 @@ export function AllowanceChanges({
     <div className="forecast-exclusions allowance-changes" aria-labelledby="allowance-changes-heading">
       <h3 id="allowance-changes-heading">Allowance changes</h3>
       <p id="allowance-changes-help">
-        Record when a subscription’s allowance changed size, for example when a promotional boost ended. Readings taken
-        before the change are rescaled to the current allowance, so the jump at the change is not learned as usage and
-        earlier weeks stay comparable for pace and token capacity. Recorded usage, costs, and the provider’s own
-        percentages are unchanged.
+        Record when a subscription’s main weekly allowance changed size, for example when a promotional boost ended.
+        Readings taken before the change are rescaled to the current allowance, so the jump at the change is not learned
+        as usage and earlier weeks stay comparable for pace and token capacity. Recorded usage, costs, and the
+        provider’s own percentages are unchanged. Claude entries also cover Fable 5’s shared weekly pool. Five-hour and
+        other independent model limits keep their own history.
       </p>
       <form
         className="settings-fields forecast-exclusion-controls allowance-change-controls"
@@ -101,7 +102,7 @@ export function AllowanceChanges({
         }}
       >
         <label>
-          <span>Subscription</span>
+          <span>Weekly allowance</span>
           <select
             value={source}
             disabled={saving}
@@ -134,7 +135,7 @@ export function AllowanceChanges({
               type="number"
               min={1}
               max={10_000}
-              step={1}
+              step="any"
               required
               value={previous}
               disabled={saving}

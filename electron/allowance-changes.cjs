@@ -7,7 +7,7 @@
 // without a token being spent. Learning treats that step as usage and the
 // earlier readings as smaller than they were in today's terms.
 //
-// A recorded change says "before `at`, this subscription's allowance was
+// A recorded change says "before `at`, this subscription's main weekly allowance was
 // `previousAllowancePercent` of the allowance that replaced it". Readings
 // before it are multiplied by that ratio; readings after it are untouched.
 // Each entry compares neighbouring allowances, never today's, so a reading
@@ -23,6 +23,17 @@ const FUTURE_TOLERANCE_MS = 5 * 60_000;
 // allowance change moves both readings by the same ratio.
 function allowanceFamily(sourceId) {
   return sourceId === 'claude-fable' ? 'claude' : sourceId;
+}
+
+// These entries describe the main weekly pool, not independent short-term,
+// model or OAuth limits. Require both identity and duration: Codex can use
+// primary/secondary for either duration, and unknown buckets are not evidence
+// that a weekly change applies. Fable follows the shared Claude weekly pool.
+function isWeeklyAllowance(sourceId, bucketId, windowMinutes) {
+  if (windowMinutes !== 10_080) return false;
+  if (sourceId === 'claude') return bucketId === 'seven_day';
+  if (sourceId === 'claude-fable') return ['fable_seven_day', 'fable:seven_day_fable'].includes(bucketId);
+  return sourceId === 'codex' && ['codex:weekly', 'codex:primary', 'codex:secondary'].includes(bucketId);
 }
 
 function isAllowanceChange(value, nowMs = Date.now()) {
@@ -61,14 +72,20 @@ function normalizeAllowanceChanges(value) {
 // The multiplier that expresses a reading taken at `observedMs` in the current
 // allowance, or null when nothing recorded applies to this source so callers
 // can skip the work entirely.
-function createAllowanceScaler(changes, sourceId) {
+function createAllowanceScaler(changes, sourceId, { bucketId, windowMinutes, nowMs = Date.now() } = {}) {
+  if (!isWeeklyAllowance(sourceId, bucketId, windowMinutes)) return null;
   const family = allowanceFamily(sourceId);
   const relevant = normalizeAllowanceChanges(changes)
     .filter((entry) => entry.source === family && Number.isFinite(Date.parse(entry.at))
+      && Date.parse(entry.at) <= nowMs
       && Number.isFinite(entry.previousAllowancePercent) && entry.previousAllowancePercent > 0)
     .map((entry) => ({ atMs: Date.parse(entry.at), factor: entry.previousAllowancePercent / 100 }));
   if (!relevant.length) return null;
-  return (observedMs) => relevant.reduce((factor, entry) => (observedMs < entry.atMs ? factor * entry.factor : factor), 1);
+  const scaler = (observedMs) => relevant.reduce((factor, entry) => (observedMs < entry.atMs ? factor * entry.factor : factor), 1);
+  // Two explained changes can cancel numerically; equal endpoint scales do
+  // not mean that no allowance boundary was recorded between the readings.
+  scaler.hasChangeBetween = (before, after) => relevant.some((entry) => before < entry.atMs && entry.atMs <= after);
+  return scaler;
 }
 
 module.exports = {

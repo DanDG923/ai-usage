@@ -474,8 +474,10 @@ function rawUsedPercent(row) {
 // allowance. Readings taken before a recorded allowance change are a share of
 // the earlier allowance; without the rescale the step at the change would be
 // calibrated as Fable consumption and the earlier pairs would run too cool.
-function allowanceAdjustedUsed(store) {
-  const scaler = createAllowanceScaler(store.getSettings().allowanceChanges, 'claude');
+function allowanceAdjustedUsed(store, nowMs) {
+  const scaler = createAllowanceScaler(store.getSettings().allowanceChanges, 'claude', {
+    bucketId: OVERALL_BUCKET, windowMinutes: 10_080, nowMs,
+  });
   if (!scaler) return rawUsedPercent;
   return (row) => {
     const used = rawUsedPercent(row);
@@ -515,7 +517,7 @@ function deriveFableEstimate(store, nowMs = Date.now()) {
   if (planType !== 'max') {
     return { derived: false, reason: 'fable-not-confirmed-in-shared-plan' };
   }
-  const usedOf = allowanceAdjustedUsed(store);
+  const usedOf = allowanceAdjustedUsed(store, nowMs);
   const resetMs = new Date(overallWindow.resets_at).getTime();
   const windowMinutes = Number(overallWindow.window_minutes) > 0 ? Number(overallWindow.window_minutes) : 10_080;
   const windowMs = windowMinutes * 60_000;

@@ -29,6 +29,7 @@ const boostWeek = () => [
   ...Array.from({ length: 11 }, (_, index) => row(local(8) + index * 12 * HOUR, index * 2)),
   row(local(13, 12), 33),
 ];
+const weeklyScope = { bucketId: 'seven_day', windowMinutes: 10_080 };
 const change = (overrides = {}) => ({ source: 'claude', at: BOOST_ENDED_AT, previousAllowancePercent: 150, ...overrides });
 
 function fixture(t) {
@@ -42,16 +43,16 @@ function fixture(t) {
 }
 
 test('a scaler multiplies readings before each change for its source family and compounds changes', () => {
-  assert.equal(createAllowanceScaler([], 'claude'), null);
-  assert.equal(createAllowanceScaler([change({ source: 'codex' })], 'claude'), null, 'another subscription is untouched');
-  const claude = createAllowanceScaler([change()], 'claude');
+  assert.equal(createAllowanceScaler([], 'claude', weeklyScope), null);
+  assert.equal(createAllowanceScaler([change({ source: 'codex' })], 'claude', weeklyScope), null, 'another subscription is untouched');
+  const claude = createAllowanceScaler([change()], 'claude', weeklyScope);
   assert.equal(claude(local(13, 5)), 1.5);
   assert.equal(claude(local(13, 6)), 1, 'the change instant itself is on the new allowance');
-  assert.equal(createAllowanceScaler([change()], 'claude-fable')(local(12)), 1.5, 'Fable shares the Claude pool');
+  assert.equal(createAllowanceScaler([change()], 'claude-fable', { bucketId: 'fable_seven_day', windowMinutes: 10_080 })(local(12)), 1.5, 'Fable shares the Claude pool');
   const compounded = createAllowanceScaler([
     change({ at: new Date(local(1)).toISOString(), previousAllowancePercent: 50 }),
     change(),
-  ], 'claude');
+  ], 'claude', weeklyScope);
   assert.equal(compounded(local(0, 12)), 0.75, 'half of the second allowance, which was 150% of the current one');
   assert.equal(compounded(local(5)), 1.5);
   assert.equal(compounded(local(13, 7)), 1);
@@ -72,6 +73,80 @@ test('changes are validated as complete records and stored sorted without duplic
   const later = change({ at: new Date(local(13, 8)).toISOString(), previousAllowancePercent: 120 });
   assert.deepEqual(normalizeAllowanceChanges([later, change(), change({ source: 'codex' }), change()]),
     [change(), change({ source: 'codex' }), later]);
+});
+
+test('weekly entries require a known weekly bucket and leave independent limits unchanged', () => {
+  const at = local(13, 5);
+  for (const [sourceId, bucketId] of [['claude', 'seven_day'], ['claude-fable', 'fable_seven_day'],
+    ['claude-fable', 'fable:seven_day_fable'], ['codex', 'codex:weekly'], ['codex', 'codex:primary'], ['codex', 'codex:secondary']]) {
+    const entries = [change({ source: sourceId === 'codex' ? 'codex' : 'claude' })];
+    assert.equal(createAllowanceScaler(entries, sourceId, { bucketId, windowMinutes: 10_080 })(at), 1.5);
+    assert.equal(createAllowanceScaler(entries, sourceId, { bucketId, windowMinutes: 300 }), null);
+  }
+  for (const bucketId of ['five_hour', 'seven_day_opus', 'seven_day_sonnet', 'seven_day_oauth_apps', 'model_scoped:opus', undefined]) {
+    assert.equal(createAllowanceScaler([change()], 'claude', { bucketId, windowMinutes: 10_080 }), null);
+  }
+  assert.equal(createAllowanceScaler([change()], 'claude'), null, 'source alone cannot establish scope');
+  assert.equal(createAllowanceScaler([change({ source: 'codex' })], 'codex', {
+    bucketId: 'gpt-5.3-codex-spark:secondary', windowMinutes: 10_080,
+  }), null);
+});
+
+test('the store preserves five-hour and model forecasts while rescaling weekly and Fable histories', (t) => {
+  const store = fixture(t);
+  const at = Date.parse(BOOST_ENDED_AT);
+  const identities = [
+    ['claude', 'seven_day', 10_080, true], ['claude-fable', 'fable_seven_day', 10_080, true],
+    ['claude', 'five_hour', 300, false], ['claude', 'seven_day_opus', 10_080, false],
+    ['claude', 'model_scoped:opus', 10_080, false], ['claude', 'seven_day_oauth_apps', 10_080, false],
+    ['codex', 'codex:primary', 300, false], ['codex', 'codex:secondary', 10_080, true],
+    ['codex', 'gpt-5.3-codex-spark:secondary', 10_080, false],
+  ];
+  for (const [sourceId, bucketId, windowMinutes] of identities) {
+    for (const [offset, usedPercent] of [[-1, 10], [1, 12]]) store.recordObservation({
+      sourceId, bucketId, windowMinutes, observedAt: new Date(at + offset * HOUR).toISOString(),
+      resetsAt: new Date(at + 2 * HOUR).toISOString(), usedPercent, remainingPercent: 100 - usedPercent,
+      provenance: 'official',
+    });
+  }
+  const read = () => identities.map(([sourceId, bucketId]) => store.getQuota(sourceId, store.getSettings(), at + HOUR)
+    .windows.find((window) => window.bucketId === bucketId));
+  const before = read();
+  const persisted = store.prepare('SELECT * FROM quota_observations').all();
+  store.updateSettings({ allowanceChanges: [change(), change({ source: 'codex' })] });
+  read().forEach((after, index) => {
+    const [, bucketId, , affected] = identities[index];
+    if (!affected) assert.deepEqual(after, before[index], `${bucketId} must remain identical, including learned steps`);
+    else assert.equal(after.forecast.series.observed[0].remaining, 85, bucketId);
+    assert.equal(after.usedPercent, 12, 'the displayed provider reading stays intact');
+  });
+  assert.deepEqual(store.prepare('SELECT * FROM quota_observations').all(), persisted);
+  store.updateSettings({ allowanceChanges: [] });
+  assert.deepEqual(read(), before);
+});
+
+test('future allowance entries do not change forecasts or cached capacity until their boundary', (t) => {
+  const store = fixture(t);
+  const now = local(13, 12);
+  for (let index = 0; index < 4; index++) {
+    const at = now - (3 - index) * HOUR;
+    store.recordObservation({ ...row(new Date(at).toISOString(), index * 10),
+      resetsAt: new Date(RESET).toISOString(), provenance: 'official' });
+    if (index) store.recordUsageEvent({ eventKey: `future-${index}`, sourceId: 'claude',
+      occurredAt: new Date(at).toISOString(), model: 'claude-opus-5', inputTokens: 1_500_000 });
+  }
+  const original = store.getQuota('claude', store.getSettings(), now);
+  const boundary = now + 60_000;
+  store.updateSettings({ allowanceChanges: [change({ at: new Date(boundary).toISOString() })] });
+  const before = store.getQuota('claude', store.getSettings(), now);
+  assert.deepEqual(before, original);
+  assert.equal(store.getQuota('claude', store.getSettings(), boundary - 1).tokenCapacity, before.tokenCapacity);
+  const after = store.getQuota('claude', store.getSettings(), boundary);
+  assert.equal(after.tokenCapacity.weeklyTokens, 10_000_000);
+  assert.equal(before.tokenCapacity.weeklyTokens, 15_000_000);
+  assert.equal(after.forecast.series.observed.at(-1).remaining, 55);
+  assert.equal(store.getQuota('claude', store.getSettings(), now).tokenCapacity.weeklyTokens, 15_000_000,
+    'evaluating historical time does not apply later changes');
 });
 
 test('a recorded change rescales earlier readings so the step at the change is not learned as a burst', () => {
@@ -124,6 +199,11 @@ test('token capacity rescales earlier intervals to the current allowance and say
   assert.ok(rescaled.warnings.some((warning) => /rescaled to the current allowance/.test(warning)));
   assert.ok(!original.warnings.some((warning) => /rescaled/.test(warning)));
   assert.deepEqual(estimateTokenCapacity({ ...input, allowanceChanges: [change({ source: 'codex', at: iso(NOW - 1.5 * HOUR) })] }), original);
+  for (const bucketId of ['seven_day_opus', 'model_scoped:opus']) {
+    const scoped = { ...input, bucketId, observations: input.observations.map((reading) => ({ ...reading, bucket_id: bucketId })) };
+    assert.deepEqual(estimateTokenCapacity({ ...scoped, allowanceChanges: [change({ at: iso(NOW - 1.5 * HOUR) })] }),
+      estimateTokenCapacity(scoped), 'an independent weekly model capacity is unaffected');
+  }
   // A plan upgrade renames the plan at the same moment. Without a recorded
   // change the earlier plan's readings are discarded; with one they were
   // rescaled and remain calibration evidence.
@@ -152,6 +232,12 @@ test('token capacity rescales earlier intervals to the current allowance and say
   assert.equal(partial.status, 'learning');
   assert.equal(partial.intervals, 2, 'the team and max readings calibrate; the pro readings before the unexplained change do not');
   assert.ok(partial.warnings.some((warning) => /different plan/.test(warning)));
+  const cancelling = estimateTokenCapacity({ ...upgraded, allowanceChanges: [
+    change({ at: iso(NOW - 1.5 * HOUR), previousAllowancePercent: 50 }),
+    change({ at: iso(NOW - HOUR), previousAllowancePercent: 200 }),
+  ] });
+  assert.equal(cancelling.status, 'available', 'two recorded changes can explain a plan boundary even if their ratios cancel');
+  assert.ok(!cancelling.warnings.some((warning) => /different plan/.test(warning)));
 });
 
 test('the store validates, normalizes, persists and applies allowance changes to forecasts and capacity', (t) => {
