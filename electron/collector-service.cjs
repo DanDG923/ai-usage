@@ -33,12 +33,19 @@ function createCollectorService({
   // Requests arrive concurrently (a scheduled refresh-all can overlap a manual
   // observation's refresh-claude), but each source's collector must not run
   // against itself: two SDK control queries and two transcript scans over the
-  // same files at once waste work and race on the cursor. Work is queued per
-  // source; a queued run still starts after the earlier one settles.
-  const queues = { codex: Promise.resolve(), claude: Promise.resolve() };
+  // same files at once waste work and race on the cursor. Sources share a
+  // lane; waiting requests for the same source share their result.
+  let queue = Promise.resolve();
+  const pending = { codex: null, claude: null };
   function queued(source, run) {
-    const next = queues[source].then(run, run);
-    queues[source] = next.then(() => undefined, () => undefined);
+    // Coalesce waiting requests, but preserve one follow-up when a request
+    // arrives during an active scan. Serial sources prevent a synchronous
+    // transcript import from starving another provider's initialization timer.
+    if (pending[source]) return pending[source];
+    const start = () => { pending[source] = null; return run(); };
+    const next = queue.then(start, start);
+    pending[source] = next;
+    queue = next.then(() => undefined, () => undefined);
     return next;
   }
   const runCodex = () => queued('codex', () => collectors.codex(getStore()));

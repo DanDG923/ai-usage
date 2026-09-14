@@ -1,4 +1,5 @@
 'use strict';
+require('./setup.cjs');
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -64,6 +65,18 @@ function snapshot(overrides = {}) {
     ...overrides,
   };
 }
+
+test('tray retains percentages within Windows limit and uses collection time rather than redraw time', () => {
+  const current = snapshot({
+    dashboardVerdict: { label: 'A long verdict '.repeat(40) },
+    sources: [{ lastSuccessAt: '2026-09-14T08:12:00.000Z' }],
+  });
+  const tooltip = buildTrayTooltip(current, Date.parse('2026-09-14T21:00:00Z'));
+  assert.ok(tooltip.length <= 127);
+  assert.match(tooltip, /^Codex 60%/);
+  assert.match(tooltip, /Updated 09:12/);
+  assert.doesNotMatch(tooltip, /22:00/);
+});
 
 test('a safe dashboard produces no notifications and clears the risk episode', () => {
   const result = decideNotifications({ previous: null, current: snapshot(), state: { ...emptyState(), lastRiskSignature: 'risk|Codex' }, nowMs: NOW });
@@ -175,7 +188,7 @@ test('the summary text and tray tooltip share the same headline numbers', () => 
   assert.match(text, /Fable 5: no allowance reading yet/);
   assert.match(text, /GBP 12\.50 API-equivalent over the last 30 days/);
   const tooltip = buildTrayTooltip(current, NOW);
-  assert.match(tooltip, /^All allowances on track\nCodex 60% · Claude 90% · Fable 5 —\n/);
+  assert.match(tooltip, /^Codex 60% · Claude 90% · Fable 5 —\n/);
 });
 
 test('the tray tooltip headlines the weekly window even when a shorter window is riskier', () => {
@@ -190,7 +203,7 @@ test('the tray tooltip headlines the weekly window even when a shorter window is
     forecast: { state: 'risk', expectedRemaining: 0, currentIsEstimated: false, exhaustsAt: '2026-09-01T12:00:00.000Z', expired: false },
   });
   const current = snapshot({ quotas: { codex: { ...weekly, windows: [weekly, fiveHour] }, claude: null, fable: null } });
-  assert.match(buildTrayTooltip(current, NOW), /^All allowances on track\nCodex 60% · Claude — · Fable 5 —\n/);
+  assert.match(buildTrayTooltip(current, NOW), /^Codex 60% · Claude — · Fable 5 —\n/);
 });
 
 test('a forecast-only change never announces a reset and a real shorter-window reset still does', () => {

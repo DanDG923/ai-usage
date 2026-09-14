@@ -1,4 +1,5 @@
 'use strict';
+require('./setup.cjs');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { createClaudeAgentSdkUsagePort } = require('../electron/claude-agent-usage.cjs');
@@ -55,9 +56,16 @@ test('one fresh process retry recovers a transient failure and retains safe atte
 
 test('empty subscription responses retry once then fail without inventing fresh evidence', async () => {
   const payload = { subscription_type: 'max', rate_limits_available: false, rate_limits: null };
-  const f = fixture([{ payload, log: '' }, { payload, log: '' }]);
+  const f = fixture([{ payload, log: ok }, { payload, log: ok }]);
   await assert.rejects(f.port.read(), { code: 'claude-usage-empty' });
   assert.equal(f.calls(), 2);
+});
+
+test('empty subscription responses without a usage diagnostic are not retried', async () => {
+  const payload = { subscription_type: 'max', rate_limits_available: false, rate_limits: null };
+  const f = fixture([{ payload, log: '' }]);
+  await assert.rejects(f.port.read(), { code: 'claude-usage-empty' });
+  assert.equal(f.calls(), 1);
 });
 
 test('non-subscription sessions can legitimately have no plan windows', async () => {
@@ -70,6 +78,7 @@ test('non-subscription sessions can legitimately have no plan windows', async ()
 test('a protocol change that removes freshness diagnostics fails closed', async () => {
   const f = fixture([{ log: '' }, { log: '' }]);
   await assert.rejects(f.port.read(), { code: 'claude-usage-unverified' });
+  assert.equal(f.calls(), 1);
 });
 
 for (const status of [401, 403, 429]) {

@@ -1,4 +1,5 @@
-import { subscriptionVisible } from '../electron/dashboard-decision.mjs';
+import { selectDisplayedWindows } from '../electron/quota-selection.mjs';
+import { SOURCES, evidenceNeedsRefresh, subscriptionVisible } from '../electron/dashboard-decision.mjs';
 import {
   compactNumber,
   displayedRemaining,
@@ -32,12 +33,6 @@ export type ProviderView = {
   /** Active windows shorter than the headline one, such as a five-hour session. */
   secondaryWindows: QuotaWindow[];
 };
-
-const PROVIDERS: { id: ProviderId; name: string; sourceId: Source['id'] }[] = [
-  { id: 'codex', name: 'Codex', sourceId: 'codex' },
-  { id: 'claude', name: 'Claude', sourceId: 'claude' },
-  { id: 'fable', name: 'Fable 5', sourceId: 'claude-fable' },
-];
 
 function sentence(text: string) {
   return text ? text.charAt(0).toUpperCase() + text.slice(1) : text;
@@ -128,43 +123,41 @@ export function providerViews(snapshot: Snapshot): ProviderView[] {
 }
 
 function buildProviderViews(snapshot: Snapshot): ProviderView[] {
-  return PROVIDERS.filter(({ id }) => subscriptionVisible(snapshot.settings, id)).map(({ id, name, sourceId }) => {
-    const quota = snapshot.quotas[id];
-    const current = primaryWindow(quota);
-    const expired = Boolean(current?.forecast.expired);
-    const source = snapshot.sources.find((entry) => entry.id === sourceId) ?? null;
-    return {
-      id,
-      name,
-      quota,
-      current,
-      source,
-      state: expired ? 'unknown' : (current?.forecast.state ?? 'unknown'),
-      remaining: current && !expired ? Math.max(0, Math.min(100, displayedRemaining(current))) : null,
-      expectedRemaining:
-        expired || current?.forecast.expectedRemaining == null
-          ? null
-          : Math.max(0, Math.min(100, current.forecast.expectedRemaining)),
-      heavyRemaining:
-        expired || current?.forecast.heavyRemaining == null
-          ? null
-          : Math.max(0, Math.min(100, current.forecast.heavyRemaining)),
-      resetAt: current?.resetsAt ?? null,
-      subtitle: providerSubtitle(id, current, source),
-      provenance: current?.provenance ?? 'unavailable',
-      expired,
-      estimated: current && !expired ? isEstimated(current) : false,
-      stale: Boolean(
-        expired ||
-        (source && ['stale', 'degraded', 'error'].includes(source.status)) ||
-        (current?.forecast.staleHours != null && current.forecast.staleHours > 24),
-      ),
-      notes: providerNotes(id, current, source),
-      secondaryWindows: current
-        ? quotaWindows(quota)
-            .filter((entry) => entry !== current && !entry.forecast.expired)
-            .sort((a, b) => (b.windowMinutes ?? 0) - (a.windowMinutes ?? 0))
-        : [],
-    };
-  });
+  return SOURCES.filter(({ id }) => subscriptionVisible(snapshot.settings, id)).map(
+    ({ id, label: name, healthId: sourceId }) => {
+      const quota = snapshot.quotas[id];
+      const current = primaryWindow(quota);
+      const expired = Boolean(current?.forecast.expired);
+      const source = snapshot.sources.find((entry) => entry.id === sourceId) ?? null;
+      return {
+        id,
+        name,
+        quota,
+        current,
+        source,
+        state: expired ? 'unknown' : (current?.forecast.state ?? 'unknown'),
+        remaining: current && !expired ? Math.max(0, Math.min(100, displayedRemaining(current))) : null,
+        expectedRemaining:
+          expired || current?.forecast.expectedRemaining == null
+            ? null
+            : Math.max(0, Math.min(100, current.forecast.expectedRemaining)),
+        heavyRemaining:
+          expired || current?.forecast.heavyRemaining == null
+            ? null
+            : Math.max(0, Math.min(100, current.forecast.heavyRemaining)),
+        resetAt: current?.resetsAt ?? null,
+        subtitle: providerSubtitle(id, current, source),
+        provenance: current?.provenance ?? 'unavailable',
+        expired,
+        estimated: current && !expired ? isEstimated(current) : false,
+        stale: Boolean(
+          expired ||
+          (source && ['stale', 'degraded', 'error'].includes(source.status)) ||
+          quotaWindows(quota).some((entry) => !entry.forecast.expired && evidenceNeedsRefresh(entry)),
+        ),
+        notes: providerNotes(id, current, source),
+        secondaryWindows: current ? selectDisplayedWindows(quotaWindows(quota)).secondary : [],
+      };
+    },
+  );
 }

@@ -253,6 +253,7 @@ export type Settings = {
   showClaudeSubscription: boolean;
   currency: string;
   usdToCurrency: number;
+  currencyRates?: Record<string, number>;
   activeDays: number[];
   activeStartHour: number;
   activeEndHour: number;
@@ -350,6 +351,7 @@ export type UpdateStatus = {
 };
 
 export type Bridge = {
+  reportRendererError?(error: { message: string; componentStack: string }): Promise<void>;
   previewDesktopExport(): Promise<DesktopImportPreview | null>;
   cancelDesktopExport(previewId: string): Promise<void>;
   importDesktopExport(
@@ -359,7 +361,7 @@ export type Bridge = {
     result: { imported: number; duplicates: number };
     snapshot: Snapshot;
   }>;
-  clearDesktopEstimates(): Promise<{ cancelled: boolean; snapshot: Snapshot }>;
+  clearDesktopEstimates(): Promise<{ cancelled: boolean; snapshot?: Snapshot }>;
   getClaudeSetup(): Promise<ClaudeSetupStatus>;
   /** The saved dismissal flag alone; unlike getClaudeSetup it runs no Claude command. */
   isClaudeSetupDismissed(): Promise<boolean>;
@@ -373,7 +375,7 @@ export type Bridge = {
   getTasks(options: SessionPageOptions): Promise<TaskPage>;
   getSessions(options: SessionPageOptions): Promise<SessionPage>;
   refresh(): Promise<{
-    snapshot: Snapshot;
+    snapshot?: Snapshot;
     backupError?: string | null;
     collectors: Record<string, { error?: string; warning?: string }>;
   }>;
@@ -389,9 +391,9 @@ export type Bridge = {
     sourceUrl?: string | null;
   }): Promise<{ snapshot: Snapshot }>;
   addManualObservation(observation: ManualObservation): Promise<Snapshot>;
-  installClaudeHelper(): Promise<{ snapshot: Snapshot }>;
+  installClaudeHelper(): Promise<{ snapshot?: Snapshot }>;
   uninstallClaudeHelper(): Promise<{
-    snapshot: Snapshot;
+    snapshot?: Snapshot;
     result: {
       managed: boolean;
       restoredPreviousStatusLine: boolean;
@@ -399,10 +401,10 @@ export type Bridge = {
       helperScriptRemoved: boolean;
     };
   }>;
-  createBackup(): Promise<{ snapshot: Snapshot; result: { databasePath: string; exportPath: string } }>;
+  createBackup(): Promise<{ snapshot?: Snapshot; result: { databasePath: string; exportPath: string } }>;
   restoreBackup(): Promise<{
     cancelled: boolean;
-    snapshot: Snapshot;
+    snapshot?: Snapshot;
     result?: RestoreCounts;
     safetyBackup?: { databasePath: string; exportPath: string };
   }>;

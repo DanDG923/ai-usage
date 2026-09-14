@@ -161,6 +161,14 @@ export function TaskTable({ snapshot, query }: { snapshot: Snapshot; query: stri
           )}
         </div>
       )}
+      {data && error && (
+        <div className="session-error">
+          <span role="alert">{error} Showing the previous results.</span>
+          <button className="secondary-button" onClick={state.retry}>
+            Try again
+          </button>
+        </div>
+      )}
       <Pagination state={state} groupLabel="Task pages" loadingLabel="Loading tasks…" unit="tasks / sessions" />
     </section>
   );

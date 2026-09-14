@@ -1,3 +1,4 @@
+import { SOURCES, evidenceNeedsRefresh } from '../electron/dashboard-decision.mjs';
 import { selectDisplayedWindows } from '../electron/quota-selection.mjs';
 import type { DashboardVerdict, Quota, QuotaWindow, Snapshot } from './types';
 
@@ -30,7 +31,7 @@ const TIME = new Intl.DateTimeFormat(LOCALE, { hour: '2-digit', minute: '2-digit
 const moneyFormats = new Map<string, Intl.NumberFormat>();
 
 export function money(value: number, currency: string) {
-  const minimumFractionDigits = value >= 100 ? 0 : 2;
+  const minimumFractionDigits = 2;
   const key = `${currency}|${minimumFractionDigits}`;
   let format = moneyFormats.get(key);
   if (!format) {
@@ -89,7 +90,8 @@ export function resetDistance(value?: string | null) {
   if (!value) return 'Reset unknown';
   const date = parseDate(value);
   if (!date) return 'Reset unknown';
-  const hours = Math.max(0, (date.getTime() - Date.now()) / 3_600_000);
+  if (date.getTime() <= Date.now()) return 'Reset passed';
+  const hours = (date.getTime() - Date.now()) / 3_600_000;
   // Under a day the provider shows minutes, so rounding 4h 18m up to
   // "5 hours" read as a disagreement with it.
   const minutes = Math.round(hours * 60);
@@ -123,8 +125,12 @@ export function percent(value: number | null | undefined, digits = 0) {
   return value == null ? '—' : `${value.toFixed(digits)}%`;
 }
 
+export function priceCoverage(value: number) {
+  return value >= 1 ? '100%' : `${Math.min(99, Math.floor(Math.max(0, value) * 100 + 1e-9))}%`;
+}
+
 export function sourceLabel(id: string) {
-  return id === 'codex' ? 'Codex' : id === 'claude-fable' ? 'Fable 5' : 'Claude';
+  return SOURCES.find((source) => source.id === id || source.healthId === id)?.label ?? id;
 }
 
 /** The last path segment of a working directory, for project labels. */
@@ -188,11 +194,7 @@ export function verdictSentence(
   quotas: Snapshot['quotas'],
   sources: Snapshot['sources'] = [],
 ) {
-  const providers: { name: string; quota: Quota | null }[] = [
-    { name: 'Codex', quota: quotas.codex },
-    { name: 'Claude', quota: quotas.claude },
-    { name: 'Fable 5', quota: quotas.fable },
-  ];
+  const providers = SOURCES.map(({ id, label }) => ({ name: label, quota: quotas[id] }));
   const affectedNames = [...new Set(verdict.affected.map((entry) => entry.split(' · ')[0].trim()))];
   const join = (names: string[]) =>
     names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
@@ -209,8 +211,7 @@ export function verdictSentence(
       return (
         active.length > 0 &&
         active.every((window) => {
-          const freshnessHours = Math.min(24, Math.max(0.5, ((window.windowMinutes ?? 7200) / 60) * 0.2));
-          return window.forecast.state === 'safe' && (window.forecast.staleHours ?? Infinity) <= freshnessHours;
+          return window.forecast.state === 'safe' && !evidenceNeedsRefresh(window);
         })
       );
     })

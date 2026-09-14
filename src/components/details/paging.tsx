@@ -6,7 +6,7 @@ export const PAGE_SIZE = 10;
 
 export type Paged<Row> = { rows: Row[]; total: number; page: number; pageSize: number; totalPages: number };
 
-type Result<Row> = { key: string; selectionKey: string; data?: Paged<Row>; error?: string };
+type Result<Row> = { key: string; selectionKey: string; displayKey: string; data?: Paged<Row>; error?: string };
 
 /**
  * One paged, filtered read of local history, shared by the session and task
@@ -44,7 +44,8 @@ export function usePagedQuery<Row>({
   const page = selection.key === selectionKey ? selection.page : 1;
   const [retry, setRetry] = useState(0);
   const [result, setResult] = useState<Result<Row> | null>(null);
-  const requestKey = JSON.stringify([selectionKey, page, snapshot.generatedAt, costs.currency, retry]);
+  const displayKey = JSON.stringify([selectionKey, page, costs.currency, snapshot.settings.usdToCurrency]);
+  const requestKey = JSON.stringify([displayKey, snapshot.generatedAt, retry]);
   const preview = Boolean(snapshot.isPreview);
 
   useEffect(() => {
@@ -70,11 +71,17 @@ export function usePagedQuery<Row>({
       };
       void load().then(
         (data) => {
-          if (!cancelled) setResult({ key: requestKey, selectionKey, data });
+          if (!cancelled) setResult({ key: requestKey, selectionKey, displayKey, data });
         },
         (error: unknown) => {
           if (!cancelled)
-            setResult({ key: requestKey, selectionKey, error: error instanceof Error ? error.message : failed });
+            setResult((previous) => ({
+              key: requestKey,
+              selectionKey,
+              displayKey,
+              data: previous?.displayKey === displayKey ? previous.data : undefined,
+              error: error instanceof Error ? error.message : failed,
+            }));
         },
       );
     }, 150);
@@ -82,12 +89,25 @@ export function usePagedQuery<Row>({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [days, examples, failed, fetch, filter, matches, page, preview, requestKey, selectionKey, unavailable]);
+  }, [
+    displayKey,
+    days,
+    examples,
+    failed,
+    fetch,
+    filter,
+    matches,
+    page,
+    preview,
+    requestKey,
+    selectionKey,
+    unavailable,
+  ]);
 
   // A response belongs only to the exact period, filter, page and snapshot
   // requested. An older response can never relabel the current search.
   const current = result?.key === requestKey ? result : null;
-  const data = current?.data;
+  const data = current?.data ?? (!current && result?.displayKey === displayKey ? result.data : undefined);
   const loading = !current;
   const pagination = data ?? (result?.selectionKey === selectionKey ? result.data : undefined);
   const first = data && data.total ? (data.page - 1) * data.pageSize + 1 : 0;
@@ -146,7 +166,7 @@ export function Pagination({
           disabled={!loading && pagination.page <= 1}
           aria-disabled={loading || pagination.page <= 1}
           onClick={() => {
-            if (data && data.page > 1) goToPage(data.page - 1);
+            if (!loading && data && data.page > 1) goToPage(data.page - 1);
           }}
         >
           Previous
@@ -159,7 +179,7 @@ export function Pagination({
           disabled={!loading && pagination.page >= pagination.totalPages}
           aria-disabled={loading || pagination.page >= pagination.totalPages}
           onClick={() => {
-            if (data && data.page < data.totalPages) goToPage(data.page + 1);
+            if (!loading && data && data.page < data.totalPages) goToPage(data.page + 1);
           }}
         >
           Next

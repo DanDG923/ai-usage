@@ -8,7 +8,7 @@ const { auditManifest, hashFile } = require('./release-manifest.cjs');
 
 const root = path.join(__dirname, '..');
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
-const releaseDirectory = path.join(root, pkg.build?.directories?.output || 'release');
+const releaseDirectory = require('./build-paths.cjs').buildDirectory(root);
 const artifactNames = [
   `AI-Usage-Portable-${pkg.version}-x64.exe`,
   `AI-Usage-Setup-${pkg.version}-x64.exe`,
@@ -125,7 +125,9 @@ async function main() {
   })}\n`);
 }
 
-main().catch((error) => {
+if (require.main === module) main().catch((error) => {
   process.stderr.write(`${error.message}\n`);
   process.exitCode = 1;
 });
+
+module.exports = { assertArchive };

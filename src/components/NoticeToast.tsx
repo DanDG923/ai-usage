@@ -16,19 +16,30 @@ function noticeIsSticky(notice: string) {
 export type NoticeChannel = {
   /** Publish a message; an empty string dismisses the current one. */
   show: (text: string) => void;
+  fail: (text: string) => void;
+  isFailure: () => boolean;
   current: () => string;
   subscribe: (listener: () => void) => () => void;
 };
 
 export function createNoticeChannel(): NoticeChannel {
   let notice = '';
+  let failure = false;
   const listeners = new Set<() => void>();
   return {
     show(text) {
-      if (text === notice) return;
+      const nextFailure = noticeIsSticky(text);
+      if (text === notice && nextFailure === failure) return;
+      failure = nextFailure;
       notice = text;
       for (const listener of listeners) listener();
     },
+    fail(text) {
+      failure = true;
+      notice = text;
+      for (const listener of listeners) listener();
+    },
+    isFailure: () => failure,
     current: () => notice,
     subscribe(listener) {
       listeners.add(listener);
@@ -40,21 +51,32 @@ export function createNoticeChannel(): NoticeChannel {
 export function NoticeToast({ channel }: { channel: NoticeChannel }) {
   const notice = useSyncExternalStore(channel.subscribe, channel.current);
 
+  const failure = useSyncExternalStore(channel.subscribe, channel.isFailure);
+
   // Informational notices clear themselves; the timer restarts whenever the
   // text changes so a newer message gets its full lifetime.
   useEffect(() => {
-    if (!notice || noticeIsSticky(notice)) return;
+    if (!notice || failure) return;
     const timer = window.setTimeout(() => channel.show(''), NOTICE_LIFETIME_MS);
     return () => window.clearTimeout(timer);
-  }, [notice, channel]);
+  }, [notice, failure, channel]);
 
-  if (!notice) return null;
   return (
-    <div className="toast" role="status" aria-live="polite">
-      <span>{notice}</span>
-      <button aria-label="Dismiss message" onClick={() => channel.show('')}>
-        ×
-      </button>
-    </div>
+    <>
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {!failure ? notice : ''}
+      </div>
+      <div className="sr-only" role="alert" aria-atomic="true">
+        {failure ? notice : ''}
+      </div>
+      {notice && (
+        <div className="toast">
+          <span>{notice}</span>
+          <button aria-label="Dismiss message" onClick={() => channel.show('')}>
+            &times;
+          </button>
+        </div>
+      )}
+    </>
   );
 }

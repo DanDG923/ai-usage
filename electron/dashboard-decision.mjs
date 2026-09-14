@@ -49,7 +49,7 @@ function providerNames(labels) {
   return unique(labels.map((label) => String(label).split(' · ')[0].trim()));
 }
 
-function forecastReasons(state, forecast = {}) {
+function forecastReasons(state, forecast = {}, paceRiskThreshold = 1.2) {
   if (state === 'critical') return ['expected-exhaustion'];
   if (state === 'watch') return ['watch'];
   if (state !== 'risk') return [];
@@ -57,12 +57,12 @@ function forecastReasons(state, forecast = {}) {
   const heavyExhausts = Boolean(forecast.heavyExhaustsAt)
     || (Number.isFinite(forecast.heavyRemaining) && forecast.heavyRemaining <= 0);
   if (heavyExhausts) reasons.push('heavy-exhaustion');
-  if ((Number.isFinite(forecast.paceRatio) && forecast.paceRatio > 1) || !reasons.length) reasons.push('pace');
+  if ((Number.isFinite(forecast.paceRatio) && forecast.paceRatio > paceRiskThreshold) || !reasons.length) reasons.push('pace');
   return reasons;
 }
 
 function actionableLabel(state, affected, reason, details, assessed) {
-  if (reason === 'mixed') return `${details.length} allowances need attention`;
+  if (reason === 'mixed') return `${details.length} ${details.length === 1 ? 'allowance needs' : 'allowances need'} attention`;
   const only = details.length === 1 ? details[0] : null;
   const sameSourceWindows = only ? assessed.filter((entry) => entry.sourceId === only.sourceId).length : 0;
   const names = only && sameSourceWindows > 1
@@ -82,7 +82,7 @@ function actionableLabel(state, affected, reason, details, assessed) {
   return `${subject} ${plural ? 'are' : 'is'} running warm`;
 }
 
-function freshnessLimitHours(window) {
+export function freshnessLimitHours(window) {
   const minutes = Number(window?.windowMinutes);
   if (!Number.isFinite(minutes) || minutes <= 0) return 24;
   // Short windows need proportionally recent evidence. Weekly windows can
@@ -90,7 +90,7 @@ function freshnessLimitHours(window) {
   return Math.min(24, Math.max(0.5, (minutes / 60) * 0.2));
 }
 
-function evidenceNeedsRefresh(window) {
+export function evidenceNeedsRefresh(window) {
   const staleHours = Number(window?.forecast?.staleHours);
   return Number.isFinite(staleHours) && staleHours > freshnessLimitHours(window);
 }
@@ -140,7 +140,7 @@ export function buildDashboardVerdict(snapshot = {}) {
       bucketId: entry.bucketId,
       bucketName: entry.bucketName,
       state: entry.state,
-      reasons: forecastReasons(entry.state, entry.forecast),
+      reasons: forecastReasons(entry.state, entry.forecast, snapshot.settings?.paceRiskThreshold ?? 1.2),
       expectedRemaining: Number.isFinite(entry.forecast?.expectedRemaining) ? entry.forecast.expectedRemaining : null,
       heavyRemaining: Number.isFinite(entry.forecast?.heavyRemaining) ? entry.forecast.heavyRemaining : null,
       exhaustsAt: entry.forecast?.exhaustsAt || null,
@@ -148,7 +148,7 @@ export function buildDashboardVerdict(snapshot = {}) {
       paceRatio: Number.isFinite(entry.forecast?.paceRatio) ? entry.forecast.paceRatio : 0,
     }));
     const reasons = unique(details.flatMap((entry) => entry.reasons));
-    const reason = reasons.length === 1 ? reasons[0] : 'mixed';
+    const reason = reasons.length === 1 || details.length === 1 ? reasons[0] : 'mixed';
     return {
       state: actionable,
       reason,
@@ -195,4 +195,3 @@ export function buildDashboardVerdict(snapshot = {}) {
     details: [],
   };
 }
-

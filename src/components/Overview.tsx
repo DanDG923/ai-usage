@@ -5,6 +5,7 @@ import {
   dateTimeLabel,
   money,
   percent,
+  priceCoverage,
   shortDate,
   verdictSentence,
   whenLabel,
@@ -117,7 +118,8 @@ function insights(views: ProviderView[], snapshot: Snapshot, nowMs: number): Ins
       detail: 'Expected and heavier projections remain above zero through their next resets.',
     });
   }
-  return rows.slice(0, 4);
+  const severity = { hot: 0, warm: 1, neutral: 2, good: 3 };
+  return rows.sort((a, b) => severity[a.tone] - severity[b.tone]);
 }
 
 function RecentCycles({ views, snapshot }: { views: ProviderView[]; snapshot: Snapshot }) {
@@ -350,7 +352,7 @@ export function Overview({
 
           <section className="panel billing-summary">
             <div className="panel-heading compact-heading">
-              <h2>This billing period</h2>
+              <h2>Last {snapshot.costs.periodDays} days</h2>
             </div>
             <dl>
               <div className="billing-primary">
@@ -370,7 +372,7 @@ export function Overview({
               </div>
               <div>
                 <dt>Price coverage</dt>
-                <dd>{percent(snapshot.costs.coverage * 100)}</dd>
+                <dd>{priceCoverage(snapshot.costs.coverage)}</dd>
                 <small title={unpriced ? `Unpriced: ${unpriced}` : undefined}>
                   {unpriced
                     ? `${compactNumber(snapshot.costs.unpricedModels.length)} unpriced model${snapshot.costs.unpricedModels.length === 1 ? '' : 's'}`

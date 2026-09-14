@@ -1,6 +1,7 @@
 'use strict';
 
 const { createAllowanceScaler } = require('./allowance-changes.cjs');
+const { OFFICIAL_PROVENANCES, isOfficialProvenance } = require('./quota-provenance.mjs');
 const { MAX_QUOTA_RESET_AHEAD_MS, QUOTA_CLOCK_SKEW_MS, FORECAST_LOOKBACK_MS, validQuotaTime } = require('./quota-time.cjs');
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -8,11 +9,26 @@ const DAY_MS = 24 * HOUR_MS;
 const RESET_TOLERANCE_MS = 60_000;
 const HEAVY_HISTORY_DAYS = 7;
 const EARLY_RESET_DAY_WEIGHT = 0.25;
-const RESET_EVIDENCE_PROVENANCES = new Set(['official', 'local-official', 'official-statusline', 'official-claude-usage', 'manual-official']);
+const RESET_EVIDENCE_PROVENANCES = new Set(OFFICIAL_PROVENANCES);
 const MAX_PROJECTION_MS = MAX_QUOTA_RESET_AHEAD_MS + QUOTA_CLOCK_SKEW_MS;
 const MAX_SERIES_POINTS = Math.ceil(MAX_PROJECTION_MS / HOUR_MS) + 1;
 
 function clamp(value, min, max) { return Math.min(max, Math.max(min, value)); }
+
+function nextLocalHour(cursor) {
+  const date = new Date(cursor);
+  // Advance elapsed time to the next local hour boundary. Arithmetic on local
+  // minutes also visits the repeated hour at a DST fallback instead of skipping
+  // it with Date.setHours, and supports half/quarter-hour UTC offsets.
+  return cursor + HOUR_MS - date.getMinutes() * 60_000 - date.getSeconds() * 1000 - date.getMilliseconds();
+}
+
+function forecastState(expectedRemaining, heavyRemaining, paceRatio, paceRiskThreshold, watchRemainingThreshold) {
+  return expectedRemaining <= 0 ? 'critical'
+    : heavyRemaining <= 0 || paceRatio > paceRiskThreshold ? 'risk'
+      : expectedRemaining < watchRemainingThreshold || heavyRemaining < watchRemainingThreshold
+        || paceRatio > paceRiskThreshold * 0.75 ? 'watch' : 'safe';
+}
 
 function percentile(values, fraction) {
   if (!values.length) return 0;
@@ -64,7 +80,7 @@ function activeHoursBetween(startMs, endMs, schedule) {
   let total = 0;
   let cursor = startMs;
   while (cursor < endMs) {
-    const next = Math.min(endMs, Math.floor(cursor / HOUR_MS) * HOUR_MS + HOUR_MS);
+    const next = Math.min(endMs, nextLocalHour(cursor));
     if (isActiveHour(new Date((cursor + next) / 2), schedule)) total += (next - cursor) / HOUR_MS;
     cursor = next;
   }
@@ -84,7 +100,7 @@ function offScheduleHoursForLocalDay(day, schedule) {
 
 function providerBacked(row) {
   const provenance = String(row?.provenance || 'official');
-  return provenance.startsWith('official') || provenance === 'local-official' || provenance === 'manual-official';
+  return isOfficialProvenance(provenance);
 }
 
 // A provider-backed replenishment can arrive one reading before its scheduled
@@ -217,7 +233,7 @@ function splitWindowUsage(rows, schedule, nowMs, startMs, endMs, used, excluded 
     }
     let cursor = Math.max(startMs, rows[0].observedAt);
     while (cursor < endMs) {
-      const next = Math.min(endMs, Math.floor(cursor / HOUR_MS) * HOUR_MS + HOUR_MS);
+      const next = Math.min(endMs, nextLocalHour(cursor));
       const midpoint = new Date((cursor + next) / 2);
       const hours = (next - cursor) / HOUR_MS * (1 - (dayWeights.get(localDayKey(midpoint)) ?? 1));
       result.elapsedHours -= hours;
@@ -251,9 +267,15 @@ function splitWindowUsage(rows, schedule, nowMs, startMs, endMs, used, excluded 
 // once it is normalised, and the mark survives object spread, so the later
 // passes and the sample derivation inside them return it unchanged.
 const NORMALISED = Symbol('normalised');
+const PREPARED = Symbol('prepared');
+function prepareObservation(row) {
+  Object.defineProperty(row, PREPARED, { value: normaliseObservation(row) });
+  return row;
+}
 
 function normaliseObservation(row) {
   if (row[NORMALISED]) return row;
+  if (row[PREPARED]) return row[PREPARED];
   const windowMinutes = row.windowMinutes ?? row.window_minutes;
   return {
     [NORMALISED]: true,
@@ -282,15 +304,19 @@ function rescaleObservations(rows, options) {
   const changes = options.allowanceChanges;
   if (!Array.isArray(changes) || !changes.length) return rows;
   const scalers = new Map();
+  let previousSource, previousBucket, previousMinutes, previousScaler;
   const nowMs = options.now != null ? new Date(options.now).getTime() : Date.now();
   return rows.map((row) => {
     const sourceId = row.sourceId ?? options.sourceId;
     if (!sourceId || row.allowanceScaled) return row;
     const bucketId = row.bucketId ?? options.bucketId;
     const windowMinutes = row.windowMinutes;
-    const key = JSON.stringify([sourceId, bucketId, windowMinutes]);
-    if (!scalers.has(key)) scalers.set(key, createAllowanceScaler(changes, sourceId, { bucketId, windowMinutes, nowMs }));
-    const scale = scalers.get(key)?.(row.observedAt) ?? 1;
+    if (sourceId !== previousSource || bucketId !== previousBucket || windowMinutes !== previousMinutes) {
+      const key = JSON.stringify([sourceId, bucketId, windowMinutes]);
+      if (!scalers.has(key)) scalers.set(key, createAllowanceScaler(changes, sourceId, { bucketId, windowMinutes, nowMs }));
+      previousSource = sourceId; previousBucket = bucketId; previousMinutes = windowMinutes; previousScaler = scalers.get(key);
+    }
+    const scale = previousScaler?.(row.observedAt) ?? 1;
     if (scale === 1 || !Number.isFinite(row.usedPercent)) return row;
     const usedPercent = row.usedPercent * scale;
     return { ...row, usedPercent, remainingPercent: 100 - usedPercent };
@@ -311,7 +337,7 @@ function addIntervalSamples(samples, before, after, schedule, nowMs, rateElapsed
   const phases = new Map();
   let cursor = before.observedAt;
   while (cursor < after.observedAt) {
-    const next = Math.min(after.observedAt, Math.floor(cursor / HOUR_MS) * HOUR_MS + HOUR_MS);
+    const next = Math.min(after.observedAt, nextLocalHour(cursor));
     const midpointMs = (cursor + next) / 2;
     const midpoint = new Date(midpointMs);
     const phase = isActiveHour(midpoint, schedule) ? 'active' : 'off-schedule';
@@ -493,7 +519,7 @@ function buildSeries(expectedStart, heavyStart, startMs, endMs, schedule, sample
   let heavyRemaining = heavyStart;
   let cursor = startMs;
   while (cursor < endMs) {
-    const next = Math.min(endMs, cursor + HOUR_MS);
+    const next = Math.min(endMs, nextLocalHour(cursor));
     const midpoint = new Date((cursor + next) / 2);
     const phase = isActiveHour(midpoint, schedule) ? 'active' : 'off-schedule';
     const phaseRates = phase === 'active' ? rates.active : rates.offSchedule;
@@ -559,43 +585,7 @@ function exhaustionTime(series) {
   return null;
 }
 
-function forecastQuotaWithLearning(observations, options = {}, dayWeights = null) {
-  const nowMs = options.now != null ? new Date(options.now).getTime() : Date.now();
-  if (!Number.isFinite(nowMs)) return unknownForecast();
-  const schedule = {
-    activeDays: options.schedule?.activeDays ?? [1, 2, 3, 4, 5, 6, 0],
-    startHour: options.schedule?.startHour ?? 8,
-    endHour: options.schedule?.endHour ?? 22,
-  };
-  const fallbackRate = Number(options.fallbackRate ?? 0.35);
-  const paceRiskThreshold = Number(options.paceRiskThreshold ?? 1.2);
-  const hardLimitThreshold = Number(options.hardLimitThreshold ?? 90);
-  // Budget mode: the share of the allowance the user wants untouched at reset.
-  // It is subtracted from what the safe pace may spend, never from the
-  // projection itself — the forecast still says what will happen.
-  const reservePercent = clamp(Number(options.reservePercent ?? 0) || 0, 0, 90);
-  const excluded = exclusionLookup(options.excludedDates);
-  let normalised = observations.map(normaliseObservation)
-    .filter((row) => validQuotaTime(row.observedAt, row.resetsAt, row.windowMinutes, nowMs))
-    .sort((a, b) => a.observedAt - b.observedAt);
-  const current = normalised.at(-1);
-  if (!current) return unknownForecast();
-  // Keep the latest dormant reading so it still reports expired, but do not
-  // traverse ancient rolling windows in learning or active-hour calculations.
-  normalised = normalised.filter((row) => row === current || row.observedAt >= nowMs - FORECAST_LOOKBACK_MS);
-
-  const resetMs = current.resetsAt;
-  const clusters = clusterByWindow(normalised);
-  // A hard reset may briefly retain the previous reset timestamp, so select
-  // the latest matching cluster rather than the first historical match.
-  const currentCluster = clusters.findLast((entry) => Math.abs(entry.resetsAt - resetMs) <= RESET_TOLERANCE_MS) ?? clusters.at(-1);
-  const observed = currentCluster.rows
-    .map((row) => ({ at: row.observedAt, remaining: clamp(Number.isFinite(row.remainingPercent) ? row.remainingPercent : 100 - row.usedPercent, 0, 100) }));
-  const staleHours = Math.max(0, (nowMs - current.observedAt) / HOUR_MS);
-  if (!Number.isFinite(resetMs) || resetMs <= nowMs) return unknownForecast({ expired: true, observed, staleHours });
-
-  const remaining = Number.isFinite(current.remainingPercent) ? current.remainingPercent : 100 - current.usedPercent;
-  const usedNow = clamp(Number.isFinite(current.usedPercent) ? current.usedPercent : 100 - remaining, 0, 100);
+function learnForecast({ normalised, current, currentCluster, clusters, schedule, nowMs, excluded, dayWeights, usedNow, resetMs, fallbackRate }) {
   const samples = deriveLearningSamples(normalised, schedule, nowMs, excluded).map((sample) => {
     if (!dayWeights?.size) return sample;
     const hours = sample.dailyHours.reduce((sum, entry) => sum + entry.hours, 0);
@@ -620,8 +610,8 @@ function forecastQuotaWithLearning(observations, options = {}, dayWeights = null
   const {
     activeHours: anchorActiveHours, offHours: anchorOffHours, activeUsed: activeAnchorUsed, offUsed: offAnchorUsed,
   } = splitWindowUsage(inWindow, schedule, nowMs, anchorStartMs, current.observedAt, anchorUsed, excluded, dayWeights);
-  const windowPace = anchorActiveHours >= 1 && anchorUsed >= 0 ? activeAnchorUsed / anchorActiveHours : null;
-  const offWindowPace = anchorOffHours >= 1 && anchorUsed >= 0 ? offAnchorUsed / anchorOffHours : null;
+  const windowPace = anchorActiveHours >= 1 ? activeAnchorUsed / anchorActiveHours : null;
+  const offWindowPace = anchorOffHours >= 1 ? offAnchorUsed / anchorOffHours : null;
   // After a reset the fresh window has no history of its own, so the most
   // recent prior window's average pace carries forward as weaker evidence
   // instead of letting while-working burst rates run unchecked until reset.
@@ -631,6 +621,7 @@ function forecastQuotaWithLearning(observations, options = {}, dayWeights = null
   for (let index = clusters.length - 1; index >= 0 && !priorEvidence; index -= 1) {
     const entry = clusters[index];
     if (entry === currentCluster || entry.rows.length < 2) continue;
+    if (entry.rows.at(-1).windowMinutes > 0 && entry.rows.at(-1).windowMinutes < 360) continue;
     const pace = windowPaceOf(entry.rows, schedule, entry.observedResetAt, nowMs, excluded, dayWeights);
     if (pace && pace.evidenceActiveHours >= 6) priorEvidence = pace;
   }
@@ -720,6 +711,60 @@ function forecastQuotaWithLearning(observations, options = {}, dayWeights = null
     },
   };
 
+  return { samples, modelSamples, rates, sustainableOffSchedulePace, recent, globalRate, anchor, windowPace };
+}
+
+function forecastQuotaWithLearning(observations, options = {}, dayWeights = null) {
+  const nowMs = options.now != null ? new Date(options.now).getTime() : Date.now();
+  if (!Number.isFinite(nowMs)) return unknownForecast();
+  const schedule = {
+    activeDays: options.schedule?.activeDays ?? [1, 2, 3, 4, 5, 6, 0],
+    startHour: options.schedule?.startHour ?? 8,
+    endHour: options.schedule?.endHour ?? 22,
+  };
+  const fallbackRate = Number(options.fallbackRate ?? 0.35);
+  const paceRiskThreshold = Number(options.paceRiskThreshold ?? 1.2);
+  const hardLimitThreshold = Number(options.hardLimitThreshold ?? 90);
+  // Budget mode: the share of the allowance the user wants untouched at reset.
+  // It is subtracted from what the safe pace may spend, never from the
+  // projection itself — the forecast still says what will happen.
+  const reservePercent = clamp(Number(options.reservePercent ?? 0) || 0, 0, 90);
+  const excluded = exclusionLookup(options.excludedDates);
+  let normalised = observations.map(normaliseObservation)
+    .filter((row) => validQuotaTime(row.observedAt, row.resetsAt, row.windowMinutes, nowMs))
+    .sort((a, b) => a.observedAt - b.observedAt);
+  const current = normalised.at(-1);
+  if (!current) return unknownForecast();
+  // Keep the latest dormant reading so it still reports expired, but do not
+  // traverse ancient rolling windows in learning or active-hour calculations.
+  normalised = normalised.filter((row) => row === current || row.observedAt >= nowMs - FORECAST_LOOKBACK_MS);
+
+  const resetMs = current.resetsAt;
+  const clusters = clusterByWindow(normalised);
+  // A hard reset may briefly retain the previous reset timestamp, so select
+  // the latest matching cluster rather than the first historical match.
+  const currentCluster = clusters.at(-1);
+  const displayStart = nowMs - 48 * HOUR_MS;
+  const firstVisible = currentCluster.rows.findIndex((row) => row.observedAt >= displayStart);
+  const visibleRows = firstVisible < 0 ? currentCluster.rows.slice(-1) : currentCluster.rows.slice(Math.max(0, firstVisible - 1));
+  const observed = visibleRows
+    .map((row) => ({ at: row.observedAt, remaining: clamp(Number.isFinite(row.remainingPercent) ? row.remainingPercent : 100 - row.usedPercent, 0, 100) }));
+  const staleHours = Math.max(0, (nowMs - current.observedAt) / HOUR_MS);
+  if (!Number.isFinite(resetMs) || resetMs <= nowMs) return unknownForecast({ expired: true, observed, staleHours });
+
+  const remaining = Number.isFinite(current.remainingPercent) ? current.remainingPercent : 100 - current.usedPercent;
+  const usedNow = clamp(Number.isFinite(current.usedPercent) ? current.usedPercent : 100 - remaining, 0, 100);
+  const learningKey = JSON.stringify([normalised.length, normalised[0].observedAt, current.observedAt, current.usedPercent,
+    dayWeights ? [...dayWeights] : null]);
+  const cachedModel = options.learningCache?.get(learningKey);
+  const model = cachedModel && nowMs >= cachedModel.at && nowMs - cachedModel.at < 60_000
+    ? cachedModel.value : learnForecast({ normalised, current, currentCluster, clusters, schedule, nowMs, excluded, dayWeights, usedNow, resetMs, fallbackRate });
+  if (options.learningCache && model !== cachedModel?.value) {
+    if (options.learningCache.size >= 4) options.learningCache.clear();
+    options.learningCache.set(learningKey, { at: nowMs, value: model });
+  }
+  const { samples, modelSamples, rates, sustainableOffSchedulePace, recent, globalRate, anchor, windowPace } = model;
+
   const catchUp = buildSeries(remaining, remaining, current.observedAt, nowMs, schedule, samples, rates);
   if (!catchUp) return unknownForecast({ observed, staleHours });
   const estimatedCurrent = catchUp.expected.at(-1)?.remaining ?? remaining;
@@ -754,19 +799,14 @@ function forecastQuotaWithLearning(observations, options = {}, dayWeights = null
     : localDayKey(new Date(sample.observedAt)))).size;
   const coveredHours = modelSamples.reduce((total, sample) => total + sample.coveredHours, 0);
   const changedSamples = new Set(modelSamples.filter((sample) => sample.changed).map((sample) => sample.observedAt)).size;
-  const resetCycles = new Set(normalised.filter((row) => !excluded(row.observedAt, row.observedAt + 1))
-    .map((row) => Math.round(row.resetsAt / RESET_TOLERANCE_MS))).size;
+  const resetCycles = clusters.filter((entry) => entry.rows.some((row) => !excluded(row.observedAt, row.observedAt + 1))).length;
   const evidenceConfidence = 0.18 + Math.min(learnedDays, 28) / 28 * 0.5
     + Math.min(coveredHours, 80) / 80 * 0.15 + Math.min(changedSamples, 12) / 12 * 0.08
     + Math.min(resetCycles, 3) / 3 * 0.04;
   const confidence = clamp(evidenceConfidence * Math.exp(-staleHours / 168), 0.12, 0.95);
-  const watchPaceThreshold = paceRiskThreshold * 0.75;
   // A reserve the projection will not honour is worth a warning of its own.
   const watchRemainingThreshold = Math.max(100 - hardLimitThreshold, reservePercent);
-  const state = expectedRemaining <= 0 ? 'critical'
-    : heavyRemaining <= 0 || paceRatio > paceRiskThreshold ? 'risk'
-      : expectedRemaining < watchRemainingThreshold || heavyRemaining < watchRemainingThreshold
-        || paceRatio > watchPaceThreshold ? 'watch' : 'safe';
+  const state = forecastState(expectedRemaining, heavyRemaining, paceRatio, paceRiskThreshold, watchRemainingThreshold);
 
   return {
     state, expectedRemaining, heavyRemaining, confidence, learnedSamples: modelSamples.length,
@@ -788,8 +828,9 @@ function earlyResetAdjustment(observations, options, nowMs) {
   if (rows.length < 2) return null;
   // Callers normally supply one bucket. A mixed history cannot establish that
   // an apparent drop represents replenishment of the same allowance.
-  const identity = (row) => JSON.stringify([row.sourceId, row.bucketId, row.windowMinutes]);
-  if (!rows[0].sourceId || !rows[0].bucketId || new Set(rows.map(identity)).size !== 1 || !(rows[0].windowMinutes > 0)) return null;
+  const first = rows[0];
+  if (!first.sourceId || !first.bucketId || !(first.windowMinutes > 0)
+    || rows.some((row) => row.sourceId !== first.sourceId || row.bucketId !== first.bucketId || row.windowMinutes !== first.windowMinutes)) return null;
   const candidates = new Map();
   const excluded = exclusionLookup(options.excludedDates);
   for (let index = 1; index < rows.length; index += 1) {
@@ -880,12 +921,35 @@ function earlyResetAdjustment(observations, options, nowMs) {
   } : null;
 }
 
+function collapseReadings(rows, nowMs) {
+  const result = [];
+  let previous = null, run = 0, previousDay;
+  for (const row of rows) {
+    const day = localDayKey(new Date(row.observedAt));
+    const same = previous && day === previousDay && (row.observedAt <= nowMs) === (previous.observedAt <= nowMs)
+      && ['sourceId', 'bucketId', 'usedPercent', 'remainingPercent', 'resetsAt', 'windowMinutes', 'provenance', 'resetEvidence', 'allowanceScaled']
+        .every((field) => Object.is(row[field], previous[field]));
+    run = same ? run + 1 : 1;
+    if (run > 2) result[result.length - 1] = row;
+    else result.push(row);
+    previous = row; previousDay = day;
+  }
+  return result;
+}
+
 function forecastQuota(observations, options = {}) {
   // Normalise once; each pass below would otherwise re-parse every timestamp.
-  const rows = rescaleObservations(observations.map(normaliseObservation), options);
+  const nowMs = options.now != null ? new Date(options.now).getTime() : Date.now();
+  let normalised = rescaleObservations(observations.map(normaliseObservation), options);
+  if (options.compactReadings) {
+    normalised = normalised.filter((row) => validQuotaTime(row.observedAt, row.resetsAt, row.windowMinutes, nowMs))
+      .sort((a, b) => a.observedAt - b.observedAt);
+    const current = normalised.at(-1);
+    normalised = collapseReadings(normalised.filter((row) => row === current || row.observedAt >= nowMs - FORECAST_LOOKBACK_MS), nowMs);
+  }
+  const rows = normalised;
   const ordinary = forecastQuotaWithLearning(rows, options);
   if (ordinary.expired || ordinary.expectedRemaining == null) return ordinary;
-  const nowMs = options.now != null ? new Date(options.now).getTime() : Date.now();
   const adjustment = earlyResetAdjustment(rows, options, nowMs);
   if (!adjustment) return ordinary;
   const adjusted = forecastQuotaWithLearning(rows, options,
@@ -902,12 +966,9 @@ function forecastQuota(observations, options = {}) {
   const heavyRemaining = heavy.at(-1)?.remaining ?? ordinary.heavyRemaining;
   const paceRiskThreshold = Number(options.paceRiskThreshold ?? 1.2);
   const watchRemainingThreshold = Math.max(100 - Number(options.hardLimitThreshold ?? 90), adjusted.reservePercent);
-  const state = adjusted.expectedRemaining <= 0 ? 'critical'
-    : heavyRemaining <= 0 || adjusted.paceRatio > paceRiskThreshold ? 'risk'
-      : adjusted.expectedRemaining < watchRemainingThreshold || heavyRemaining < watchRemainingThreshold
-        || adjusted.paceRatio > paceRiskThreshold * 0.75 ? 'watch' : 'safe';
+  const state = forecastState(adjusted.expectedRemaining, heavyRemaining, adjusted.paceRatio, paceRiskThreshold, watchRemainingThreshold);
   return { ...adjusted, state, heavyRemaining, heavyExhaustsAt: exhaustionTime(heavy),
     series: { ...adjusted.series, heavy }, resetAdjustment: adjustment };
 }
 
-module.exports = { activeHoursBetween, deriveLearningSamples, exhaustionTime, forecastQuota, percentile };
+module.exports = { activeHoursBetween, clusterByWindow, sameWindowDrift, normaliseObservation, prepareObservation, deriveLearningSamples, exhaustionTime, forecastQuota, percentile };

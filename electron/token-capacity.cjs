@@ -2,6 +2,8 @@
 
 const { createAllowanceScaler } = require('./allowance-changes.cjs');
 const { FORECAST_LOOKBACK_MS } = require('./quota-time.cjs');
+const { normaliseObservation } = require('./forecast.cjs');
+const { OFFICIAL_PROVENANCES: CALIBRATION_PROVENANCES } = require('./quota-provenance.mjs');
 
 const DAY_MS = 86_400_000;
 const WEEK_MS = 7 * DAY_MS;
@@ -12,9 +14,7 @@ const STALENESS_MS = DAY_MS;
 const RESET_TOLERANCE_MS = 60_000;
 const MIN_INTERVAL_PERCENT = 5;
 const MIN_INTERVALS = 3;
-const OFFICIAL_PROVENANCES = new Set([
-  'official', 'local-official', 'manual-official', 'official-claude-usage', 'official-statusline',
-]);
+const OFFICIAL_PROVENANCES = new Set(CALIBRATION_PROVENANCES);
 const MODEL_IDS = new Set(['claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-sonnet-5', 'claude-haiku-4-5']);
 const EMPTY_MIX = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
 const BASE_WARNINGS = [
@@ -80,7 +80,8 @@ function excludedIntervals(dates) {
 
 function normalizeObservation(row, sourceId, bucketId, scope, nowMs) {
   if (!row || row.source_id !== sourceId || row.bucket_id !== bucketId || row.window_minutes !== 10_080) return null;
-  const at = asTime(row.observed_at), reset = asTime(row.resets_at), used = row.used_percent;
+  const prepared = normaliseObservation(row);
+  const at = prepared.observedAt, reset = prepared.resetsAt, used = row.used_percent;
   if (!Number.isFinite(at) || !Number.isFinite(reset) || at > nowMs || at < nowMs - LOOKBACK_MS
     || reset - at < -RESET_TOLERANCE_MS || reset - at > WEEK_MS + RESET_TOLERANCE_MS
     || typeof used !== 'number' || !Number.isFinite(used) || used < 0 || used > 100) return null;
@@ -211,9 +212,16 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
     // The first reset stays fixed for the entire cluster: chained small reset
     // shifts must not merge unrelated windows across a long observation gap.
     const resetChanged = Math.abs(after.reset - cycleReset) > RESET_TOLERANCE_MS;
+    const gap = after.at - anchor.at;
+    const idleRolling = anchor.used === 0 && after.used === 0 && gap > 0
+      && Math.abs((after.reset - anchor.reset) - gap) <= RESET_TOLERANCE_MS + gap * 0.01;
+    if (idleRolling) { anchor = after; cycleReset = after.reset; continue; }
     const rebased = highWater - after.used >= 5 && after.used <= 2;
+    const pinnedAfterIdle = anchor.used === 0 && after.used > 0
+      && after.reset - WEEK_MS >= anchor.at - RESET_TOLERANCE_MS
+      && after.reset - WEEK_MS <= after.at + RESET_TOLERANCE_MS;
     if (resetChanged || rebased) {
-      if (resetChanged && Math.abs(after.reset - cycleReset) < DAY_MS) closeResets = true;
+      if (resetChanged && !pinnedAfterIdle && Math.abs(after.reset - cycleReset) < DAY_MS) closeResets = true;
       anchor = after; highWater = after.used; cycleReset = after.reset; cycle += 1; recovering = false;
       continue;
     }

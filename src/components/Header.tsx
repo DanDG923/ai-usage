@@ -95,10 +95,10 @@ export function Header({
           <BrandMark />
           <span>AI Usage</span>
         </button>
-        <nav role="tablist" aria-orientation="vertical" aria-label="Sections">
+        <div role="tablist" aria-orientation="vertical" aria-label="Sections">
           <div className="rail-primary">{TABS.slice(0, -1).map(tabButton)}</div>
           <div className="rail-secondary">{tabButton(TABS.at(-1)!, TABS.length - 1)}</div>
-        </nav>
+        </div>
       </aside>
       <header className="app-header">
         <div className="command-title">

@@ -9,9 +9,9 @@ It imports local usage evidence, learns your real burn pattern, evaluates every 
 
 ## Install
 
-Use `AI-Usage-Setup-1.0.44-x64.exe` for a normal Windows installation. Running it over an existing installation upgrades in place and preserves the local database, settings, observations, and backups. Uninstalling first is neither required nor recommended. Install this version once to enable future updates through the app.
+Use `AI-Usage-Setup-1.0.45-x64.exe` for a normal Windows installation. Running it over an existing installation upgrades in place and preserves the local database, settings, observations, and backups. Uninstalling first is neither required nor recommended. Install this version once to enable future updates through the app.
 
-Use `AI-Usage-Portable-1.0.44-x64.exe` for a single executable that does not install the app. Windows SmartScreen may show an unknown-publisher warning because this personal build is not backed by a commercial code-signing certificate; verify the supplied SHA-256 hash before running it.
+Use `AI-Usage-Portable-1.0.45-x64.exe` for a single executable that does not install the app. Windows SmartScreen may show an unknown-publisher warning because this personal build is not backed by a commercial code-signing certificate; verify the supplied SHA-256 hash before running it.
 
 ## Personal private updates
 
@@ -173,11 +173,11 @@ Some risks are accepted by design and worth knowing:
 
 - **Claude Code installation** runs Anthropic's installer script, fetched from `claude.ai` at the moment you choose to install. Trust rests on TLS to that host; the script is not pinned or hashed locally.
 - **In-app updates** are not code-signed. Trust rests on GitHub TLS, access control on the private repository, and the SHA-512 in the release manifest. Downloading and installing each require a click, so a compromised release cannot install itself.
-- **Backups** in `Documents\AI Usage\Backups` contain settings, session identifiers and the working directory of every session. They hold no credentials, but a synced Documents folder will copy them.
+- **Backups** under `%APPDATA%\ai-usage\Backups` contain settings, session identifiers and the working directory of every session. They hold no credentials. Older backups in `Documents\AI Usage\Backups` remain there and may already have synced through OneDrive.
 
 ## Data and backups
 
-The database is stored under the standard Windows app-data directory for AI Usage. Backups are written to `Documents\AI Usage\Backups` as both a SQLite snapshot and a readable `.aiusage.json` export. Daily backup creation is enabled by default, and **Back up now** is available at any time.
+The database is stored under the standard Windows app-data directory for AI Usage. New backups are written to `%APPDATA%\ai-usage\Backups` as both a SQLite snapshot and a compressed `.aiusage.json.gz` export. Daily backup creation is enabled by default, and **Back up now** is available at any time. Restore accepts both compressed exports and legacy `.aiusage.json` files; browse to `Documents\AI Usage\Backups` to select an older export. Existing backups outside the current backup folder and completed files absent from the database's backup list are protected from automatic pruning.
 
 Backups, restores, and CSV exports run in a dedicated background worker. Storage changes are queued safely, and quitting waits for active storage work to complete.
 
@@ -202,12 +202,12 @@ npm run build
 
 For a repeatable cost-analytics benchmark, run `node tools/benchmark-analytics.cjs` (optionally followed by a record count). It uses 30,000 synthetic records in an in-memory database by default, reports the median of seven measured runs after two warmups, and prints a checksum of the complete result. Compare the checksum as well as the timing when changing analytics. This measures backend cost aggregation, not collection or end-to-end UI latency, and never reads the installed app's data.
 
-Linting uses oxlint (typescript-eslint does not yet support the TypeScript 7 compiler this project builds with) and Prettier formats the renderer source. The same steps run in GitHub Actions on every push and pull request. `npm run build` runs the tests and web build, creates both Windows artifacts without publishing, audits the packaged ASAR for source maps, private local data, and the SDK's optional Claude binary, verifies the private update feed and installer manifest, then writes `release\SHA256SUMS.txt`. The checksums cover the installer, portable executable, installer block map, and `latest.yml`. The source uses React, Vite, Electron, Node's built-in SQLite support, the official Claude Agent SDK, and local JSON-line collectors. Packaged builds use the already installed external Claude binary instead.
+Linting uses oxlint (typescript-eslint does not yet support the TypeScript 7 compiler this project builds with) and Prettier formats the renderer source. The same steps run in GitHub Actions on every push and pull request. `npm run build` runs the tests and web build, creates both Windows artifacts without publishing, audits the packaged ASAR for source maps, private local data, and the SDK's optional Claude binary, verifies the private update feed and installer manifest, then writes `SHA256SUMS.txt` in the configured build output folder. The checksums cover the installer, portable executable, installer block map, and `latest.yml`. The source uses React, Vite, Electron, Node's built-in SQLite support, the official Claude Agent SDK, and local JSON-line collectors. Packaged builds use the already installed external Claude binary instead.
 
 ## Publish future private updates
 
 1. Update `package.json`, both root versions in `package-lock.json`, the current installer names in this README, the version contract test, and `CHANGELOG.md`. Keep the GitHub repository private and retain the matching `updateFeed` and `build.publish` settings in `package.json`; the separate `updateFeed` survives packaging so the installed app can verify its destination.
-2. Complete the checks above, review the changes, and merge them. Create and push the matching version tag, for example `v1.0.44` for version `1.0.44`.
+2. Complete the checks above, review the changes, and merge them. Create and push the matching version tag, for example `v1.0.45` for version `1.0.45`.
 3. The **Private Windows release** GitHub Actions workflow builds Windows x64 packages, checks the manifest and packaged contents, and creates a draft release. It uploads the Setup installer, portable executable, installer block map, `latest.yml`, and `SHA256SUMS.txt`, verifies each remote asset's size and SHA-256 digest, then publishes the release as latest. The normal pull-request CI job is unchanged.
 
 The release workflow can also be started manually with an existing version tag. It refuses a mismatched version, a public or different destination, a tag whose commit is not already on `main`, an existing release for that tag, or a version older than an existing stable release. If an upload fails, any created release stays a draft for inspection and is not offered to the app. Review and remove that incomplete draft before retrying; the workflow never overwrites existing release assets.
@@ -221,3 +221,14 @@ Run the Setup installer and leave **Open AI Usage and set up usage tracking** ch
 Choose **Sign in to Claude** and complete the account flow in your browser. AI Usage never copies account credentials into its database or installer. Claude Desktop sign-in can be separate from Claude Code sign-in. Then choose **Start collecting** to optionally enable the fallback helper and refresh. Restart Claude Code for the helper to take effect. The provider may omit subscription windows even after a successful sign-in; missing limits are not reported as zero. Local activity only appears after Claude Code has written local usage records.
 
 **Set up later** leaves Codex collection available. Reopen the guide from **Settings → Sources → Set up Claude**. Failed or cancelled installation/sign-in can be retried. A silent installation defers account setup until the app is opened interactively. Codex must separately be installed and signed into on that computer.
+
+
+### Review maintenance changes
+
+Local packaging output now defaults to `%LOCALAPPDATA%\AI Usage\Build\release`, with `AI_USAGE_BUILD_OUTPUT` available for an explicit alternative. CI keeps its `release` folder. Use the package scripts so the builder, release notes and audit resolve the same location. `npm run version:check` verifies release metadata; `node tools/bump-version.cjs 1.0.45` prepares a future version and its changelog entry without tagging or publishing.
+
+`npm test` uses two test processes, isolated provider folders, an explicit Europe/London test clock zone, fast SQLite settings for disposable fixtures, and cleanup of only the temporary folders created by that run. `npm run test:electron` repeats the suite with the shipped Electron runtime. Renderer interaction tests also exercise the real Chromium DOM with a fake bridge.
+
+Release access remains a repository-administration decision: anyone with write access can change a tag-triggered workflow. SHA-pinned actions and least-privilege job tokens do not replace protected refs/environments or installer signing. Restrict writer access and configure signing when the repository plan and a certificate support it; these changes do not silently modify collaborators or claim that unsigned installers are signed. CI combines verification and packaging to avoid duplicate setup/renderer builds; releases still rebuild and audit the tagged commit with no publishing token present during packaging.
+
+Full JavaScript `checkJs` adoption is deferred: it requires a separate annotation pass through the Electron modules. TypeScript renderer checks, JavaScript lint, exercised IPC validation, and both Node/Electron runtime suites remain required.

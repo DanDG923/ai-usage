@@ -5,9 +5,9 @@ const path = require('node:path');
 const readline = require('node:readline');
 const { spawn } = require('node:child_process');
 const { findCodexBinary, providerProcessOptions, providerHome } = require('./provider-executable.cjs');
-const { planIncrementalRead, readCompleteLines } = require('./incremental-file.cjs');
+const { IncrementalReadError, planIncrementalRead, readCompleteLines } = require('./incremental-file.cjs');
 const { epochToIso } = require('./time.cjs');
-const { codexQuotaLabel } = require('./codex-quota-label.cjs');
+const { codexQuotaLabel, durationLabel } = require('./codex-quota-label.cjs');
 const { codexAgentMetadata, textId } = require('./task-usage.cjs');
 
 // Read from the manifest so the version reported to Codex cannot drift.
@@ -148,7 +148,7 @@ function recordRateLimit(store, raw, observedAt, provenance, extra = {}, { onRej
     const observation = {
       sourceId,
       bucketId: `${limitId}:${label}`,
-      bucketName: codexQuotaLabel(window.windowMinutes >= 10_000 ? 'Weekly' : window.windowMinutes >= 240 ? 'Five hour' : limitName,
+      bucketName: codexQuotaLabel(durationLabel(window.windowMinutes, limitName),
         window.windowMinutes, { limitId, limitName }),
       observedAt,
       usedPercent: window.usedPercent,
@@ -190,7 +190,7 @@ async function collectFromAppServer(store, binary, {
     const observedAt = new Date().toISOString();
     const resetCredits = limits?.rateLimitResetCredits?.availableCount ?? null;
     const buckets = limits?.rateLimitsByLimitId && Object.keys(limits.rateLimitsByLimitId).length
-      ? Object.values(limits.rateLimitsByLimitId)
+      ? Object.entries(limits.rateLimitsByLimitId).map(([limitId, bucket]) => ({ ...bucket, limitId: bucket?.limitId ?? bucket?.limit_id ?? limitId }))
       : [limits?.rateLimits].filter(Boolean);
     let observations = 0;
     for (const bucket of buckets) {
@@ -351,40 +351,35 @@ function retainedSnapshotExists(store, eventKey, event) {
       event.outputTokens ?? 0, event.reasoningOutputTokens ?? 0));
 }
 
-function needsDuplicateBackup(store, lines, initialState) {
-  const state = { ...initialState };
-  for (const entry of sessionEntries(lines, state)) {
-    if (entry.type !== 'event_msg' || entry.payload?.type !== 'token_count' || !entry.payload?.info?.last_token_usage) continue;
-    const fingerprint = usageFingerprint(entry.payload.info, state.sessionId, state.model, entry.timestamp);
-    const event = codexUsageEvent(entry, state);
-    const previous = state.lastTokenSnapshot;
-    if (fingerprint && fingerprint === previous?.fingerprint) {
-      if (event.eventKey !== previous.eventKey
-        && store.prepare(`SELECT 1 AS found FROM usage_events WHERE ${DUPLICATE_ROW_GUARD}`).get(...duplicateRowParameters(event))) return true;
-    } else {
-      state.lastTokenSnapshot = fingerprint ? { fingerprint, eventKey: event.eventKey } : null;
-    }
-  }
-  return false;
-}
-
 // Version 1.0.34 introduced ordinal keys without invalidating old cursors.
 // Before replaying a collision, verify every held row against its source group.
 // Conflicting/manual rows stay untouched, including the rest of that group.
-function collisionMigration(store, lines, initialState) {
+function collisionMigration(store, lines, initialState, { checkCollisions, checkDuplicates, protectSingles }) {
   const groups = new Map();
   const state = { ...initialState };
+  let backupNeeded = false;
   for (const entry of sessionEntries(lines, state)) {
     if (entry.type !== 'event_msg' || entry.payload?.type !== 'token_count' || !entry.payload?.info?.last_token_usage) continue;
     const event = codexUsageEvent(entry, state);
-    const base = `codex:${state.sessionId}:${entry.timestamp}`;
-    if (!groups.has(base)) groups.set(base, []);
-    groups.get(base).push(event);
+    if (checkDuplicates) {
+      const fingerprint = usageFingerprint(entry.payload.info, state.sessionId, state.model, entry.timestamp);
+      const previous = state.lastTokenSnapshot;
+      if (fingerprint && fingerprint === previous?.fingerprint) {
+        if (!backupNeeded && event.eventKey !== previous.eventKey
+          && store.prepare(`SELECT 1 AS found FROM usage_events WHERE ${DUPLICATE_ROW_GUARD}`).get(...duplicateRowParameters(event))) backupNeeded = true;
+      } else {
+        state.lastTokenSnapshot = fingerprint ? { fingerprint, eventKey: event.eventKey } : null;
+      }
+    }
+    if (checkCollisions) {
+      const base = `codex:${state.sessionId}:${entry.timestamp}`;
+      if (!groups.has(base)) groups.set(base, []);
+      groups.get(base).push(event);
+    }
   }
   const blocked = new Set();
-  let backupNeeded = false;
   for (const [base, events] of groups) {
-    if (events.length < 2) continue;
+    if (events.length < 2 && !protectSingles) continue;
     let held = false;
     let conflict = false;
     for (const event of events) {
@@ -403,7 +398,7 @@ function collisionMigration(store, lines, initialState) {
       })) conflict = true;
     }
     if (conflict) for (const event of events) blocked.add(event.eventKey);
-    else if (held) backupNeeded = true;
+    else if (held && events.length > 1) backupNeeded = true;
   }
   return { blocked, backupNeeded };
 }
@@ -460,69 +455,87 @@ function importLocalSessions(store, days = 120) {
       : { sessionId: path.basename(fullPath, '.jsonl'), model: null, project: null, agentAttributionVersion: 1, accountingVersion: 1, eventKeyVersion: 1 };
     let chunk;
     try {
-      chunk = readCompleteLines(fullPath, startOffset, stat.size);
+      chunk = readCompleteLines(fullPath, startOffset, stat.size, { streaming: true });
     } catch (error) {
       readErrors += 1;
       lastReadError = error?.code || (error instanceof Error ? error.message : String(error));
       continue;
     }
-    // VACUUM-backed safety copies must happen outside the file transaction.
-    // This read-only pass runs only during accounting migration; a clean first
-    // import makes no backup unless an exact historical duplicate exists.
-    const migration = previous?.state?.eventKeyVersion !== 1
-      ? collisionMigration(store, chunk.lines, state) : { blocked: new Set(), backupNeeded: false };
-    if (!plan.resumed && !reconciliationBackup
-      && (migration.backupNeeded || needsDuplicateBackup(store, chunk.lines, state))) {
-      reconciliationBackup = store.createBackup();
-    }
-    // One commit per file: the rows and the cursor that says they were read
-    // land together, and a first import no longer pays a WAL sync per event.
-    store.transaction(() => {
-      for (const entry of sessionEntries(chunk.lines, state, (message) => { rejected += 1; lastRejection = message; })) {
-        if (entry.type !== 'event_msg' || entry.payload?.type !== 'token_count') continue;
-        const usage = entry.payload?.info?.last_token_usage;
-        if (usage) {
-          const event = codexUsageEvent(entry, state);
-          const fingerprint = usageFingerprint(entry.payload.info, state.sessionId, state.model, entry.timestamp);
-          const previousSnapshot = state.lastTokenSnapshot;
-          const duplicate = fingerprint && fingerprint === previousSnapshot?.fingerprint
-            && retainedSnapshotExists(store, previousSnapshot.eventKey, event);
-          if (migration.blocked.has(event.eventKey)) {
-            state.lastTokenSnapshot = null;
-            rejected += 1;
-            lastRejection = 'A same-time Codex record conflicts with its source log; its counts were preserved.';
-          } else if (duplicate) {
-            duplicateEvents += 1;
-            if (reconciliationBackup && event.eventKey !== previousSnapshot.eventKey) {
-              reconciledEvents += store.prepare(`DELETE FROM usage_events WHERE ${DUPLICATE_ROW_GUARD}`)
-                .run(...duplicateRowParameters(event)).changes;
-            }
-          } else {
-            // One malformed event must not stop the file; see the Claude importer.
-            try {
-              store.recordUsageEvent(event);
-              state.lastTokenSnapshot = fingerprint ? { fingerprint, eventKey: event.eventKey } : null;
-              events += 1;
-            } catch (error) {
-              if (error?.code) throw error;
+    const beforeFile = { events, observations, rejected, lastRejection, duplicateEvents, reconciledEvents };
+    try {
+      // VACUUM-backed safety copies must happen outside the file transaction.
+      // A clean first import makes no backup unless source-verified historical
+      // records need a repair. Current cursors skip this read-only preflight.
+      // Restored ledgers and moved logs can have historical events but no cursor.
+      // Keys are globally unique: restored/manual rows may use another source
+      // while retaining a Codex key. Probe the indexed key namespace itself.
+      const missingHistoricalCursor = !previous && Boolean(store.prepare("SELECT 1 FROM usage_events WHERE event_key >= 'codex:' AND event_key < 'codex;' LIMIT 1").get());
+      const checkCollisions = (previous && previous.state?.eventKeyVersion !== 1) || missingHistoricalCursor;
+      const checkDuplicates = (previous || missingHistoricalCursor) && !currentCursor && !plan.resumed && !reconciliationBackup;
+      // Share one preflight scan for both repairs. Normal current-cursor reads
+      // retain their single streaming pass.
+      const migration = checkCollisions || checkDuplicates
+        ? collisionMigration(store, chunk.lines, state, { checkCollisions, checkDuplicates, protectSingles: missingHistoricalCursor })
+        : { blocked: new Set(), backupNeeded: false };
+      if (!reconciliationBackup && migration.backupNeeded) {
+        reconciliationBackup = store.createBackup();
+      }
+      // One commit per file: the rows and the cursor that says they were read
+      // land together, and a first import no longer pays a WAL sync per event.
+      store.transaction(() => {
+        for (const entry of sessionEntries(chunk.lines, state, (message) => { rejected += 1; lastRejection = message; })) {
+          if (entry.type !== 'event_msg' || entry.payload?.type !== 'token_count') continue;
+          const usage = entry.payload?.info?.last_token_usage;
+          if (usage) {
+            const event = codexUsageEvent(entry, state);
+            const fingerprint = usageFingerprint(entry.payload.info, state.sessionId, state.model, entry.timestamp);
+            const previousSnapshot = state.lastTokenSnapshot;
+            const duplicate = fingerprint && fingerprint === previousSnapshot?.fingerprint
+              && retainedSnapshotExists(store, previousSnapshot.eventKey, event);
+            if (migration.blocked.has(event.eventKey)) {
               state.lastTokenSnapshot = null;
               rejected += 1;
-              lastRejection = error instanceof Error ? error.message : String(error);
+              lastRejection = 'A same-time Codex record conflicts with its source log; its counts were preserved.';
+            } else if (duplicate) {
+              duplicateEvents += 1;
+              if (reconciliationBackup && event.eventKey !== previousSnapshot.eventKey) {
+                reconciledEvents += store.prepare(`DELETE FROM usage_events WHERE ${DUPLICATE_ROW_GUARD}`)
+                  .run(...duplicateRowParameters(event)).changes;
+              }
+            } else {
+              // One malformed event must not stop the file; see the Claude importer.
+              try {
+                store.recordUsageEvent(event);
+                state.lastTokenSnapshot = fingerprint ? { fingerprint, eventKey: event.eventKey } : null;
+                events += 1;
+              } catch (error) {
+                if (error?.code) throw error;
+                state.lastTokenSnapshot = null;
+                rejected += 1;
+                lastRejection = error instanceof Error ? error.message : String(error);
+              }
             }
           }
+          if (entry.payload?.rate_limits) {
+            observations += recordRateLimit(store, entry.payload.rate_limits, entry.timestamp, 'local-official', {}, {
+              onRejected: (error) => {
+                rejected += 1;
+                lastRejection = error instanceof Error ? error.message : String(error);
+              },
+            });
+          }
         }
-        if (entry.payload?.rate_limits) {
-          observations += recordRateLimit(store, entry.payload.rate_limits, entry.timestamp, 'local-official', {}, {
-            onRejected: (error) => {
-              rejected += 1;
-              lastRejection = error instanceof Error ? error.message : String(error);
-            },
-          });
-        }
-      }
-      store.markImportedFile(fullPath, stat.mtimeMs, startOffset + chunk.consumedBytes, state);
-    });
-    importedFiles += 1;
+        store.markImportedFile(fullPath, stat.mtimeMs, startOffset + chunk.consumedBytes, state);
+      });
+      importedFiles += 1;
+    } catch (error) {
+      if (!(error instanceof IncrementalReadError)) throw error;
+      // The transaction rolled back any rows read before the failure. Keep
+      // the returned counters in step with the committed ledger and cursor.
+      ({ events, observations, rejected, lastRejection, duplicateEvents, reconciledEvents } = beforeFile);
+      readErrors += 1;
+      lastReadError = error.code || error.message;
+    }
   }
   return { importedFiles, events, observations, rejected, lastRejection, duplicateEvents, reconciledEvents, reconciliationBackup, readErrors, lastReadError };
 }

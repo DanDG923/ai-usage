@@ -106,7 +106,7 @@ export function ToggleRow({
   onChange: (checked: boolean) => void;
 }) {
   return (
-    <label className="toggle-row">
+    <label className="toggle-row" aria-label={title}>
       <span>
         <strong>{title}</strong>
         <small>{description}</small>
@@ -121,16 +121,19 @@ export function SectionHeading({
   title,
   description,
   aside,
+  level = 3,
 }: {
   title: string;
   description?: string;
+  level?: 2 | 3 | 4;
   /** Optional right-hand content, e.g. a note or a control. */
   aside?: ReactNode;
 }) {
+  const Heading = `h${level}` as const;
   return (
     <div className="panel-heading">
       <div>
-        <h2>{title}</h2>
+        <Heading>{title}</Heading>
         {description && <p>{description}</p>}
       </div>
       {aside && <div className="panel-aside">{aside}</div>}

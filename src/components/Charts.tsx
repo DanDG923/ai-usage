@@ -1,6 +1,7 @@
+/* oxlint-disable jsx-a11y/no-noninteractive-element-interactions -- Pointer tooltips supplement the keyboard-accessible data tables for each SVG. */
 import { useCallback, useId, useMemo, useRef, useState } from 'react';
 import type { CostAnalytics, DailyUsage, Point } from '../types';
-import { LOCALE, compactNumber, formatInt, money } from '../lib';
+import { LOCALE, compactNumber, formatInt, money, percent } from '../lib';
 import type { ProviderView } from '../provider-view';
 import { recentDayKeys } from './details/cost-math';
 import { spreadRunwayLabels } from './details/runway-labels';
@@ -86,7 +87,9 @@ type Anchor = 'start' | 'middle' | 'end';
 function runwayLayout(views: ProviderView[], height: number) {
   const active = views.filter((view) => {
     const series = view.current?.forecast.series;
-    return Boolean(series && (series.observed.length || series.expected.length || series.heavy.length));
+    return Boolean(
+      !view.expired && series && (series.observed.length || series.expected.length || series.heavy.length),
+    );
   });
   if (!active.length) return null;
 
@@ -130,9 +133,10 @@ function runwayLayout(views: ProviderView[], height: number) {
     };
   });
   const summary = active
-    .map(
-      (view) =>
-        `${view.name}: expected ${Math.round(view.current!.forecast.expectedRemaining ?? 0)}%, heavier ${Math.round(view.current!.forecast.heavyRemaining ?? 0)}% at its reset`,
+    .map((view) =>
+      view.state === 'unknown' || view.expectedRemaining == null || view.heavyRemaining == null
+        ? `${view.name}: forecast is learning; observed balance ${percent(view.remaining)}`
+        : `${view.name}: expected ${percent(view.expectedRemaining)}, heavier ${percent(view.heavyRemaining)} at its reset`,
     )
     .join('. ');
   const labels = spreadRunwayLabels(
@@ -302,6 +306,38 @@ export function CombinedRunwayChart({ views }: { views: ProviderView[] }) {
           })}
         </div>
       )}
+      <details className="chart-data">
+        <summary>View runway data</summary>
+        <div className="table-scroll">
+          <table>
+            <caption>Allowance runway observations and projections</caption>
+            <thead>
+              <tr>
+                <th>Provider</th>
+                <th>Time</th>
+                <th>Series</th>
+                <th>Remaining</th>
+              </tr>
+            </thead>
+            <tbody>
+              {series.flatMap(({ view, forecast }) =>
+                (['observed', 'expected', 'heavy'] as const).flatMap((kind) =>
+                  forecast.series[kind]
+                    .filter((point) => point.at >= minAt && point.at <= maxAt)
+                    .map((point, index) => (
+                      <tr key={`${view.id}:${kind}:${index}`}>
+                        <td>{view.name}</td>
+                        <td>{WEEKDAY_DAY_MONTH_TIME.format(new Date(point.at))}</td>
+                        <td>{kind}</td>
+                        <td>{percent(point.remaining, 1)}</td>
+                      </tr>
+                    )),
+                ),
+              )}
+            </tbody>
+          </table>
+        </div>
+      </details>
       <p className="combined-runway-note">Shared calendar · each provider line ends at its own reset</p>
     </div>
   );
@@ -444,6 +480,32 @@ export function CostChart({ costs }: { costs: CostAnalytics }) {
         ))}
         {hover != null && <line className="forecast-hover" x1={x(hover)} x2={x(hover)} y1={COST.top} y2={baseline} />}
       </svg>
+      <details className="chart-data">
+        <summary>View cost data</summary>
+        <div className="table-scroll">
+          <table>
+            <caption>Daily API-equivalent cost</caption>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Codex</th>
+                <th>Claude + Fable</th>
+                <th>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {points.map((point) => (
+                <tr key={point.date}>
+                  <td>{dateLabel(point.date, WEEKDAY_DAY_MONTH)}</td>
+                  <td>{money(point.codex, costs.currency)}</td>
+                  <td>{money(point.claude, costs.currency)}</td>
+                  <td>{money(point.codex + point.claude, costs.currency)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </details>
       {hovered && hover != null && (
         <div className="forecast-tip" style={{ left: `${Math.min(84, Math.max(2, (x(hover) / COST.width) * 100))}%` }}>
           {dateLabel(hovered.date, WEEKDAY_DAY_MONTH)} · total {money(hovered.codex + hovered.claude, costs.currency)} ·
@@ -532,6 +594,28 @@ export function DailyUsageChart({ rows, days }: { rows: DailyUsage[]; days: numb
           </text>
         ))}
       </svg>
+      <details className="chart-data">
+        <summary>View daily token data</summary>
+        <div className="table-scroll">
+          <table>
+            <caption>Official daily Codex token usage</caption>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Tokens</th>
+              </tr>
+            </thead>
+            <tbody>
+              {points.map((point) => (
+                <tr key={point.date}>
+                  <td>{dateLabel(point.date, WEEKDAY_DAY_MONTH)}</td>
+                  <td>{formatInt(point.tokens)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </details>
       {hovered && hover != null && (
         <div
           className="forecast-tip"

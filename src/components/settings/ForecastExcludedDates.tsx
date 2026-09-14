@@ -71,8 +71,8 @@ export function ForecastExcludedDates({
   };
 
   return (
-    <div className="forecast-exclusions" aria-labelledby="forecast-exclusions-heading">
-      <h3 id="forecast-exclusions-heading">Ignored forecast days</h3>
+    <div role="group" className="forecast-exclusions" aria-labelledby="forecast-exclusions-heading">
+      <h4 id="forecast-exclusions-heading">Ignored forecast days</h4>
       <p id="forecast-exclusions-help">
         Exclude an unusual day from the patterns learned for Codex, Claude, and Fable. Recorded usage, costs, and your
         current allowance stay intact. You can include the day again at any time.

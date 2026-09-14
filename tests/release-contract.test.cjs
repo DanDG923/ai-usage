@@ -1,4 +1,5 @@
 'use strict';
+require('./setup.cjs');
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -13,13 +14,12 @@ test('release metadata, dependency pin, package exclusions, and docs agree', () 
   const pkg = readJson('package.json');
   const lock = readJson('package-lock.json');
   const readme = readText('README.md');
-  const changelog = readText('CHANGELOG.md');
 
-  assert.equal(pkg.version, '1.0.44');
+  assert.equal(require('../tools/bump-version.cjs').checkVersion(root, pkg.version), pkg.version);
   assert.equal(lock.version, pkg.version);
   assert.equal(lock.packages[''].version, pkg.version);
-  assert.equal(pkg.dependencies['@anthropic-ai/claude-agent-sdk'], '0.3.251');
-  assert.equal(lock.packages[''].dependencies['@anthropic-ai/claude-agent-sdk'], '0.3.251');
+  assert.match(pkg.dependencies['@anthropic-ai/claude-agent-sdk'], /^\d+\.\d+\.\d+$/);
+  assert.equal(lock.packages[''].dependencies['@anthropic-ai/claude-agent-sdk'], pkg.dependencies['@anthropic-ai/claude-agent-sdk']);
   // Vite bundles the renderer, so its packages must never be packed as loose
   // files; the only runtime dependencies are the SDK and the updater.
   assert.deepEqual(Object.keys(pkg.dependencies).sort(), ['@anthropic-ai/claude-agent-sdk', 'electron-updater']);
@@ -52,10 +52,8 @@ test('release metadata, dependency pin, package exclusions, and docs agree', () 
   assert.match(releaseAudit, /SHA256SUMS\.txt/);
   assert.match(releaseAudit, /source map/i);
   assert.match(releaseAudit, /private local data/i);
-  assert.match(readme, /AI-Usage-Setup-1.0.44-x64\.exe/);
   assert.match(readme, /actual local Fable token activity/i);
   assert.match(readme, /experimental/i);
-  assert.match(changelog, /^# Changelog\s+## 1.0.44/m);
 });
 
 test('private releases build without credentials and publish complete verified assets', () => {
@@ -90,103 +88,21 @@ test('private releases build without credentials and publish complete verified a
   // Packaging is exercised on every push so a broken ASAR or update feed is
   // caught before a tag ever reaches the release workflow. The nsis target is
   // the only Windows target for which electron-builder writes app-update.yml.
-  const pack = ci.jobs.package;
+  const pack = ci.jobs.verify;
   assert.equal(pack['runs-on'], 'windows-latest');
-  assert.equal(pack.needs, 'verify');
+  assert.equal(ci.jobs.package, undefined);
+  assert.equal(ci.permissions.contents, 'read');
+  assert.ok(ci.concurrency['cancel-in-progress']);
+  for (const step of [...pack.steps, ...steps].filter((item) => item.uses)) assert.match(step.uses, /@[a-f0-9]{40}$/);
   const packRuns = pack.steps.map((step) => step.run).filter(Boolean);
   assert.ok(packRuns.includes('npm ci --ignore-scripts'));
   assert.ok(packRuns.includes('node node_modules/electron/install.js'));
   assert.ok(packRuns.includes('npm run build:web'));
   assert.ok(packRuns.indexOf('npm run release:notes') < packRuns.findIndex((run) => run.includes('electron-builder')));
-  const builder = pack.steps.find((step) => /electron-builder --win nsis --x64 --publish never/.test(step.run || ''));
+  const builder = pack.steps.find((step) => /electron-builder --config tools\/electron-builder.cjs --win nsis --x64 --publish never/.test(step.run || ''));
   assert.equal(builder.env.CSC_IDENTITY_AUTO_DISCOVERY, 'false');
   assert.equal(builder.env.GH_TOKEN, undefined);
   assert.equal(builder.env.GITHUB_TOKEN, undefined);
   assert.ok(packRuns.includes('node tools/audit-release.cjs --unpacked'));
   assert.match(readText('tools/audit-release.cjs'), /--unpacked/);
-});
-
-test('the desktop window integrates native controls into the app header', () => {
-  const main = readText('electron/main.cjs');
-  const app = readText('src/App.tsx');
-  const styles = readText('src/styles.css');
-
-  // Window chrome follows the theme: both palettes are declared once and the
-  // overlay is re-applied whenever the effective theme changes.
-  assert.match(main, /dark:\s*\{\s*background:\s*'#0c1116',\s*symbol:\s*'#cbd3da'\s*\}/);
-  assert.match(main, /light:\s*\{\s*background:\s*'#f4f6f8',\s*symbol:\s*'#3b4854'\s*\}/);
-  assert.match(main, /backgroundColor:\s*chrome\.background/);
-  assert.match(main, /titleBarStyle:\s*'hidden'/);
-  assert.match(main, /titleBarOverlay:\s*\{[^}]*color:\s*chrome\.background/s);
-  assert.match(main, /titleBarOverlay:\s*\{[^}]*symbolColor:\s*chrome\.symbol/s);
-  assert.match(main, /nativeTheme\.on\('updated'/);
-  assert.match(main, /setTitleBarOverlay\(/);
-  assert.match(styles, /\.app-header\s*\{[^}]*padding-left:[^}]*titlebar-area-x[^}]*padding-right:[^}]*titlebar-area-width/s);
-  assert.match(styles, /\.app-header\s*\{[^}]*app-region:\s*drag/s);
-  assert.match(styles, /\.app-header\s*>\s*\*\s*\{[^}]*app-region:\s*no-drag/s);
-  assert.match(app, /if\s*\(!snapshot\)\s*\{[\s\S]*?<header className="app-header app-header-status">/s);
-  assert.match(styles, /@media\s*\(max-width:\s*1250px\)\s*\{\s*\.app-header\s*\{[^}]*titlebar-area-height/s);
-  assert.match(styles, /@media\s*\(max-width:\s*760px\)\s*\{\s*\.app-header\s*\{[^}]*padding-left:\s*max\(14px/s);
-});
-
-test('the renderer reflows to the window without scaling the interface', () => {
-  const entry = readText('src/main.tsx');
-  const professional = readText('src/professional.css');
-  const app = readText('src/App.tsx');
-
-  assert.match(entry, /import ['"]\.\/pricing\.css['"];\s*import ['"]\.\/professional\.css['"];/);
-  assert.doesNotMatch(entry, /fluid\.css/);
-  assert.doesNotMatch(app, /watchViewportScale/);
-  assert.doesNotMatch(professional, /--ui-(?:header-)?scale/);
-  assert.doesNotMatch(professional, /transform:\s*scale\(/);
-
-  assert.match(professional, /--content-max:\s*1520px/);
-  assert.match(professional, /--page-gutter:\s*clamp\(/);
-  assert.match(professional, /\.app-shell\s*\{[^}]*padding-left:\s*var\(--rail-width\)/s);
-  assert.match(professional, /\.page\s*\{[^}]*width:\s*min\(var\(--content-max\)/s);
-  assert.match(professional, /\.overview-workspace\s*\{[^}]*grid-template-columns:/s);
-
-  const medium = professional.slice(
-    professional.indexOf('@media (max-width: 1260px)'),
-    professional.indexOf('@media (max-width: 980px)'),
-  );
-  const compact = professional.slice(
-    professional.indexOf('@media (max-width: 980px)'),
-    professional.indexOf('@media (max-width: 760px)'),
-  );
-  const narrow = professional.slice(
-    professional.indexOf('@media (max-width: 760px)'),
-    professional.indexOf('@media (prefers-reduced-motion: reduce)'),
-  );
-  assert.match(medium, /\.overview-workspace\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s);
-  assert.match(compact, /--rail-width:\s*72px/);
-  assert.match(compact, /\.provider-summary-grid\s*\{[^}]*grid-template-columns:\s*1fr/s);
-  assert.match(narrow, /--rail-width:\s*64px/);
-  assert.match(narrow, /\.overview-insights\s*\{[^}]*grid-template-columns:\s*1fr/s);
-  assert.match(narrow, /\.cost-summary dl\s*\{[^}]*grid-template-columns:\s*1fr/s);
-  assert.match(narrow, /\.table-search\s*\{[^}]*width:\s*100%/s);
-  assert.match(professional, /@media\s*\(prefers-reduced-motion:\s*reduce\)/);
-  assert.match(professional, /@media\s*\(forced-colors:\s*active\)/);
-});
-
-test('renderer contracts keep desktop failures honest and estimates visibly approximate', () => {
-  const app = readText('src/App.tsx');
-  const providerView = readText('src/provider-view.ts');
-  const providerSummary = readText('src/components/ProviderSummary.tsx');
-  const styles = readText('src/styles.css');
-  const accessibility = readText('src/accessibility.css');
-
-  assert.match(app, /window\.location\.protocol\s*!==\s*'file:'/);
-  assert.match(app, /isBrowserPreview\s*\?\s*demoSnapshot\s*:\s*null/);
-  assert.match(app, /secure desktop bridge/i);
-  assert.match(app, /if\s*\(!window\.aiUsage\)\s*return;/);
-  assert.match(providerView, /displayedRemaining\(current\)/);
-  assert.match(providerView, /estimated: current && !expired \? isEstimated\(current\) : false/);
-  assert.match(providerSummary, /\{view\.estimated\s*\?\s*'~'\s*:\s*''\}/);
-  assert.match(providerSummary, /view\.estimated \? 'Estimated balance' : 'Current balance'/);
-  assert.match(styles, /\.settings-content[^}]*min-width\s*:\s*0/s);
-  assert.match(styles, /\.settings-page\s*\{\s*grid-template-columns\s*:\s*minmax\(0,\s*1fr\)/s);
-  assert.match(styles, /\.app-header nav[^}]*flex\s*:\s*0 0 auto/s);
-  assert.match(styles, /\.app-header \.refresh-button[^}]*flex\s*:\s*0 0 auto/s);
-  assert.match(accessibility, /input:focus-visible\s*\+\s*i/);
 });

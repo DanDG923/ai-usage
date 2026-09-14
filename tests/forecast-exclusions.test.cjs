@@ -1,4 +1,5 @@
 'use strict';
+require('./setup.cjs');
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -183,7 +184,7 @@ test('exclusions survive reopen and backup restore while quota observations and 
   const reopened = new UsageStore(store.databasePath, store.backupDirectory);
   try { assert.deepEqual(reopened.getSettings().forecastExcludedDates, ['2026-09-04']); }
   finally { reopened.close(); }
-  const payload = JSON.parse(fs.readFileSync(store.createBackup().exportPath, 'utf8'));
+  const payload = store.readExport(store.createBackup().exportPath);
   const target = fixture(t);
   target.restoreFromExport(payload);
   assert.deepEqual(target.getSettings().forecastExcludedDates, ['2026-09-04']);

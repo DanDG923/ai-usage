@@ -4,7 +4,8 @@
     "typescript",
     "react",
     "unicorn",
-    "oxc"
+    "oxc",
+    "jsx-a11y"
   ],
   "categories": {
     "correctness": "error",
@@ -36,7 +37,9 @@
     "react/react-in-jsx-scope": "off",
     "unicorn/no-array-sort": "off",
     "unicorn/consistent-function-scoping": "off",
-    "preserve-caught-error": "off"
+    "preserve-caught-error": "off",
+    "jsx-a11y/no-autofocus": "off",
+    "jsx-a11y/prefer-tag-over-role": "off"
   },
   "ignorePatterns": [
     "dist/**",

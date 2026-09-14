@@ -1,4 +1,5 @@
 'use strict';
+require('./setup.cjs');
 
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
@@ -188,7 +189,7 @@ test('disabling automatic checks before the initial delay prevents its check', a
   checker.start();
   enabled = false;
   t.mock.timers.tick(45_000);
-  await Promise.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(updater.checks, 0);
   checker.stop();
 });

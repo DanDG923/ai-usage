@@ -1,4 +1,5 @@
 'use strict';
+require('./setup.cjs');
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -82,7 +83,7 @@ test('ordinal migration repairs an old completed cursor only after a backup, the
   });
   const result = importLocalSessions(store);
   assert.ok(result.reconciliationBackup);
-  const backup = JSON.parse(fs.readFileSync(result.reconciliationBackup.exportPath, 'utf8'));
+  const backup = store.readExport(result.reconciliationBackup.exportPath);
   assert.equal(backup.usageEvents.length, 1);
   assert.equal(backup.usageEvents[0].input_tokens, 200);
   assert.deepEqual(store.prepare('SELECT input_tokens FROM usage_events ORDER BY event_key').all().map((row) => row.input_tokens), [100, 200]);
@@ -190,7 +191,7 @@ test('legacy source-backed duplicates are backed up and repaired once without de
   assert.equal(result.reconciledEvents, 2);
   assert.equal(result.duplicateEvents, 9);
   assert.ok(fs.existsSync(result.reconciliationBackup.exportPath));
-  const backup = JSON.parse(fs.readFileSync(result.reconciliationBackup.exportPath, 'utf8'));
+  const backup = store.readExport(result.reconciliationBackup.exportPath);
   assert.equal(backup.usageEvents.length, 10, 'the safety copy retains the complete pre-repair ledger');
   const backupDatabase = new DatabaseSync(result.reconciliationBackup.databasePath, { readOnly: true });
   try {
@@ -219,7 +220,7 @@ test('restoring a pre-repair backup schedules source-backed reconciliation even 
   records.forEach((record) => seedOldEvent(store, record));
   legacyCursor(store, file);
   const first = importLocalSessions(store);
-  const backup = JSON.parse(fs.readFileSync(first.reconciliationBackup.exportPath, 'utf8'));
+  const backup = store.readExport(first.reconciliationBackup.exportPath);
   assert.equal(store.prepare('SELECT COUNT(*) AS count FROM usage_events').get().count, 1);
   store.restoreFromExport(backup);
   assert.equal(store.prepare('SELECT COUNT(*) AS count FROM usage_events').get().count, 2);
@@ -316,30 +317,18 @@ for (const source of ['codex', 'claude', 'inbox']) {
   });
 }
 
-for (const slow of ['provider', 'activity']) {
-  test(`diagnostics stop each timer at settlement when ${slow} is slower and the other operation rejects`, async (t) => {
-    const { store } = fixture(t);
-    const baseline = Date.now();
-    let wallClock = baseline;
-    t.mock.method(Date, 'now', () => wallClock);
-    const deferred = () => {
-      let resolve, reject;
-      const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
-      return { promise, resolve, reject };
-    };
-    const provider = deferred(), activity = deferred();
-    const tracker = createFableUsageTracker({ store, clock: () => new Date(baseline),
-      usagePort: { read: () => provider.promise }, activityReader: { import: () => activity.promise } });
-    const refresh = tracker.refresh();
-    await new Promise((resolve) => setImmediate(resolve));
-    wallClock += 20;
-    (slow === 'provider' ? activity : provider).reject(new Error('Synthetic fast failure'));
-    await new Promise((resolve) => setImmediate(resolve));
-    wallClock += 100;
-    if (slow === 'provider') provider.resolve({ rate_limits_available: false, reason: 'Synthetic unavailable quota' });
-    else activity.resolve({ usageEvents: 0, filesFound: 0 });
-    const result = await refresh;
-    assert.equal(result.provider.durationMs, slow === 'provider' ? 120 : 20);
-    assert.equal(result.health.activityDurationMs, slow === 'activity' ? 120 : 20);
-  });
-}
+test('diagnostics time sequential imports and timestamp allowance readings after the provider completes', async (t) => {
+  const { store } = fixture(t);
+  const baseline = Date.now();
+  let wallClock = baseline;
+  t.mock.method(Date, 'now', () => wallClock);
+  const order = [];
+  const tracker = createFableUsageTracker({ store, clock: () => new Date(wallClock),
+    activityReader: { import: async () => { order.push('activity'); wallClock += 20; throw new Error('Import failed'); } },
+    usagePort: { read: async () => { order.push('provider'); wallClock += 100; return { rate_limits_available: false }; } } });
+  const result = await tracker.refresh();
+  assert.deepEqual(order, ['activity', 'provider']);
+  assert.equal(result.provider.durationMs, 100);
+  assert.equal(result.health.activityDurationMs, 20);
+  assert.equal(result.refreshedAt, new Date(baseline + 120).toISOString());
+});

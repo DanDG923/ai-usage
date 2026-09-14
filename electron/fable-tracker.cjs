@@ -7,16 +7,8 @@ const { QUOTA_CLOCK_SKEW_MS, validQuotaTime } = require('./quota-time.cjs');
 const FABLE_SOURCE_ID = 'claude-fable';
 const FABLE_BUCKET_ID = 'fable_seven_day';
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-// The one list of provenances that count as provider-backed Fable evidence,
-// shared with the estimator so both agree on what an "official" reading is.
-const OFFICIAL_PROVENANCES = ['official-claude-usage', 'official-statusline', 'manual-official', 'official'];
-const PROVIDER_WINDOW_DESCRIPTORS = [
-  { key: 'five_hour', bucketName: '5-hour', windowMinutes: 300, scope: 'overall' },
-  { key: 'seven_day', bucketName: 'Weekly', windowMinutes: 10_080, scope: 'overall' },
-  { key: 'seven_day_oauth_apps', bucketName: 'OAuth apps weekly', windowMinutes: 10_080, scope: 'oauth-apps' },
-  { key: 'seven_day_opus', bucketName: 'Opus weekly', windowMinutes: 10_080, scope: 'model' },
-  { key: 'seven_day_sonnet', bucketName: 'Sonnet weekly', windowMinutes: 10_080, scope: 'model' },
-];
+const { OFFICIAL_PROVENANCES } = require('./quota-provenance.mjs');
+const { PROVIDER_WINDOW_DESCRIPTORS } = require('./claude-window-descriptors.cjs');
 
 function isRecord(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -315,13 +307,11 @@ function createFableUsageTracker({ store, usagePort, activityReader, clock = () 
   if (typeof activityReader?.import !== 'function') throw new TypeError('activityReader.import is required.');
   if (typeof clock !== 'function') throw new TypeError('clock must be a function.');
 
-  let inFlight = null;
-
   async function performRefresh(options = {}) {
     const now = clock();
-    const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
+    let nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
     if (!Number.isFinite(nowMs)) throw new Error('The tracker clock returned an invalid time.');
-    const refreshedAt = new Date(nowMs).toISOString();
+    let refreshedAt = new Date(nowMs).toISOString();
     const fallbackObservedAt = options.fallbackObservedAt == null
       ? null : asIso(options.fallbackObservedAt);
     if (options.fallbackObservedAt != null && fallbackObservedAt == null) {
@@ -335,9 +325,15 @@ function createFableUsageTracker({ store, usagePort, activityReader, clock = () 
       const promise = Promise.resolve().then(run).finally(() => { elapsedMs = Date.now() - startedAt; });
       return { promise, elapsed: () => elapsedMs };
     };
-    const usageRead = timed(() => usagePort.read({ signal: options.signal }));
+    // Finish synchronous imports before starting the SDK timeout clock.
     const activityRead = timed(() => activityReader.import({ signal: options.signal }));
-    const [usageResult, activityResult] = await Promise.allSettled([usageRead.promise, activityRead.promise]);
+    const [activityResult] = await Promise.allSettled([activityRead.promise]);
+    const usageRead = timed(() => usagePort.read({ signal: options.signal }));
+    const [usageResult] = await Promise.allSettled([usageRead.promise]);
+    const fetched = clock();
+    nowMs = fetched instanceof Date ? fetched.getTime() : new Date(fetched).getTime();
+    if (!Number.isFinite(nowMs)) throw new Error('The tracker clock returned an invalid time.');
+    refreshedAt = new Date(nowMs).toISOString();
     const usageDurationMs = usageRead.elapsed();
     const activityDurationMs = activityRead.elapsed();
 
@@ -361,7 +357,9 @@ function createFableUsageTracker({ store, usagePort, activityReader, clock = () 
     const freshStatuslineFallback = Boolean(cached
       && fallbackObservedAt
       && cached.provenance === 'official-statusline'
-      && cached.observed_at === fallbackObservedAt);
+      && cached.observed_at === fallbackObservedAt
+      && nowMs - Date.parse(fallbackObservedAt) <= 5 * 60_000
+      && Date.parse(fallbackObservedAt) <= nowMs + QUOTA_CLOCK_SKEW_MS);
     let allowance;
     let officialSource;
     let state;
@@ -439,11 +437,7 @@ function createFableUsageTracker({ store, usagePort, activityReader, clock = () 
   }
 
   return {
-    refresh(options) {
-      if (inFlight) return inFlight;
-      inFlight = performRefresh(options).finally(() => { inFlight = null; });
-      return inFlight;
-    },
+    refresh: performRefresh,
   };
 }
 

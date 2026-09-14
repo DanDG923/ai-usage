@@ -2,35 +2,43 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
+async function invoke(channel, ...args) {
+  try { return await ipcRenderer.invoke(channel, ...args); } catch (error) {
+    const message = String(error?.message || error).replace(/^Error invoking remote method ['"].+?['"]:\s*(?:Error:\s*)?/, '');
+    throw new Error(message);
+  }
+}
+
 contextBridge.exposeInMainWorld('aiUsage', {
-  getClaudeSetup: () => ipcRenderer.invoke('claude-setup:status'),
-  isClaudeSetupDismissed: () => ipcRenderer.invoke('claude-setup:dismissed'),
-  configureClaude: (action, enableHelper) => ipcRenderer.invoke('claude-setup:configure', action, enableHelper),
-  cancelClaudeSetup: () => ipcRenderer.invoke('claude-setup:cancel'),
-  getSnapshot: (days) => ipcRenderer.invoke('dashboard:get-snapshot', days),
-  getTasks: (options) => ipcRenderer.invoke('dashboard:get-tasks', options),
-  getSessions: (options) => ipcRenderer.invoke('dashboard:get-sessions', options),
-  refresh: () => ipcRenderer.invoke('dashboard:refresh'),
-  updateSettings: (patch) => ipcRenderer.invoke('dashboard:update-settings', patch),
-  updatePrice: (price) => ipcRenderer.invoke('dashboard:update-price', price),
-  addManualObservation: (observation) => ipcRenderer.invoke('dashboard:add-manual-observation', observation),
-  installClaudeHelper: () => ipcRenderer.invoke('dashboard:install-claude-helper'),
-  uninstallClaudeHelper: () => ipcRenderer.invoke('dashboard:uninstall-claude-helper'),
-  createBackup: () => ipcRenderer.invoke('dashboard:create-backup'),
-  restoreBackup: () => ipcRenderer.invoke('dashboard:restore-backup'),
-  previewDesktopExport: () => ipcRenderer.invoke('dashboard:preview-desktop-export'),
-  cancelDesktopExport: (previewId) => ipcRenderer.invoke('dashboard:cancel-desktop-export', previewId),
-  importDesktopExport: (previewId, assumedModel) => ipcRenderer.invoke('dashboard:import-desktop-export', previewId, assumedModel),
-  clearDesktopEstimates: () => ipcRenderer.invoke('dashboard:clear-desktop-estimates'),
-  openBackupDirectory: () => ipcRenderer.invoke('dashboard:open-backup-directory'),
-  exportCsv: (days) => ipcRenderer.invoke('dashboard:export-csv', days),
-  copySummary: () => ipcRenderer.invoke('dashboard:copy-summary'),
-  snoozeAlerts: (hours) => ipcRenderer.invoke('dashboard:snooze-alerts', hours),
-  getVersion: () => ipcRenderer.invoke('app:get-version'),
-  checkForUpdates: () => ipcRenderer.invoke('app:check-updates'),
-  getUpdateStatus: () => ipcRenderer.invoke('app:update-status'),
-  downloadUpdate: () => ipcRenderer.invoke('app:download-update'),
-  installUpdate: () => ipcRenderer.invoke('app:install-update'),
+  getClaudeSetup: () => invoke('claude-setup:status'),
+  isClaudeSetupDismissed: () => invoke('claude-setup:dismissed'),
+  configureClaude: (action, enableHelper) => invoke('claude-setup:configure', action, enableHelper),
+  cancelClaudeSetup: () => invoke('claude-setup:cancel'),
+  getSnapshot: (days) => invoke('dashboard:get-snapshot', days),
+  getTasks: (options) => invoke('dashboard:get-tasks', options),
+  getSessions: (options) => invoke('dashboard:get-sessions', options),
+  refresh: () => invoke('dashboard:refresh'),
+  updateSettings: (patch) => invoke('dashboard:update-settings', patch),
+  updatePrice: (price) => invoke('dashboard:update-price', price),
+  addManualObservation: (observation) => invoke('dashboard:add-manual-observation', observation),
+  installClaudeHelper: () => invoke('dashboard:install-claude-helper'),
+  uninstallClaudeHelper: () => invoke('dashboard:uninstall-claude-helper'),
+  createBackup: () => invoke('dashboard:create-backup'),
+  restoreBackup: () => invoke('dashboard:restore-backup'),
+  previewDesktopExport: () => invoke('dashboard:preview-desktop-export'),
+  cancelDesktopExport: (previewId) => invoke('dashboard:cancel-desktop-export', previewId),
+  importDesktopExport: (previewId, assumedModel) => invoke('dashboard:import-desktop-export', previewId, assumedModel),
+  clearDesktopEstimates: () => invoke('dashboard:clear-desktop-estimates'),
+  openBackupDirectory: () => invoke('dashboard:open-backup-directory'),
+  exportCsv: (days) => invoke('dashboard:export-csv', days),
+  copySummary: () => invoke('dashboard:copy-summary'),
+  snoozeAlerts: (hours) => invoke('dashboard:snooze-alerts', hours),
+  reportRendererError: (detail) => invoke('app:renderer-error', detail),
+  getVersion: () => invoke('app:get-version'),
+  checkForUpdates: () => invoke('app:check-updates'),
+  getUpdateStatus: () => invoke('app:update-status'),
+  downloadUpdate: () => invoke('app:download-update'),
+  installUpdate: () => invoke('app:install-update'),
   onUpdateStatus: (callback) => {
     const listener = (_event, status) => callback(status);
     ipcRenderer.on('app:update-status-changed', listener);
