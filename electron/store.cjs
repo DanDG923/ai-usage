@@ -1023,7 +1023,7 @@ class UsageStore {
       allowanceChanges: settings.allowanceChanges,
       sourceId,
     };
-    const windows = [...grouped.entries()].map(([bucketId, observations]) => {
+    let windows = [...grouped.entries()].map(([bucketId, observations]) => {
       const latest = observations.at(-1);
       // Old backups may already have persisted invalid metadata; keep the
       // reading usable without rewriting the original historical evidence.
@@ -1049,8 +1049,11 @@ class UsageStore {
       };
     });
     if (sourceId === 'claude-fable') {
+      // One window per bucket, as for every stored bucket: the projection is
+      // the bucket's current state and stands in for its expired reading,
+      // which remains in cycle history.
       const projected = this.projectedFableWindow(windows, grouped.get(FABLE_BUCKET) || [], settings, forecastOptions, nowMs);
-      if (projected) windows.push(projected);
+      if (projected) windows = [...windows.filter((window) => window.bucketId !== FABLE_BUCKET), projected];
     }
     if (!windows.length) return null;
     // The shared rule orders the windows and names the headline, so the tray,

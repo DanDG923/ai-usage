@@ -78,7 +78,11 @@ test('a live official Fable window headlines and no projection is added beside i
   expiredOfficial.fable(NOW - 9 * 24 * HOUR, 60, { resetsAt: iso(NOW - 5 * 24 * HOUR) });
   const withHistory = expiredOfficial.quota();
   assert.equal(withHistory.provenance, 'derived-tokens', 'an expired official window does not block the projection');
-  assert.deepEqual(withHistory.windows.map((window) => window.provenance), ['derived-tokens', 'official-claude-usage']);
+  assert.deepEqual(withHistory.windows.map((window) => window.provenance), ['derived-tokens'],
+    'one window per bucket: the projection stands in for the expired reading');
+  const snapshot = expiredOfficial.store.getDashboardSnapshot(30, NOW);
+  assert.equal(snapshot.quotas.fable.windows.length, 1);
+  assert.ok(snapshot.cycles.fable.some((cycle) => Math.abs(cycle.peakUsedPercent - 60) < 0.01), 'the expired reading stays in cycle history');
 });
 
 test('the projection follows the allowance-change setting on the very next snapshot, in both directions', (t) => {
