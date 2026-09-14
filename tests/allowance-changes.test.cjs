@@ -1,4 +1,5 @@
 'use strict';
+require('./setup.cjs');
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -154,9 +155,9 @@ test('a recorded change rescales earlier readings so the step at the change is n
   const options = { now: local(13, 12), schedule };
   const original = forecastQuota(observations, options);
   const rescaled = forecastQuota(observations, { ...options, allowanceChanges: [change()] });
-  assert.equal(rescaled.series.observed[0].remaining, 100);
-  assert.equal(rescaled.series.observed[10].remaining, 70, 'twenty boosted points are thirty of the current allowance');
-  assert.equal(rescaled.series.observed[11].remaining, 67, 'readings after the change are taken as they are');
+  assert.ok(rescaled.series.observed.slice(1).every((point) => point.at >= options.now - 48 * HOUR), 'only the drawn span plus one preceding point is sent');
+  assert.equal(rescaled.series.observed.find((point) => point.at === local(13)).remaining, 70, 'twenty boosted points are thirty of the current allowance');
+  assert.equal(rescaled.series.observed.at(-1).remaining, 67, 'readings after the change are taken as they are');
   assert.equal(rescaled.estimatedCurrentRemaining, 67);
   assert.equal(rescaled.learnedSamples, original.learnedSamples);
   assert.ok(rescaled.workingPace < original.workingPace / 2,
@@ -262,8 +263,8 @@ test('the store validates, normalizes, persists and applies allowance changes to
   store.updateSettings({ allowanceChanges: [change()] });
   const rescaled = store.getQuota('claude', store.getSettings(), now);
   assert.equal(rescaled.usedPercent, 33, 'the provider reading on the card is untouched');
-  assert.equal(rescaled.forecast.series.observed[10].remaining, 70);
-  assert.equal(original.forecast.series.observed[10].remaining, 80);
+  assert.equal(rescaled.forecast.series.observed.find((point) => point.at === local(13)).remaining, 70);
+  assert.equal(original.forecast.series.observed.find((point) => point.at === local(13)).remaining, 80);
   assert.ok(rescaled.forecast.heavyRemaining > original.forecast.heavyRemaining);
   assert.ok(rescaled.tokenCapacity.warnings.some((warning) => /rescaled/.test(warning)), 'capacity is re-estimated for the new setting');
   assert.ok(!original.tokenCapacity.warnings.some((warning) => /rescaled/.test(warning)));
@@ -271,7 +272,7 @@ test('the store validates, normalizes, persists and applies allowance changes to
   const reopened = new UsageStore(store.databasePath, store.backupDirectory);
   try { assert.deepEqual(reopened.getSettings().allowanceChanges, [change()]); }
   finally { reopened.close(); }
-  const payload = JSON.parse(fs.readFileSync(store.createBackup().exportPath, 'utf8'));
+  const payload = store.readExport(store.createBackup().exportPath);
   const target = fixture(t);
   target.restoreFromExport(payload);
   assert.deepEqual(target.getSettings().allowanceChanges, [change()]);

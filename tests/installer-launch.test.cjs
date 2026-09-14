@@ -1,4 +1,5 @@
 'use strict';
+require('./setup.cjs');
 
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
@@ -7,7 +8,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { INSTALLER_ARGS, installDirectoryWritable, launchInstaller, verifyInstaller } = require('../electron/installer-launch.cjs');
+const { INSTALLER_ARGS, installDirectoryWritable, launchInstaller, verifyInstaller, relaunchApplication, preserveInstallerEnvironment } = require('../electron/installer-launch.cjs');
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-installer-'));
@@ -17,6 +18,41 @@ function fixture() {
   const sha512 = crypto.createHash('sha512').update(bytes).digest('base64');
   return { root, filePath, sha512, clean: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
+
+test('trusted installer gets the captured environment without changing update authentication', async () => {
+  const f = fixture(), calls = [];
+  try {
+    const environment = { GH_TOKEN: 'launch-only', PATH: 'kept' };
+    await launchInstaller({ filePath: f.filePath, sha512: f.sha512, environment, spawnProcess: fakeSpawn(['spawn'], calls) });
+    assert.deepEqual(calls[0].options.env, environment);
+    assert.notEqual(calls[0].options.env, environment);
+  } finally { f.clean(); }
+});
+
+test('relaunch temporarily restores only captured token variables and cleans up even on failure', () => {
+  const currentEnvironment = { PATH: 'current', GH_TOKEN: 'existing' };
+  const environment = { PATH: 'original', GH_TOKEN: 'launch', GITHUB_TOKEN: 'other' };
+  assert.throws(() => relaunchApplication({ currentEnvironment, environment, app: { relaunch() {
+    assert.deepEqual(currentEnvironment, { PATH: 'current', GH_TOKEN: 'launch', GITHUB_TOKEN: 'other' });
+    throw new Error('launch failed');
+  } } }), /launch failed/);
+  assert.deepEqual(currentEnvironment, { PATH: 'current', GH_TOKEN: 'existing' });
+});
+
+test('NSIS asynchronous elevation retries preserve launch tokens only for trusted installer processes', async () => {
+  const calls = [];
+  const updater = { installerPath: 'C:\\download\\setup.exe', spawnLog: async (...args) => { calls.push(args); } };
+  preserveInstallerEnvironment(updater, { GH_TOKEN: 'launch-only' }, 'C:\\app\\resources');
+  await updater.spawnLog(updater.installerPath, ['/S']);
+  await new Promise((resolve) => setImmediate(resolve));
+  await updater.spawnLog('C:\\app\\resources\\elevate.exe', [updater.installerPath]);
+  await updater.spawnLog('C:\\other\\program.exe', []);
+  await updater.spawnLog('C:\\app\\resources\\elevate.exe', ['C:\\other\\program.exe']);
+  assert.deepEqual(calls[0][2], { GH_TOKEN: 'launch-only' });
+  assert.deepEqual(calls[1][2], { GH_TOKEN: 'launch-only' });
+  assert.equal(calls[2][2], undefined);
+  assert.equal(calls[3][2], undefined);
+});
 
 // A fake child: `outcomes` lists, per attempt, either an error code or 'spawn'.
 function fakeSpawn(outcomes, calls) {

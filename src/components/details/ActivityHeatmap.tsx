@@ -12,7 +12,15 @@ export function ActivityHeatmap({ grid, currency, days }: { grid: number[][]; cu
   const rows = [1, 2, 3, 4, 5, 6, 0].map((weekday) => grid[weekday] || []);
   const max = Math.max(1e-9, ...rows.flat());
   const total = rows.flat().reduce((sum, value) => sum + value, 0);
-  if (total <= 0) return null;
+  if (total <= 0)
+    return (
+      <section className="panel table-panel heatmap-panel">
+        <div className="panel-heading">
+          <h2>When the work happens</h2>
+        </div>
+        <p className="empty-chart">Hourly activity appears after local token records have been collected.</p>
+      </section>
+    );
   const busiest = rows.reduce<{ day: number; hour: number; value: number }>(
     (best, row, day) => {
       row.forEach((value, hour) => {
@@ -58,6 +66,32 @@ export function ActivityHeatmap({ grid, currency, days }: { grid: number[][]; cu
           </div>
         ))}
       </div>
+      <details className="chart-data">
+        <summary>View hourly activity data</summary>
+        <div className="table-scroll">
+          <table>
+            <caption>API-equivalent cost by weekday and hour</caption>
+            <thead>
+              <tr>
+                <th>Day</th>
+                <th>Hour</th>
+                <th>Cost</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.flatMap((row, day) =>
+                Array.from({ length: 24 }, (_, hour) => (
+                  <tr key={`${day}:${hour}`}>
+                    <td>{DAYS[day]}</td>
+                    <td>{String(hour).padStart(2, '0')}:00</td>
+                    <td>{money(row[hour] || 0, currency)}</td>
+                  </tr>
+                )),
+              )}
+            </tbody>
+          </table>
+        </div>
+      </details>
       <div className="heatmap-legend">
         Less
         {[0, 25, 50, 75, 100].map((level) => (

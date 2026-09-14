@@ -69,7 +69,7 @@ The arithmetic in `deriveFableEstimate`, `fablePairCalibration`, `fableStepsFrom
 // Read-only. Never writes to quota_observations.
 projectFableAllowance(store, settings, nowMs) -> {
   available: boolean,
-  reason: string | null,        // same reason codes as today, plus 'official-current'
+  reason: string | null,        // projection availability reason
   method: 'fable-anchor-pair' | 'overall-share' | null,
   window: QuotaWindow | null,   // observedAt = nowMs, provenance 'derived-tokens', metadata.calibration as today, metadata.projected: true
   series: [{ observedAt, usedPercent }],  // see below
@@ -80,14 +80,14 @@ projectFableAllowance(store, settings, nowMs) -> {
 
 Plan confirmation uses the most recent `official-claude-usage` row in the current overall window, not the newest row of any provenance. Status-line rows never carry a plan and cannot switch the projection off. If no SDK row in the window says `max`, the projection is unavailable with the existing reason `fable-not-confirmed-in-shared-plan`.
 
-When a usable official Fable window is live (`selectDisplayedWindows('claude-fable', officialRows).primary` is active and official), the projection returns `available: false, reason: 'official-current'` and the card shows the provider figure, as it does today when `hasProviderScopedFable` is true.
+The store and collector give active provider-scoped Fable readings precedence. Manual official readings remain calibration anchors, so estimates can advance from them using subsequent local activity. The projection itself does not emit an `official-current` reason.
 
 ### The series (keeps the forecast's learning)
 
 Today the Fable forecast learns from a derived row written every refresh. A projection that returned only the current point would starve it. So the projection also returns the points the derivation already computes internally:
 
 - **overall-share**: the base value plus cumulative steps at each overall official reading inside the window, then the current point with the tail.
-- **anchor-pair**: each official Fable anchor in the window, then the current point.
+- **anchor-pair**: the current projected point. Persisted official anchor rows are supplied separately to the forecast; they are not duplicated in the generated series.
 
 `getQuota('claude-fable')` feeds `forecastQuota` the official rows plus the series as non-persisted rows with `provenance: 'derived-tokens'`. The forecast already treats that provenance as non-reset-evidence with a 0.65 weight, so no forecast change is needed. Allowance changes apply through the existing scaler because the projection reads overall rows through `allowanceAdjustedUsed`; ignored days are honoured because the forecast, not the projection, applies them.
 
@@ -112,7 +112,7 @@ No visible change. `provider-view.ts` keys "Local estimate" on `provenance === '
 
 ### Tests
 
-- `tests/fable-projection.test.cjs`: the five derivation tests moved from `claude-collector.test.cjs` (share, Opus-only, Fable-only, Pro plan refused, unknown plan refused) rewritten against the pure function; the 1.0.42 scenarios (allowance change rescales the estimate, removal restores it, a Codex entry changes nothing, no overall reading gives `no-overall-reading`); a status-line row newer than the SDK row does not switch the projection off; the series has one point per overall step plus the current point; official-current yields no projection.
+- `tests/fable-projection.test.cjs`: the five derivation tests moved from `claude-collector.test.cjs` (share, Opus-only, Fable-only, Pro plan refused, unknown plan refused) rewritten against the pure function; the 1.0.42 scenarios (allowance change rescales the estimate, removal restores it, a Codex entry changes nothing, no overall reading gives `no-overall-reading`); a status-line row newer than the SDK row does not switch the projection off; the series has one point per overall step plus the current point; active provider-scoped readings retain display precedence.
 - `tests/store.test.cjs`: `getQuota('claude-fable')` appends the projected window only without a live official one; cache invalidates on a Claude usage write, a Claude or Fable quota write, and an `allowanceChanges` save; migration removes legacy derived rows once; ingest rejects `derived-tokens`; restore skips legacy rows and counts them.
 - `tests/claude-collector.test.cjs`: `refreshClaude` reports the projection in `fableDerived` and writes no Fable rows.
 - Snapshot-level: `renderer-behavior.test.cjs` demo snapshot gains a projected Fable window fixture so the "Local estimate" path stays rendered.

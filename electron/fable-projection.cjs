@@ -8,7 +8,7 @@
 // rows to go stale, so there is nothing to rescale, retire or discard.
 
 const { createAllowanceScaler } = require('./allowance-changes.cjs');
-const { OFFICIAL_PROVENANCES } = require('./fable-tracker.cjs');
+const { OFFICIAL_PROVENANCES } = require('./quota-provenance.mjs');
 
 // Every input is bounded by the projection's own clock. A reading dated
 // ahead of now — queued for an early reset, or left behind by a clock that
@@ -170,7 +170,8 @@ function fableStepsFromOverall(store, readings, fromMs, toMs, usedOf = rawUsedPe
     if (!(atMs > fromMs) || atMs > toMs) continue;
     const deltaOverall = Math.max(0, afterUsed - priorHighWater);
     if (!(deltaOverall > 0)) continue;
-    const fable = allowancePressure(store, 'fable', before.observed_at, after.observed_at);
+    const fable = allowancePressure(store, 'fable',
+      new Date(Math.max(fromMs, new Date(before.observed_at).getTime())).toISOString(), after.observed_at);
     const all = allowancePressure(store, null, before.observed_at, after.observed_at);
     if (!all.complete) {
       rejectedCoverage += 1;
@@ -181,6 +182,7 @@ function fableStepsFromOverall(store, readings, fromMs, toMs, usedOf = rawUsedPe
     steps.push({
       at: after.observed_at,
       deltaOverall,
+      ceiling: Math.min(100, afterUsed / FABLE_ALLOWANCE_SHARE),
       share,
       deltaFable: (deltaOverall * share) / FABLE_ALLOWANCE_SHARE,
       fablePressure: fable.pressure,
@@ -367,7 +369,7 @@ function computeProjection(store, nowMs) {
   let cumulative = baseUsed;
   for (const step of steps) {
     cumulative += step.deltaFable;
-    series.push({ observedAt: step.at, usedPercent: Math.max(0, Math.min(cumulative, 100)) });
+    series.push({ observedAt: step.at, usedPercent: Math.max(0, Math.min(cumulative, step.ceiling, 100)) });
   }
   series.push({ observedAt: new Date(nowMs).toISOString(), usedPercent });
   return {
@@ -402,8 +404,8 @@ function projectFableAllowance(store, nowMs = Date.now()) {
 
 // The summary the Claude refresh has always reported for the estimate.
 function deriveFableEstimate(store, nowMs = Date.now()) {
-  const result = computeProjection(store, nowMs);
-  if (!result.derived) return { derived: false, reason: result.reason };
+  const result = store.getFableProjection(store.getSettings(), nowMs);
+  if (!result.available) return { derived: false, reason: result.reason };
   const { usedPercent, ceiling, clamped, method, measuredSteps, measuredPairs, anchored } = result;
   return { derived: true, usedPercent, ceiling, clamped, method, measuredSteps, measuredPairs, anchored };
 }

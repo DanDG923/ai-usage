@@ -1,6 +1,6 @@
 import { Search } from 'lucide-react';
 import { useDeferredValue, useMemo } from 'react';
-import { compactNumber, formatInt, money, percent, sourceLabel } from '../lib';
+import { compactNumber, formatInt, money, percent, priceCoverage, sourceLabel } from '../lib';
 import type { Snapshot } from '../types';
 import { CostChart } from './Charts';
 import { API_EQUIVALENT_EXPLAINER, InfoTip } from './InfoTip';
@@ -115,7 +115,7 @@ export function Costs({
           </div>
           <div>
             <dt>Recorded token price coverage</dt>
-            <dd>{percent(costs.coverage * 100)}</dd>
+            <dd>{priceCoverage(costs.coverage)}</dd>
             <small>{costs.isLowerBound ? 'Some recorded models are unpriced' : 'Recorded tokens only'}</small>
           </div>
         </dl>

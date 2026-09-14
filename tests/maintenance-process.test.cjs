@@ -1,4 +1,5 @@
 'use strict';
+require('./setup.cjs');
 
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
@@ -128,7 +129,7 @@ test('real worker backs up, exports and restores without blocking parent timers 
     const backup = await host.request('create-backup');
     assert.ok(ticks > 1, 'parent timers should keep running during a full database backup');
     assert.ok(fs.existsSync(backup.databasePath));
-    assert.equal(JSON.parse(fs.readFileSync(backup.exportPath, 'utf8')).usageEvents.length, 5000);
+    assert.equal(store.readExport(backup.exportPath).usageEvents.length, 5000);
     const redundant = await host.request('scheduled-backup');
     assert.equal(redundant, null, 'scheduled backup should honor the backup already written');
 

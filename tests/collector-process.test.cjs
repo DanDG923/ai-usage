@@ -1,4 +1,5 @@
 'use strict';
+require('./setup.cjs');
 
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
@@ -168,7 +169,7 @@ test('overlapping requests never run one source\'s collector concurrently', asyn
   });
   const [all, only] = await Promise.all([service.handle({ type: 'refresh-all' }), service.handle({ type: 'refresh-claude' })]);
   assert.equal(peak, 1, 'the Claude collector ran against itself');
-  assert.deepEqual(order, ['claude:start', 'claude:end', 'claude:start', 'claude:end']);
+  assert.deepEqual(order, ['claude:start', 'claude:end'], 'waiting requests should share the same scan');
   assert.equal(all.claude.status, 'fulfilled');
   assert.equal(only.claude.status, 'fulfilled');
 });

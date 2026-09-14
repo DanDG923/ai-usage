@@ -15,7 +15,7 @@ const { createMaintenanceHost, createDatabaseQueue } = require('./maintenance-ho
 const { buildSummaryText, buildTrayTooltip, decideNotifications, emptyState } = require('./notifications.cjs');
 const { paintStateDot } = require('./tray-icon.cjs');
 const { createUpdateChecker } = require('./updater.cjs');
-const { installDirectoryWritable, launchInstaller } = require('./installer-launch.cjs');
+const { installDirectoryWritable, launchInstaller, relaunchApplication, preserveInstallerEnvironment } = require('./installer-launch.cjs');
 const { createGitHubUpdateAuth } = require('./update-auth.cjs');
 const {
   WINDOW_BOUNDS,
@@ -53,9 +53,14 @@ let periodDays = 30;
 let previousSnapshot = null;
 let notificationState = emptyState();
 let cachedSnapshot = null;
+let lastFullSnapshot = null;
 let shutdownPromise;
 let shutdownComplete = false;
 let preparingUpdate = false;
+let quitRequestedDuringUpdate = false;
+let snoozeTimer;
+let resumeTimer;
+let refreshIntervalMs = 0;
 const notifiedUpdates = new Set();
 const databaseJobs = createDatabaseQueue();
 
@@ -112,6 +117,15 @@ function log(message) {
   if (process.env.AI_USAGE_DEBUG === '1') process.stderr.write(`[ai-usage] ${message}\n`);
 }
 
+function logRendererError(message) {
+  log(message);
+  try {
+    const file = path.join(app.getPath('userData'), 'renderer-errors.log');
+    try { if (fs.statSync(file).size > 64 * 1024) fs.renameSync(file, `${file}.1`); } catch { /* First log or unavailable rotation. */ }
+    fs.appendFileSync(file, `${new Date().toISOString()} ${message}\n`, 'utf8');
+  } catch { /* Reporting must not fail the renderer recovery. */ }
+}
+
 // Every promise chain here is caught; this is the last resort so a missed one
 // is logged rather than surfaced by Electron as a modal dialog.
 process.on('unhandledRejection', (reason) => {
@@ -158,7 +172,22 @@ function snapshot() {
   }
   const value = store.getDashboardSnapshot(periodDays, now);
   cachedSnapshot = { days: periodDays, at: now, value };
+  lastFullSnapshot = value;
   return value;
+}
+
+function currentView() {
+  return window && !window.isDestroyed() && window.isVisible()
+    ? snapshot() : store.getTraySnapshot(Date.now());
+}
+
+function patchSnapshotSettings() {
+  if (cachedSnapshot && cachedSnapshot.days === periodDays && Date.now() - cachedSnapshot.at < SNAPSHOT_TTL_MS) {
+    cachedSnapshot.value = { ...cachedSnapshot.value, settings: store.getSettings() };
+    lastFullSnapshot = cachedSnapshot.value;
+    return cachedSnapshot.value;
+  }
+  return snapshot();
 }
 
 function showFatalError(title, message, error) {
@@ -216,6 +245,7 @@ function createWindow() {
   const chrome = CHROME[resolvedTheme()];
   window = new BrowserWindow({
     ...WINDOW_BOUNDS,
+    show: !process.argv.includes('--hidden'),
     backgroundColor: chrome.background,
     title: 'AI Usage',
     icon: loadAppIcon() ?? undefined,
@@ -243,7 +273,6 @@ function createWindow() {
   void loadWindowContents(targetWindow, target).catch((error) => {
     showFatalError('AI Usage could not load', 'The dashboard load failure could not be displayed.', error);
   });
-  hardenWebContents(window.webContents);
   window.on('close', (event) => {
     if (!isQuitting) {
       event.preventDefault();
@@ -251,7 +280,13 @@ function createWindow() {
     }
   });
   // Reopening from the tray must never present hours-old figures as current.
-  window.on('show', () => refreshIfStale());
+  window.on('show', () => {
+    if (store && !storageClosing()) {
+      invalidateSnapshot();
+      window.webContents.send('dashboard:updated', snapshot());
+    }
+    refreshIfStale();
+  });
   window.on('closed', () => { window = null; });
   return window;
 }
@@ -323,16 +358,30 @@ function updateTray(current) {
     trayMenuSnoozed = snoozed;
     tray.setContextMenu(buildTrayMenu());
   }
+  scheduleSnoozeEnd();
 }
 
-function setSnooze(hours) {
+function scheduleSnoozeEnd() {
+  clearTimeout(snoozeTimer);
+  const until = Date.parse(store?.getSettings().alertsSnoozedUntil || "");
+  if (!Number.isFinite(until) || until <= Date.now() || isQuitting) return;
+  snoozeTimer = setTimeout(() => {
+    if (tray && !isQuitting) {
+      trayMenuSnoozed = alertsSnoozed();
+      tray.setContextMenu(buildTrayMenu());
+      if (trayMenuSnoozed) scheduleSnoozeEnd();
+    }
+  }, Math.min(2_147_483_647, Math.max(1, until - Date.now())));
+  snoozeTimer.unref?.();
+}
+
+function setSnooze(hours, { push = true } = {}) {
   return databaseJobs.run(() => {
     const until = hours > 0 ? new Date(Date.now() + hours * 60 * 60 * 1000).toISOString() : null;
     store.updateSettings({ alertsSnoozedUntil: until });
-    invalidateSnapshot();
-    const current = snapshot();
+    const current = patchSnapshotSettings();
     updateTray(current);
-    if (window && !window.isDestroyed()) window.webContents.send('dashboard:updated', current);
+    if (push && window && !window.isDestroyed() && window.isVisible()) window.webContents.send('dashboard:updated', current);
     return current;
   });
 }
@@ -364,11 +413,16 @@ function automaticCollectionEnabled() {
 // pace notification could fire only while the dashboard was already open, and
 // a "daily" backup was skipped on any day nobody pressed Refresh.
 function scheduleAutomaticRefresh() {
+  const minutes = Number(store.getSettings().refreshIntervalMinutes);
+  const intervalMs = Number.isFinite(minutes) && minutes > 0 ? minutes * 60_000 : 0;
+  if (intervalMs === refreshIntervalMs && (refreshTimer || intervalMs === 0)) return;
   clearInterval(refreshTimer);
   refreshTimer = null;
-  const minutes = Number(store.getSettings().refreshIntervalMinutes);
-  if (!Number.isFinite(minutes) || minutes <= 0) return;
-  refreshTimer = setInterval(() => { refreshAll().catch(() => {}); }, minutes * 60_000);
+  refreshIntervalMs = intervalMs;
+  if (!intervalMs) return;
+  refreshTimer = setInterval(() => {
+    if (Date.now() - lastRefreshAt >= intervalMs) refreshAll().catch(() => {});
+  }, Math.min(intervalMs, 60_000));
 }
 
 // Every setting whose effect lives outside the database is reconciled here, so
@@ -386,7 +440,7 @@ function applyLoginItem(enabled) {
   if (appliedLoginItem === key) return;
   appliedLoginItem = key;
   try {
-    app.setLoginItemSettings({ openAtLogin: enabled, path: executable });
+    app.setLoginItemSettings({ openAtLogin: enabled, path: executable, args: ['--hidden'] });
   } catch { /* A refused registry write must not fail the settings save. */ }
 }
 
@@ -437,8 +491,8 @@ function collectorOutcome(entry) {
 // Everything that has to happen after collectors write: publish the new
 // snapshot, then the things that can fail. A backup error used to skip the
 // publish, silently freezing an open window for the life of the process.
-function publishAfterWrite(current) {
-  if (window && !window.isDestroyed()) window.webContents.send('dashboard:updated', current);
+function publishAfterWrite(current, { push = true } = {}) {
+  if (push && window && !window.isDestroyed() && window.isVisible()) window.webContents.send('dashboard:updated', current);
   updateTray(current);
   try {
     showNotifications(current);
@@ -449,7 +503,7 @@ function publishAfterWrite(current) {
 async function refreshAll() {
   if (refreshPromise) return refreshPromise;
   refreshPromise = (async () => {
-    if (isQuitting) return { snapshot: previousSnapshot, backupError: null, collectors: {} };
+    if (isQuitting) return { snapshot: undefined, backupError: null, collectors: {} };
     let outcomes;
     try {
       outcomes = await databaseJobs.collect(() => collectors.refreshAll());
@@ -462,7 +516,7 @@ async function refreshAll() {
     }
     // Quitting stops the collectors, which rejects the in-flight run; that is
     // not a source failure and must not be written as one for the next launch.
-    if (isQuitting) return { snapshot: previousSnapshot, backupError: null, collectors: {} };
+    if (isQuitting) return { snapshot: undefined, backupError: null, collectors: {} };
     const { codex, claude } = outcomes;
     await databaseJobs.run(() => {
       if (codex?.status === 'rejected') store.setSourceStatus('codex', 'error', `Codex refresh failed: ${codex.reason?.message || 'Unknown local error.'}`);
@@ -475,7 +529,7 @@ async function refreshAll() {
         store.compactObservations();
       } catch { /* Housekeeping is best effort. */ }
       invalidateSnapshot();
-      const updated = snapshot();
+      const updated = currentView();
       lastRefreshAt = Date.now();
       publishAfterWrite(updated);
       return updated;
@@ -488,9 +542,9 @@ async function refreshAll() {
       backupError = error.message;
     }
     return {
-      // Settings or a restore may have landed while the scheduled backup
-      // waited for other collectors. Never return an older published view.
-      snapshot: isQuitting ? previousSnapshot : snapshot(),
+      // Collection publishes once. Returning a second snapshot repeats renders
+      // and could replace a newer settings or restore result.
+      snapshot: undefined,
       backupError,
       collectors: {
         codex: collectorOutcome(codex),
@@ -506,14 +560,14 @@ async function refreshAll() {
 }
 
 async function refreshClaudeOnly() {
-  if (isQuitting) return snapshot();
+  if (isQuitting) return previousSnapshot;
   const outcomes = await databaseJobs.collect(() => collectors.refreshClaude());
   if (outcomes?.claude?.status === 'rejected') {
     throw new Error(outcomes.claude.reason?.message || 'Claude refresh failed.');
   }
   return databaseJobs.run(() => {
     invalidateSnapshot();
-    const current = snapshot();
+    const current = currentView();
     publishAfterWrite(current);
     return current;
   });
@@ -543,191 +597,14 @@ function hardenWebContents(contents) {
 }
 
 function registerIpc() {
-  handleIpc('claude-setup:status', () => claudeSetup.status());
-  handleIpc('claude-setup:dismissed', () => claudeSetup.dismissed());
-  handleIpc('claude-setup:cancel', () => { claudeSetup.cancel(); });
-  handleIpc('claude-setup:configure', async (_event, action, enableHelper) => {
-    switch (action) {
-      case 'check': return claudeSetup.status();
-      case 'install': return claudeSetup.install();
-      case 'login': return claudeSetup.login();
-      case 'finish': return claudeSetup.finish({ enableHelper: enableHelper === true });
-      case 'skip': claudeSetup.skip(); return claudeSetup.status();
-      default: throw new Error('Unknown Claude setup step.');
-    }
+  require('./ipc-handlers.cjs').registerIpc({
+    handleIpc, claudeSetup, storageClosing, getPreviousSnapshot: () => lastFullSnapshot,
+    getCachedSnapshot: () => cachedSnapshot, setPeriodDays, snapshot, EMPTY_SESSION_PAGE,
+    store, refreshAll, databaseJobs, invalidateSnapshot, applySettingsEffects, patchSnapshotSettings,
+    updateTray, publishAfterWrite, refreshClaudeOnly, log, logRendererError, installClaudeHelper, getInboxPath,
+    uninstallClaudeHelper, maintenance, dialog, getWindow: () => window, shell, app,
+    buildSummaryText, currentView, clipboard, setSnooze, updateChecker,
   });
-  handleIpc('dashboard:get-snapshot', (_event, days = 30) => {
-    // The window outlives the database handle briefly while an update installs.
-    if (storageClosing()) return previousSnapshot ?? cachedSnapshot?.value ?? null;
-    setPeriodDays(days);
-    return snapshot();
-  });
-  const pageOptions = (options) => (options && typeof options === 'object' ? options : {});
-  handleIpc('dashboard:get-sessions', (_event, options) => (storageClosing() ? EMPTY_SESSION_PAGE : store.getSessionPage(pageOptions(options))));
-  handleIpc('dashboard:get-tasks', (_event, options) => (storageClosing() ? EMPTY_SESSION_PAGE : store.getTaskPage(pageOptions(options))));
-  handleIpc('dashboard:refresh', () => refreshAll());
-  handleIpc('dashboard:update-settings', (_event, patch) => databaseJobs.run(() => {
-    const settings = store.updateSettings(patch || {});
-    // The Fable estimate is projected when the snapshot is built, so a saved
-    // allowance change is reflected by the very next snapshot.
-    invalidateSnapshot();
-    applySettingsEffects();
-    const current = snapshot();
-    updateTray(current);
-    return { settings, snapshot: current };
-  }));
-  handleIpc('dashboard:update-price', (_event, price) => databaseJobs.run(() => {
-    store.updatePrice(price || {});
-    invalidateSnapshot();
-    return { snapshot: snapshot() };
-  }));
-  handleIpc('dashboard:add-manual-observation', async (_event, observation) => {
-    if (!observation || typeof observation !== 'object') throw new Error('An observation is required.');
-    const sourceId = observation.sourceId;
-    const usedPercent = Number(observation.usedPercent);
-    const resetsAt = new Date(observation.resetsAt);
-    if (!['codex', 'claude', 'claude-fable'].includes(sourceId)) throw new Error('Unknown source.');
-    if (!Number.isFinite(usedPercent) || usedPercent < 0 || usedPercent > 100) throw new Error('Usage percentage must be between 0 and 100.');
-    if (!Number.isFinite(resetsAt.getTime()) || resetsAt.getTime() <= Date.now()) throw new Error('Reset time must be a valid time in the future.');
-    // Only the fields the renderer's form sends are accepted; bucket, window,
-    // plan, and observation time are fixed here rather than taken from IPC.
-    const note = typeof observation.note === 'string' ? observation.note.slice(0, 500) : null;
-    const current = await databaseJobs.run(() => {
-      store.recordObservation({
-        sourceId,
-        bucketId: store.getManualBucketId(sourceId),
-        bucketName: sourceId === 'claude-fable' ? 'Fable 5 weekly' : 'Weekly',
-        observedAt: new Date().toISOString(),
-        usedPercent,
-        remainingPercent: 100 - usedPercent,
-        resetsAt: resetsAt.toISOString(),
-        windowMinutes: 10_080,
-        planType: null,
-        provenance: 'manual-official',
-        confidence: 0.98,
-        metadata: { note, sharedWithOverall: false },
-      });
-      invalidateSnapshot();
-      const saved = snapshot();
-      publishAfterWrite(saved);
-      return saved;
-    });
-    // The observation is committed. Provider availability must not turn that
-    // successful save into an error or hold the form open for a network call.
-    // Claude's derived view refreshes through the normal snapshot push.
-    if (sourceId !== 'codex') void refreshClaudeOnly().catch((error) => log(`Refresh after manual observation: ${error.message}`));
-    return current;
-  });
-  handleIpc('dashboard:install-claude-helper', async () => {
-    const result = installClaudeHelper(getInboxPath());
-    const current = await refreshClaudeOnly();
-    return { result, snapshot: current };
-  });
-  handleIpc('dashboard:uninstall-claude-helper', async () => {
-    const result = uninstallClaudeHelper();
-    const current = await refreshClaudeOnly();
-    return { result, snapshot: current };
-  });
-  handleIpc('dashboard:create-backup', () => databaseJobs.exclusive(async () => {
-    const result = await maintenance.request('create-backup');
-    invalidateSnapshot();
-    return { result, snapshot: snapshot() };
-  }));
-  handleIpc('dashboard:restore-backup', async () => {
-    const chosen = await dialog.showOpenDialog(window ?? undefined, {
-      title: 'Restore an AI Usage export',
-      defaultPath: store.backupDirectory,
-      properties: ['openFile'],
-      filters: [{ name: 'AI Usage export', extensions: ['json'] }],
-    });
-    if (chosen.canceled || !chosen.filePaths?.length) return { cancelled: true, snapshot: snapshot() };
-    const { result, safetyBackup } = await databaseJobs.exclusive(async () => {
-      const restored = await maintenance.request('restore-backup', { filePath: chosen.filePaths[0] });
-      invalidateSnapshot();
-      // Settings effects belong in the main process. Publish immediately so
-      // imported history appears while the sources refresh in the background.
-      applySettingsEffects();
-      publishAfterWrite(snapshot());
-      return restored;
-    });
-    const refreshed = await refreshAll().catch(() => null);
-    return { cancelled: false, result, safetyBackup, snapshot: refreshed?.snapshot ?? snapshot() };
-  });
-  handleIpc('dashboard:open-backup-directory', async () => {
-    const error = await shell.openPath(store.backupDirectory);
-    if (error) throw new Error(`Windows could not open the backup folder: ${error}`);
-  });
-  handleIpc('dashboard:preview-desktop-export', async () => {
-    const chosen = await dialog.showOpenDialog(window ?? undefined, {
-      title: 'Choose conversations.json from your Claude export', properties: ['openFile'],
-      filters: [{ name: 'Claude conversation export', extensions: ['json'] }],
-    });
-    if (chosen.canceled || !chosen.filePaths?.length) return null;
-    return databaseJobs.exclusive(() => maintenance.request('preview-desktop-export', { filePath: chosen.filePaths[0] }));
-  });
-  handleIpc('dashboard:cancel-desktop-export', async (_event, previewId) => {
-    await maintenance.request('cancel-desktop-export', { previewId });
-  });
-  handleIpc('dashboard:import-desktop-export', async (_event, previewId, assumedModel) => {
-    if (typeof previewId !== 'string' || previewId.length > 100
-      || (assumedModel != null && (typeof assumedModel !== 'string' || assumedModel.length > 120))) {
-      throw new Error('Invalid desktop import selection.');
-    }
-    return databaseJobs.exclusive(async () => {
-      const result = await maintenance.request('import-desktop-export', { previewId, assumedModel });
-      invalidateSnapshot();
-      const current = snapshot();
-      publishAfterWrite(current);
-      return { result, snapshot: current };
-    });
-  });
-  handleIpc('dashboard:clear-desktop-estimates', async () => {
-    const choice = await dialog.showMessageBox(window ?? undefined, {
-      type: 'question', title: 'Remove imported chat estimates?',
-      message: 'Remove all imported Claude chat estimates?',
-      detail: 'A backup is created first. Recorded token usage and quota history are kept.',
-      buttons: ['Cancel', 'Remove estimates'], defaultId: 0, cancelId: 0,
-    });
-    if (choice.response !== 1) return { cancelled: true, snapshot: snapshot() };
-    return databaseJobs.exclusive(async () => {
-      await maintenance.request('clear-desktop-estimates');
-      invalidateSnapshot();
-      const current = snapshot();
-      publishAfterWrite(current);
-      return { cancelled: false, snapshot: current };
-    });
-  });
-  handleIpc('dashboard:export-csv', async (_event, days = 90) => {
-    const period = Math.min(365, Math.max(1, Math.round(Number(days)) || 90));
-    const stamp = new Date().toISOString().slice(0, 10);
-    const chosen = await dialog.showSaveDialog(window ?? undefined, {
-      title: 'Export the token ledger',
-      defaultPath: path.join(app.getPath('documents'), `ai-usage-ledger-${stamp}.csv`),
-      filters: [{ name: 'CSV', extensions: ['csv'] }],
-    });
-    if (chosen.canceled || !chosen.filePath) return { cancelled: true };
-    const exported = await databaseJobs.exclusive(() => maintenance.request('export-csv', { filePath: chosen.filePath, days: period }));
-    return { cancelled: false, ...exported };
-  });
-  handleIpc('dashboard:copy-summary', () => {
-    const text = buildSummaryText(snapshot());
-    clipboard.writeText(text);
-    return { text };
-  });
-  handleIpc('dashboard:snooze-alerts', async (_event, hours) => {
-    const parsed = Number(hours);
-    const current = await setSnooze(Number.isFinite(parsed) && parsed > 0 ? Math.min(72, parsed) : 0);
-    return { snapshot: current };
-  });
-  handleIpc('app:get-version', () => app.getVersion());
-  handleIpc('app:check-updates', async () => {
-    if (!updateChecker) return { status: 'unavailable', available: false };
-    await updateChecker.check();
-    return updateChecker.status();
-  });
-  handleIpc('app:update-status', () => (updateChecker ? updateChecker.status() : { status: 'unavailable', available: false }));
-  handleIpc('app:download-update', () => updateChecker?.download() || { status: 'unavailable', available: false });
-  handleIpc('app:install-update', () => updateChecker?.install() || { status: 'unavailable', available: false });
 }
 
 function publishUpdateStatus(status) {
@@ -747,6 +624,8 @@ function stopForShutdown() {
   isQuitting = true;
   claudeSetup?.cancel();
   clearInterval(refreshTimer);
+  clearTimeout(snoozeTimer);
+  clearTimeout(resumeTimer);
   refreshTimer = null;
   updateChecker?.stop();
   try { collectors?.stop(); } catch { /* Already gone. */ }
@@ -799,10 +678,17 @@ async function prepareUpdateInstall() {
     }
     deadline.cancel();
     preparingUpdate = false;
-    isQuitting = false;
+    isQuitting = quitRequestedDuringUpdate;
+    if (quitRequestedDuringUpdate) { app.quit(); throw Object.assign(new Error("Update cancelled while quitting."), { code: "UPDATE_BACKUP_FAILED" }); }
     collectors = createCollectors();
     applySettingsEffects();
     throw Object.assign(new Error('Update safety backup failed.'), { code: 'UPDATE_BACKUP_FAILED' });
+  }
+  if (quitRequestedDuringUpdate) {
+    deadline.cancel();
+    preparingUpdate = false;
+    app.quit();
+    throw Object.assign(new Error('Update cancelled while quitting.'), { code: 'UPDATE_BACKUP_FAILED' });
   }
   try {
     await Promise.race([closeStorage(), deadline.expiry]);
@@ -813,13 +699,19 @@ async function prepareUpdateInstall() {
       // stalled. The installer replaces the process, so let it proceed.
       updateLog('Storage did not close in time; installing with the backup taken.');
       shutdownComplete = true;
-      return;
+    } else {
+      updateLog(`Storage close failed: ${error?.message || 'unknown error'}`);
+      recoverFromUpdateInstallFailure();
+      throw error;
     }
-    updateLog(`Storage close failed: ${error?.message || 'unknown error'}`);
-    recoverFromUpdateInstallFailure();
-    throw error;
   } finally {
     deadline.cancel();
+  }
+  if (quitRequestedDuringUpdate) {
+    preparingUpdate = false;
+    shutdownComplete = true;
+    app.quit();
+    throw Object.assign(new Error('Update cancelled while quitting.'), { code: 'UPDATE_BACKUP_FAILED' });
   }
 }
 
@@ -831,13 +723,13 @@ function recoverFromUpdateInstallFailure(message = 'Your safety backup has been 
   updateLog(`Recovery: ${message} Relaunching the current version.`);
   dialog.showErrorBox('AI Usage update could not start', message);
   shutdownComplete = true;
-  app.relaunch();
+  if (!quitRequestedDuringUpdate) relaunchApplication({ app, environment: launchEnvironment });
   app.quit();
 }
 
 function loadAutoUpdater() {
   try {
-    return require('electron-updater').autoUpdater;
+    return preserveInstallerEnvironment(require('electron-updater').autoUpdater, launchEnvironment);
   } catch {
     return null;
   }
@@ -853,7 +745,7 @@ if (isPrimaryInstance) {
       await app.whenReady();
       const testRoot = process.env.AI_USAGE_TEST_ROOT;
       const databasePath = testRoot ? path.join(testRoot, 'ai-usage.sqlite') : path.join(app.getPath('userData'), 'ai-usage.sqlite');
-      const backupDirectory = testRoot ? path.join(testRoot, 'Backups') : path.join(app.getPath('documents'), 'AI Usage', 'Backups');
+      const backupDirectory = testRoot ? path.join(testRoot, 'Backups') : path.join(app.getPath('userData'), 'Backups');
       store = new UsageStore(databasePath, backupDirectory);
       maintenance = createMaintenanceHost({ databasePath, backupDirectory });
       claudeSetup = createClaudeSetup({
@@ -873,7 +765,7 @@ if (isPrimaryInstance) {
         getToken: createGitHubUpdateAuth().getToken,
         beforeInstall: prepareUpdateInstall,
         onInstallError: recoverFromUpdateInstallFailure,
-        launchInstaller,
+        launchInstaller: (options) => launchInstaller({ ...options, environment: launchEnvironment }),
         quitForInstall: () => app.quit(),
         installDirectoryWritable,
         onStatus: publishUpdateStatus,
@@ -908,7 +800,11 @@ if (isPrimaryInstance) {
       applySettingsEffects();
       // A sleeping PC collects nothing, so waking is the moment the local records
       // are most likely to be behind.
-      powerMonitor.on('resume', () => refreshIfStale());
+      powerMonitor.on('resume', () => {
+        clearTimeout(resumeTimer);
+        resumeTimer = setTimeout(() => { if (!isQuitting) refreshIfStale(); }, 15_000);
+        resumeTimer.unref?.();
+      });
     },
     onFailure: (error) => {
       showFatalError('AI Usage could not start', 'Startup did not complete.', error);
@@ -922,7 +818,7 @@ if (isPrimaryInstance) {
   app.on('before-quit', (event) => {
     if (shutdownComplete) return;
     event.preventDefault();
-    if (preparingUpdate) return;
+    if (preparingUpdate) { quitRequestedDuringUpdate = true; return; }
     if (shutdownPromise) return;
     stopForShutdown();
     // Cancel provider calls, then drain database jobs and close the maintenance

@@ -7,7 +7,8 @@ import { BrandMark, Header, TABS, type Tab } from './components/Header';
 import { NoticeToast, createNoticeChannel } from './components/NoticeToast';
 import { Overview } from './components/Overview';
 import { Settings, type SettingsActions } from './components/Settings';
-import { demoSnapshot } from './data/demo';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { snapshotAtTime } from './snapshot-time';
 import { formatInt } from './lib';
 import type { ManualObservation, PriceRow, Settings as SettingsType, Snapshot, Theme } from './types';
 
@@ -28,18 +29,57 @@ export default function App() {
   const isBrowserPreview = !window.aiUsage && window.location.protocol !== 'file:';
   // Demo data is a browser-preview adapter only. An installed desktop window
   // starts empty so a failed local read can never masquerade as real usage.
-  const [snapshot, setSnapshot] = useState<Snapshot | null>(() => (isBrowserPreview ? demoSnapshot : null));
+  const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [refreshing, setRefreshing] = useState(Boolean(window.aiUsage));
   // Notices are published to the toast, not held as App state: see NoticeToast.
   const [notices] = useState(createNoticeChannel);
   const setNotice = notices.show;
   const [loadError, setLoadError] = useState('');
   const loadRequest = useRef(0);
+  const desiredPeriod = useRef(30);
+  const committedPeriod = useRef(30);
+  const pendingPeriod = useRef<number | null>(null);
 
-  const commitSnapshot = useCallback((next: Snapshot) => {
-    setSnapshot(next);
-    setDays(next.costs.periodDays);
+  const commitSnapshot = useCallback((next: Snapshot | null | undefined) => {
+    if (!next) return;
+    const matchesPeriod = next.costs.periodDays === desiredPeriod.current;
+    setSnapshot((current) =>
+      !matchesPeriod && current ? { ...next, costs: current.costs, desktopEstimates: current.desktopEstimates } : next,
+    );
+    if (matchesPeriod) {
+      committedPeriod.current = next.costs.periodDays;
+      setDays(next.costs.periodDays);
+    }
   }, []);
+
+  useEffect(() => {
+    if (!isBrowserPreview) return;
+    let active = true;
+    void import('./data/demo').then(({ demoSnapshot }) => {
+      if (active) commitSnapshot(demoSnapshot);
+    });
+    return () => {
+      active = false;
+    };
+  }, [commitSnapshot, isBrowserPreview]);
+
+  // Re-evaluate evidence and expiry locally even while collection is offline.
+  // Wake at the first reset (or next minute), without changing the data revision.
+  useEffect(() => {
+    if (!snapshot) return;
+    const now = Date.now();
+    const resetTimes = Object.values(snapshot.quotas)
+      .flatMap((quota) =>
+        (quota?.windows?.length ? quota.windows : quota ? [quota] : []).map((entry) => Date.parse(entry.resetsAt)),
+      )
+      .filter((at) => at > now);
+    const delay = Math.max(1, Math.min(60_000, ...resetTimes.map((at) => at - now)));
+    const timer = window.setTimeout(
+      () => setSnapshot((current) => (current ? snapshotAtTime(current, Date.now()) : current)),
+      delay,
+    );
+    return () => window.clearTimeout(timer);
+  }, [snapshot]);
 
   useEffect(() => {
     applyThemeAttribute(snapshot?.settings.theme);
@@ -56,6 +96,8 @@ export default function App() {
         }
         return;
       }
+      desiredPeriod.current = period;
+      pendingPeriod.current = period;
       const request = ++loadRequest.current;
       setRefreshing(true);
       setLoadError('');
@@ -65,6 +107,7 @@ export default function App() {
         // The bridge answers null while storage is closed for an update. The
         // last snapshot is still the truth, so it is kept rather than cleared.
         if (!next) {
+          desiredPeriod.current = committedPeriod.current;
           setNotice(BUSY_NOTICE);
           return;
         }
@@ -74,13 +117,17 @@ export default function App() {
       } catch (error) {
         if (request !== loadRequest.current) return;
         const message = error instanceof Error ? error.message : 'Could not load the local dashboard.';
+        desiredPeriod.current = committedPeriod.current;
         setLoadError(message);
-        setNotice(message);
+        notices.fail(message);
       } finally {
-        if (request === loadRequest.current) setRefreshing(false);
+        if (request === loadRequest.current) {
+          pendingPeriod.current = null;
+          setRefreshing(false);
+        }
       }
     },
-    [commitSnapshot, isBrowserPreview, setNotice],
+    [commitSnapshot, isBrowserPreview, setNotice, notices],
   );
 
   // This effect synchronises with the desktop bridge (an external system):
@@ -89,17 +136,16 @@ export default function App() {
   useEffect(() => {
     void load(30);
     const release = window.aiUsage?.onUpdated?.((next) => {
-      loadRequest.current += 1;
       commitSnapshot(next);
       setLoadError('');
-      setRefreshing(false);
+      if (pendingPeriod.current == null) setRefreshing(false);
     });
     return release;
   }, [commitSnapshot, load]);
   /* oxlint-enable react/set-state-in-effect */
 
   const failWith = (fallback: string) => (error: unknown) => {
-    setNotice(error instanceof Error ? error.message : fallback);
+    notices.fail(error instanceof Error ? error.message : fallback);
   };
 
   const refresh = async () => {
@@ -148,7 +194,7 @@ export default function App() {
         if (notices.current()) notices.show('');
         return;
       }
-      const target = event.target as HTMLElement | null;
+      const target = event.target instanceof HTMLElement ? event.target : null;
       if (target && (target.closest('input, select, textarea, [contenteditable="true"]') || target.isContentEditable))
         return;
       const index = ['1', '2', '3', '4'].indexOf(event.key);
@@ -422,30 +468,32 @@ export default function App() {
       {(snapshot.settings.showClaudeSubscription !== false || setupRequested) && (
         <ClaudeSetup requested={setupRequested} onClose={() => setSetupRequested(false)} onRefresh={refresh} />
       )}
-      {tab === 'overview' && (
-        <Overview
-          snapshot={snapshot}
-          refreshing={refreshing}
-          onRefresh={refresh}
-          onSetupClaude={() => setSetupRequested(true)}
-          onSources={() => {
-            setTab('settings');
-            document.getElementById('tab-settings')?.focus();
-          }}
-        />
-      )}
-      {tab === 'activity' && <Activity snapshot={snapshot} days={days} />}
-      {tab === 'costs' && (
-        <Costs
-          snapshot={snapshot}
-          days={days}
-          onDays={changeDays}
-          query={costQuery}
-          onQuery={setCostQuery}
-          onSnapshot={commitSnapshot}
-        />
-      )}
-      {tab === 'settings' && <Settings snapshot={snapshot} actions={actions} />}
+      <ErrorBoundary key={tab}>
+        {tab === 'overview' && (
+          <Overview
+            snapshot={snapshot}
+            refreshing={refreshing}
+            onRefresh={refresh}
+            onSetupClaude={() => setSetupRequested(true)}
+            onSources={() => {
+              setTab('settings');
+              document.getElementById('tab-settings')?.focus();
+            }}
+          />
+        )}
+        {tab === 'activity' && <Activity snapshot={snapshot} days={days} />}
+        {tab === 'costs' && (
+          <Costs
+            snapshot={snapshot}
+            days={days}
+            onDays={changeDays}
+            query={costQuery}
+            onQuery={setCostQuery}
+            onSnapshot={commitSnapshot}
+          />
+        )}
+        {tab === 'settings' && <Settings snapshot={snapshot} actions={actions} />}
+      </ErrorBoundary>
       <NoticeToast channel={notices} />
     </div>
   );

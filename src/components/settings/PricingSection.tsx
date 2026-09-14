@@ -144,6 +144,22 @@ export function PricingSection({
   onPrice: (row: PriceRow) => Promise<void>;
 }) {
   const { settings } = snapshot;
+  const [pendingCurrency, setPendingCurrency] = useState<string | null>(null);
+  const [rateDraft, setRateDraft] = useState('');
+  const [savingCurrency, setSavingCurrency] = useState(false);
+  const [currencyError, setCurrencyError] = useState('');
+  const chooseCurrency = async (currency: string, rate?: number) => {
+    setSavingCurrency(true);
+    setCurrencyError('');
+    try {
+      if ((await update({ currency, ...(rate != null ? { usdToCurrency: rate } : {}) })) === false) return;
+      setPendingCurrency(null);
+    } catch {
+      setCurrencyError('Currency could not be saved. Try again.');
+    } finally {
+      setSavingCurrency(false);
+    }
+  };
   const pricedModels = new Set(snapshot.priceCatalog.map((row) => row.model.toLowerCase()));
   const seenModels = new Set(pricedModels);
   const unpricedRows = [
@@ -184,11 +200,14 @@ export function PricingSection({
           <span>Display currency</span>
           <select
             value={settings.currency}
-            onChange={(event) =>
-              update(
-                event.target.value === 'USD' ? { currency: 'USD', usdToCurrency: 1 } : { currency: event.target.value },
-              )
-            }
+            disabled={savingCurrency}
+            onChange={(event) => {
+              const currency = event.target.value;
+              if (currency !== 'USD' && !settings.currencyRates?.[currency] && currency !== settings.currency) {
+                setPendingCurrency(currency);
+                setRateDraft('');
+              } else void chooseCurrency(currency);
+            }}
           >
             <option value="GBP">GBP · £</option>
             <option value="USD">USD · $</option>
@@ -205,31 +224,38 @@ export function PricingSection({
           onCommit={(value) => update({ usdToCurrency: value })}
         />
       </div>
-      <div className="settings-fields plan-fields">
-        <NumericSetting
-          label="Codex subscription (USD per month)"
-          value={settings.codexPlanUsdPerMonth}
-          min={0}
-          max={100_000}
-          step={1}
-          onCommit={(value) => update({ codexPlanUsdPerMonth: value })}
-        />
-        <NumericSetting
-          label="Claude subscription (USD per month)"
-          value={settings.claudePlanUsdPerMonth}
-          min={0}
-          max={100_000}
-          step={1}
-          onCommit={(value) => update({ claudePlanUsdPerMonth: value })}
-        />
-      </div>
-      <div className="learning-note">
-        <span>
-          <strong>Subscription value</strong>
-          With a monthly fee set, the Overview compares the API-equivalent value of the period with the fees for the
-          same number of days. Leave a fee at zero to hide the ratio. Fees are compared, not charged.
-        </span>
-      </div>
+      {pendingCurrency && (
+        <div className="currency-row" role="group" aria-label={`Set ${pendingCurrency} display rate`}>
+          <label>
+            <span>One USD equals ({pendingCurrency}, manual rate)</span>
+            <input
+              type="number"
+              min="0.01"
+              max="10000"
+              step="0.001"
+              value={rateDraft}
+              onChange={(event) => setRateDraft(event.target.value)}
+            />
+          </label>
+          <button
+            className="secondary-button"
+            disabled={
+              savingCurrency ||
+              !rateDraft.trim() ||
+              !Number.isFinite(Number(rateDraft)) ||
+              Number(rateDraft) < 0.01 ||
+              Number(rateDraft) > 10000
+            }
+            onClick={() => void chooseCurrency(pendingCurrency, Number(rateDraft))}
+          >
+            Save rate and switch
+          </button>
+          <button className="secondary-button" disabled={savingCurrency} onClick={() => setPendingCurrency(null)}>
+            Cancel
+          </button>
+        </div>
+      )}
+      {currencyError && <p role="alert">{currencyError}</p>}
       <div className="pricing-disclosure">
         <span>
           <strong>
@@ -253,7 +279,9 @@ export function PricingSection({
               <th>Write 1h</th>
               <th>Cache read</th>
               <th>Output</th>
-              <th />
+              <th>
+                <span className="sr-only">Save price</span>
+              </th>
             </tr>
           </thead>
           <tbody>

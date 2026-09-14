@@ -104,8 +104,8 @@ class TaskUsage {
       inputTokens: event.source_id === 'codex' ? Math.max(0, event.input_tokens - event.cached_input_tokens) : event.input_tokens,
       cachedInputTokens: event.cached_input_tokens, cacheWriteInputTokens: event.cache_write_input_tokens,
       outputTokens: event.output_tokens, reasoningOutputTokens: event.reasoning_output_tokens,
-      totalTokens, usageCount: 1, costUsd: cost.actualUsd, coveredTokens: cost.covered ? totalTokens : 0,
-      startedAt: event.occurred_at, occurredAt: event.occurred_at,
+      totalTokens, usageCount: event.event_count ?? 1, costUsd: cost.actualUsd, coveredTokens: cost.covered ? totalTokens : 0,
+      startedAt: event.first_occurred_at ?? event.occurred_at, occurredAt: event.occurred_at,
     });
     if (!row.project && event.project) row.project = event.project;
     this.rows.set(key, row);

@@ -1,4 +1,5 @@
 'use strict';
+require('./setup.cjs');
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -365,7 +366,7 @@ test('the Fable estimate is projected on demand and never written as a reading',
   const repeat = deriveFableEstimate(store, Date.parse('2026-08-29T14:00:00Z'));
   assert.equal(repeat.derived, true);
   assert.ok(Math.abs(repeat.usedPercent - first.usedPercent) < 0.01, 'idle time does not move the estimate');
-  assert.equal(store.getRecentQuotaObservations('claude-fable', 'fable_seven_day', null, 10).length, 0);
+  assert.equal(store.prepare("SELECT COUNT(*) AS count FROM quota_observations WHERE source_id = 'claude-fable' AND bucket_id = 'fable_seven_day'").get().count, 0);
   const quota = store.getQuota('claude-fable', store.getSettings(), Date.parse('2026-08-29T14:00:00Z'));
   assert.equal(quota.provenance, 'derived-tokens');
   assert.equal(quota.metadata.projected, true);

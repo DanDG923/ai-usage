@@ -48,7 +48,7 @@ export function DesktopEstimates({
     perform(async () => {
       if (!preview || !window.aiUsage) return;
       const result = await window.aiUsage.importDesktopExport(preview.id, assumedModel || null);
-      onSnapshot(result.snapshot);
+      if (result.snapshot) onSnapshot(result.snapshot);
       setPreview(null);
       setNotice(
         `Imported ${result.result.imported} reply estimates; ${result.result.duplicates} already imported replies were kept unchanged.`,
@@ -63,7 +63,7 @@ export function DesktopEstimates({
     perform(async () => {
       const result = await window.aiUsage?.clearDesktopEstimates();
       if (result && !result.cancelled) {
-        onSnapshot(result.snapshot);
+        if (result.snapshot) onSnapshot(result.snapshot);
         setNotice('Imported estimates removed. A safety backup was saved.');
       }
     });

@@ -8,6 +8,8 @@
 // the caller: the store knows the clock, the renderer reads the flag the
 // store already set on each forecast from the same comparison.
 
+import { isProviderProvenance } from './quota-provenance.mjs';
+
 const CODEX_MAIN_BUCKET = /^codex:(?:primary|secondary|weekly)$/;
 const CLAUDE_MAIN_BUCKETS = new Set(['seven_day', 'five_hour']);
 const FABLE_MAIN_BUCKETS = new Set(['fable_seven_day', 'fable:seven_day_fable']);
@@ -26,8 +28,7 @@ export function isMainWindow(window) {
 }
 
 export function isOfficialWindow(window) {
-  const provenance = String(window?.provenance || '');
-  return provenance.startsWith('official') || provenance === 'local-official';
+  return isProviderProvenance(window?.provenance);
 }
 
 function expiryOf({ nowMs, isExpired } = {}) {

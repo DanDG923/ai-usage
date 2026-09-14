@@ -33,3 +33,7 @@ Microsoft/
 /AI-Usage-Source-*/
 /SHA256SUMS.txt
 /RELEASE-NOTES.md
+
+/.tmp-npm-cache/
+/.tmp-electron-cache/
+*.aiusage.json.gz

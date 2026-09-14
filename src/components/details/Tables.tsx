@@ -1,5 +1,5 @@
 import { memo } from 'react';
-import { compactNumber, money, percent, projectName, shortDate, sourceLabel } from '../../lib';
+import { compactNumber, money, percent, priceCoverage, projectName, shortDate, sourceLabel } from '../../lib';
 import type { CostAnalytics, ModelCost } from '../../types';
 
 function ModelCategory({
@@ -95,7 +95,7 @@ export const ProjectTable = memo(function ProjectTable({ costs, query }: { costs
                   <td className="num">{row.sessionCount}</td>
                   <td>{shortDate(row.lastActivity)}</td>
                   <td className="num">{compactNumber(row.totalTokens)}</td>
-                  <td className="num">{percent(row.coverage * 100)}</td>
+                  <td className="num">{priceCoverage(row.coverage)}</td>
                   <td className="num">
                     <EquivalentValue cost={row.cost} coverage={row.coverage} currency={costs.currency} />
                   </td>
@@ -191,7 +191,7 @@ export const ModelTable = memo(function ModelTable({ costs, query }: { costs: Co
                     <ModelCategory row={row} category="output" tokens={row.outputTokens} currency={costs.currency} />
                     <small>{compactNumber(row.reasoningOutputTokens)} reasoning</small>
                   </td>
-                  <td className="num">{percent(row.coverage * 100)}</td>
+                  <td className="num">{priceCoverage(row.coverage)}</td>
                   <td className="num">{row.costShare == null ? '—' : percent(row.costShare * 100)}</td>
                   <td className="num">
                     <EquivalentValue cost={row.cost} coverage={row.coverage} currency={costs.currency} />

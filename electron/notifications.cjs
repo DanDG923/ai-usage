@@ -89,7 +89,7 @@ function buildSummaryText(snapshot, nowMs = Date.now()) {
   ].join('\n');
 }
 
-function buildTrayTooltip(snapshot, nowMs = Date.now()) {
+function buildTrayTooltip(snapshot) {
   const verdict = snapshot?.dashboardVerdict?.label || 'AI Usage';
   const compact = visibleSources(snapshot).map((source) => {
     const window = primaryWindow(snapshot?.quotas?.[source.key]);
@@ -98,7 +98,12 @@ function buildTrayTooltip(snapshot, nowMs = Date.now()) {
     const estimated = window.forecast?.currentIsEstimated && window.forecast?.estimatedCurrentRemaining != null;
     return `${source.label} ${estimated ? '~' : ''}${Math.round(remaining ?? 0)}%`;
   });
-  return `${verdict}\n${compact.join(' · ')}\nUpdated ${new Date(nowMs).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`;
+  const latest = Math.max(0, ...(snapshot?.sources || []).map((source) => Date.parse(source.lastSuccessAt || source.last_success_at || '') || 0));
+  const updated = latest ? `Updated ${new Date(latest).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}` : 'Not collected yet';
+  const prefix = `${compact.join(' · ')}\n${updated}\n`;
+  const available = Math.max(0, 127 - prefix.length);
+  const label = verdict.length > available ? `${verdict.slice(0, Math.max(0, available - 1))}…` : verdict;
+  return `${prefix}${label}`.slice(0, 127);
 }
 
 // Decide which desktop notifications a fresh snapshot earns. Pure: takes the
@@ -140,14 +145,14 @@ function decideNotifications({ previous, current, state = emptyState(), nowMs = 
         : verdict.reason === 'heavy-exhaustion'
           ? 'An allowance could run out under heavier usage'
           : verdict.reason === 'mixed'
-            ? 'Multiple allowances need attention'
+            ? (affected.length > 1 ? 'Multiple allowances need attention' : 'An allowance needs attention')
             : 'AI usage pace needs attention';
       const body = verdict.state === 'critical'
         ? `${subject} is projected to exhaust its allowance before reset.${when}`
         : verdict.reason === 'heavy-exhaustion'
           ? `${subject} remains above zero in the expected forecast, but could exhaust under heavier usage before reset.`
           : verdict.reason === 'mixed'
-            ? `${subject} need attention for different forecast reasons. Open AI Usage for the provider-level detail.${when}`
+            ? `${subject} ${affected.length > 1 ? "need" : "needs"} attention for different forecast reasons. Open AI Usage for the provider-level detail.${when}`
             : `${subject} is above the configured safe pace.${when}`;
       notifications.push({
         kind: 'risk',

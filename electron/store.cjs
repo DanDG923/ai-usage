@@ -7,11 +7,11 @@ const { buildDashboardVerdict } = require('./dashboard-decision.cjs');
 const { isOfficialWindow, selectDisplayedWindows } = require('./quota-selection.cjs');
 const { FABLE_BUCKET, projectFableAllowance } = require('./fable-projection.cjs');
 const { codexQuotaLabel } = require('./codex-quota-label.cjs');
-const { forecastQuota } = require('./forecast.cjs');
+const { forecastQuota, normaliseObservation, prepareObservation, clusterByWindow } = require('./forecast.cjs');
 const { TaskUsage } = require('./task-usage.cjs');
 const { estimateTokenCapacity, LOOKBACK_MS: TOKEN_CAPACITY_LOOKBACK_MS, STALENESS_MS: TOKEN_CAPACITY_STALENESS_MS } = require('./token-capacity.cjs');
 const { MAX_QUOTA_RESET_AHEAD_MS, QUOTA_CLOCK_SKEW_MS, FORECAST_LOOKBACK_MS, validQuotaTime } = require('./quota-time.cjs');
-const { isAllowanceChangeList, normalizeAllowanceChanges } = require('./allowance-changes.cjs');
+const { isAllowanceChange, isAllowanceChangeList, normalizeAllowanceChanges } = require('./allowance-changes.cjs');
 
 const SOURCE_DEFINITIONS = [
   ['codex', 'Codex', 'codex'],
@@ -31,6 +31,7 @@ const DEFAULT_SETTINGS = {
   showClaudeSubscription: true,
   currency: 'GBP',
   usdToCurrency: 0.736,
+  currencyRates: { USD: 1, GBP: 0.736 },
   activeDays: [1, 2, 3, 4, 5, 6, 0],
   activeStartHour: 8,
   activeEndHour: 22,
@@ -81,6 +82,9 @@ const SETTING_VALIDATORS = {
   showClaudeSubscription: (value) => typeof value === 'boolean',
   currency: (value) => ['GBP', 'USD', 'EUR'].includes(value),
   usdToCurrency: (value) => Number.isFinite(value) && value > 0 && value <= 10_000,
+  currencyRates: (value) => value && typeof value === 'object' && !Array.isArray(value)
+    && Object.entries(value).every(([currency, rate]) => ['GBP', 'USD', 'EUR'].includes(currency)
+      && Number.isFinite(rate) && rate > 0 && rate <= 10_000 && (currency !== 'USD' || rate === 1)),
   activeDays: (value) => Array.isArray(value)
     && value.length > 0
     && value.every((day) => Number.isInteger(day) && day >= 0 && day <= 6)
@@ -296,6 +300,9 @@ class UsageStore {
     this.tokenCapacityCache = new Map();
     this.fableProjectionCache = null;
     this.tokenCapacityEvidenceCache = new Map();
+    this.quotaRowsCache = new Map();
+    this.analyticsDayCache = new Map();
+    this.forecastModelCache = new Map();
     this.transactionDepth = 0;
     const opened = openDatabase(databasePath);
     this.db = opened.db;
@@ -350,6 +357,7 @@ class UsageStore {
       -- existence probes) otherwise sort every row of the source.
       CREATE INDEX IF NOT EXISTS idx_quota_source_time
         ON quota_observations(source_id, observed_at);
+      CREATE INDEX IF NOT EXISTS idx_quota_observed ON quota_observations(observed_at);
       CREATE TABLE IF NOT EXISTS usage_events (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         event_key TEXT NOT NULL UNIQUE,
@@ -369,7 +377,7 @@ class UsageStore {
         FOREIGN KEY(source_id) REFERENCES sources(id)
       );
       CREATE INDEX IF NOT EXISTS idx_usage_time ON usage_events(occurred_at);
-      CREATE INDEX IF NOT EXISTS idx_usage_source_model ON usage_events(source_id, model);
+      DROP INDEX IF EXISTS idx_usage_source_model;
       CREATE INDEX IF NOT EXISTS idx_usage_source_time ON usage_events(source_id, occurred_at);
       CREATE TABLE IF NOT EXISTS account_daily_usage (
         source_id TEXT NOT NULL,
@@ -400,6 +408,7 @@ class UsageStore {
         export_path TEXT NOT NULL
       );
     `);
+    this.transaction(() => {
     const sourceColumns = new Set(this.prepare('PRAGMA table_info(sources)').all().map((row) => row.name));
     if (!sourceColumns.has('last_attempt_at')) this.db.exec('ALTER TABLE sources ADD COLUMN last_attempt_at TEXT;');
     if (!sourceColumns.has('last_success_at')) this.db.exec('ALTER TABLE sources ADD COLUMN last_success_at TEXT;');
@@ -433,6 +442,8 @@ class UsageStore {
       // the next refresh rebuild them from the local source of truth.
       this.prepare("DELETE FROM imported_files WHERE lower(file_path) LIKE '%.claude%projects%.jsonl'").run();
     }
+    const dateMigration = 'migration.quota-date-cleanup-v1';
+    if (!this.prepare('SELECT 1 FROM settings WHERE key = ?').get(dateMigration)) {
     this.db.exec(`
       DELETE FROM quota_observations
       WHERE resets_at IS NULL
@@ -449,6 +460,9 @@ class UsageStore {
       DELETE FROM quota_observations
       WHERE source_id = 'claude-fable' AND bucket_id = 'fable-weekly';
     `);
+    this.prepare('INSERT INTO settings(key, value_json, updated_at) VALUES (?, ?, ?)').run(dateMigration, 'true', iso());
+    }
+    });
     const fablePlanEvidenceMigration = 'migration.fable-plan-evidence-v1';
     if (!this.prepare('SELECT 1 FROM settings WHERE key = ?').get(fablePlanEvidenceMigration)) {
       // Claude's status-line payload has never contained a subscription/seat
@@ -498,6 +512,24 @@ class UsageStore {
       revision INTEGER NOT NULL,
       PRIMARY KEY(domain, source_id, bucket_id)
     ) WITHOUT ROWID;`);
+    this.db.exec(`CREATE TABLE IF NOT EXISTS analytics_day_revisions(day TEXT PRIMARY KEY, revision INTEGER NOT NULL) WITHOUT ROWID;`);
+    for (const action of ['INSERT', 'UPDATE', 'DELETE']) {
+      const refs = action === 'UPDATE' ? ['OLD', 'NEW'] : [action === 'INSERT' ? 'NEW' : 'OLD'];
+      this.db.exec(`CREATE TRIGGER IF NOT EXISTS analytics_day_${action.toLowerCase()} AFTER ${action} ON usage_events BEGIN
+        ${refs.map((ref) => `INSERT INTO analytics_day_revisions(day, revision) VALUES (substr(${ref}.occurred_at, 1, 10), 1)
+          ON CONFLICT(day) DO UPDATE SET revision = revision + 1;`).join('\n')}
+      END;`);
+    }
+    this.db.exec(`CREATE TABLE IF NOT EXISTS quota_compaction_state (
+      id INTEGER PRIMARY KEY CHECK(id = 1), through_at TEXT, dirty_at TEXT
+    );
+    INSERT OR IGNORE INTO quota_compaction_state(id, dirty_at) SELECT 1, MIN(observed_at) FROM quota_observations;
+    CREATE TRIGGER IF NOT EXISTS compaction_insert AFTER INSERT ON quota_observations BEGIN
+      UPDATE quota_compaction_state SET dirty_at = MIN(COALESCE(dirty_at, NEW.observed_at), NEW.observed_at) WHERE id = 1;
+    END;
+    CREATE TRIGGER IF NOT EXISTS compaction_update AFTER UPDATE ON quota_observations BEGIN
+      UPDATE quota_compaction_state SET dirty_at = MIN(COALESCE(dirty_at, NEW.observed_at), NEW.observed_at, OLD.observed_at) WHERE id = 1;
+    END;`);
     for (const [table, domain, scope] of [
       ['usage_events', 'usage', ['source_id']],
       ['quota_observations', 'quota', ['source_id', 'bucket_id']],
@@ -594,10 +626,12 @@ class UsageStore {
     for (const row of this.prepare('SELECT key, value_json FROM settings').all()) {
       const validate = settingValidator(row.key);
       if (!validate) continue;
-      const value = json(row.value_json, undefined);
-      if (validate(value)) {
+      const stored = json(row.value_json, undefined);
+      const value = row.key === 'allowanceChanges' && Array.isArray(stored)
+        ? stored.filter((entry) => isAllowanceChange(entry, Infinity)).slice(-24) : stored;
+      if (row.key === 'allowanceChanges' ? isAllowanceChangeList(value, Infinity) : validate(value)) {
         repaired[row.key] = normalizedSetting(row.key, value);
-        if (JSON.stringify(repaired[row.key]) !== JSON.stringify(value)) {
+        if (JSON.stringify(repaired[row.key]) !== JSON.stringify(stored)) {
           update.run(JSON.stringify(repaired[row.key]), iso(), row.key);
         }
       }
@@ -612,6 +646,10 @@ class UsageStore {
     if (repaired.currency === 'USD' && repaired.usdToCurrency !== 1) {
       update.run(JSON.stringify(1), iso(), 'usdToCurrency');
     }
+    const currencyRates = { ...repaired.currencyRates, USD: 1,
+      [repaired.currency]: repaired.currency === 'USD' ? 1 : repaired.usdToCurrency };
+    this.prepare('INSERT OR REPLACE INTO settings(key, value_json, updated_at) VALUES (?, ?, ?)')
+      .run('currencyRates', JSON.stringify(currencyRates), iso());
   }
 
   // node:sqlite does not cache prepared statements, so every call re-parsed
@@ -675,6 +713,16 @@ class UsageStore {
       // Selecting USD is one coherent setting change, not a currency label
       // followed by a separate rate edit the caller might forget to make.
       normalizedPatch.usdToCurrency = 1;
+    }
+    else if (candidateCurrency !== current.currency && !Object.hasOwn(normalizedPatch, 'usdToCurrency')) {
+      const savedRate = current.currencyRates?.[candidateCurrency];
+      if (!savedRate) throw new Error(`Enter a USD to ${candidateCurrency} conversion rate.`);
+      normalizedPatch.usdToCurrency = savedRate;
+    }
+    if (Object.hasOwn(normalizedPatch, 'currency') || Object.hasOwn(normalizedPatch, 'usdToCurrency')) {
+      normalizedPatch.currencyRates = { ...current.currencyRates, ...normalizedPatch.currencyRates,
+        [current.currency]: current.usdToCurrency,
+        [candidateCurrency]: normalizedPatch.usdToCurrency ?? current.usdToCurrency, USD: 1 };
     }
     const candidate = { ...current, ...normalizedPatch };
     if (candidate.activeStartHour >= candidate.activeEndHour) {
@@ -914,29 +962,14 @@ class UsageStore {
     return row?.bucket_id || 'codex:weekly';
   }
 
-  getRecentQuotaObservations(sourceId, bucketId, provenances = null, limit = 2) {
-    const filter = provenances?.length ? ` AND provenance IN (${provenances.map(() => '?').join(', ')})` : '';
-    return this.prepare(`
-      SELECT * FROM quota_observations WHERE source_id = ? AND bucket_id = ?${filter}
-      ORDER BY observed_at DESC LIMIT ?
-    `).all(sourceId, bucketId, ...(provenances || []), limit);
-  }
-
-  // Official readings for one bucket, oldest first, from `sinceIso` onward.
-  getOfficialObservations(sourceId, bucketId, provenances, sinceIso) {
-    return this.prepare(`
-      SELECT * FROM quota_observations
-      WHERE source_id = ? AND bucket_id = ? AND observed_at >= ?
-        AND provenance IN (${provenances.map(() => '?').join(', ')})
-      ORDER BY observed_at ASC
-    `).all(sourceId, bucketId, sinceIso, ...provenances);
-  }
-
   upsertDailyUsage(sourceId, usageDate, tokens) {
+    if (!KNOWN_SOURCE_IDS.has(sourceId) || !isForecastDate(usageDate) || !Number.isSafeInteger(tokens) || tokens < 0) {
+      throw new Error('Invalid daily usage date or token count.');
+    }
     this.prepare(`
       INSERT INTO account_daily_usage(source_id, usage_date, tokens) VALUES (?, ?, ?)
       ON CONFLICT(source_id, usage_date) DO UPDATE SET tokens = excluded.tokens
-    `).run(sourceId, usageDate, Number(tokens || 0));
+    `).run(sourceId, usageDate, tokens);
   }
 
   // `size_bytes` is the byte cursor: how much of the file has been consumed.
@@ -972,17 +1005,31 @@ class UsageStore {
   getQuota(sourceId, settings = this.getSettings(), nowMs = Date.now()) {
     const latestAllowed = iso(nowMs + QUOTA_CLOCK_SKEW_MS);
     const oldestRecent = iso(nowMs - FORECAST_LOOKBACK_MS);
-    const usable = (row) => validQuotaTime(new Date(row.observed_at).getTime(),
-      new Date(row.resets_at).getTime(), row.window_minutes, nowMs);
-    const candidates = this.prepare(`
-      SELECT * FROM quota_observations
-      WHERE source_id = ? AND observed_at <= ?
-        AND (observed_at >= ? OR (bucket_id, observed_at) IN (
-          SELECT bucket_id, MAX(observed_at) FROM quota_observations
-          WHERE source_id = ? AND observed_at <= ? GROUP BY bucket_id
-        ))
-      ORDER BY observed_at ASC, id ASC
-    `).all(sourceId, latestAllowed, oldestRecent, sourceId, latestAllowed);
+    // Capture revisions before reading rows: a concurrent collector commit can
+    // invalidate this result, but can never label old rows with a new revision.
+    const quotaRevision = this.prepare("SELECT COALESCE(SUM(revision), 0) AS value FROM analytics_revisions WHERE domain = 'quota' AND source_id = ?").get(sourceId).value;
+    const usable = (row) => {
+      const parsed = normaliseObservation(row);
+      return validQuotaTime(parsed.observedAt, parsed.resetsAt, row.window_minutes, nowMs);
+    };
+    const batch = Math.floor(nowMs / 900_000) * 900_000;
+    const cached = !this.db.isTransaction ? this.quotaRowsCache.get(sourceId) : null;
+    let candidates;
+    if (cached?.revision === quotaRevision && cached.batch === batch) {
+      candidates = cached.rows;
+    } else {
+      candidates = this.prepare(`
+        SELECT * FROM quota_observations WHERE source_id = ? AND observed_at >= ? AND observed_at <= ?
+        UNION
+        SELECT q.* FROM (SELECT DISTINCT bucket_id FROM quota_observations WHERE source_id = ?) buckets
+        JOIN quota_observations q ON q.id = (
+          SELECT id FROM quota_observations WHERE source_id = ? AND bucket_id = buckets.bucket_id AND observed_at <= ?
+          ORDER BY observed_at DESC, id DESC LIMIT 1)
+        ORDER BY observed_at, id
+      `).all(sourceId, iso(batch - FORECAST_LOOKBACK_MS), iso(batch + 900_000 + QUOTA_CLOCK_SKEW_MS),
+        sourceId, sourceId, latestAllowed).map(prepareObservation);
+      if (!this.db.isTransaction) this.quotaRowsCache.set(sourceId, { rows: candidates, revision: quotaRevision, batch });
+    }
     // Recheck persisted rows before selecting current card data or forecasting.
     // Older app versions could store dates and windows now rejected on ingest.
     const rows = candidates.filter(usable);
@@ -1028,7 +1075,6 @@ class UsageStore {
       // Old backups may already have persisted invalid metadata; keep the
       // reading usable without rewriting the original historical evidence.
       const metadata = quotaMetadata(latest.metadata_json) || {};
-      const forecast = forecastQuota(observations, forecastOptions);
       return {
         bucketId,
         bucketName: sourceId === 'codex'
@@ -1042,25 +1088,42 @@ class UsageStore {
         planType: latest.plan_type,
         provenance: latest.provenance,
         metadata,
-        forecast,
-        tokenCapacity: Number(latest.window_minutes) === 10_080
-          ? this.getTokenCapacity(sourceId, bucketId, observations, settings, nowMs)
-          : null,
       };
     });
-    if (sourceId === 'claude-fable') {
-      // One window per bucket, as for every stored bucket: the projection is
-      // the bucket's current state and stands in for its expired reading,
-      // which remains in cycle history.
-      const projected = this.projectedFableWindow(windows, grouped.get(FABLE_BUCKET) || [], settings, forecastOptions, nowMs);
-      if (projected) windows = [...windows.filter((window) => window.bucketId !== FABLE_BUCKET), projected];
-    }
+    // Decide replacement from every window before omitting any forecast: a
+    // live provider window in an alternate Fable bucket can prevent projection.
+    const projected = sourceId === 'claude-fable'
+      ? this.projectedFableWindow(windows, grouped.get(FABLE_BUCKET) || [], settings, forecastOptions, nowMs)
+      : null;
+    windows = windows.filter((window) => !projected || window.bucketId !== FABLE_BUCKET).map((window) => ({
+      ...window,
+      forecast: this.learnedForecast(sourceId, window.bucketId, grouped.get(window.bucketId), forecastOptions, quotaRevision),
+      tokenCapacity: Number(window.windowMinutes) === 10_080
+        ? this.getTokenCapacity(sourceId, window.bucketId, grouped.get(window.bucketId), settings, nowMs, quotaRevision)
+        : null,
+    }));
+    if (projected) windows.push(projected);
     if (!windows.length) return null;
     // The shared rule orders the windows and names the headline, so the tray,
     // notifications, cycle history and cards follow the same window as the
     // top-level fields here even when every window was recorded in one scan.
     const selection = selectDisplayedWindows(windows, { nowMs });
     return { ...selection.primary, windows: [...selection.active, ...selection.expired] };
+  }
+
+  learnedForecast(sourceId, bucketId, observations, options, revision) {
+    const { now, ...modelOptions } = options;
+    const key = JSON.stringify([sourceId, bucketId, modelOptions,
+      (options.allowanceChanges || []).filter((change) => Date.parse(change.at) <= now).length]);
+    let cached = !this.db.isTransaction ? this.forecastModelCache.get(key) : null;
+    if (!cached || cached.revision !== revision) {
+      cached = { revision, models: new Map() };
+      if (!this.db.isTransaction) {
+        this.forecastModelCache.set(key, cached);
+        if (this.forecastModelCache.size > 64) this.forecastModelCache.delete(this.forecastModelCache.keys().next().value);
+      }
+    }
+    return forecastQuota(observations, { ...options, learningCache: cached.models, compactReadings: true });
   }
 
   // The Fable estimate as a window: built from the projection when no
@@ -1162,14 +1225,13 @@ class UsageStore {
     // token history once, independent of API prices and the selected Costs period.
     const revision = this.prepare(`SELECT COALESCE(SUM(revision), 0) AS value
       FROM analytics_revisions WHERE domain = 'usage' AND source_id = ?`).get(sourceId).value;
-    const cached = this.transactionDepth === 0 ? this.tokenCapacityEvidenceCache.get(sourceId) : null;
+    const cached = !this.db.isTransaction ? this.tokenCapacityEvidenceCache.get(sourceId) : null;
     if (cached && cached.revision === revision && nowMs >= cached.evaluatedAt && nowMs < cached.expiresAt) return cached;
-    const rows = this.prepare(`SELECT event_key, source_id, occurred_at, model,
+    const rows = this.prepare(`SELECT source_id, occurred_at, model,
       input_tokens, cached_input_tokens, cache_write_input_tokens,
-      cache_write_5m_input_tokens, cache_write_1h_input_tokens,
-      output_tokens, reasoning_output_tokens, metadata_json
+      output_tokens, reasoning_output_tokens
       FROM usage_events WHERE source_id = ? AND occurred_at >= ? AND occurred_at <= ?
-      ORDER BY occurred_at, event_key`).all(sourceId, iso(nowMs - TOKEN_CAPACITY_LOOKBACK_MS), iso(nowMs));
+      ORDER BY occurred_at`).all(sourceId, iso(nowMs - TOKEN_CAPACITY_LOOKBACK_MS), iso(nowMs));
     const next = this.prepare(`SELECT MIN(occurred_at) AS at FROM usage_events
       WHERE source_id = ? AND occurred_at > ?`).get(sourceId, iso(nowMs)).at;
     // Writes bump the usage revision (triggers cover every connection), so the
@@ -1180,21 +1242,21 @@ class UsageStore {
       next ? Date.parse(next) : Infinity,
     );
     const result = { rows, revision, evaluatedAt: nowMs, expiresAt };
-    if (this.transactionDepth === 0) this.tokenCapacityEvidenceCache.set(sourceId, result);
+    if (!this.db.isTransaction) this.tokenCapacityEvidenceCache.set(sourceId, result);
     return result;
   }
 
-  getTokenCapacity(sourceId, bucketId, observations, settings, nowMs) {
+  getTokenCapacity(sourceId, bucketId, observations, settings, nowMs, capturedQuotaRevision = null) {
     const ledgerSource = sourceId === 'claude-fable' ? 'claude' : sourceId;
     const evidence = this.tokenCapacityEvidence(ledgerSource, nowMs);
-    const quotaRevision = this.prepare(`SELECT COALESCE(SUM(revision), 0) AS value
-      FROM analytics_revisions WHERE domain = 'quota' AND source_id = ? AND bucket_id = ?`).get(sourceId, bucketId).value;
+    const quotaRevision = capturedQuotaRevision ?? this.prepare(`SELECT COALESCE(SUM(revision), 0) AS value
+      FROM analytics_revisions WHERE domain = 'quota' AND source_id = ?`).get(sourceId).value;
     const excludedDates = settings.forecastExcludedDates || [];
     const allowanceChanges = settings.allowanceChanges || [];
     const key = JSON.stringify([sourceId, bucketId]);
     // Both learning settings change the estimate without touching a revision.
     const exclusions = JSON.stringify([excludedDates, allowanceChanges]);
-    const cached = this.transactionDepth === 0 ? this.tokenCapacityCache.get(key) : null;
+    const cached = !this.db.isTransaction ? this.tokenCapacityCache.get(key) : null;
     if (cached && cached.usageRevision === evidence.revision && cached.quotaRevision === quotaRevision
       && cached.exclusions === exclusions && nowMs >= cached.evaluatedAt && nowMs < cached.expiresAt) return cached.value;
 
@@ -1217,7 +1279,7 @@ class UsageStore {
     if (value.remainingAsOf) {
       expiresAt = Math.min(expiresAt, Date.parse(value.remainingAsOf) + TOKEN_CAPACITY_STALENESS_MS + 1);
     }
-    if (this.transactionDepth === 0) {
+    if (!this.db.isTransaction) {
       // Bucket names are provider-controlled; stale buckets need not retain
       // unbounded cached results for the lifetime of the application.
       if (this.tokenCapacityCache.size >= 64 && !this.tokenCapacityCache.has(key)) this.tokenCapacityCache.delete(this.tokenCapacityCache.keys().next().value);
@@ -1334,7 +1396,7 @@ class UsageStore {
     // the rule, while similarly priced models such as codex-auto-review do not.
     const requestInput = Number(row.input_tokens || 0) + cacheWriteTotal;
     const longContext = OPENAI_LONG_CONTEXT_MODELS.has(price.model)
-      && requestInput > OPENAI_LONG_CONTEXT_THRESHOLD;
+      && (row.aggregateLongContext ?? requestInput > OPENAI_LONG_CONTEXT_THRESHOLD);
     const inputMultiplier = longContext ? 2 : 1;
     const outputMultiplier = longContext ? 1.5 : 1;
     const actualUsd = (
@@ -1454,12 +1516,50 @@ class UsageStore {
       page: selectedPage, pageSize: size, totalPages };
   }
 
+  analyticsEvents(since, until) {
+    const revisions = new Map(this.prepare('SELECT day, revision FROM analytics_day_revisions WHERE day >= ? AND day <= ?')
+      .all(since.slice(0, 10), until.slice(0, 10)).map((row) => [row.day, row.revision]));
+    const result = [];
+    const start = Date.parse(`${since.slice(0, 10)}T00:00:00.000Z`);
+    for (let cursor = start; cursor <= Date.parse(until); cursor += DAY_MS) {
+      const day = iso(cursor).slice(0, 10);
+      const lower = cursor === start ? since : iso(cursor);
+      const upper = iso(Math.min(cursor + DAY_MS - 1, Date.parse(until)));
+      const revision = revisions.get(day) ?? 0;
+      const cached = !this.db.isTransaction ? this.analyticsDayCache.get(day) : null;
+      let rows = cached?.revision === revision && cached.lower === lower && cached.upper === upper ? cached.rows : null;
+      if (!rows) {
+        // Preserve per-request context tiers and legacy cache durations before
+        // aggregation. Task metadata stays distinct so parent/agent attribution
+        // cannot merge. Counts remain request counts, not aggregate row counts.
+        rows = this.prepare(`SELECT MIN(event_key) AS event_key, source_id, session_id, model, project, metadata_json,
+          MIN(occurred_at) AS first_occurred_at, MAX(occurred_at) AS occurred_at, COUNT(*) AS event_count,
+          input_tokens + cache_write_input_tokens > ${OPENAI_LONG_CONTEXT_THRESHOLD} AS aggregateLongContext,
+          SUM(input_tokens) AS input_tokens, SUM(cached_input_tokens) AS cached_input_tokens,
+          SUM(cache_write_input_tokens) AS cache_write_input_tokens,
+          SUM(CASE WHEN cache_write_5m_input_tokens + cache_write_1h_input_tokens = 0 THEN cache_write_input_tokens ELSE cache_write_5m_input_tokens END) AS cache_write_5m_input_tokens,
+          SUM(cache_write_1h_input_tokens) AS cache_write_1h_input_tokens,
+          SUM(output_tokens) AS output_tokens, SUM(reasoning_output_tokens) AS reasoning_output_tokens
+          FROM usage_events WHERE occurred_at >= ? AND occurred_at <= ?
+          GROUP BY source_id, session_id, CASE WHEN session_id IS NULL OR session_id = '' THEN event_key END,
+            model, project, metadata_json, substr(occurred_at, 1, 13), CAST(substr(occurred_at, 15, 2) AS INTEGER) / 15, aggregateLongContext
+          ORDER BY first_occurred_at, occurred_at`).all(lower, upper);
+        if (!this.db.isTransaction) {
+          this.analyticsDayCache.set(day, { revision, lower, upper, rows });
+          if (this.analyticsDayCache.size > 367) this.analyticsDayCache.delete(this.analyticsDayCache.keys().next().value);
+        }
+      }
+      result.push(...rows);
+    }
+    return result;
+  }
+
   buildAnalytics(days, settings, nowMs) {
     const since = iso(nowMs - days * DAY_MS);
     const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     // Aggregate one row at a time instead of retaining the entire raw ledger
     // alongside the model, project, and session summaries.
-    const events = this.prepare('SELECT * FROM usage_events WHERE occurred_at >= ? AND occurred_at <= ? ORDER BY occurred_at ASC').iterate(since, iso(nowMs));
+    const events = this.analyticsEvents(since, iso(nowMs));
     const byModelMap = new Map();
     const unpricedModelsMap = new Map();
     const byDayMap = new Map();
@@ -1475,7 +1575,7 @@ class UsageStore {
     let requestCount = 0;
 
     for (const event of events) {
-      requestCount += 1;
+      requestCount += event.event_count;
       const cost = this.calculateCost(event);
       const eventTokens = event.source_id === 'codex'
         ? Number(event.input_tokens) + Number(event.cache_write_input_tokens) + Number(event.output_tokens)
@@ -1598,11 +1698,11 @@ class UsageStore {
       claude: toCurrency(row.claudeUsd),
     }));
     const sessions = [...sessionMap.values()]
-      .sort((a, b) => b.costUsd - a.costUsd || b.occurredAt.localeCompare(a.occurredAt)
+      .sort((a, b) => round(b.costUsd - a.costUsd, 8) || b.occurredAt.localeCompare(a.occurredAt)
         || a.sourceId.localeCompare(b.sourceId) || a.sessionId.localeCompare(b.sessionId) || a.model.localeCompare(b.model))
       .map((row) => ({ ...row, cost: toCurrency(row.costUsd), coverage: row.totalTokens ? row.coveredTokens / row.totalTokens : 0 }));
     const byProject = [...byProjectMap.values()]
-      .sort((a, b) => b.costUsd - a.costUsd)
+      .sort((a, b) => round(b.costUsd - a.costUsd, 8) || String(a.project || '').localeCompare(String(b.project || '')))
       .map((row) => ({
         project: row.project,
         cost: toCurrency(row.costUsd),
@@ -1739,21 +1839,19 @@ class UsageStore {
     // full re-costing per window. Timestamps are normalised ISO strings, so
     // the comparison is the same text comparison the query used.
     if (windows.length) {
-      const events = this.prepare(`
-        SELECT * FROM usage_events
-        WHERE source_id = ? AND occurred_at >= ? AND occurred_at < ? ${modelFilter}
-      `).iterate(
-        eventSource,
-        windows.reduce((min, window) => (window.startIso < min ? window.startIso : min), windows[0].startIso),
-        windows.reduce((max, window) => (window.endIso > max ? window.endIso : max), windows[0].endIso),
-      );
       this.withPriceCache(() => {
-        for (const event of events) {
-          let usd = null;
-          for (const window of windows) {
-            if (event.occurred_at < window.startIso || event.occurred_at >= window.endIso) continue;
-            usd ??= this.calculateCost(event).actualUsd;
-            window.usd += usd;
+        for (const window of windows) {
+          const events = this.prepare(`SELECT source_id, model,
+            input_tokens + cache_write_input_tokens > ${OPENAI_LONG_CONTEXT_THRESHOLD} AS aggregateLongContext,
+            SUM(input_tokens) AS input_tokens, SUM(cached_input_tokens) AS cached_input_tokens,
+            SUM(cache_write_input_tokens) AS cache_write_input_tokens,
+            SUM(CASE WHEN cache_write_5m_input_tokens + cache_write_1h_input_tokens = 0 THEN cache_write_input_tokens ELSE cache_write_5m_input_tokens END) AS cache_write_5m_input_tokens,
+            SUM(cache_write_1h_input_tokens) AS cache_write_1h_input_tokens,
+            SUM(output_tokens) AS output_tokens
+            FROM usage_events WHERE source_id = ? AND occurred_at >= ? AND occurred_at < ? ${modelFilter}
+            GROUP BY model, aggregateLongContext`).iterate(eventSource, window.startIso, window.endIso);
+          for (const event of events) {
+            window.usd += this.calculateCost(event).actualUsd;
             // Codex reports cached input as a subset of input; Claude reports it
             // separately. Same rule as buildCostAnalytics so the two tables agree.
             window.tokens += event.source_id === 'codex'
@@ -1820,26 +1918,45 @@ class UsageStore {
   // Housekeeping after a refresh: compact old polling rows so the table stops
   // growing with the refresh interval. Manual readings are never touched.
   compactObservations(nowMs = Date.now()) {
-    const cutoff = iso(nowMs - COMPACT_AFTER_MS);
-    const result = this.prepare(`
-      WITH ranked AS (
-        SELECT id,
-          ROW_NUMBER() OVER (daily ORDER BY observed_at ASC, id ASC) AS first_reading,
-          ROW_NUMBER() OVER (daily ORDER BY observed_at DESC, id DESC) AS last_reading,
-          ROW_NUMBER() OVER (daily ORDER BY used_percent DESC, observed_at DESC, id DESC) AS peak_reading
-        FROM quota_observations WHERE observed_at < ?
-        WINDOW daily AS (PARTITION BY source_id, bucket_id, resets_at, date(observed_at, 'localtime'))
-      )
-      DELETE FROM quota_observations
-      WHERE observed_at < ? AND provenance != 'manual-official' AND id NOT IN (
-        SELECT id FROM ranked WHERE first_reading = 1 OR last_reading = 1 OR peak_reading = 1
-      )
-    `).run(cutoff, cutoff);
-    return { removed: Number(result.changes || 0), cutoff };
+    const edge = new Date(nowMs - COMPACT_AFTER_MS);
+    edge.setHours(0, 0, 0, 0);
+    const cutoff = iso(edge.getTime());
+    return this.transaction(() => {
+      const state = this.prepare('SELECT * FROM quota_compaction_state WHERE id = 1').get();
+      const lower = [state.through_at, state.dirty_at].filter(Boolean).sort()[0];
+      if (!lower || lower >= cutoff) return { removed: 0, cutoff };
+      const from = new Date(lower); from.setHours(0, 0, 0, 0);
+      const buckets = new Map();
+      for (const row of this.prepare('SELECT * FROM quota_observations WHERE observed_at >= ? AND observed_at < ? ORDER BY observed_at, id')
+        .iterate(iso(from.getTime()), cutoff)) {
+        const key = JSON.stringify([row.source_id, row.bucket_id, row.window_minutes]);
+        if (!buckets.has(key)) buckets.set(key, []);
+        buckets.get(key).push({ ...normaliseObservation(row), id: row.id, original: row });
+      }
+      let removed = 0;
+      const remove = this.prepare('DELETE FROM quota_observations WHERE id = ?');
+      for (const rows of buckets.values()) {
+        for (const cluster of clusterByWindow(rows)) {
+          const days = new Map();
+          for (const row of cluster.rows) {
+            const day = dateKey(row.observedAt);
+            if (!days.has(day)) days.set(day, []);
+            days.get(day).push(row);
+          }
+          for (const day of days.values()) {
+            const peak = day.reduce((best, row) => row.usedPercent >= best.usedPercent ? row : best);
+            const keep = new Set([day[0].id, day.at(-1).id, peak.id]);
+            for (const row of day) if (!keep.has(row.id) && row.provenance !== 'manual-official') removed += remove.run(row.id).changes;
+          }
+        }
+      }
+      this.prepare('UPDATE quota_compaction_state SET through_at = ?, dirty_at = NULL WHERE id = 1').run(cutoff);
+      return { removed, cutoff };
+    });
   }
 
-  getDailyUsage(days = 90) {
-    const since = dateKey(Date.now() - days * 24 * 60 * 60 * 1000);
+  getDailyUsage(days = 90, nowMs = Date.now()) {
+    const since = dateKey(nowMs - days * 24 * 60 * 60 * 1000);
     return this.prepare(`
       SELECT source_id AS sourceId, usage_date AS date, tokens
       FROM account_daily_usage
@@ -1848,7 +1965,7 @@ class UsageStore {
     `).all(since);
   }
 
-  getDashboardSnapshot(days = 30, nowMs = Date.now()) {
+  getTraySnapshot(nowMs = Date.now()) {
     const settings = this.getSettings();
     const sources = this.prepare('SELECT * FROM sources ORDER BY CASE id WHEN \'codex\' THEN 1 WHEN \'claude\' THEN 2 ELSE 3 END').all()
       .map((row) => ({ ...row, metadata: json(row.metadata_json, {}) }));
@@ -1869,6 +1986,14 @@ class UsageStore {
       quotas,
       dashboardVerdict: buildDashboardVerdict({ quotas, sources, settings }),
       resetCredits,
+    };
+  }
+
+  getDashboardSnapshot(days = 30, nowMs = Date.now()) {
+    const snapshot = this.getTraySnapshot(nowMs);
+    const { settings, quotas } = snapshot;
+    return {
+      ...snapshot,
       priceCatalog: this.getPriceCatalog(),
       costs: this.getCostAnalytics(days, settings, nowMs),
       desktopEstimates: require('./desktop-estimates.cjs').desktopAnalytics(this, days, settings, nowMs),
@@ -1877,7 +2002,7 @@ class UsageStore {
         claude: this.getCycleHistory('claude', quotas.claude, settings, 8, nowMs),
         fable: this.getCycleHistory('claude-fable', quotas.fable, settings, 8, nowMs),
       },
-      dailyUsage: this.getDailyUsage(Math.max(days, 90)),
+      dailyUsage: this.getDailyUsage(Math.max(days, 90), nowMs),
       storage: {
         databasePath: this.databasePath,
         backupDirectory: this.backupDirectory,
@@ -1889,24 +2014,31 @@ class UsageStore {
   // `keep` names a backup file this run must not prune — the one the caller is
   // about to restore from. Opening a restore point should never delete it.
   createBackup(options = {}) {
-    const stamp = new Date().toISOString().replaceAll(':', '-').replaceAll('.', '-');
+    const stamp = `${new Date().toISOString().replaceAll(':', '-').replaceAll('.', '-')}-${require('node:crypto').randomUUID()}`;
     const databasePath = path.join(this.backupDirectory, `ai-usage-${stamp}.sqlite`);
-    const exportPath = path.join(this.backupDirectory, `ai-usage-${stamp}.aiusage.json`);
-    this.db.prepare('VACUUM INTO ?').run(databasePath);
-    const payload = {
-      schemaVersion: 1,
-      exportedAt: iso(),
-      settings: this.getSettings(),
-      sources: this.prepare('SELECT * FROM sources').all(),
-      observations: this.prepare('SELECT * FROM quota_observations').all(),
-      usageEvents: this.prepare('SELECT * FROM usage_events').all(),
-      desktopEstimates: this.prepare('SELECT * FROM desktop_chat_estimates').all(),
-      dailyUsage: this.prepare('SELECT * FROM account_daily_usage').all(),
-      prices: this.prepare('SELECT * FROM price_catalog').all(),
-    };
-    fs.writeFileSync(exportPath, JSON.stringify(payload, null, 2), 'utf8');
-    this.prepare('INSERT INTO backups(created_at, database_path, export_path) VALUES (?, ?, ?)')
-      .run(iso(), databasePath, exportPath);
+    const exportPath = path.join(this.backupDirectory, `ai-usage-${stamp}.aiusage.json.gz`);
+    const partialDatabase = `${databasePath}.partial`, partialExport = `${exportPath}.partial`;
+    this.sweepPartialBackups();
+    try {
+      this.db.prepare('VACUUM INTO ?').run(partialDatabase);
+      const copy = new DatabaseSync(partialDatabase, { readOnly: true });
+      try {
+        const settings = { ...DEFAULT_SETTINGS };
+        for (const row of copy.prepare('SELECT key, value_json FROM settings').iterate()) {
+          if (Object.hasOwn(DEFAULT_SETTINGS, row.key)) settings[row.key] = json(row.value_json, settings[row.key]);
+        }
+        require('./backup-export.cjs').writeExport(partialExport, copy, settings);
+      } finally { copy.close(); }
+      fs.renameSync(partialDatabase, databasePath);
+      fs.renameSync(partialExport, exportPath);
+      this.prepare('INSERT INTO backups(created_at, database_path, export_path) VALUES (?, ?, ?)')
+        .run(iso(), databasePath, exportPath);
+    } catch (error) {
+      for (const file of [partialDatabase, partialExport, databasePath, exportPath]) {
+        try { fs.unlinkSync(file); } catch { /* A later partial sweep retries locked files. */ }
+      }
+      throw error;
+    }
     this.pruneBackups(this.getSettings().backupRetentionCount, options.keep);
     return { databasePath, exportPath };
   }
@@ -1915,11 +2047,19 @@ class UsageStore {
   // before taking its own backup: creating one prunes old sets, and the file
   // the user chose from the backup folder can be among them.
   readExport(filePath) {
-    if (!filePath || !fs.existsSync(filePath)) throw new Error('That backup file could not be found.');
-    try {
-      return JSON.parse(fs.readFileSync(filePath, 'utf8').replace(/^﻿/, ''));
-    } catch {
-      throw new Error('That file is not a readable AI Usage export.');
+    return require('./backup-export.cjs').readExport(filePath);
+  }
+
+  sweepPartialBackups(nowMs = Date.now()) {
+    // Missing registrations can mean database recovery, not failed backups.
+    // Completed files may be the only remaining history; only partials are disposable.
+    for (const entry of fs.readdirSync(this.backupDirectory, { withFileTypes: true })) {
+      if (!entry.isFile() || !/^ai-usage-\d{4}-\d{2}-\d{2}T[\dZ-]+-[\da-f-]{36}\.(?:sqlite|aiusage\.json\.gz)\.partial$/.test(entry.name)) continue;
+      const file = path.join(this.backupDirectory, entry.name);
+      try {
+        if (nowMs - fs.statSync(file).mtimeMs <= DAY_MS) continue;
+        fs.unlinkSync(file);
+      } catch { /* Retry next maintenance. */ }
     }
   }
 
@@ -1945,6 +2085,7 @@ class UsageStore {
     const knownSources = new Set(SOURCE_DEFINITIONS.map(([id]) => id));
     const counts = { settings: 0, observations: 0, usageEvents: 0, dailyUsage: 0, prices: 0, skipped: 0 };
     let restoredCodexEvents = 0;
+    let restoredClaudeEvents = 0;
 
     const insertObservation = this.prepare(`
       INSERT OR IGNORE INTO quota_observations(
@@ -2121,6 +2262,7 @@ class UsageStore {
           ).changes;
           counts.usageEvents += inserted;
           if (row.source_id === 'codex') restoredCodexEvents += inserted;
+          if (row.source_id === 'claude') restoredClaudeEvents += inserted;
         } catch (error) {
           // Database errors may roll back the transaction. Continuing after
           // one would autocommit later records outside the failed restore.
@@ -2138,11 +2280,17 @@ class UsageStore {
           WHERE lower(replace(file_path, char(92), '/')) LIKE '%/.codex/sessions/%.jsonl'
             AND CASE WHEN json_valid(state_json) THEN json_type(state_json, '$.accountingVersion') END IS NOT NULL`).run();
       }
+      if (restoredClaudeEvents) {
+        this.prepare(`UPDATE imported_files SET state_json = json_remove(state_json, '$.accountingVersion')
+          WHERE CASE WHEN json_valid(state_json) THEN json_type(state_json, '$.accountingVersion') END IS NOT NULL
+            AND (CASE WHEN json_valid(state_json) THEN json_extract(state_json, '$.collector') END = 'claude-transcript'
+              OR lower(file_path) LIKE '%.claude%projects%.jsonl')`).run();
+      }
 
       for (const row of list(payload.dailyUsage)) {
         try {
           const tokens = finiteNumber(row.tokens);
-          if (!knownSources.has(row.source_id) || typeof row.usage_date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(row.usage_date)
+          if (!knownSources.has(row.source_id) || !isForecastDate(row.usage_date)
             || !Number.isSafeInteger(tokens) || tokens < 0) throw unreadable();
           counts.dailyUsage += insertDailyUsage.run(row.source_id, row.usage_date, tokens).changes;
         } catch (error) {
@@ -2244,8 +2392,13 @@ class UsageStore {
     if (!frequency || frequency === 'off') return null;
     const intervals = { daily: 24 * 60 * 60 * 1000, weekly: 7 * 24 * 60 * 60 * 1000 };
     const interval = intervals[frequency] || intervals.daily;
+    const attemptKey = 'maintenance.backup-attempt';
+    const attempt = this.prepare('SELECT value_json FROM settings WHERE key = ?').get(attemptKey);
+    if (attempt && Date.now() - Number(json(attempt.value_json, 0)) < 60 * 60_000) return null;
     const latest = this.prepare('SELECT created_at FROM backups ORDER BY created_at DESC LIMIT 1').get();
     if (latest && Date.now() - new Date(latest.created_at).getTime() < interval) return null;
+    this.prepare('INSERT OR REPLACE INTO settings(key, value_json, updated_at) VALUES (?, ?, ?)')
+      .run(attemptKey, JSON.stringify(Date.now()), iso());
     return this.createBackup();
   }
 }

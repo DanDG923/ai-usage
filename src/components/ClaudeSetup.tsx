@@ -1,3 +1,4 @@
+/* oxlint-disable jsx-a11y/no-noninteractive-element-interactions -- The modal handles Escape and traps Tab to keep keyboard focus inside the dialog. */
 import { useEffect, useRef, useState } from 'react';
 import type { ClaudeSetupStatus } from '../types';
 
@@ -90,6 +91,12 @@ export function ClaudeSetup({
         aria-labelledby="claude-setup-title"
         onKeyDown={(event) => {
           event.stopPropagation();
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            if (busy) void window.aiUsage?.cancelClaudeSetup();
+            else void act('skip');
+            return;
+          }
           if (event.key !== 'Tab') return;
           const controls = Array.from(
             event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)'),

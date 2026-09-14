@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.45 — 14 September 2026
+
+- Correct short-window forecasts at local hour boundaries, manual Fable calibration, allowance-change learning and idle reset confidence. Keep every displayed Fable window supplied with a forecast when provider and manual readings coexist.
+- Reduce repeated dashboard work with bounded forecast and daily-analytics caches while preserving recorded usage, cost totals and reporting boundaries.
+- Preserve recovery backups when a damaged database is recreated. Write compressed exports with bounded memory, clean up failed partial files, back off failed attempts, and place new backups outside Documents/OneDrive. Existing backups remain available.
+- Preserve restored or edited records during Codex import, back up verified accounting repairs, and continue importing healthy transcripts after another file fails to read. Avoid copied Claude fork usage and stale rotated status-line evidence.
+- Keep critical allowances visible, remember per-currency conversion rates, retain expanded tables during refresh, and prevent background updates from undoing a period selection. Improve reset countdowns, chart alternatives, focus, contrast and error messages.
+- Fix hidden refresh, notification, shutdown and installer-authentication edge cases. Update Electron and the Claude SDK, tighten CI and package audits, and add independent regression coverage.
+- Preserve local history, settings, observations and existing backups during an update.
+
 ## 1.0.44 — 14 September 2026
 
 - Align the minimise, maximise and close buttons vertically with the refresh button by matching the native window-controls height to the dashboard header.

@@ -1,4 +1,5 @@
 'use strict';
+require('./setup.cjs');
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -42,6 +43,30 @@ function fableWeek({ overall, usage }) {
   usage('f1', NOW - 19 * HOUR, 'claude-fable-5', 4_000_000);
   overall(NOW - HOUR, 20);
 }
+
+test('an overall interval crossing a manual anchor counts only pressure after the anchor', (t) => {
+  const context = fixture(t);
+  context.overall(NOW - 4 * HOUR, 10);
+  context.usage('before-anchor', NOW - 3 * HOUR, 'claude-fable-5', 1000);
+  context.fable(NOW - 2 * HOUR, 20, { provenance: 'manual-official' });
+  context.overall(NOW, 20);
+  const result = projectFableAllowance(context.store, NOW);
+  assert.equal(result.usedPercent, 20);
+  assert.ok(result.series.every((point) => point.usedPercent <= 20));
+});
+
+test('each series ceiling bounds its point without discarding pressure from the card accumulator', (t) => {
+  const context = fixture(t);
+  context.overall(NOW - 4 * HOUR, 10);
+  context.fable(NOW - 4 * HOUR, 50, { provenance: 'manual-official' });
+  context.usage('fable-step', NOW - 3 * HOUR, 'claude-fable-5', 1000);
+  context.overall(NOW - 2 * HOUR, 20);
+  context.usage('opus-step', NOW - HOUR, 'claude-opus-5', 1000);
+  context.overall(NOW, 30);
+  const result = projectFableAllowance(context.store, NOW);
+  assert.equal(result.usedPercent, 60);
+  assert.deepEqual(result.series.map((point) => point.usedPercent), [40, 60, 60]);
+});
 
 test('the Fable card is a projected window when no provider-backed Fable window is live, and nothing is stored', (t) => {
   const context = fixture(t);

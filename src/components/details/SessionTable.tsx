@@ -96,6 +96,14 @@ export function SessionTable({ snapshot, query }: { snapshot: Snapshot; query: s
           </tbody>
         </table>
       </div>
+      {data && error && (
+        <div className="session-error">
+          <span role="alert">{error} Showing the previous results.</span>
+          <button className="secondary-button" onClick={state.retry}>
+            Try again
+          </button>
+        </div>
+      )}
       <Pagination state={state} groupLabel="Session pages" loadingLabel="Loading sessions…" unit="results" />
     </section>
   );

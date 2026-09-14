@@ -1,4 +1,5 @@
 'use strict';
+require('./setup.cjs');
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -700,7 +701,7 @@ test('the automatic collection interval rejects values a timer cannot use', () =
 
 test('official daily account usage is exposed in dashboard snapshots', () => withStore((store) => {
   store.upsertDailyUsage('codex', '2026-08-29', 123456);
-  const snapshot = store.getDashboardSnapshot(30);
+  const snapshot = store.getDashboardSnapshot(30, Date.parse('2026-08-30T12:00:00Z'));
   assert.equal(snapshot.dailyUsage.length, 1);
   assert.equal(snapshot.dailyUsage[0].sourceId, 'codex');
   assert.equal(snapshot.dailyUsage[0].date, '2026-08-29');

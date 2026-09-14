@@ -1,4 +1,5 @@
 'use strict';
+require('./setup.cjs');
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -440,4 +441,55 @@ test('recorded allowance changes are listed in Settings with their source, insta
   assert.ok(listed.indexOf('13 Sept 2026') < listed.indexOf('20 Aug 2026'), 'latest change first');
   assert.match(html, /<time dateTime="2026-09-13T06:00:00.000Z">/);
   assert.match(html, /aria-label="Remove the allowance change for Codex main weekly, 20 Aug 2026, 11:00"/);
+});
+
+test('coverage never rounds incomplete evidence to 100 percent and money has consistent precision', () => {
+  assert.equal(lib.priceCoverage(0.996), '99%');
+  assert.equal(lib.priceCoverage(1), '100%');
+  assert.equal(lib.money(1755.8, 'GBP'), '£1,755.80');
+  assert.equal(lib.resetDistance(new Date(Date.now() - 1).toISOString()), 'Reset passed');
+});
+
+test('attention preserves late critical rows and sorts urgency before provider order', () => {
+  const snapshot = structuredClone(demoSnapshot);
+  for (const quota of Object.values(snapshot.quotas)) {
+    for (const entry of [quota, ...quota.windows]) {
+      entry.forecast = { ...entry.forecast, expired: false, exhaustsAt: null, heavyExhaustsAt: null, paceRatio: 1.1, staleHours: 30 };
+    }
+  }
+  const current = lib.primaryWindow(snapshot.quotas.fable);
+  current.forecast.exhaustsAt = new Date(Date.now() + 3600000).toISOString();
+  const html = render(Overview, { snapshot, refreshing: false, onRefresh: async () => {}, onSetupClaude() {}, onSources() {} });
+  const attention = html.slice(html.indexOf('class="insight-list"'));
+  assert.ok(attention.indexOf('Fable 5 is expected to run out') < attention.indexOf('Codex is above its safe pace'));
+  assert.match(attention, /Last 30 days/);
+});
+
+test('short-window stale evidence requests refresh on the provider view', () => {
+  const snapshot = structuredClone(demoSnapshot);
+  const weekly = lib.primaryWindow(snapshot.quotas.codex);
+  weekly.forecast.staleHours = 0;
+  const short = { ...weekly, bucketId: 'short', windowMinutes: 300, forecast: { ...weekly.forecast, staleHours: 1.1 } };
+  snapshot.quotas.codex.windows = [weekly, short];
+  assert.equal(providerViews(snapshot)[0].stale, true);
+});
+
+test('learning runway descriptions never invent zero percent and exclude expired series', async () => {
+  const { CombinedRunwayChart } = await server.ssrLoadModule('/src/components/Charts.tsx');
+  const snapshot = structuredClone(demoSnapshot);
+  const views = providerViews(snapshot).map((view) => ({ ...view, expectedRemaining: null, heavyRemaining: null,
+    current: { ...view.current, forecast: { ...view.current.forecast, expectedRemaining: null, heavyRemaining: null } } }));
+  const html = render(CombinedRunwayChart, { views });
+  assert.match(html, /forecast is learning/);
+  assert.doesNotMatch(html, /expected 0%/);
+  const expired = render(CombinedRunwayChart, { views: views.map((view) => ({ ...view, expired: true })) });
+  assert.doesNotMatch(expired, /combined-runway-chart/);
+});
+
+test('empty hourly activity and chart data tables are available without pointer interaction', async () => {
+  const { ActivityHeatmap } = await server.ssrLoadModule('/src/components/details/ActivityHeatmap.tsx');
+  const { CostChart, DailyUsageChart } = await server.ssrLoadModule('/src/components/Charts.tsx');
+  assert.match(render(ActivityHeatmap, { grid: Array.from({ length: 7 }, () => Array(24).fill(0)), currency: 'GBP', days: 30 }), /Hourly activity appears/);
+  assert.match(render(CostChart, { costs: demoSnapshot.costs }), /View cost data.*<table>/);
+  assert.match(render(DailyUsageChart, { rows: [{ date: '2026-09-14', tokens: 100 }], days: 30 }), /View daily token data.*<table>/);
 });

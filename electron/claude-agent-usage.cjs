@@ -345,7 +345,9 @@ function createClaudeAgentSdkUsagePort({
       throw new ClaudeUsageAdapterError('claude-usage-unverified', 'Claude returned allowance data without confirming a fresh fetch. The last fresh reading is retained.');
     }
     if (result.subscription_type && (!result.rate_limits_available || !result.rate_limits || !Object.keys(result.rate_limits).length)) {
-      throw new ClaudeUsageAdapterError('claude-usage-empty', 'Claude returned no current subscription allowance. The last fresh reading is retained.');
+      const error = new ClaudeUsageAdapterError('claude-usage-empty', 'Claude returned no current subscription allowance. The last fresh reading is retained.');
+      error.retryable = fetch.outcome === 'verified';
+      throw error;
     }
     return result;
   }
@@ -363,10 +365,10 @@ function createClaudeAgentSdkUsagePort({
         } catch (error) {
           attempts.push({ startedAt, durationMs: Date.now() - started, outcome: 'failed', errorCode: error.code });
           error.collectionDiagnostics = { attempts };
-          const retryable = /^claude-usage-(?:empty|unverified|fetch-failed|econnrefused|econnreset|etimedout|enotfound|eai_again|http-50[0234]|http-529)$/.test(error.code);
+          const retryable = /^claude-usage-(?:empty|fetch-failed|econnrefused|econnreset|etimedout|enotfound|eai_again|http-50[0234]|http-529)$/.test(error.code);
           // Do not immediately retry throttling, authentication, schema, or
           // cleanup failures. Each retry starts only after cleanup completes.
-          if (attempt === 2 || !retryable || signal?.aborted) throw error;
+          if (attempt === 2 || !retryable || error.retryable === false || signal?.aborted) throw error;
           try { await delay(retryDelayMs, undefined, { signal }); }
           catch {
             const cancelled = new ClaudeUsageAdapterError('claude-usage-aborted', 'Claude usage reading was cancelled.');

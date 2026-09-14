@@ -1,4 +1,4 @@
-import { Component, type ReactNode } from 'react';
+import { Component, type ErrorInfo, type ReactNode } from 'react';
 
 /** The fallback is a plain component so its markup can be rendered on its own. */
 export function ErrorFallback({ message }: { message: string }) {
@@ -26,6 +26,13 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
 
   static getDerivedStateFromError(error: unknown): State {
     return { message: error instanceof Error ? error.message : String(error) };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('Dashboard rendering failed', error);
+    void window.aiUsage
+      ?.reportRendererError?.({ message: error.message, componentStack: info.componentStack ?? '' })
+      .catch(() => {});
   }
 
   render() {

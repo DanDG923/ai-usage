@@ -85,8 +85,8 @@ export function AllowanceChanges({
   };
 
   return (
-    <div className="forecast-exclusions allowance-changes" aria-labelledby="allowance-changes-heading">
-      <h3 id="allowance-changes-heading">Allowance changes</h3>
+    <div role="group" className="forecast-exclusions allowance-changes" aria-labelledby="allowance-changes-heading">
+      <h4 id="allowance-changes-heading">Allowance changes</h4>
       <p id="allowance-changes-help">
         Record when a subscription’s main weekly allowance changed size, for example when a promotional boost ended.
         Readings taken before the change are rescaled to the current allowance, so the jump at the change is not learned

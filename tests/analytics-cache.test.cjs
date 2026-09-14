@@ -1,4 +1,5 @@
 'use strict';
+require('./setup.cjs');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -369,13 +370,13 @@ test('revision migration preserves old databases, remains idempotent and validat
   assert.equal(store.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
   assert.deepEqual(store.prepare('PRAGMA foreign_key_check').all(), []);
   const triggerCount = () => store.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'analytics_%'").get().count;
-  assert.equal(triggerCount(), 9);
+  assert.equal(triggerCount(), 12);
   assert.equal(costs(store).actual, 1);
   store.prepare('UPDATE usage_events SET input_tokens = 200000').run();
   assert.equal(costs(store).actual, 2, 'migrated triggers invalidate existing rows');
   store.close();
   store = new UsageStore(databasePath, directory);
-  assert.equal(triggerCount(), 9);
+  assert.equal(triggerCount(), 12);
   assert.equal(costs(store).actual, 2);
   assert.deepEqual(store.getSettings(), before.settings);
   assert.equal(store.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
@@ -391,7 +392,6 @@ test('only newly restored Codex events invalidate Codex accounting cursors witho
   store.markImportedFile(codexPath, 123, 456, context);
   store.markImportedFile(claudePath, 124, 457, context);
   const beforeCodex = store.getImportedFile(codexPath);
-  const beforeClaude = store.getImportedFile(claudePath);
   const restoreRow = { event_key: 'existing', source_id: 'codex', occurred_at: new Date(NOW).toISOString(),
     input_tokens: 1000, model: 'gpt-5.6-sol' };
   store.recordUsageEvent({ eventKey: 'existing', sourceId: 'codex', occurredAt: restoreRow.occurred_at, inputTokens: 1000 });
@@ -399,6 +399,8 @@ test('only newly restored Codex events invalidate Codex accounting cursors witho
   assert.deepEqual(store.getImportedFile(codexPath), beforeCodex, 'already-present rows do not cause another rescan');
   store.restoreFromExport({ schemaVersion: 1, usageEvents: [{ ...restoreRow, event_key: 'claude-new', source_id: 'claude' }] });
   assert.deepEqual(store.getImportedFile(codexPath), beforeCodex, 'Claude restores do not affect Codex cursors');
+  const afterClaude = store.getImportedFile(claudePath);
+  assert.equal(afterClaude.state.accountingVersion, undefined, 'Claude restore schedules its own clone accounting repair');
   assert.equal(store.restoreFromExport({ schemaVersion: 1, usageEvents: [{ ...restoreRow, event_key: 'codex-new' }] }).usageEvents, 1);
   const afterCodex = store.getImportedFile(codexPath);
   const { accountingVersion: _version, ...preservedContext } = context;
@@ -406,7 +408,7 @@ test('only newly restored Codex events invalidate Codex accounting cursors witho
   assert.equal(afterCodex.size_bytes, beforeCodex.size_bytes);
   assert.equal(afterCodex.modified_ms, beforeCodex.modified_ms);
   assert.equal(afterCodex.imported_at, beforeCodex.imported_at);
-  assert.deepEqual(store.getImportedFile(claudePath), beforeClaude);
+  assert.deepEqual(store.getImportedFile(claudePath), afterClaude, 'Codex restores do not alter Claude cursors');
 });
 
 test('failed restore cursor invalidation rolls back newly restored evidence and keeps the original cursor', t => {

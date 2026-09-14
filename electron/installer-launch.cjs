@@ -48,11 +48,11 @@ async function verifyInstaller(filePath, expectedSha512) {
   if (digest !== expectedSha512) throw coded('The downloaded installer failed verification.', 'ERR_UPDATER_CHECKSUM_MISMATCH');
 }
 
-function spawnOnce(filePath, args, spawnProcess) {
+function spawnOnce(filePath, args, spawnProcess, environment) {
   return new Promise((resolve, reject) => {
     let child;
     try {
-      child = spawnProcess(filePath, args, { detached: true, stdio: 'ignore' });
+      child = spawnProcess(filePath, args, { detached: true, stdio: 'ignore', ...(environment ? { env: { ...environment } } : {}) });
     } catch (error) {
       reject(error);
       return;
@@ -67,13 +67,13 @@ function spawnOnce(filePath, args, spawnProcess) {
 
 async function launchInstaller({
   filePath, sha512, args = INSTALLER_ARGS, spawnProcess = spawn,
-  attempts = LAUNCH_ATTEMPTS, retryDelayMs = LAUNCH_RETRY_DELAY_MS, onLog = () => {},
+  environment, attempts = LAUNCH_ATTEMPTS, retryDelayMs = LAUNCH_RETRY_DELAY_MS, onLog = () => {},
 }) {
   await verifyInstaller(filePath, sha512);
   onLog(`Installer verified: ${path.basename(filePath)}.`);
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      const pid = await spawnOnce(filePath, [...args], spawnProcess);
+      const pid = await spawnOnce(filePath, [...args], spawnProcess, environment);
       onLog(`Installer launched on attempt ${attempt}${pid ? ` (pid ${pid})` : ''}.`);
       return { attempt, pid };
     } catch (error) {
@@ -90,11 +90,45 @@ async function launchInstaller({
 // provides; this launcher handles the per-user layout the app ships with.
 function installDirectoryWritable(executablePath = process.execPath) {
   try {
-    fs.accessSync(path.dirname(executablePath), fs.constants.W_OK);
+    const probe = path.join(path.dirname(executablePath), `.ai-usage-write-probe-${crypto.randomUUID()}`);
+    const descriptor = fs.openSync(probe, 'wx');
+    try { fs.closeSync(descriptor); } finally { fs.unlinkSync(probe); }
     return true;
   } catch {
     return false;
   }
 }
 
-module.exports = { INSTALLER_ARGS, installDirectoryWritable, launchInstaller, verifyInstaller };
+// Electron relaunch inherits process.env and has no environment option. Restore
+// only for this trusted scheduling call, then immediately remove the tokens again.
+function relaunchApplication({ app, environment, currentEnvironment = process.env }) {
+  const names = Object.keys(environment || {}).filter((name) => /^(?:GH_TOKEN|GITHUB_TOKEN)$/i.test(name));
+  const previous = names.map((name) => [name, currentEnvironment[name]]);
+  try {
+    for (const name of names) currentEnvironment[name] = environment[name];
+    app.relaunch();
+  } finally {
+    for (const [name, value] of previous) {
+      if (value == null) delete currentEnvironment[name];
+      else currentEnvironment[name] = value;
+    }
+  }
+}
+
+// NSIS can retry elevation asynchronously, after quitAndInstall has returned.
+// Pass the captured environment on each trusted spawn instead of restoring
+// global token variables while the updater might still make HTTP requests.
+function preserveInstallerEnvironment(updater, environment, resourcesPath = process.resourcesPath) {
+  if (typeof updater?.spawnLog !== 'function') return updater;
+  const spawnLog = updater.spawnLog;
+  updater.spawnLog = function (command, args = [], env, stdio) {
+    const installer = this.installerPath;
+    const validInstaller = typeof installer === 'string' && path.isAbsolute(installer) && path.extname(installer).toLowerCase() === '.exe';
+    const same = (left, right) => typeof left === 'string' && typeof right === 'string' && path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase();
+    const trusted = validInstaller && (same(command, installer)
+      || (resourcesPath && same(command, path.join(resourcesPath, 'elevate.exe')) && same(args[0], installer)));
+    return spawnLog.call(this, command, args, trusted ? { ...environment, ...env } : env, stdio);
+  };
+  return updater;
+}
+module.exports = { INSTALLER_ARGS, installDirectoryWritable, launchInstaller, verifyInstaller, relaunchApplication, preserveInstallerEnvironment };

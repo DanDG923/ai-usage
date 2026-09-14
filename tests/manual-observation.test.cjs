@@ -1,10 +1,11 @@
 'use strict';
+require('./setup.cjs');
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const vm = require('node:vm');
+const { registerIpc } = require('../electron/ipc-handlers.cjs');
 const test = require('node:test');
 const { UsageStore } = require('../electron/store.cjs');
 const { createDatabaseQueue } = require('../electron/maintenance-host.cjs');
@@ -16,12 +17,10 @@ function fixture(t, refreshClaudeOnly) {
   const store = new UsageStore(path.join(root, 'db.sqlite'), path.join(root, 'Backups'));
   t.after(() => { store.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const handlers = new Map(), published = [], logs = [];
-  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  const registration = source.slice(source.indexOf('function registerIpc()'), source.indexOf('\nfunction publishUpdateStatus('));
-  vm.runInNewContext(`${registration}\nregisterIpc();`, {
+  registerIpc({
     handleIpc: (channel, handler) => handlers.set(channel, handler), store, databaseJobs: createDatabaseQueue(),
     invalidateSnapshot() {}, snapshot: () => store.getDashboardSnapshot(), refreshClaudeOnly,
-    publishAfterWrite: (value) => published.push(value), log: (value) => logs.push(value),
+    publishAfterWrite: (value, options) => { if (options?.push !== false) published.push(value); }, log: (value) => logs.push(value),
   });
   return { store, published, logs, save: (sourceId) => handlers.get('dashboard:add-manual-observation')({}, {
     sourceId, usedPercent: 25, resetsAt: new Date(Date.now() + 86_400_000).toISOString(),
@@ -34,7 +33,7 @@ test('a saved manual Claude reading returns before a slow refresh and remains sa
   const { save, store, published, logs } = fixture(t, () => refresh);
   const saved = await save('claude');
   assert.equal(saved.quotas.claude.usedPercent, 25);
-  assert.equal(published.length, 1);
+  assert.equal(published.length, 0);
   rejectRefresh(new Error('Provider offline'));
   await new Promise((resolve) => setImmediate(resolve));
   assert.match(logs[0], /Provider offline/);
@@ -42,6 +41,9 @@ test('a saved manual Claude reading returns before a slow refresh and remains sa
 });
 
 test('a manual Codex save does not depend on the Claude collector', async (t) => {
-  const { save } = fixture(t, () => assert.fail('Codex does not need a Claude refresh'));
+  let calls = 0;
+  const { save } = fixture(t, async () => { calls++; });
   assert.equal((await save('codex')).quotas.codex.usedPercent, 25);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls, 0);
 });

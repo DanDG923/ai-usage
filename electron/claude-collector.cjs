@@ -7,8 +7,9 @@ const { findClaudeBinary, providerHome } = require('./provider-executable.cjs');
 const { createClaudeAgentSdkUsagePort } = require('./claude-agent-usage.cjs');
 const { createFableUsageTracker } = require('./fable-tracker.cjs');
 const { deriveFableEstimate } = require('./fable-projection.cjs');
-const { planIncrementalRead, readCompleteLines } = require('./incremental-file.cjs');
+const { IncrementalReadError, planIncrementalRead, readCompleteLines } = require('./incremental-file.cjs');
 const { epochToIso } = require('./time.cjs');
+const { claudeWindowDescriptor } = require('./claude-window-descriptors.cjs');
 
 const MAX_INBOX_BYTES = 2 * 1024 * 1024;
 
@@ -51,21 +52,10 @@ function importClaudeInboxFile(store, inboxPath) {
   }
   const sameSizeWasRewritten = previous && previous.size_bytes === stat.size && previous.modified_ms !== stat.mtimeMs;
   const startOffset = previous && stat.size >= previous.size_bytes && !sameSizeWasRewritten ? previous.size_bytes : 0;
-  let buffer;
-  try {
-    buffer = fs.readFileSync(inboxPath);
-  } catch {
-    return emptyInboxResult({ readErrors: 1 });
-  }
-  const tail = buffer.subarray(startOffset);
-  const finalNewline = tail.lastIndexOf(0x0a);
-  if (finalNewline < 0) {
-    store.markImportedFile(inboxPath, stat.mtimeMs, startOffset);
-    return emptyInboxResult({ bytesRead: tail.length });
-  }
-  const completeBytes = finalNewline + 1;
-  const chunk = tail.subarray(0, completeBytes).toString('utf8').replace(/^\uFEFF/, '');
-  const lines = chunk.split(/\r?\n/).filter(Boolean);
+  let chunk;
+  try { chunk = readCompleteLines(inboxPath, startOffset, stat.size); }
+  catch { return emptyInboxResult({ readErrors: 1 }); }
+  const { lines, consumedBytes: completeBytes } = chunk;
   const result = emptyInboxResult({ bytesRead: completeBytes });
   // Persist a file's observations and cursor together. A storage failure must
   // leave the bytes available for retry, including already rotated inbox files.
@@ -83,7 +73,7 @@ function importClaudeInboxFile(store, inboxPath) {
         result.rejectedRecords += 1;
         continue;
       }
-      const capturedAt = epochToIso(payload.ai_usage_captured_at || payload.captured_at || new Date().toISOString());
+      const capturedAt = epochToIso(payload.ai_usage_captured_at || payload.captured_at || stat.mtimeMs);
       if (!capturedAt || !payload.rate_limits || typeof payload.rate_limits !== 'object' || Array.isArray(payload.rate_limits)) {
         result.rejectedRecords += 1;
         continue;
@@ -94,8 +84,9 @@ function importClaudeInboxFile(store, inboxPath) {
         if (!limit || limit.used_percentage == null || limit.resets_at == null) continue;
         const isFable = key.toLowerCase().includes('fable');
         const sourceId = isFable ? 'claude-fable' : 'claude';
-        const minutes = key.includes('five_hour') ? 300 : key.includes('seven_day') || isFable ? 10_080 : null;
-        const bucketName = isFable ? 'Fable 5 weekly' : key === 'five_hour' ? 'Five hour' : key === 'seven_day' ? 'Weekly' : key.replaceAll('_', ' ');
+        const descriptor = claudeWindowDescriptor(key);
+        const minutes = isFable ? 10_080 : descriptor.windowMinutes;
+        const bucketName = isFable ? 'Fable 5 weekly' : descriptor.bucketName;
         const resetsAt = epochToIso(limit.resets_at);
         if (!resetsAt) {
           result.invalidResets += 1;
@@ -169,7 +160,9 @@ function importClaudeInbox(store, inboxPath) {
       try {
         const stat = fs.statSync(filePath);
         const cursor = store.getImportedFile(filePath)?.size_bytes || 0;
-        if (cursor >= stat.size) {
+        // Rotated writers are closed; allow one hour for a torn final record.
+        // A failed complete-record import must still be retried.
+        if (cursor >= stat.size || (!result.readErrors && Date.now() - stat.mtimeMs > 60 * 60_000)) {
           fs.unlinkSync(filePath);
           store.forgetImportedFile(filePath);
         }
@@ -179,7 +172,7 @@ function importClaudeInbox(store, inboxPath) {
   return total;
 }
 
-function listTranscriptFiles(root, cutoffMs) {
+function listTranscriptFiles(root, cutoffMs, legacyFiles = new Set()) {
   if (!fs.existsSync(root)) return [];
   const files = [];
   const stack = [root];
@@ -197,7 +190,7 @@ function listTranscriptFiles(root, cutoffMs) {
       else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
         try {
           const stat = fs.statSync(fullPath);
-          if (stat.mtimeMs >= cutoffMs) files.push({ fullPath, stat });
+          if (stat.mtimeMs >= cutoffMs || legacyFiles.has(path.resolve(fullPath).toLowerCase())) files.push({ fullPath, stat });
         } catch {
           // A session can disappear while Claude rotates its local records.
         }
@@ -207,15 +200,73 @@ function listTranscriptFiles(root, cutoffMs) {
   return files;
 }
 
+function transcriptEvent(row, messageId, fullPath) {
+  const usage = row.message.usage;
+  const model = row.message.model || 'claude-unknown';
+  const cacheCreation = usage.cache_creation || {};
+  let cacheWrite5m = Number(cacheCreation.ephemeral_5m_input_tokens || 0);
+  const cacheWrite1h = Number(cacheCreation.ephemeral_1h_input_tokens || 0);
+  const cacheWriteTotal = Number(usage.cache_creation_input_tokens || cacheWrite5m + cacheWrite1h);
+  if (cacheWrite5m + cacheWrite1h === 0 && cacheWriteTotal > 0) cacheWrite5m = cacheWriteTotal;
+
+  return {
+    eventKey: `claude-transcript:${row.sessionId || 'unknown-session'}:${messageId}`,
+    sourceId: 'claude',
+    occurredAt: row.timestamp,
+    sessionId: row.sessionId || null,
+    model,
+    project: typeof row.cwd === 'string' && row.cwd.trim() ? row.cwd.trim() : null,
+    inputTokens: usage.input_tokens,
+    cachedInputTokens: usage.cache_read_input_tokens,
+    cacheWriteInputTokens: cacheWriteTotal,
+    cacheWrite5mInputTokens: cacheWrite5m,
+    cacheWrite1hInputTokens: cacheWrite1h,
+    outputTokens: usage.output_tokens,
+    reasoningOutputTokens: usage.output_tokens_details?.reasoning_tokens || 0,
+    metadata: {
+      source: 'claude-transcript',
+      ...claudeAgentMetadata(row, fullPath),
+      requestId: row.requestId || null,
+      entrypoint: row.entrypoint || null,
+      sidechain: Boolean(row.isSidechain),
+      effort: row.effort || null,
+    },
+  };
+}
+
+// Repair only an untouched importer record whose source proves it was copied.
+function copiedEventRow(store, event) {
+  const row = store.prepare('SELECT * FROM usage_events WHERE event_key = ?').get(event.eventKey);
+  if (!row || row.source_id !== 'claude' || row.reported_cost_usd != null) return null;
+  const fields = { occurred_at: epochToIso(event.occurredAt), session_id: event.sessionId, model: event.model, project: event.project,
+    input_tokens: Number(event.inputTokens || 0), cached_input_tokens: Number(event.cachedInputTokens || 0),
+    cache_write_input_tokens: Number(event.cacheWriteInputTokens || 0), cache_write_5m_input_tokens: Number(event.cacheWrite5mInputTokens || 0),
+    cache_write_1h_input_tokens: Number(event.cacheWrite1hInputTokens || 0), output_tokens: Number(event.outputTokens || 0),
+    reasoning_output_tokens: Number(event.reasoningOutputTokens || 0) };
+  if (Object.entries(fields).some(([key, value]) => row[key] !== value)) return null;
+  let metadata;
+  try { metadata = JSON.parse(row.metadata_json); } catch { return null; }
+  if (metadata.source !== 'claude-transcript' || Object.entries(metadata).some(([key, value]) => event.metadata[key] !== value)) return null;
+  return row;
+}
+
 function importClaudeTranscripts(store, days = 120) {
   // CLAUDE_CONFIG_DIR relocates Claude Code's directory, projects included.
   const home = providerHome('CLAUDE_CONFIG_DIR', '.claude');
   if (!home) return { importedFiles: 0, usageEvents: 0, fableEvents: 0, filesFound: 0, rejectedRows: 0, lastRejection: null, readErrors: 0, lastReadError: null };
   const root = path.join(home, 'projects');
-  const files = listTranscriptFiles(root, Date.now() - days * 24 * 60 * 60 * 1000);
+  const legacyFiles = new Set(store.prepare("SELECT file_path, state_json FROM imported_files").all()
+    .filter((row) => {
+      const relative = path.relative(root, row.file_path);
+      if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return false;
+      try { return JSON.parse(row.state_json || '{}').accountingVersion !== 1; } catch { return true; }
+    }).map((row) => path.resolve(row.file_path).toLowerCase()));
+  const files = listTranscriptFiles(root, Date.now() - days * 24 * 60 * 60 * 1000, legacyFiles);
   let importedFiles = 0;
   let usageEvents = 0;
   let fableEvents = 0;
+  let repairedEvents = 0;
+  let reconciliationBackup = null;
   let rejectedRows = 0;
   let lastRejection = null;
   let readErrors = 0;
@@ -223,14 +274,14 @@ function importClaudeTranscripts(store, days = 120) {
 
   for (const { fullPath, stat } of files) {
     const previous = store.getImportedFile(fullPath);
-    const plan = planIncrementalRead(previous?.state?.agentAttributionVersion === 1 ? previous : null, stat);
+    const plan = planIncrementalRead(previous?.state?.agentAttributionVersion === 1 && previous.state.accountingVersion === 1 ? previous : null, stat);
     if (!plan) continue;
     // Every transcript row is self-describing (session, working directory,
     // usage), so an appended chunk needs no context from earlier lines. A
     // message streamed across two refreshes is upserted by its id either way.
     let chunk;
     try {
-      chunk = readCompleteLines(fullPath, plan.startOffset, stat.size);
+      chunk = readCompleteLines(fullPath, plan.startOffset, stat.size, { streaming: true });
     } catch (error) {
       // Retried next refresh; counted so the status can say data is missing.
       readErrors += 1;
@@ -238,62 +289,57 @@ function importClaudeTranscripts(store, days = 120) {
       continue;
     }
     const latestByMessage = new Map();
-    for (const line of chunk.lines) {
-      let row;
-      try {
-        row = JSON.parse(line);
-      } catch {
-        continue;
+    const beforeFile = { rejectedRows, lastRejection };
+    try {
+      for (const line of chunk.lines) {
+        let row;
+        try {
+          row = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (!row || typeof row !== 'object' || Array.isArray(row)) {
+          rejectedRows += 1;
+          lastRejection = 'Claude transcript record must be an object.';
+          continue;
+        }
+        const usage = row.message?.usage;
+        if (row.type !== 'assistant' || !usage) continue;
+        const messageId = row.message?.id || row.requestId || row.uuid;
+        if (!messageId || !row.timestamp) continue;
+        // Message content can dwarf usage metadata; never retain prompt text.
+        latestByMessage.set(messageId, { ...row, message: { id: row.message.id, model: row.message.model, usage }, content: undefined });
       }
-      if (!row || typeof row !== 'object' || Array.isArray(row)) {
-        rejectedRows += 1;
-        lastRejection = 'Claude transcript record must be an object.';
-        continue;
-      }
-      const usage = row.message?.usage;
-      if (row.type !== 'assistant' || !usage) continue;
-      const messageId = row.message?.id || row.requestId || row.uuid;
-      if (!messageId || !row.timestamp) continue;
-      latestByMessage.set(messageId, row);
+    } catch (error) {
+      if (!(error instanceof IncrementalReadError)) throw error;
+      ({ rejectedRows, lastRejection } = beforeFile);
+      readErrors += 1;
+      lastReadError = error.code || error.message;
+      continue;
     }
 
+    // Preserve a recovery copy before correcting previously imported forks.
+    if (!reconciliationBackup && [...latestByMessage].some(([messageId, row]) =>
+      (row.forkedFrom || row.message.model === '<synthetic>') && copiedEventRow(store, transcriptEvent(row, messageId, fullPath)))) {
+      reconciliationBackup = store.createBackup();
+    }
     // One commit per file: the rows and the cursor that says they were read
     // land together, and a first import no longer pays a WAL sync per message.
     store.transaction(() => {
       for (const [messageId, row] of latestByMessage) {
-        const usage = row.message.usage;
-        const model = row.message.model || 'claude-unknown';
-        const cacheCreation = usage.cache_creation || {};
-        let cacheWrite5m = Number(cacheCreation.ephemeral_5m_input_tokens || 0);
-        const cacheWrite1h = Number(cacheCreation.ephemeral_1h_input_tokens || 0);
-        const cacheWriteTotal = Number(usage.cache_creation_input_tokens || cacheWrite5m + cacheWrite1h);
-        if (cacheWrite5m + cacheWrite1h === 0 && cacheWriteTotal > 0) cacheWrite5m = cacheWriteTotal;
+        const event = transcriptEvent(row, messageId, fullPath);
+        const model = event.model;
+        if (row.forkedFrom || model === '<synthetic>') {
+          const held = copiedEventRow(store, event);
+          if (held && reconciliationBackup) {
+            repairedEvents += store.prepare('DELETE FROM usage_events WHERE id = ? AND metadata_json = ?').run(held.id, held.metadata_json).changes;
+          }
+          continue;
+        }
         // One malformed message must not stop the file: the cursor still
         // advances, the row is counted as rejected, and the rest is imported.
         try {
-          store.recordUsageEvent({
-            eventKey: `claude-transcript:${row.sessionId || 'unknown-session'}:${messageId}`,
-            sourceId: 'claude',
-            occurredAt: row.timestamp,
-            sessionId: row.sessionId || null,
-            model,
-            project: typeof row.cwd === 'string' && row.cwd.trim() ? row.cwd.trim() : null,
-            inputTokens: usage.input_tokens,
-            cachedInputTokens: usage.cache_read_input_tokens,
-            cacheWriteInputTokens: cacheWriteTotal,
-            cacheWrite5mInputTokens: cacheWrite5m,
-            cacheWrite1hInputTokens: cacheWrite1h,
-            outputTokens: usage.output_tokens,
-            reasoningOutputTokens: usage.output_tokens_details?.reasoning_tokens || 0,
-            metadata: {
-              source: 'claude-transcript',
-              ...claudeAgentMetadata(row, fullPath),
-              requestId: row.requestId || null,
-              entrypoint: row.entrypoint || null,
-              sidechain: Boolean(row.isSidechain),
-              effort: row.effort || null,
-            },
-          });
+          store.recordUsageEvent(event);
         } catch (error) {
           if (error?.code) throw error;
           rejectedRows += 1;
@@ -303,11 +349,13 @@ function importClaudeTranscripts(store, days = 120) {
         usageEvents += 1;
         if (String(model).toLowerCase().includes('fable')) fableEvents += 1;
       }
-      store.markImportedFile(fullPath, stat.mtimeMs, plan.startOffset + chunk.consumedBytes, { agentAttributionVersion: 1 });
+      store.markImportedFile(fullPath, stat.mtimeMs, plan.startOffset + chunk.consumedBytes, {
+        collector: 'claude-transcript', agentAttributionVersion: 1, accountingVersion: 1,
+      });
     });
     importedFiles += 1;
   }
-  return { importedFiles, usageEvents, fableEvents, filesFound: files.length, rejectedRows, lastRejection, readErrors, lastReadError };
+  return { importedFiles, usageEvents, fableEvents, repairedEvents, reconciliationBackup, filesFound: files.length, rejectedRows, lastRejection, readErrors, lastReadError };
 }
 
 
@@ -542,7 +590,9 @@ async function refreshClaude(store, inboxPath, options = {}) {
   const providerScanSucceeded = Boolean(fableTracking.provider?.attemptSucceeded
     && ['observed', 'unavailable'].includes(fableTracking.provider.kind));
   const activityCurrent = fableTracking.health.activitySource === 'current';
-  const hasFreshClaudeEvidence = statusLine.claudeObservations > 0
+  const nowMs = options.clock ? new Date(options.clock()).getTime() : Date.now();
+  const statuslineAge = nowMs - Date.parse(statusLine.latestClaudeObservedAt);
+  const hasFreshClaudeEvidence = (statusLine.claudeObservations > 0 && statuslineAge >= -60_000 && statuslineAge <= 5 * 60_000)
     || Number(fableTracking.provider?.overallWindowsRecorded || 0) > 0;
   const claudeScanSucceeded = (hasFreshClaudeEvidence || providerScanSucceeded) && activityCurrent;
   const fableObserved = store.hasUsableObservation('claude-fable');
@@ -587,7 +637,7 @@ async function refreshClaude(store, inboxPath, options = {}) {
     helperUpdated,
     provider: fableTracking.provider,
   }, { scanSucceeded: claudeScanSucceeded });
-  const fableAuto = fableDerived.derived || fableDerived.reason === 'unchanged' || fableDerived.reason === 'no-new-tokens';
+  const fableAuto = fableDerived.derived;
   const providerCurrent = hasProviderScopedFable && fableTracking.health.officialSource === 'connected';
   const providerStale = hasProviderScopedFable && !providerCurrent;
   const fableStatus = !activityCurrent ? 'degraded'
@@ -609,8 +659,9 @@ async function refreshClaude(store, inboxPath, options = {}) {
           : fableTracking.activity.requests
             ? `Imported ${fableTracking.activity.requests} actual local Fable usage event${fableTracking.activity.requests === 1 ? '' : 's'}; the provider did not return a model-scoped allowance.`
             : 'Waiting for actual local Fable activity or a provider model-scoped allowance.';
-  const fableScanSucceeded = activityCurrent && (providerCurrent || fableAuto
-    || (!providerStale && (providerScanSucceeded || activityCurrent)));
+  // Successful local activity collection is useful without an allowance.
+  // A stale provider-scoped reading still requires a provider refresh.
+  const fableScanSucceeded = activityCurrent && !providerStale;
   store.setSourceStatus('claude-fable', fableStatus, fableDetail, {
     sharedWithOverall: true,
     modelId: 'claude-fable-5',
