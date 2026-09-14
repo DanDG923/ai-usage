@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.43 — 14 September 2026
+
+- Compute the local Fable 5 estimate when the dashboard is built instead of storing it as a reading. A stored estimate could outlive the settings and evidence it was computed from: estimates recorded after an allowance boost ended but before the change was entered kept feeding the Fable forecast, and a status-line reading newer than the SDK reading could switch the estimate off. The projected estimate follows a saved or removed allowance change on the next snapshot, is never displaced by or mistaken for an official reading, reads the Max-plan check from the most recent official reading that names a plan, and is removed from the allowance history once on upgrade. Fable cycle history now comes from provider-backed and manual readings only.
+- Use one shared rule for which allowance window each provider headlines. The summary cards, tray tooltip, digests, dashboard verdict, recent-cycles table and token-capacity panel previously carried their own copies and could name different windows; an unrecognised Claude window is now listed beneath the weekly allowance rather than competing to headline it.
+- Preserve local usage history, settings, observations, and backups during an in-place update.
+
 ## 1.0.42 — 14 September 2026
 
 - Recompute the locally derived Fable 5 estimate as soon as an allowance change is saved or removed. A derived estimate that had already absorbed the allowance jump previously stayed on the Fable card until the next Claude refresh, indefinitely with refreshes set to only when you refresh. When no estimate can be produced under the new entries, the outdated one is discarded rather than left on the card. An official Fable reading is never displaced or removed by the recomputation.

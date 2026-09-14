@@ -1,6 +1,7 @@
 'use strict';
 
 const { SOURCES: SUBSCRIPTION_SOURCES, subscriptionVisible } = require('./dashboard-decision.cjs');
+const { selectDisplayedWindows } = require('./quota-selection.cjs');
 const { localDayKey } = require('./time.cjs');
 
 // The same subscription list the dashboard verdict uses; this module has
@@ -28,18 +29,9 @@ function quotaWindows(quota) {
   return Array.isArray(quota.windows) && quota.windows.length ? quota.windows : [quota];
 }
 
-// The longest active window headlines, matching the dashboard weekly card.
+// The same window the dashboard card headlines, by the shared rule.
 function primaryWindow(quota) {
-  if (!quota) return null;
-  const windows = quotaWindows(quota);
-  const active = windows.filter((window) => !window?.forecast?.expired);
-  const candidates = active.length ? active : windows;
-  if (!candidates.length) return null;
-  const mainCodex = candidates.filter((window) => window.metadata?.limitId === 'codex' || /^codex:(primary|secondary|weekly)$/.test(window.bucketId));
-  const mainClaude = candidates.filter((window) => window.metadata?.scope === 'overall'
-    || (!window.metadata?.scope && ['seven_day', 'five_hour'].includes(window.bucketId)));
-  return (mainCodex.length ? mainCodex : mainClaude.length ? mainClaude : candidates).reduce((longest, window) =>
-    (window?.windowMinutes || 0) > (longest?.windowMinutes || 0) ? window : longest);
+  return selectDisplayedWindows(quotaWindows(quota)).primary;
 }
 
 function displayedRemaining(window) {

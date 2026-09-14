@@ -143,8 +143,8 @@ function RecentCycles({ views, snapshot }: { views: ProviderView[]; snapshot: Sn
           <tbody>
             {views.map((view) => {
               const rows = snapshot.cycles[view.id] ?? [];
-              // Cycle history follows the backend's primary bucket, which is
-              // also the longest window the summary card headlines.
+              // Cycle history follows the backend's primary bucket, which the
+              // shared display rule also makes the summary card's headline.
               const quota = view.quota && !view.quota.forecast.expired ? view.quota : null;
               const cycle = quota
                 ? rows.find(

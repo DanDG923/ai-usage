@@ -1,6 +1,8 @@
 'use strict';
 
 const { asIso } = require('./time.cjs');
+const { selectDisplayedWindows } = require('./quota-selection.cjs');
+const { QUOTA_CLOCK_SKEW_MS, validQuotaTime } = require('./quota-time.cjs');
 
 const FABLE_SOURCE_ID = 'claude-fable';
 const FABLE_BUCKET_ID = 'fable_seven_day';
@@ -229,14 +231,23 @@ function recordProviderWindows(store, normalized, observedAt) {
   });
 }
 
+// The official Fable window the card would headline, chosen the way getQuota
+// chooses it: a bucket collapses to its latest usable reading first, and
+// only then does window-level precedence apply. Ranking every historical
+// reading of the bucket instead let an older provider reading outrank a
+// newer manual correction the card was already showing.
 function getLastCurrentOfficial(store, nowMs) {
   const placeholders = OFFICIAL_PROVENANCES.map(() => '?').join(', ');
-  return store.prepare(`
+  const latest = store.prepare(`
     SELECT * FROM quota_observations
-    WHERE source_id = ? AND bucket_id = ? AND provenance IN (${placeholders})
-      AND resets_at > ?
-    ORDER BY observed_at DESC LIMIT 1
-  `).get(FABLE_SOURCE_ID, FABLE_BUCKET_ID, ...OFFICIAL_PROVENANCES, new Date(nowMs).toISOString()) ?? null;
+    WHERE source_id = ? AND bucket_id = ? AND provenance IN (${placeholders}) AND observed_at <= ?
+    ORDER BY observed_at DESC, id DESC LIMIT 50
+  `).all(FABLE_SOURCE_ID, FABLE_BUCKET_ID, ...OFFICIAL_PROVENANCES, new Date(nowMs + QUOTA_CLOCK_SKEW_MS).toISOString())
+    .find((row) => validQuotaTime(Date.parse(row.observed_at), Date.parse(row.resets_at), row.window_minutes, nowMs));
+  if (!latest) return null;
+  const window = { row: latest, bucketId: latest.bucket_id, observedAt: latest.observed_at, resetsAt: latest.resets_at,
+    windowMinutes: latest.window_minutes, provenance: latest.provenance, metadata: {} };
+  return selectDisplayedWindows([window], { nowMs }).active[0]?.row ?? null;
 }
 
 function allowanceFromRow(row) {
@@ -436,4 +447,5 @@ function createFableUsageTracker({ store, usagePort, activityReader, clock = () 
   };
 }
 
-module.exports = { createFableUsageTracker, OFFICIAL_PROVENANCES };
+module.exports = {
+  getLastCurrentOfficial, createFableUsageTracker, OFFICIAL_PROVENANCES };
