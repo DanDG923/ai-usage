@@ -170,6 +170,28 @@ test('a future-dated Claude event or reading expires the cached projection at it
   assert.notEqual(context.store.getFableProjection(settings, NOW + 41_000), beforeReading, 'a future-dated reading expires it too');
 });
 
+test('readings dated ahead of the projection clock wait for their own timestamp', (t) => {
+  const context = fixture(t);
+  fableWeek(context);
+  // An early reset queued ten minutes ahead: the next window has one reading
+  // and could not be projected, so using it now would end the estimate early.
+  const nextReset = iso(NOW + 7 * 24 * HOUR);
+  context.overall(NOW + 10 * 60_000, 1, { resetsAt: nextReset });
+  const now = projectFableAllowance(context.store, NOW);
+  assert.equal(now.available, true);
+  assert.equal(now.resetsAt, RESET);
+  assert.ok(Math.abs(now.usedPercent - 20) < 0.01);
+  assert.ok(Math.abs(context.quota().usedPercent - 20) < 0.01, 'the card keeps the current window until the reading is current');
+  const later = projectFableAllowance(context.store, NOW + 11 * 60_000);
+  assert.deepEqual(later, { available: false, reason: 'not-enough-overall-readings' }, 'once current, the new window governs');
+  // A Fable anchor dated ahead of now is likewise not an anchor yet.
+  const anchored = fixture(t);
+  fableWeek(anchored);
+  anchored.fable(NOW + 5 * 60_000, 44, { provenance: 'manual-official', metadata: {} });
+  assert.equal(projectFableAllowance(anchored.store, NOW).anchored, false);
+  assert.equal(projectFableAllowance(anchored.store, NOW + 6 * 60_000).anchored, true);
+});
+
 test('the tracker anchors on the reading the card shows: the latest usable one in the bucket', (t) => {
   const context = fixture(t);
   context.fable(NOW - 2 * HOUR, 40);

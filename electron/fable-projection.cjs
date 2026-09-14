@@ -10,6 +10,29 @@
 const { createAllowanceScaler } = require('./allowance-changes.cjs');
 const { OFFICIAL_PROVENANCES } = require('./fable-tracker.cjs');
 
+// Every input is bounded by the projection's own clock. A reading dated
+// ahead of now — queued for an early reset, or left behind by a clock that
+// moved backwards — belongs to a later projection; using it now could end
+// the current estimate before that reading's own timestamp.
+const OFFICIAL_PLACEHOLDERS = OFFICIAL_PROVENANCES.map(() => '?').join(', ');
+
+function latestOfficialAt(store, sourceId, bucketId, nowMs) {
+  return store.prepare(`
+    SELECT * FROM quota_observations
+    WHERE source_id = ? AND bucket_id = ? AND provenance IN (${OFFICIAL_PLACEHOLDERS}) AND observed_at <= ?
+    ORDER BY observed_at DESC, id DESC LIMIT 1
+  `).get(sourceId, bucketId, ...OFFICIAL_PROVENANCES, new Date(nowMs).toISOString()) ?? null;
+}
+
+function officialBetween(store, sourceId, bucketId, sinceIso, nowMs) {
+  return store.prepare(`
+    SELECT * FROM quota_observations
+    WHERE source_id = ? AND bucket_id = ? AND provenance IN (${OFFICIAL_PLACEHOLDERS})
+      AND observed_at >= ? AND observed_at <= ?
+    ORDER BY observed_at ASC, id ASC
+  `).all(sourceId, bucketId, ...OFFICIAL_PROVENANCES, sinceIso, new Date(nowMs).toISOString());
+}
+
 const FABLE_BUCKET = 'fable_seven_day';
 const OVERALL_BUCKET = 'seven_day';
 // Fable's cap is half the overall weekly allowance: spending all of Fable is
@@ -98,7 +121,7 @@ function allowancePressure(store, modelLike, sinceIso, untilIso) {
 // into the next, because it is a property of pricing and caps, not the week.
 function fablePairCalibration(store, nowMs, usedOf = rawUsedPercent) {
   const sinceIso = new Date(nowMs - 21 * 24 * 60 * 60 * 1000).toISOString();
-  const readings = store.getOfficialObservations('claude-fable', FABLE_BUCKET, OFFICIAL_PROVENANCES, sinceIso);
+  const readings = officialBetween(store, 'claude-fable', FABLE_BUCKET, sinceIso, nowMs);
   let deltaSum = 0;
   let pressureSum = 0;
   let pairs = 0;
@@ -187,15 +210,15 @@ function allowanceAdjustedUsed(store, nowMs) {
 }
 
 // The plan named by the most recent official reading in the same window.
-function planEvidence(store, overallWindow) {
+function planEvidence(store, overallWindow, nowMs) {
   const resetMs = new Date(overallWindow.resets_at).getTime();
-  const placeholders = OFFICIAL_PROVENANCES.map(() => '?').join(', ');
   const row = store.prepare(`
     SELECT plan_type FROM quota_observations
-    WHERE source_id = 'claude' AND bucket_id = ? AND provenance IN (${placeholders})
+    WHERE source_id = 'claude' AND bucket_id = ? AND provenance IN (${OFFICIAL_PLACEHOLDERS}) AND observed_at <= ?
       AND resets_at >= ? AND resets_at <= ? AND plan_type IS NOT NULL AND TRIM(plan_type) != ''
     ORDER BY observed_at DESC, id DESC LIMIT 1
-  `).get(OVERALL_BUCKET, ...OFFICIAL_PROVENANCES, new Date(resetMs - 60_000).toISOString(), new Date(resetMs + 60_000).toISOString());
+  `).get(OVERALL_BUCKET, ...OFFICIAL_PROVENANCES, new Date(nowMs).toISOString(),
+    new Date(resetMs - 60_000).toISOString(), new Date(resetMs + 60_000).toISOString());
   return String(row?.plan_type || '').trim().toLowerCase();
 }
 
@@ -218,7 +241,7 @@ function planEvidence(store, overallWindow) {
 function computeProjection(store, nowMs) {
   // Read the bucket directly rather than through getQuota, which forecasts
   // every window of every source on the way past.
-  const overallWindow = store.getRecentQuotaObservations('claude', OVERALL_BUCKET, OFFICIAL_PROVENANCES, 1)[0];
+  const overallWindow = latestOfficialAt(store, 'claude', OVERALL_BUCKET, nowMs);
   if (!overallWindow) return { derived: false, reason: 'no-overall-reading' };
   // Anthropic includes Fable in the shared weekly pool on Max and qualifying
   // premium seats, while Pro and standard seats use credits instead. The local
@@ -228,7 +251,7 @@ function computeProjection(store, nowMs) {
   // this window that names one: a status-line row carries none and must not
   // switch the projection off merely by being newest. The structured
   // model-scoped provider window remains authoritative for every plan.
-  const planType = planEvidence(store, overallWindow);
+  const planType = planEvidence(store, overallWindow, nowMs);
   if (planType !== 'max') {
     return { derived: false, reason: 'fable-not-confirmed-in-shared-plan' };
   }
@@ -244,15 +267,15 @@ function computeProjection(store, nowMs) {
   if (resetMs <= nowMs) return { derived: false, reason: 'overall-window-expired' };
   const windowStartMs = resetMs - windowMs;
 
-  const readings = store.getOfficialObservations('claude', OVERALL_BUCKET, OFFICIAL_PROVENANCES, new Date(windowStartMs).toISOString())
+  const readings = officialBetween(store, 'claude', OVERALL_BUCKET, new Date(windowStartMs).toISOString(), nowMs)
     .filter((row) => Math.abs(new Date(row.resets_at).getTime() - resetMs) <= 60_000);
 
   // An official Fable reading inside this window is the best possible start.
   // Without one the window starts at zero, which is right after a reset and
   // an understatement on a machine that joined the window late — reported as
   // lower confidence rather than papered over.
-  const anchor = store.getRecentQuotaObservations('claude-fable', FABLE_BUCKET, OFFICIAL_PROVENANCES, 1)
-    .find((row) => new Date(row.observed_at).getTime() >= windowStartMs
+  const anchor = [latestOfficialAt(store, 'claude-fable', FABLE_BUCKET, nowMs)]
+    .find((row) => row && new Date(row.observed_at).getTime() >= windowStartMs
       && Math.abs(new Date(row.resets_at).getTime() - resetMs) <= 60_000) || null;
   const baseUsed = anchor ? usedOf(anchor) : 0;
   const baseAtMs = anchor ? new Date(anchor.observed_at).getTime() : windowStartMs;
