@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 const { buildDashboardVerdict } = require('./dashboard-decision.cjs');
+const { selectDisplayedWindows } = require('./quota-selection.cjs');
 const { codexQuotaLabel } = require('./codex-quota-label.cjs');
 const { forecastQuota } = require('./forecast.cjs');
 const { TaskUsage } = require('./task-usage.cjs');
@@ -1026,34 +1027,11 @@ class UsageStore {
           : null,
       };
     });
-    const now = nowMs;
-    // Codex: the account-wide limit; Claude: the shared pool rather than a
-    // model-scoped or OAuth-app bucket, so the tray and cycle history follow
-    // the overall weekly even when every window was recorded in one scan.
-    const overall = (window) => {
-      // Manual and older restored readings may lack limitId. Keep the same
-      // canonical bucket fallback used by the cards and tray.
-      if (sourceId === 'codex') return window.metadata?.limitId === 'codex' || /^codex:(primary|secondary|weekly)$/.test(window.bucketId);
-      if (sourceId === 'claude') {
-        const scope = window.metadata?.scope;
-        if (scope) return scope === 'overall';
-        return !String(window.bucketId).startsWith('model_scoped') && !/_(opus|sonnet|oauth_apps)$/.test(String(window.bucketId));
-      }
-      return true;
-    };
-    const official = (window) => String(window.provenance || '').startsWith('official') || window.provenance === 'local-official';
-    windows.sort((a, b) => {
-      const aExpired = new Date(a.resetsAt).getTime() <= now;
-      const bExpired = new Date(b.resetsAt).getTime() <= now;
-      return Number(aExpired) - Number(bExpired)
-        || Number(overall(b)) - Number(overall(a))
-        || (b.windowMinutes || 0) - (a.windowMinutes || 0)
-        || Number(official(b)) - Number(official(a))
-        || new Date(b.observedAt).getTime() - new Date(a.observedAt).getTime()
-        || a.bucketId.localeCompare(b.bucketId);
-    });
-    const primary = windows[0];
-    return { ...primary, windows };
+    // The shared rule orders the windows and names the headline, so the tray,
+    // notifications, cycle history and cards follow the same window as the
+    // top-level fields here even when every window was recorded in one scan.
+    const selection = selectDisplayedWindows(windows, { nowMs });
+    return { ...selection.primary, windows: [...selection.active, ...selection.expired] };
   }
 
   // Collector status text only needs to know whether a source has a usable

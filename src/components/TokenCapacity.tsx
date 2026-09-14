@@ -1,4 +1,5 @@
 import { subscriptionVisible } from '../../electron/dashboard-decision.mjs';
+import { selectDisplayedWindows } from '../../electron/quota-selection.mjs';
 import { compactNumber, percent, quotaWindows, shortDate } from '../lib';
 import type { QuotaWindow, Snapshot, TokenCapacityEstimate } from '../types';
 
@@ -16,7 +17,11 @@ const TOKEN_CATEGORIES = [
 ] as const;
 
 function capacityWindows(providerId: (typeof PROVIDERS)[number]['id'], snapshot: Snapshot) {
-  const weekly = quotaWindows(snapshot.quotas[providerId]).filter((window) => window.windowMinutes === 10_080);
+  // Display order is the shared rule, not the order the windows arrived in.
+  const selection = selectDisplayedWindows(
+    quotaWindows(snapshot.quotas[providerId]).filter((window) => window.windowMinutes === 10_080),
+  );
+  const weekly = [...selection.active, ...selection.expired];
   if (providerId !== 'codex') {
     // Claude also reports weekly pools with no token scope (OAuth apps). Such
     // a window would only ever show "Unavailable" beside a real estimate, so
@@ -27,21 +32,14 @@ function capacityWindows(providerId: (typeof PROVIDERS)[number]['id'], snapshot:
 
   // Codex can also report separate model-specific limits under the same
   // "Weekly" label. Only the account-wide limit has a matching token scope.
-  // Primary/secondary are provider slot names, so retain the newest live
-  // weekly reading if the account limit has moved between those slots.
-  const nowMs = Date.parse(snapshot.generatedAt);
-  const expired = (window: QuotaWindow) => window.forecast.expired || Date.parse(window.resetsAt) <= nowMs;
+  // Primary/secondary are provider slot names; the shared display order
+  // already puts the live slot ahead of an expired one, so the first
+  // account-limit window is the one the card headlines.
   return weekly
     .filter(
       (window) =>
         ['codex:weekly', 'codex:primary', 'codex:secondary'].includes(window.bucketId) &&
         (window.metadata?.limitId == null || window.metadata.limitId === 'codex'),
-    )
-    .sort(
-      (a, b) =>
-        Number(expired(a)) - Number(expired(b)) ||
-        Date.parse(b.observedAt) - Date.parse(a.observedAt) ||
-        a.bucketId.localeCompare(b.bucketId),
     )
     .slice(0, 1);
 }

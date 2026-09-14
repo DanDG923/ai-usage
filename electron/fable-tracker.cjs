@@ -1,6 +1,8 @@
 'use strict';
 
 const { asIso } = require('./time.cjs');
+const { selectDisplayedWindows } = require('./quota-selection.cjs');
+const { QUOTA_CLOCK_SKEW_MS, validQuotaTime } = require('./quota-time.cjs');
 
 const FABLE_SOURCE_ID = 'claude-fable';
 const FABLE_BUCKET_ID = 'fable_seven_day';
@@ -229,14 +231,21 @@ function recordProviderWindows(store, normalized, observedAt) {
   });
 }
 
+// The official Fable window the card would headline: the same admission and
+// ordering rules as getQuota, so the tracker cannot anchor on a reading the
+// dashboard rejects or rank two live readings differently from the card.
 function getLastCurrentOfficial(store, nowMs) {
   const placeholders = OFFICIAL_PROVENANCES.map(() => '?').join(', ');
-  return store.prepare(`
+  const rows = store.prepare(`
     SELECT * FROM quota_observations
-    WHERE source_id = ? AND bucket_id = ? AND provenance IN (${placeholders})
-      AND resets_at > ?
-    ORDER BY observed_at DESC LIMIT 1
-  `).get(FABLE_SOURCE_ID, FABLE_BUCKET_ID, ...OFFICIAL_PROVENANCES, new Date(nowMs).toISOString()) ?? null;
+    WHERE source_id = ? AND bucket_id = ? AND provenance IN (${placeholders}) AND observed_at <= ?
+    ORDER BY observed_at DESC LIMIT 50
+  `).all(FABLE_SOURCE_ID, FABLE_BUCKET_ID, ...OFFICIAL_PROVENANCES, new Date(nowMs + QUOTA_CLOCK_SKEW_MS).toISOString())
+    .filter((row) => validQuotaTime(Date.parse(row.observed_at), Date.parse(row.resets_at), row.window_minutes, nowMs));
+  const windows = rows.map((row) => ({ row, bucketId: row.bucket_id, observedAt: row.observed_at, resetsAt: row.resets_at,
+    windowMinutes: row.window_minutes, provenance: row.provenance, metadata: {} }));
+  const { active } = selectDisplayedWindows(windows, { nowMs });
+  return active[0]?.row ?? null;
 }
 
 function allowanceFromRow(row) {
