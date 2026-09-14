@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { projectFableAllowance } = require('../electron/fable-projection.cjs');
+const { getLastCurrentOfficial } = require('../electron/fable-tracker.cjs');
 const { UsageStore } = require('../electron/store.cjs');
 
 const HOUR = 3_600_000;
@@ -150,6 +151,36 @@ test('the projection is cached until Claude evidence, the allowance setting, the
   const pending = context.store.updateSettings({ allowanceChanges: [{ source: 'claude', at: iso(NOW + 70_000), previousAllowancePercent: 150 }] });
   const before = context.store.getFableProjection(pending, NOW + 67_000);
   assert.notEqual(context.store.getFableProjection(pending, NOW + 71_000), before, 'a pending change expires the cache at its instant');
+});
+
+test('a future-dated Claude event or reading expires the cached projection at its own timestamp', (t) => {
+  const context = fixture(t);
+  fableWeek(context);
+  const settings = context.store.getSettings();
+  context.usage('queued', NOW + 10_000, 'claude-fable-5', 2_000_000);
+  const stale = context.store.getFableProjection(settings, NOW);
+  assert.ok(Math.abs(stale.usedPercent - 20) < 0.01, 'the queued event is not yet part of the estimate');
+  assert.equal(context.store.getFableProjection(settings, NOW + 5_000), stale);
+  const current = context.store.getFableProjection(settings, NOW + 20_000);
+  assert.notEqual(current, stale, 'the cache expired when the event became current');
+  assert.deepEqual(current, projectFableAllowance(context.store, NOW + 20_000));
+  assert.ok(current.usedPercent > 20, `the event is in the tail now (${current.usedPercent})`);
+  context.overall(NOW + 40_000, 30);
+  const beforeReading = context.store.getFableProjection(settings, NOW + 30_000);
+  assert.notEqual(context.store.getFableProjection(settings, NOW + 41_000), beforeReading, 'a future-dated reading expires it too');
+});
+
+test('the tracker anchors on the reading the card shows: the latest usable one in the bucket', (t) => {
+  const context = fixture(t);
+  context.fable(NOW - 2 * HOUR, 40);
+  context.fable(NOW - HOUR, 20, { provenance: 'manual-official', metadata: {} });
+  assert.equal(context.quota().usedPercent, 20);
+  assert.equal(getLastCurrentOfficial(context.store, NOW).used_percent, 20, 'a newer manual correction outranks an older provider reading');
+  context.fable(NOW - 30 * 60_000, 44);
+  assert.equal(getLastCurrentOfficial(context.store, NOW).used_percent, 44);
+  const expired = fixture(t);
+  expired.fable(NOW - 9 * 24 * HOUR, 60, { resetsAt: iso(NOW - 5 * 24 * HOUR) });
+  assert.equal(getLastCurrentOfficial(expired.store, NOW), null, 'an expired reading is history, not an anchor');
 });
 
 test('legacy stored estimates are removed once by the migration and can never come back', (t) => {

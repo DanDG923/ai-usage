@@ -231,21 +231,23 @@ function recordProviderWindows(store, normalized, observedAt) {
   });
 }
 
-// The official Fable window the card would headline: the same admission and
-// ordering rules as getQuota, so the tracker cannot anchor on a reading the
-// dashboard rejects or rank two live readings differently from the card.
+// The official Fable window the card would headline, chosen the way getQuota
+// chooses it: a bucket collapses to its latest usable reading first, and
+// only then does window-level precedence apply. Ranking every historical
+// reading of the bucket instead let an older provider reading outrank a
+// newer manual correction the card was already showing.
 function getLastCurrentOfficial(store, nowMs) {
   const placeholders = OFFICIAL_PROVENANCES.map(() => '?').join(', ');
-  const rows = store.prepare(`
+  const latest = store.prepare(`
     SELECT * FROM quota_observations
     WHERE source_id = ? AND bucket_id = ? AND provenance IN (${placeholders}) AND observed_at <= ?
-    ORDER BY observed_at DESC LIMIT 50
+    ORDER BY observed_at DESC, id DESC LIMIT 50
   `).all(FABLE_SOURCE_ID, FABLE_BUCKET_ID, ...OFFICIAL_PROVENANCES, new Date(nowMs + QUOTA_CLOCK_SKEW_MS).toISOString())
-    .filter((row) => validQuotaTime(Date.parse(row.observed_at), Date.parse(row.resets_at), row.window_minutes, nowMs));
-  const windows = rows.map((row) => ({ row, bucketId: row.bucket_id, observedAt: row.observed_at, resetsAt: row.resets_at,
-    windowMinutes: row.window_minutes, provenance: row.provenance, metadata: {} }));
-  const { active } = selectDisplayedWindows(windows, { nowMs });
-  return active[0]?.row ?? null;
+    .find((row) => validQuotaTime(Date.parse(row.observed_at), Date.parse(row.resets_at), row.window_minutes, nowMs));
+  if (!latest) return null;
+  const window = { row: latest, bucketId: latest.bucket_id, observedAt: latest.observed_at, resetsAt: latest.resets_at,
+    windowMinutes: latest.window_minutes, provenance: latest.provenance, metadata: {} };
+  return selectDisplayedWindows([window], { nowMs }).active[0]?.row ?? null;
 }
 
 function allowanceFromRow(row) {
@@ -445,4 +447,5 @@ function createFableUsageTracker({ store, usagePort, activityReader, clock = () 
   };
 }
 
-module.exports = { createFableUsageTracker, OFFICIAL_PROVENANCES };
+module.exports = {
+  getLastCurrentOfficial, createFableUsageTracker, OFFICIAL_PROVENANCES };

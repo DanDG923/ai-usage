@@ -1112,6 +1112,16 @@ class UsageStore {
       const at = Date.parse(change.at);
       if (at > nowMs) expiresAt = Math.min(expiresAt, at);
     }
+    // A future-dated event or reading is already in the revision but not yet
+    // in the projection; it enters at its own timestamp without a write.
+    const now = iso(nowMs);
+    for (const row of [
+      this.prepare("SELECT occurred_at AS at FROM usage_events WHERE source_id = 'claude' AND occurred_at > ? ORDER BY occurred_at ASC LIMIT 1").get(now),
+      this.prepare("SELECT observed_at AS at FROM quota_observations WHERE source_id IN ('claude', 'claude-fable') AND observed_at > ? ORDER BY observed_at ASC LIMIT 1").get(now),
+    ]) {
+      const at = row ? Date.parse(row.at) : Number.NaN;
+      if (Number.isFinite(at) && at > nowMs) expiresAt = Math.min(expiresAt, at);
+    }
     this.fableProjectionCache = { value, revision, key, evaluatedAt: nowMs, expiresAt };
     return value;
   }
