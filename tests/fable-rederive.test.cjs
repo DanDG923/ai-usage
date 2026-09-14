@@ -95,6 +95,25 @@ test('an official Fable reading is never displaced by the recomputation', async 
   assert.deepEqual(rederiveFableEstimate(context.store), { derived: false, reason: 'no-derived-estimate' });
 });
 
+test('a newer malformed official row the card rejects does not hide the derived row it shows', async (t) => {
+  const context = fixture(t);
+  boostedWeek(context);
+  deriveFableEstimate(context.store, NOW - 90 * 60_000);
+  // Older versions could persist a reset before its own observation; ingest
+  // now rejects it, and getQuota skips it in favour of the derived row.
+  context.store.prepare(`INSERT INTO quota_observations(source_id, bucket_id, bucket_name, observed_at, used_percent,
+    remaining_percent, resets_at, window_minutes, plan_type, provenance, confidence, metadata_json)
+    VALUES ('claude-fable', 'fable_seven_day', 'Fable 5 weekly', ?, 44, 56, ?, 10080, 'max', 'manual-official', 0.98, '{}')`)
+    .run(iso(NOW - HOUR), iso(NOW - 2 * 24 * HOUR));
+  assert.equal(context.store.getQuota('claude-fable').provenance, 'derived-tokens');
+  await context.updateSettings({ allowanceChanges: [change] });
+  const rows = context.fableRows();
+  assert.equal(rows.length, 3);
+  assert.equal(rows.at(-1).provenance, 'derived-tokens');
+  assert.ok(Math.abs(rows.at(-1).used_percent - 20) < 0.01, `rescaled estimate ${rows.at(-1).used_percent}`);
+  assert.ok(Math.abs(context.store.getQuota('claude-fable').usedPercent - 20) < 0.01);
+});
+
 test('a derivation that cannot run leaves the setting saved and reports why', (t) => {
   const context = fixture(t);
   context.store.recordObservation({

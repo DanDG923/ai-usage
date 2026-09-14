@@ -9,6 +9,7 @@ const { createFableUsageTracker, OFFICIAL_PROVENANCES } = require('./fable-track
 const { planIncrementalRead, readCompleteLines } = require('./incremental-file.cjs');
 const { epochToIso } = require('./time.cjs');
 const { createAllowanceScaler } = require('./allowance-changes.cjs');
+const { QUOTA_CLOCK_SKEW_MS, validQuotaTime } = require('./quota-time.cjs');
 
 const MAX_INBOX_BYTES = 2 * 1024 * 1024;
 
@@ -493,13 +494,27 @@ function allowanceAdjustedUsed(store, nowMs) {
 // but only when a derived row is what the card shows; an official reading
 // needs no local estimate and must not be displaced by one.
 function rederiveFableEstimate(store, nowMs = Date.now()) {
-  const latest = store.getRecentQuotaObservations('claude-fable', FABLE_BUCKET, null, 1)[0];
+  const latest = displayedFableReading(store, nowMs);
   if (!latest || latest.provenance !== 'derived-tokens') return { derived: false, reason: 'no-derived-estimate' };
   try {
     return deriveFableEstimate(store, nowMs);
   } catch (error) {
     return { derived: false, reason: `derive-failed: ${error.message}` };
   }
+}
+
+// The row the Fable card headlines: the newest reading that passes the same
+// time checks getQuota applies. An upgraded or restored database can hold a
+// newer malformed official row the card rejects; it must not hide the derived
+// row the card actually shows.
+function displayedFableReading(store, nowMs) {
+  const rows = store.prepare(`SELECT provenance, observed_at, resets_at, window_minutes FROM quota_observations
+    WHERE source_id = 'claude-fable' AND bucket_id = ? AND observed_at <= ? ORDER BY observed_at DESC, id DESC`)
+    .iterate(FABLE_BUCKET, new Date(nowMs + QUOTA_CLOCK_SKEW_MS).toISOString());
+  for (const row of rows) {
+    if (validQuotaTime(Date.parse(row.observed_at), Date.parse(row.resets_at), row.window_minutes, nowMs)) return row;
+  }
+  return null;
 }
 
 // When Claude does not expose a model-scoped Fable allowance, a labelled local
