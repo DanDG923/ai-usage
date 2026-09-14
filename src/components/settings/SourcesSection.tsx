@@ -14,7 +14,7 @@ export function SourcesSection({
   onSetupClaude,
 }: {
   snapshot: Snapshot;
-  update: (patch: Partial<Settings>) => Promise<void>;
+  update: (patch: Partial<Settings>) => Promise<void | boolean>;
   onInstallClaude: () => Promise<void>;
   onUninstallClaude: () => Promise<void>;
   onSetupClaude: () => void;

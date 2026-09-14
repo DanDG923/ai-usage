@@ -8,7 +8,7 @@ export function AlertsSection({
   onSnooze,
 }: {
   snapshot: Snapshot;
-  update: (patch: Partial<Settings>) => Promise<void>;
+  update: (patch: Partial<Settings>) => Promise<void | boolean>;
   onSnooze: (hours: number) => Promise<void>;
 }) {
   const { settings } = snapshot;

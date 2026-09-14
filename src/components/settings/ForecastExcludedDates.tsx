@@ -33,7 +33,7 @@ export function ForecastExcludedDates({
   update,
 }: {
   snapshot: Snapshot;
-  update: (patch: Partial<Settings>) => Promise<void>;
+  update: (patch: Partial<Settings>) => Promise<void | boolean>;
 }) {
   const today = localDate(snapshot.timezone);
   const [date, setDate] = useState(today);
@@ -61,7 +61,7 @@ export function ForecastExcludedDates({
     setSaving(true);
     setError('');
     try {
-      await update({ forecastExcludedDates: next });
+      if ((await update({ forecastExcludedDates: next })) === false) throw new Error('Save failed');
     } catch {
       setError('The ignored dates could not be saved. Try again.');
     } finally {

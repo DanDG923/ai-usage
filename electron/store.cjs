@@ -9,6 +9,7 @@ const { forecastQuota } = require('./forecast.cjs');
 const { TaskUsage } = require('./task-usage.cjs');
 const { estimateTokenCapacity, LOOKBACK_MS: TOKEN_CAPACITY_LOOKBACK_MS, STALENESS_MS: TOKEN_CAPACITY_STALENESS_MS } = require('./token-capacity.cjs');
 const { MAX_QUOTA_RESET_AHEAD_MS, QUOTA_CLOCK_SKEW_MS, FORECAST_LOOKBACK_MS, validQuotaTime } = require('./quota-time.cjs');
+const { isAllowanceChangeList, normalizeAllowanceChanges } = require('./allowance-changes.cjs');
 
 const SOURCE_DEFINITIONS = [
   ['codex', 'Codex', 'codex'],
@@ -36,6 +37,7 @@ const DEFAULT_SETTINGS = {
   hardLimitThreshold: 90,
   reservePercent: 0,
   forecastExcludedDates: [],
+  allowanceChanges: [],
   codexPlanUsdPerMonth: 0,
   claudePlanUsdPerMonth: 0,
   notifyDesktop: true,
@@ -67,7 +69,9 @@ function isForecastDate(value) {
 }
 
 function normalizedSetting(key, value) {
-  return key === 'forecastExcludedDates' ? [...new Set(value)].sort() : value;
+  if (key === 'forecastExcludedDates') return [...new Set(value)].sort();
+  if (key === 'allowanceChanges') return normalizeAllowanceChanges(value);
+  return value;
 }
 
 const SETTING_VALIDATORS = {
@@ -86,6 +90,7 @@ const SETTING_VALIDATORS = {
   hardLimitThreshold: (value) => Number.isFinite(value) && value >= 0 && value <= 100,
   reservePercent: (value) => Number.isFinite(value) && value >= 0 && value <= 50,
   forecastExcludedDates: (value) => Array.isArray(value) && value.length <= 366 && value.every(isForecastDate),
+  allowanceChanges: (value) => isAllowanceChangeList(value),
   codexPlanUsdPerMonth: (value) => Number.isFinite(value) && value >= 0 && value <= 100_000,
   claudePlanUsdPerMonth: (value) => Number.isFinite(value) && value >= 0 && value <= 100_000,
   notifyDesktop: (value) => typeof value === 'boolean',
@@ -803,6 +808,9 @@ class UsageStore {
     const occurredAt = validIso(event.occurredAt, 'Event time');
     const token = (value) => {
       if (value == null) return 0;
+      if (!['number', 'string'].includes(typeof value) || (typeof value === 'string' && !value.trim())) {
+        throw new Error('Usage event token counts must be non-negative whole numbers.');
+      }
       const parsed = Number(value);
       if (!Number.isSafeInteger(parsed) || parsed < 0) {
         throw new Error('Usage event token counts must be non-negative whole numbers.');
@@ -811,11 +819,20 @@ class UsageStore {
     };
     const inputTokens = token(event.inputTokens);
     const cachedInputTokens = token(event.cachedInputTokens);
-    const cacheWriteInputTokens = token(event.cacheWriteInputTokens);
-    const cacheWrite5mInputTokens = token(event.cacheWrite5mInputTokens ?? event.cacheWriteInputTokens);
     const cacheWrite1hInputTokens = token(event.cacheWrite1hInputTokens);
+    const cacheWriteInputTokens = token(event.cacheWriteInputTokens ?? token(event.cacheWrite5mInputTokens) + cacheWrite1hInputTokens);
+    let cacheWrite5mInputTokens = token(event.cacheWrite5mInputTokens ?? Math.max(0, cacheWriteInputTokens - cacheWrite1hInputTokens));
+    // Legacy rows explicitly stored zero in both duration fields. Preserve
+    // their documented five-minute fallback while rejecting conflicting splits.
+    if (cacheWrite5mInputTokens + cacheWrite1hInputTokens === 0) cacheWrite5mInputTokens = cacheWriteInputTokens;
     const outputTokens = token(event.outputTokens);
     const reasoningOutputTokens = token(event.reasoningOutputTokens);
+    if (event.sourceId === 'codex' && cachedInputTokens > inputTokens) {
+      throw new Error('Codex cached input tokens must be a subset of input tokens.');
+    }
+    if (cacheWrite5mInputTokens + cacheWrite1hInputTokens !== cacheWriteInputTokens) {
+      throw new Error('Cache write durations must sum to the total cache write tokens.');
+    }
     if (reasoningOutputTokens > outputTokens) {
       throw new Error('Usage event reasoning tokens must be a subset of output tokens.');
     }
@@ -987,6 +1004,8 @@ class UsageStore {
         hardLimitThreshold: settings.hardLimitThreshold,
         reservePercent: settings.reservePercent,
         excludedDates: settings.forecastExcludedDates,
+        allowanceChanges: settings.allowanceChanges,
+        sourceId,
       });
       return {
         bucketId,
@@ -1096,14 +1115,22 @@ class UsageStore {
     const quotaRevision = this.prepare(`SELECT COALESCE(SUM(revision), 0) AS value
       FROM analytics_revisions WHERE domain = 'quota' AND source_id = ? AND bucket_id = ?`).get(sourceId, bucketId).value;
     const excludedDates = settings.forecastExcludedDates || [];
+    const allowanceChanges = settings.allowanceChanges || [];
     const key = JSON.stringify([sourceId, bucketId]);
-    const exclusions = JSON.stringify(excludedDates);
+    // Both learning settings change the estimate without touching a revision.
+    const exclusions = JSON.stringify([excludedDates, allowanceChanges]);
     const cached = this.transactionDepth === 0 ? this.tokenCapacityCache.get(key) : null;
     if (cached && cached.usageRevision === evidence.revision && cached.quotaRevision === quotaRevision
       && cached.exclusions === exclusions && nowMs >= cached.evaluatedAt && nowMs < cached.expiresAt) return cached.value;
 
-    const value = estimateTokenCapacity({ sourceId, bucketId, observations, events: evidence.rows, nowMs, excludedDates });
+    const value = estimateTokenCapacity({ sourceId, bucketId, observations, events: evidence.rows, nowMs, excludedDates, allowanceChanges });
     let expiresAt = evidence.expiresAt;
+    // Clock skew permits a change a few minutes ahead. It starts applying at
+    // that instant even when neither observations nor settings are rewritten.
+    for (const change of allowanceChanges) {
+      const at = Date.parse(change.at);
+      if (at > nowMs) expiresAt = Math.min(expiresAt, at);
+    }
     // Time can change eligibility without a write: future readings arrive,
     // history leaves the learning horizon, and current allowance expires.
     for (const row of observations) {
@@ -1988,17 +2015,22 @@ class UsageStore {
             if (!Number.isSafeInteger(parsed) || parsed < 0) throw unreadable();
             return parsed;
           };
-          const cacheWriteTotal = tokens(row.cache_write_input_tokens);
           const cacheWrite1h = tokens(row.cache_write_1h_input_tokens);
+          const cacheWriteTotal = tokens(row.cache_write_input_tokens ?? tokens(row.cache_write_5m_input_tokens) + cacheWrite1h);
           // Exports written before cache TTL was recorded carry only the total,
           // and the same "no detail means five-minute" rule the collectors and
           // calculateCost use has to hold here or the split stops adding up.
-          const cacheWrite5m = row.cache_write_5m_input_tokens == null
+          let cacheWrite5m = row.cache_write_5m_input_tokens == null
             ? Math.max(0, cacheWriteTotal - cacheWrite1h)
             : tokens(row.cache_write_5m_input_tokens);
+          if (cacheWrite5m + cacheWrite1h === 0) cacheWrite5m = cacheWriteTotal;
           const reportedCost = row.reported_cost_usd == null ? null : finiteNumber(row.reported_cost_usd);
           const outputTokens = tokens(row.output_tokens);
           const reasoningTokens = tokens(row.reasoning_output_tokens);
+          const inputTokens = tokens(row.input_tokens);
+          const cachedInputTokens = tokens(row.cached_input_tokens);
+          if ((row.source_id === 'codex' && cachedInputTokens > inputTokens)
+            || cacheWrite5m + cacheWrite1h !== cacheWriteTotal) throw unreadable();
           if (reasoningTokens > outputTokens
             || (row.reported_cost_usd != null && (reportedCost == null || reportedCost < 0))) throw unreadable();
           const inserted = insertEvent.run(
@@ -2006,7 +2038,7 @@ class UsageStore {
             typeof row.session_id === 'string' ? row.session_id : null,
             typeof row.model === 'string' ? row.model : null,
             typeof row.project === 'string' && row.project.trim() ? row.project.trim() : null,
-            tokens(row.input_tokens), tokens(row.cached_input_tokens),
+            inputTokens, cachedInputTokens,
             cacheWriteTotal, cacheWrite5m, cacheWrite1h,
             outputTokens, reasoningTokens,
             reportedCost,

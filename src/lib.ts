@@ -171,7 +171,12 @@ export function primaryWindow(quota: Quota | null | undefined): QuotaWindow | nu
   const mainCodex = candidates.filter(
     (entry) => entry.metadata?.limitId === 'codex' || /^codex:(primary|secondary|weekly)$/.test(entry.bucketId),
   );
-  return (mainCodex.length ? mainCodex : candidates).reduce((longest, entry) =>
+  const mainClaude = candidates.filter(
+    (entry) =>
+      entry.metadata?.scope === 'overall' ||
+      (!entry.metadata?.scope && ['seven_day', 'five_hour'].includes(entry.bucketId)),
+  );
+  return (mainCodex.length ? mainCodex : mainClaude.length ? mainClaude : candidates).reduce((longest, entry) =>
     (entry.windowMinutes ?? 0) > (longest.windowMinutes ?? 0) ? entry : longest,
   );
 }

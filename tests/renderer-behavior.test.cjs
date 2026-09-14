@@ -47,6 +47,21 @@ test.after(async () => { await server?.close(); });
 const render = (Component, props) => renderToStaticMarkup(React.createElement(Component, props));
 const text = (html) => html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 
+test('Claude headlines the overall pool ahead of model windows and uses its own Pro label', () => {
+  for (const modelFirst of [true, false]) {
+    const snapshot = structuredClone(demoSnapshot);
+    const overall = { ...snapshot.quotas.claude, bucketId: 'seven_day', planType: 'pro', metadata: {},
+      usedPercent: 17, remainingPercent: 83 };
+    const scoped = { ...overall, bucketId: 'model_scoped:opus', metadata: { scope: 'model' }, remainingPercent: 12 };
+    snapshot.quotas.claude.windows = modelFirst ? [scoped, overall] : [overall, scoped];
+    const view = providerViews(snapshot).find((entry) => entry.id === 'claude');
+    assert.equal(view.current, overall);
+    assert.equal(view.secondaryWindows[0], scoped);
+    assert.match(view.subtitle, /Claude Pro/);
+    assert.doesNotMatch(view.subtitle, /ChatGPT/);
+  }
+});
+
 test('subscription visibility removes allowance surfaces and restores them without changing history', () => {
   const { buildDashboardVerdict } = require('../electron/dashboard-decision.cjs');
   const snapshot = structuredClone(demoSnapshot);
@@ -404,4 +419,25 @@ test('Spark limits are separate from the main Pro allowance and do not look like
   view = providerViews(risky)[0];
   html = render(ProviderSummary, { view, nowMs: Date.parse(snapshot.generatedAt) });
   assert.match(html, /<details class="provider-model-allowances" open="">/, 'model-specific risk is visible without expanding details');
+});
+
+test('recorded allowance changes are listed in Settings with their source, instant and earlier allowance', () => {
+  const snapshot = structuredClone(demoSnapshot);
+  const update = async () => {};
+  const empty = text(render(ForecastSection, { snapshot, update }));
+  assert.match(empty, /Allowance changes/);
+  assert.match(empty, /No allowance changes recorded\./);
+  assert.match(empty, /Claude weekly \(including Fable 5\)/, 'the subscription choice names the shared pool');
+  snapshot.settings.allowanceChanges = [
+    { source: 'codex', at: '2026-08-20T10:00:00.000Z', previousAllowancePercent: 80 },
+    { source: 'claude', at: '2026-09-13T06:00:00.000Z', previousAllowancePercent: 150 },
+  ];
+  const html = render(ForecastSection, { snapshot, update });
+  const listed = text(html);
+  assert.match(listed, /2 changes recorded\./);
+  assert.match(listed, /Claude weekly \(including Fable 5\) 13 Sept 2026, 07:00\s*, previously 150% of the allowance that followed/);
+  assert.match(listed, /Codex main weekly 20 Aug 2026, 11:00\s*, previously 80% of the allowance that followed/);
+  assert.ok(listed.indexOf('13 Sept 2026') < listed.indexOf('20 Aug 2026'), 'latest change first');
+  assert.match(html, /<time dateTime="2026-09-13T06:00:00.000Z">/);
+  assert.match(html, /aria-label="Remove the allowance change for Codex main weekly, 20 Aug 2026, 11:00"/);
 });

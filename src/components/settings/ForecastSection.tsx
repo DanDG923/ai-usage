@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import type { Settings, Snapshot } from '../../types';
+import { AllowanceChanges } from './AllowanceChanges';
 import { ForecastExcludedDates } from './ForecastExcludedDates';
 import { NumericSetting, SectionHeading, hourOptions } from './fields';
 
@@ -10,7 +11,7 @@ export function ForecastSection({
   update,
 }: {
   snapshot: Snapshot;
-  update: (patch: Partial<Settings>) => Promise<void>;
+  update: (patch: Partial<Settings>) => Promise<void | boolean>;
 }) {
   const { settings } = snapshot;
   const [savingDays, setSavingDays] = useState(false);
@@ -104,6 +105,7 @@ export function ForecastSection({
         </div>
       </details>
       <ForecastExcludedDates snapshot={snapshot} update={update} />
+      <AllowanceChanges snapshot={snapshot} update={update} />
     </section>
   );
 }

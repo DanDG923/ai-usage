@@ -1,5 +1,6 @@
 'use strict';
 
+const { createAllowanceScaler } = require('./allowance-changes.cjs');
 const { MAX_QUOTA_RESET_AHEAD_MS, QUOTA_CLOCK_SKEW_MS, FORECAST_LOOKBACK_MS, validQuotaTime } = require('./quota-time.cjs');
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -268,6 +269,29 @@ function normaliseObservation(row) {
     sourceId: row.sourceId ?? row.source_id,
     bucketId: row.bucketId ?? row.bucket_id,
   };
+}
+
+// Readings before a recorded allowance change are a share of a different
+// allowance. Express them in the current one so the step at the change is
+// not learned as a burst and the earlier pace is not understated. The scaled
+// copy keeps its normalised mark, so every later pass takes it as it is.
+function rescaleObservations(rows, options) {
+  const changes = options.allowanceChanges;
+  if (!Array.isArray(changes) || !changes.length) return rows;
+  const scalers = new Map();
+  const nowMs = options.now != null ? new Date(options.now).getTime() : Date.now();
+  return rows.map((row) => {
+    const sourceId = row.sourceId ?? options.sourceId;
+    if (!sourceId) return row;
+    const bucketId = row.bucketId ?? options.bucketId;
+    const windowMinutes = row.windowMinutes;
+    const key = JSON.stringify([sourceId, bucketId, windowMinutes]);
+    if (!scalers.has(key)) scalers.set(key, createAllowanceScaler(changes, sourceId, { bucketId, windowMinutes, nowMs }));
+    const scale = scalers.get(key)?.(row.observedAt) ?? 1;
+    if (scale === 1 || !Number.isFinite(row.usedPercent)) return row;
+    const usedPercent = row.usedPercent * scale;
+    return { ...row, usedPercent, remainingPercent: 100 - usedPercent };
+  });
 }
 
 function addIntervalSamples(samples, before, after, schedule, nowMs, rateElapsedHours = null) {
@@ -855,7 +879,7 @@ function earlyResetAdjustment(observations, options, nowMs) {
 
 function forecastQuota(observations, options = {}) {
   // Normalise once; each pass below would otherwise re-parse every timestamp.
-  const rows = observations.map(normaliseObservation);
+  const rows = rescaleObservations(observations.map(normaliseObservation), options);
   const ordinary = forecastQuotaWithLearning(rows, options);
   if (ordinary.expired || ordinary.expectedRemaining == null) return ordinary;
   const nowMs = options.now != null ? new Date(options.now).getTime() : Date.now();

@@ -43,10 +43,10 @@ function sentence(text: string) {
   return text ? text.charAt(0).toUpperCase() + text.slice(1) : text;
 }
 
-function planName(planType: string | null) {
+function planName(planType: string | null, provider: ProviderId) {
   const value = planType?.trim();
   if (!value) return 'Allowance';
-  if (value.toLowerCase() === 'pro') return 'ChatGPT Pro';
+  if (value.toLowerCase() === 'pro') return provider === 'codex' ? 'ChatGPT Pro' : 'Claude Pro';
   if (value.toLowerCase() === 'max') return 'Claude Max';
   return value;
 }
@@ -77,7 +77,7 @@ function fableActivity(source: Source | null) {
 
 function providerSubtitle(id: ProviderId, current: QuotaWindow | null, source: Source | null) {
   if (!current) return 'Awaiting data';
-  let measurement = planName(current.planType);
+  let measurement = planName(current.planType, id);
   if (id === 'fable') {
     measurement =
       current.provenance === 'derived-tokens'

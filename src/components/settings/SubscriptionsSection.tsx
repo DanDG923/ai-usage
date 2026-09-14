@@ -6,7 +6,7 @@ export function SubscriptionsSection({
   update,
 }: {
   snapshot: Snapshot;
-  update: (patch: Partial<Settings>) => Promise<void>;
+  update: (patch: Partial<Settings>) => Promise<void | boolean>;
 }) {
   return (
     <section className="panel settings-section" aria-label="Subscriptions">

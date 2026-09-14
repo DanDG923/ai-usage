@@ -36,7 +36,9 @@ function primaryWindow(quota) {
   const candidates = active.length ? active : windows;
   if (!candidates.length) return null;
   const mainCodex = candidates.filter((window) => window.metadata?.limitId === 'codex' || /^codex:(primary|secondary|weekly)$/.test(window.bucketId));
-  return (mainCodex.length ? mainCodex : candidates).reduce((longest, window) =>
+  const mainClaude = candidates.filter((window) => window.metadata?.scope === 'overall'
+    || (!window.metadata?.scope && ['seven_day', 'five_hour'].includes(window.bucketId)));
+  return (mainCodex.length ? mainCodex : mainClaude.length ? mainClaude : candidates).reduce((longest, window) =>
     (window?.windowMinutes || 0) > (longest?.windowMinutes || 0) ? window : longest);
 }
 

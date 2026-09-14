@@ -1,5 +1,6 @@
 'use strict';
 
+const { createAllowanceScaler } = require('./allowance-changes.cjs');
 const { FORECAST_LOOKBACK_MS } = require('./quota-time.cjs');
 
 const DAY_MS = 86_400_000;
@@ -145,7 +146,7 @@ function roundedTokens(value, direction = 'round') {
   return Math[direction](value / step) * step;
 }
 
-function estimateTokenCapacity({ sourceId, bucketId, observations = [], events = [], nowMs = Date.now(), excludedDates = [] } = {}) {
+function estimateTokenCapacity({ sourceId, bucketId, observations = [], events = [], nowMs = Date.now(), excludedDates = [], allowanceChanges = [] } = {}) {
   const result = { status: 'unavailable', reason: null, weeklyTokens: null, weeklyRange: null,
     remainingTokens: null, remainingRange: null, remainingAsOf: null, confidence: 'low',
     intervals: 0, cycles: 0, observedPercent: 0, calibratedAt: null, modelMix: [], tokenMix: { ...EMPTY_MIX },
@@ -154,15 +155,41 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
   if (!scope || !Number.isFinite(nowMs)) {
     return { ...result, reason: 'This limit cannot be matched safely to a known weekly token scope.' };
   }
+  // A percentage read under a different allowance is a share of a different
+  // whole. Rescaling it to the current allowance keeps the tokens-per-point
+  // ratio of every earlier interval comparable with intervals measured now,
+  // and turns the step at the change into ordinary rounding.
+  const scaler = createAllowanceScaler(allowanceChanges, sourceId, { bucketId, windowMinutes: 10_080, nowMs });
+  let rescaled = false;
   const allReadings = (Array.isArray(observations) ? observations : [])
     .map((row) => normalizeObservation(row, sourceId, bucketId, scope, nowMs)).filter(Boolean)
+    .map((row) => {
+      const scale = scaler ? scaler(row.at) : 1;
+      if (scale === 1) return row;
+      rescaled = true;
+      return { ...row, used: row.used * scale };
+    })
     .sort((a, b) => a.at - b.at || Number(a.official) - Number(b.official));
+  if (rescaled) result.warnings.push('Readings before a recorded allowance change were rescaled to the current allowance.');
   let readings = allReadings.filter((row) => row.official);
   if (!readings.length) return { ...result, reason: 'No valid official seven-day readings are available for this limit.' };
-  const currentPlan = readings.findLast((row) => row.plan)?.plan;
-  const lastIncompatible = readings.findLastIndex((row) => row.plan && currentPlan && row.plan !== currentPlan);
-  if (lastIncompatible >= 0) {
-    readings = readings.slice(lastIncompatible + 1);
+  // A plan name changing is only a calibration break when nothing says how
+  // the allowance moved. A recorded change inside that transition already
+  // rescaled the earlier readings, so their evidence stays comparable. Each
+  // boundary is judged on its own, and history restarts after the latest
+  // one nothing explains. A boundary spans from the last reading naming the
+  // old plan to the first naming the new one: status-line and manual
+  // readings carry no plan, and one in between must not hide the change.
+  let cutoff = -1;
+  let previousPlanned = -1;
+  readings.forEach((row, index) => {
+    if (!row.plan) return;
+    if (previousPlanned >= 0 && row.plan !== readings[previousPlanned].plan
+      && !scaler?.hasChangeBetween(readings[previousPlanned].at, row.at)) cutoff = index;
+    previousPlanned = index;
+  });
+  if (cutoff > 0) {
+    readings = readings.slice(cutoff);
     result.warnings.push('Earlier readings from a different plan were excluded.');
   }
   result.status = 'learning';

@@ -1208,6 +1208,10 @@ body {
   min-height: 32px;
 }
 
+.settings-fields.allowance-change-controls {
+  grid-template-columns: minmax(0, 200px) minmax(0, 200px) minmax(0, 200px) auto;
+}
+
 .forecast-exclusions .forecast-exclusion-note {
   margin-top: 8px;
   font-size: 11.5px;
@@ -1353,6 +1357,9 @@ tbody tr:hover td {
 }
 
 @media (max-width: 980px) {
+  .settings-fields.allowance-change-controls {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
   :root {
     --rail-width: 72px;
     --page-gutter: 20px;

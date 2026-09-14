@@ -18,9 +18,12 @@ export function NumericSetting({
   step: number;
   suffix?: string;
   disabled?: boolean;
-  onCommit: (value: number) => Promise<void>;
+  onCommit: (value: number) => Promise<void | boolean>;
 }) {
   const [draft, setDraft] = useState(String(value));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const inFlight = useRef(false);
   const cancelBlur = useRef(false);
   // A saved value arriving from a snapshot replaces the draft; typing does not.
   const [committed, setCommitted] = useState(value);
@@ -30,7 +33,7 @@ export function NumericSetting({
   }
   const parsed = Number(draft);
   const valid = draft.trim() !== '' && Number.isFinite(parsed) && parsed >= min && parsed <= max;
-  const commit = () => {
+  const commit = async () => {
     if (cancelBlur.current) {
       cancelBlur.current = false;
       return;
@@ -39,12 +42,24 @@ export function NumericSetting({
       setDraft(String(value));
       return;
     }
-    if (parsed !== value) void onCommit(parsed);
+    if (parsed === value || inFlight.current) return;
+    inFlight.current = true;
+    setSaving(true);
+    setError('');
+    try {
+      if ((await onCommit(parsed)) === false) throw new Error('Save failed');
+    } catch {
+      setDraft(String(value));
+      setError('This value could not be saved. Try again.');
+    } finally {
+      inFlight.current = false;
+      setSaving(false);
+    }
   };
   const input = (
     <input
       aria-label={label}
-      disabled={disabled}
+      disabled={disabled || saving}
       type="number"
       min={min}
       max={max}
@@ -74,6 +89,7 @@ export function NumericSetting({
       ) : (
         input
       )}
+      {error && <small role="alert">{error}</small>}
     </label>
   );
 }
