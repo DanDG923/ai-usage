@@ -565,11 +565,13 @@ function registerIpc() {
   handleIpc('dashboard:get-tasks', (_event, options) => (storageClosing() ? EMPTY_SESSION_PAGE : store.getTaskPage(pageOptions(options))));
   handleIpc('dashboard:refresh', () => refreshAll());
   handleIpc('dashboard:update-settings', (_event, patch) => databaseJobs.run(() => {
-    const before = JSON.stringify(store.getSettings().allowanceChanges);
+    const claudeEntries = (settings) => JSON.stringify(settings.allowanceChanges.filter((entry) => entry.source === 'claude'));
+    const before = claudeEntries(store.getSettings());
     const settings = store.updateSettings(patch || {});
-    // Allowance changes rescale the Claude history the local Fable estimate is
+    // Claude allowance changes rescale the history the local Fable estimate is
     // built from; the persisted estimate must follow the setting immediately.
-    if (JSON.stringify(settings.allowanceChanges) !== before) rederiveFableEstimate(store);
+    // Codex entries cannot move it, so they must not risk discarding it.
+    if (claudeEntries(settings) !== before) rederiveFableEstimate(store);
     invalidateSnapshot();
     applySettingsEffects();
     const current = snapshot();

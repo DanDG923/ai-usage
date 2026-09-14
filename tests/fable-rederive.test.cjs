@@ -74,6 +74,8 @@ test('saving or removing an allowance change re-derives a stale Fable estimate a
   assert.equal(context.fableRows().length, 2, 'unrelated settings leave the estimate alone');
   await context.updateSettings({ allowanceChanges: [change] });
   assert.equal(context.fableRows().length, 2, 'an unchanged list is not a change');
+  await context.updateSettings({ allowanceChanges: [change, { ...change, source: 'codex' }] });
+  assert.equal(context.fableRows().length, 2, 'a Codex entry cannot move the Fable estimate and does not touch it');
 
   await context.updateSettings({ allowanceChanges: [] });
   rows = context.fableRows();
