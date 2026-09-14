@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.44 — 14 September 2026
+
+- Align the minimise, maximise and close buttons vertically with the refresh button by matching the native window-controls height to the dashboard header.
+
 ## 1.0.43 — 14 September 2026
 
 - Compute the local Fable 5 estimate when the dashboard is built instead of storing it as a reading. A stored estimate could outlive the settings and evidence it was computed from: estimates recorded after an allowance boost ended but before the change was entered kept feeding the Fable forecast, and a status-line reading newer than the SDK reading could switch the estimate off. The projected estimate follows a saved or removed allowance change on the next snapshot, is never displaced by or mistaken for an official reading, reads the Max-plan check from the most recent official reading that names a plan, and is removed from the allowance history once on upgrade. Fable cycle history now comes from provider-backed and manual readings only.
