@@ -1,0 +1,188 @@
+'use strict';
+
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const test = require('node:test');
+const { projectFableAllowance } = require('../electron/fable-projection.cjs');
+const { UsageStore } = require('../electron/store.cjs');
+
+const HOUR = 3_600_000;
+const RESET = '2026-09-02T00:00:00.000Z';
+const NOW = Date.parse('2026-08-29T13:00:00Z');
+const iso = (at) => new Date(at).toISOString();
+
+function fixture(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-fable-projection-'));
+  const store = new UsageStore(path.join(root, 'db.sqlite'), path.join(root, 'Backups'));
+  t.after(() => { store.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const overall = (observedAt, usedPercent, overrides = {}) => store.recordObservation({
+    sourceId: 'claude', bucketId: 'seven_day', bucketName: 'Weekly', observedAt: iso(observedAt), usedPercent,
+    remainingPercent: 100 - usedPercent, resetsAt: RESET, windowMinutes: 10_080, planType: 'max',
+    provenance: 'official-claude-usage', confidence: 1, metadata: { scope: 'overall' }, ...overrides,
+  });
+  const fable = (observedAt, usedPercent, overrides = {}) => store.recordObservation({
+    sourceId: 'claude-fable', bucketId: 'fable_seven_day', bucketName: 'Fable 5 weekly', observedAt: iso(observedAt),
+    usedPercent, remainingPercent: 100 - usedPercent, resetsAt: RESET, windowMinutes: 10_080, planType: 'max',
+    provenance: 'official-claude-usage', confidence: 1, metadata: { scope: 'model' }, ...overrides,
+  });
+  const usage = (key, occurredAt, model, inputTokens) => store.recordUsageEvent({
+    eventKey: `projection:${key}`, sourceId: 'claude', occurredAt: iso(occurredAt), sessionId: 'session', model,
+    inputTokens, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, metadata: {},
+  });
+  const fableRows = () => store.prepare("SELECT COUNT(*) AS count FROM quota_observations WHERE source_id = 'claude-fable'").get().count;
+  return { store, overall, fable, usage, fableRows, quota: (nowMs = NOW) => store.getQuota('claude-fable', store.getSettings(), nowMs) };
+}
+
+// Ten points of overall use, all of it Fable: doubled for the half cap, 20%.
+function fableWeek({ overall, usage }) {
+  overall(NOW - 25 * HOUR, 10);
+  usage('f1', NOW - 19 * HOUR, 'claude-fable-5', 4_000_000);
+  overall(NOW - HOUR, 20);
+}
+
+test('the Fable card is a projected window when no provider-backed Fable window is live, and nothing is stored', (t) => {
+  const context = fixture(t);
+  assert.equal(context.quota(), null, 'no evidence at all means no window');
+  fableWeek(context);
+  const quota = context.quota();
+  assert.equal(quota.bucketId, 'fable_seven_day');
+  assert.equal(quota.provenance, 'derived-tokens');
+  assert.equal(quota.metadata.projected, true);
+  assert.equal(quota.metadata.calibration.method, 'overall-share');
+  assert.ok(Math.abs(quota.usedPercent - 20) < 0.01, `usedPercent ${quota.usedPercent}`);
+  assert.equal(quota.observedAt, iso(NOW));
+  assert.equal(quota.resetsAt, RESET);
+  assert.equal(quota.windows.length, 1);
+  assert.equal(quota.forecast.expired, false);
+  assert.ok(quota.forecast.learnedSamples >= 1, 'the forecast learns from the projected series');
+  assert.equal(quota.tokenCapacity.status, 'unavailable');
+  assert.equal(context.fableRows(), 0);
+  const snapshot = context.store.getDashboardSnapshot(30, NOW);
+  assert.equal(snapshot.quotas.fable.provenance, 'derived-tokens');
+  assert.deepEqual(snapshot.cycles.fable, [], 'cycle history is built from persisted readings only');
+});
+
+test('a live official Fable window headlines and no projection is added beside it', (t) => {
+  const context = fixture(t);
+  fableWeek(context);
+  context.fable(NOW - 30 * 60_000, 44);
+  const quota = context.quota();
+  assert.equal(quota.provenance, 'official-claude-usage');
+  assert.equal(quota.usedPercent, 44);
+  assert.deepEqual(quota.windows.map((window) => window.provenance), ['official-claude-usage']);
+  const expiredOfficial = fixture(t);
+  fableWeek(expiredOfficial);
+  expiredOfficial.fable(NOW - 9 * 24 * HOUR, 60, { resetsAt: iso(NOW - 5 * 24 * HOUR) });
+  const withHistory = expiredOfficial.quota();
+  assert.equal(withHistory.provenance, 'derived-tokens', 'an expired official window does not block the projection');
+  assert.deepEqual(withHistory.windows.map((window) => window.provenance), ['derived-tokens', 'official-claude-usage']);
+});
+
+test('the projection follows the allowance-change setting on the very next snapshot, in both directions', (t) => {
+  const context = fixture(t);
+  // The boost ended overnight: ten boosted points read as fifteen, and the
+  // Fable session added ten real points. Learned as usage, all fifteen of the
+  // step would be Fable's.
+  context.overall(NOW - 25 * HOUR, 10);
+  context.usage('f1', NOW - 19 * HOUR, 'claude-fable-5', 4_000_000);
+  context.overall(NOW - HOUR, 25);
+  assert.ok(Math.abs(context.quota().usedPercent - 30) < 0.01);
+  const change = { source: 'claude', at: iso(NOW - 12 * HOUR), previousAllowancePercent: 150 };
+  context.store.updateSettings({ allowanceChanges: [change] });
+  assert.ok(Math.abs(context.quota().usedPercent - 20) < 0.01, 'the rescaled step leaves ten real points');
+  context.store.updateSettings({ allowanceChanges: [change, { ...change, source: 'codex' }] });
+  assert.ok(Math.abs(context.quota().usedPercent - 20) < 0.01, 'a Codex entry changes nothing');
+  context.store.updateSettings({ allowanceChanges: [] });
+  assert.ok(Math.abs(context.quota().usedPercent - 30) < 0.01, 'removal restores the earlier estimate');
+  assert.equal(context.fableRows(), 0, 'no refresh, no rows, no stale figure anywhere');
+});
+
+test('a plan-less status-line row newer than the SDK reading cannot switch the projection off', (t) => {
+  const context = fixture(t);
+  fableWeek(context);
+  context.overall(NOW - 30 * 60_000, 20, { planType: null, provenance: 'official-statusline', metadata: {} });
+  const projection = projectFableAllowance(context.store, NOW);
+  assert.equal(projection.available, true);
+  assert.equal(projection.planType, 'max');
+  assert.ok(Math.abs(context.quota().usedPercent - 20) < 0.01);
+  const pro = fixture(t);
+  pro.overall(NOW - 25 * HOUR, 10, { planType: 'pro' });
+  pro.usage('f1', NOW - 19 * HOUR, 'claude-fable-5', 4_000_000);
+  pro.overall(NOW - HOUR, 20, { planType: 'pro' });
+  assert.deepEqual(projectFableAllowance(pro.store, NOW), { available: false, reason: 'fable-not-confirmed-in-shared-plan' });
+  assert.equal(pro.quota(), null);
+});
+
+test('the series carries one point per overall step plus the current estimate', (t) => {
+  const context = fixture(t);
+  context.overall(NOW - 25 * HOUR, 10);
+  context.usage('f1', NOW - 22 * HOUR, 'claude-fable-5', 2_000_000);
+  context.overall(NOW - 20 * HOUR, 15);
+  context.usage('f2', NOW - 10 * HOUR, 'claude-fable-5', 2_000_000);
+  context.overall(NOW - HOUR, 20);
+  const projection = projectFableAllowance(context.store, NOW);
+  assert.equal(projection.available, true);
+  assert.equal(projection.measuredSteps, 2);
+  assert.deepEqual(projection.series.map((point) => point.observedAt), [iso(NOW - 20 * HOUR), iso(NOW - HOUR), iso(NOW)]);
+  assert.deepEqual(projection.series.map((point) => Math.round(point.usedPercent)), [10, 20, 20]);
+  const quota = context.quota();
+  assert.equal(quota.forecast.series.observed.length, 3);
+});
+
+test('the projection is cached until Claude evidence, the allowance setting, the clock or the reset moves it', (t) => {
+  const context = fixture(t);
+  fableWeek(context);
+  const settings = context.store.getSettings();
+  const first = context.store.getFableProjection(settings, NOW);
+  assert.equal(context.store.getFableProjection(settings, NOW + 30_000), first, 'a repeat inside a minute is served from cache');
+  assert.notEqual(context.store.getFableProjection(settings, NOW + 61_000), first, 'the tail grows with the clock');
+  const cached = context.store.getFableProjection(settings, NOW + 61_000);
+  context.usage('later', NOW + 62_000, 'claude-fable-5', 1_000_000);
+  assert.notEqual(context.store.getFableProjection(settings, NOW + 63_000), cached, 'Claude usage invalidates');
+  const afterUsage = context.store.getFableProjection(settings, NOW + 63_000);
+  context.overall(NOW + 64_000, 21);
+  assert.notEqual(context.store.getFableProjection(settings, NOW + 65_000), afterUsage, 'a Claude reading invalidates');
+  const afterReading = context.store.getFableProjection(settings, NOW + 65_000);
+  const changed = context.store.updateSettings({ allowanceChanges: [{ source: 'claude', at: iso(NOW - 12 * HOUR), previousAllowancePercent: 150 }] });
+  assert.notEqual(context.store.getFableProjection(changed, NOW + 66_000), afterReading, 'the setting is part of the key');
+  const pending = context.store.updateSettings({ allowanceChanges: [{ source: 'claude', at: iso(NOW + 70_000), previousAllowancePercent: 150 }] });
+  const before = context.store.getFableProjection(pending, NOW + 67_000);
+  assert.notEqual(context.store.getFableProjection(pending, NOW + 71_000), before, 'a pending change expires the cache at its instant');
+});
+
+test('legacy stored estimates are removed once by the migration and can never come back', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-fable-migration-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const databasePath = path.join(root, 'db.sqlite');
+  let store = new UsageStore(databasePath, path.join(root, 'Backups'));
+  store.recordObservation({
+    sourceId: 'claude-fable', bucketId: 'fable_seven_day', bucketName: 'Fable 5 weekly', observedAt: iso(NOW - HOUR),
+    usedPercent: 12, remainingPercent: 88, resetsAt: RESET, windowMinutes: 10_080, provenance: 'manual-official',
+    confidence: 0.98, metadata: {},
+  });
+  store.prepare(`INSERT INTO quota_observations(source_id, bucket_id, bucket_name, observed_at, used_percent, remaining_percent,
+    resets_at, window_minutes, plan_type, provenance, confidence, metadata_json)
+    VALUES ('claude-fable', 'fable_seven_day', 'Fable 5 weekly', ?, 30, 70, ?, 10080, 'max', 'derived-tokens', 0.5, '{}')`)
+    .run(iso(NOW - 2 * HOUR), RESET);
+  store.prepare('DELETE FROM settings WHERE key = ?').run('migration.fable-projection-v1');
+  store.close();
+  store = new UsageStore(databasePath, path.join(root, 'Backups'));
+  try {
+    const rows = store.prepare("SELECT provenance FROM quota_observations WHERE source_id = 'claude-fable'").all();
+    assert.deepEqual(rows.map((row) => row.provenance), ['manual-official']);
+    assert.ok(store.prepare('SELECT 1 FROM settings WHERE key = ?').get('migration.fable-projection-v1'));
+    assert.throws(() => store.recordObservation({
+      sourceId: 'claude-fable', bucketId: 'fable_seven_day', bucketName: 'Fable 5 weekly', observedAt: iso(NOW),
+      usedPercent: 12, remainingPercent: 88, resetsAt: RESET, windowMinutes: 10_080, provenance: 'derived-tokens',
+      confidence: 0.5, metadata: {},
+    }), /projected, not stored/);
+    const restored = store.restoreFromExport({ schemaVersion: 1, observations: [{
+      source_id: 'claude-fable', bucket_id: 'fable_seven_day', observed_at: iso(NOW - 3 * HOUR), used_percent: 5,
+      resets_at: RESET, window_minutes: 10_080, provenance: 'derived-tokens',
+    }] });
+    assert.equal(restored.observations, 0);
+    assert.equal(restored.skipped, 1);
+  } finally { store.close(); }
+});
