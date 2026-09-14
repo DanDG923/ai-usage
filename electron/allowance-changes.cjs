@@ -8,10 +8,11 @@
 // earlier readings as smaller than they were in today's terms.
 //
 // A recorded change says "before `at`, this subscription's allowance was
-// `previousAllowancePercent` of the current one". Readings before it are
-// multiplied by that ratio so the whole history is expressed in the current
-// allowance; readings after it are untouched. Changes compound: a reading
-// before two changes is scaled by both ratios.
+// `previousAllowancePercent` of the allowance that replaced it". Readings
+// before it are multiplied by that ratio; readings after it are untouched.
+// Each entry compares neighbouring allowances, never today's, so a reading
+// before two changes is scaled by both ratios and an entry stays correct
+// when the allowance changes again later.
 
 const ALLOWANCE_CHANGE_SOURCES = ['claude', 'codex'];
 const MAX_ALLOWANCE_CHANGES = 24;

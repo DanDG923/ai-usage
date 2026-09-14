@@ -244,7 +244,7 @@ export type AllowanceChange = {
   source: 'claude' | 'codex';
   /** ISO instant of the change, chosen between the last old-allowance reading and the first new one. */
   at: string;
-  /** The earlier allowance as a percentage of the current one, e.g. 150 when a 50% boost ended. */
+  /** The earlier allowance as a percentage of the one that replaced it, e.g. 150 when a 50% boost ended. */
   previousAllowancePercent: number;
 };
 

@@ -175,7 +175,12 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
   if (!readings.length) return { ...result, reason: 'No valid official seven-day readings are available for this limit.' };
   const currentPlan = readings.findLast((row) => row.plan)?.plan;
   const lastIncompatible = readings.findLastIndex((row) => row.plan && currentPlan && row.plan !== currentPlan);
-  if (lastIncompatible >= 0) {
+  // A plan name changing is only a calibration break when nothing says how
+  // the allowance moved. A recorded change inside that transition already
+  // rescaled the earlier readings, so their evidence stays comparable.
+  const transitionExplained = lastIncompatible >= 0 && scaler
+    && scaler(readings[lastIncompatible].at) !== scaler(readings[Math.min(lastIncompatible + 1, readings.length - 1)].at);
+  if (lastIncompatible >= 0 && !transitionExplained) {
     readings = readings.slice(lastIncompatible + 1);
     result.warnings.push('Earlier readings from a different plan were excluded.');
   }

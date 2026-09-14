@@ -141,7 +141,7 @@ export function AllowanceChanges({
               aria-invalid={previous.trim() !== '' && (!percentValid || noChange)}
               onChange={(event) => setPrevious(event.target.value)}
             />
-            <span>% of today’s</span>
+            <span>% of the one after</span>
           </div>
         </label>
         <button className="secondary-button" type="submit" disabled={!canRecord}>
@@ -150,7 +150,9 @@ export function AllowanceChanges({
       </form>
       <p id="allowance-changes-note" className="forecast-exclusion-note">
         Choose a time after the last reading on the old allowance and before the first reading on the new one. A boost
-        of 50% that has ended means the earlier allowance was 150% of today’s. Times use {snapshot.timezone}.
+        of 50% that has ended means the earlier allowance was 150% of the one that replaced it. Each entry compares the
+        allowance before it with the allowance after it, so it stays right if the allowance changes again. Times use{' '}
+        {snapshot.timezone}.
       </p>
       <p role="status" className="forecast-exclusion-note">
         {changes.length === 0
@@ -167,7 +169,7 @@ export function AllowanceChanges({
               <li key={`${change.source}|${change.at}`}>
                 <span>
                   <strong>{SOURCE_LABELS[change.source]}</strong> <time dateTime={change.at}>{when}</time>, previously{' '}
-                  {change.previousAllowancePercent}% of the current allowance
+                  {change.previousAllowancePercent}% of the allowance that followed
                 </span>
                 <button
                   className="secondary-button"

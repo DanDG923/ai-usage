@@ -52,7 +52,7 @@ test('a scaler multiplies readings before each change for its source family and 
     change({ at: new Date(local(1)).toISOString(), previousAllowancePercent: 50 }),
     change(),
   ], 'claude');
-  assert.equal(compounded(local(0, 12)), 0.75, 'a reading before both changes carries both ratios');
+  assert.equal(compounded(local(0, 12)), 0.75, 'half of the second allowance, which was 150% of the current one');
   assert.equal(compounded(local(5)), 1.5);
   assert.equal(compounded(local(13, 7)), 1);
 });
@@ -124,6 +124,18 @@ test('token capacity rescales earlier intervals to the current allowance and say
   assert.ok(rescaled.warnings.some((warning) => /rescaled to the current allowance/.test(warning)));
   assert.ok(!original.warnings.some((warning) => /rescaled/.test(warning)));
   assert.deepEqual(estimateTokenCapacity({ ...input, allowanceChanges: [change({ source: 'codex', at: iso(NOW - 1.5 * HOUR) })] }), original);
+  // A plan upgrade renames the plan at the same moment. Without a recorded
+  // change the earlier plan's readings are discarded; with one they were
+  // rescaled and remain calibration evidence.
+  const upgraded = { ...input, observations: input.observations.map((reading, index) => ({ ...reading, plan_type: index < 4 ? 'pro' : 'max' })) };
+  const restarted = estimateTokenCapacity(upgraded);
+  assert.equal(restarted.status, 'learning');
+  assert.ok(restarted.warnings.some((warning) => /different plan/.test(warning)));
+  const carried = estimateTokenCapacity({ ...upgraded, allowanceChanges: [change({ at: iso(NOW - 1.5 * HOUR) })] });
+  assert.equal(carried.status, 'available');
+  assert.equal(carried.weeklyTokens, 10_000_000);
+  assert.equal(carried.intervals, 4);
+  assert.ok(!carried.warnings.some((warning) => /different plan/.test(warning)));
 });
 
 test('the store validates, normalizes, persists and applies allowance changes to forecasts and capacity', (t) => {

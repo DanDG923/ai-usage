@@ -420,8 +420,8 @@ test('recorded allowance changes are listed in Settings with their source, insta
   const html = render(ForecastSection, { snapshot, update });
   const listed = text(html);
   assert.match(listed, /2 changes recorded\./);
-  assert.match(listed, /Claude \(including Fable 5\) 13 Sept 2026, 07:00\s*, previously 150% of the current allowance/);
-  assert.match(listed, /Codex 20 Aug 2026, 11:00\s*, previously 80% of the current allowance/);
+  assert.match(listed, /Claude \(including Fable 5\) 13 Sept 2026, 07:00\s*, previously 150% of the allowance that followed/);
+  assert.match(listed, /Codex 20 Aug 2026, 11:00\s*, previously 80% of the allowance that followed/);
   assert.ok(listed.indexOf('13 Sept 2026') < listed.indexOf('20 Aug 2026'), 'latest change first');
   assert.match(html, /<time dateTime="2026-09-13T06:00:00.000Z">/);
   assert.match(html, /aria-label="Remove the allowance change for Codex, 20 Aug 2026, 11:00"/);
