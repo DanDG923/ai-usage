@@ -223,6 +223,8 @@ function createWindow() {
     titleBarOverlay: {
       color: chrome.background,
       symbolColor: chrome.symbol,
+      // Match --command-height in src/professional.css to centre the controls.
+      height: 56,
     },
     autoHideMenuBar: true,
     webPreferences: {
