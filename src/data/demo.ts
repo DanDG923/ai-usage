@@ -204,6 +204,7 @@ export const demoSnapshot: Snapshot = {
     alertsSnoozedUntil: null,
     launchAtLogin: false,
     theme: 'system',
+    softwareRendering: true,
     autoUpdate: true,
     backupFrequency: 'daily',
     backupRetentionCount: 30,

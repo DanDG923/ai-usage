@@ -276,6 +276,8 @@ export type Settings = {
   alertsSnoozedUntil: string | null;
   launchAtLogin: boolean;
   theme: Theme;
+  /** Draw with the CPU instead of the graphics card; applied at the next launch. */
+  softwareRendering: boolean;
   autoUpdate: boolean;
   backupFrequency: string;
   backupRetentionCount: number;
@@ -326,6 +328,14 @@ export type ManualObservation = {
   resetsAt: string;
   observedAt?: string;
   note?: string;
+};
+
+export type RenderingMode = {
+  /** How this running instance draws; changes apply at the next launch. */
+  active: 'software' | 'hardware';
+  requested: 'software' | 'hardware';
+  /** True when the environment forces software rendering, so a restart cannot apply the preference. */
+  forced: boolean;
 };
 
 export type UpdateStatus = {
@@ -413,12 +423,15 @@ export type Bridge = {
   copySummary(): Promise<{ text: string }>;
   snoozeAlerts(hours: number): Promise<{ snapshot: Snapshot }>;
   getVersion(): Promise<string>;
+  getRenderingMode?(): Promise<RenderingMode>;
+  relaunch?(): Promise<void>;
   checkForUpdates(): Promise<UpdateStatus>;
   getUpdateStatus(): Promise<UpdateStatus>;
   downloadUpdate(): Promise<UpdateStatus>;
   installUpdate(): Promise<UpdateStatus>;
   onUpdateStatus(callback: (status: UpdateStatus) => void): () => void;
   onUpdated?(callback: (snapshot: Snapshot) => void): () => void;
+  onPrepareSleep?(callback: () => boolean): () => void;
 };
 
 export type DesktopImportPreview = {

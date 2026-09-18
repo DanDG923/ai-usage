@@ -73,6 +73,7 @@ export function DesktopEstimates({
       className="panel desktop-estimates"
       aria-labelledby="desktop-estimates-heading"
       aria-busy={busy}
+      data-keep-awake={preview ? 'true' : undefined}
     >
       <div className="panel-heading">
         <div>

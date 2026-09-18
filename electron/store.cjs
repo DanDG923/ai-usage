@@ -51,6 +51,9 @@ const DEFAULT_SETTINGS = {
   alertsSnoozedUntil: null,
   launchAtLogin: false,
   theme: 'system',
+  // Software rendering keeps Chromium's GPU process small while the dashboard
+  // sits in the tray. Applied at the next launch; see startup-preferences.cjs.
+  softwareRendering: true,
   autoUpdate: true,
   backupFrequency: 'daily',
   backupRetentionCount: 30,
@@ -107,6 +110,7 @@ const SETTING_VALIDATORS = {
   alertsSnoozedUntil: isIsoOrNull,
   launchAtLogin: (value) => typeof value === 'boolean',
   theme: (value) => ['system', 'dark', 'light'].includes(value),
+  softwareRendering: (value) => typeof value === 'boolean',
   autoUpdate: (value) => typeof value === 'boolean',
   backupFrequency: (value) => ['off', 'daily', 'weekly'].includes(value),
   backupRetentionCount: (value) => Number.isInteger(value) && value >= 1 && value <= 365,
@@ -682,9 +686,14 @@ class UsageStore {
     }
   }
 
-  close() {
+  releaseDashboardCaches() {
     this.costAnalyticsCache.clear();
     this.cycleHistoryCache.clear();
+    this.analyticsDayCache.clear();
+  }
+
+  close() {
+    this.releaseDashboardCaches();
     this.statements.clear();
     this.db.close();
   }

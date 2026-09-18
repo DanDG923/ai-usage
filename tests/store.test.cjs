@@ -14,6 +14,20 @@ function withStore(run) {
   try { return run(store); } finally { store.close(); }
 }
 
+test('releasing dashboard caches preserves the complete rebuilt snapshot and stored ledger', () => withStore((store) => {
+  const now = Date.parse('2026-09-18T12:00:00Z');
+  store.recordUsageEvent({ eventKey: 'cache-release', sourceId: 'codex', model: 'gpt-5.6-sol',
+    occurredAt: new Date(now - 60_000).toISOString(), sessionId: 'one-session', inputTokens: 1000, outputTokens: 100 });
+  const before = store.getDashboardSnapshot(30, now);
+  assert.ok(store.costAnalyticsCache.size > 0);
+  store.releaseDashboardCaches();
+  assert.equal(store.costAnalyticsCache.size, 0);
+  assert.equal(store.cycleHistoryCache.size, 0);
+  assert.equal(store.analyticsDayCache.size, 0);
+  assert.deepEqual(store.getDashboardSnapshot(30, now), before);
+  assert.equal(store.prepare('SELECT COUNT(*) AS count FROM usage_events').get().count, 1);
+}));
+
 test('subscription visibility persists across reopening and backup restore without deleting usage', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-visibility-'));
   const dbPath = path.join(root, 'test.sqlite');
@@ -726,7 +740,9 @@ test('the Claude primary window is the shared weekly pool, not a model-scoped bu
 }));
 
 test('reset-cycle token totals use the same per-source rule as the cost ledger', () => withStore((store) => {
-  const observedAt = new Date().toISOString();
+  // Keep the event strictly before the cycle's exclusive upper bound, even
+  // when insertion and the read finish within the same clock millisecond.
+  const observedAt = new Date(Date.now() - 1000).toISOString();
   const resetsAt = new Date(Date.now() + 2 * 86_400_000).toISOString();
   store.recordObservation({ sourceId: 'codex', bucketId: 'codex:secondary', bucketName: 'Codex weekly', observedAt, usedPercent: 30, resetsAt, windowMinutes: 10_080, provenance: 'official', metadata: { limitId: 'codex' } });
   store.recordUsageEvent({ eventKey: 'codex-1', sourceId: 'codex', occurredAt: observedAt, model: 'gpt-5.6-sol', inputTokens: 1_000, cachedInputTokens: 400, outputTokens: 100 });

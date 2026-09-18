@@ -9,6 +9,7 @@ import { Overview } from './components/Overview';
 import { Settings, type SettingsActions } from './components/Settings';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { snapshotAtTime } from './snapshot-time';
+import { readDashboardView, saveDashboardView } from './dashboard-view';
 import { formatInt } from './lib';
 import type { ManualObservation, PriceRow, Settings as SettingsType, Snapshot, Theme } from './types';
 
@@ -21,11 +22,12 @@ function applyThemeAttribute(theme: Theme | undefined) {
 }
 
 export default function App() {
-  const [tab, setTab] = useState<Tab>('overview');
-  const [costQuery, setCostQuery] = useState('');
+  const [initialView] = useState(readDashboardView);
+  const [tab, setTab] = useState<Tab>(initialView.tab);
+  const [costQuery, setCostQuery] = useState(initialView.costQuery);
   const [dataOperation, setDataOperation] = useState<SettingsActions['dataOperation']>(null);
   const [setupRequested, setSetupRequested] = useState(false);
-  const [days, setDays] = useState(30);
+  const [days, setDays] = useState(initialView.days);
   const isBrowserPreview = !window.aiUsage && window.location.protocol !== 'file:';
   // Demo data is a browser-preview adapter only. An installed desktop window
   // starts empty so a failed local read can never masquerade as real usage.
@@ -36,9 +38,17 @@ export default function App() {
   const setNotice = notices.show;
   const [loadError, setLoadError] = useState('');
   const loadRequest = useRef(0);
-  const desiredPeriod = useRef(30);
-  const committedPeriod = useRef(30);
+  const desiredPeriod = useRef(initialView.days);
+  const committedPeriod = useRef(initialView.days);
   const pendingPeriod = useRef<number | null>(null);
+
+  useEffect(() => {
+    return window.aiUsage?.onPrepareSleep?.(() => {
+      if (!snapshot || loadError || refreshing || dataOperation || setupRequested || tab === 'settings') return false;
+      if (document.querySelector('[role="dialog"], [aria-busy="true"], [data-keep-awake="true"]')) return false;
+      return saveDashboardView({ tab, days, costQuery });
+    });
+  }, [snapshot, loadError, refreshing, dataOperation, setupRequested, tab, days, costQuery]);
 
   const commitSnapshot = useCallback((next: Snapshot | null | undefined) => {
     if (!next) return;
@@ -134,14 +144,14 @@ export default function App() {
   // the first read starts here and later pushes arrive through onUpdated.
   /* oxlint-disable react/set-state-in-effect */
   useEffect(() => {
-    void load(30);
+    void load(initialView.days);
     const release = window.aiUsage?.onUpdated?.((next) => {
       commitSnapshot(next);
       setLoadError('');
       if (pendingPeriod.current == null) setRefreshing(false);
     });
     return release;
-  }, [commitSnapshot, load]);
+  }, [commitSnapshot, load, initialView.days]);
   /* oxlint-enable react/set-state-in-effect */
 
   const failWith = (fallback: string) => (error: unknown) => {
