@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.46
+
+- Releases the dashboard renderer after 30 seconds closed to the tray, restoring the selected page, analysis period, search and window bounds when reopened. Settings, open dialogs, import previews and in-progress operations keep the window loaded to protect unfinished work. Starting with Windows in tray mode no longer creates a dashboard renderer.
+- Closes idle collector database connections and releases their process after 30 seconds without pending requests. The next scheduled or manual collection starts a fresh process; overlapping work and late replies remain isolated.
+- Releases full dashboard snapshots and detailed analytics caches when the window is unloaded while retaining the evidence needed for reset and fallback notifications. Explicit tray summary copies still include the API-equivalent cost and selected period.
+- Adds deterministic lifecycle regressions and a repeatable Electron memory benchmark using a separate profile and 30,000 synthetic records. In a Windows before/after run, tray-mode private bytes fell from 363 MiB to 289 MiB (20%); summed process working sets fell from 511 MiB to 309 MiB (40%, including shared pages). These measurements are workload-specific and were taken with hardware acceleration still on.
+- Stabilises two existing time-sensitive test fixtures: historical inbox freshness and same-millisecond cycle-history reads.
+- Adds **Lower memory use** under Settings → Appearance & updates, on by default: the dashboard is drawn with the processor instead of the graphics card, which keeps Chromium's GPU process near 30 MiB private instead of roughly 200 MiB once a dashboard has been drawn. In the same Windows benchmark, tray-mode private bytes fell from 289 MiB to 117 MiB, open-dashboard private bytes from 422 MiB to 230 MiB, and hidden tray start from 150 MiB to 94 MiB. The choice is read before the app starts; changing it offers a Restart button. `AI_USAGE_DISABLE_GPU=1` still forces software rendering.
+- Loads the private update component for the first update check instead of at launch, so portable and development builds never load it. Disables the renderer spellcheck service, which the dashboard's numeric and search fields never used.
+
 ## 1.0.45 — 14 September 2026
 
 - Correct short-window forecasts at local hour boundaries, manual Fable calibration, allowance-change learning and idle reset confidence. Keep every displayed Fable window supplied with a forecast when provider and manual readings coexist.

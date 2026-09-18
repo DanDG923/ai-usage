@@ -105,8 +105,9 @@ test('a failed Claude fork-repair backup preserves the copied row and its old cu
 });
 
 test('replayed rotated inbox evidence does not claim a fresh connection, and torn rotated tails expire', async (t) => {
-  const { root, store, write } = fixture(t);
   const now = Date.parse('2026-09-14T12:00:00Z');
+  t.mock.timers.enable({ apis: ['Date'], now });
+  const { root, store, write } = fixture(t);
   const inbox = path.join(root, 'inbox.jsonl');
   write('inbox.jsonl.rotated-old', [{ captured_at: '2026-09-14T08:00:00Z', rate_limits: {
     seven_day: { used_percentage: 20, resets_at: '2026-09-18T12:00:00Z' },

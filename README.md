@@ -9,9 +9,9 @@ It imports local usage evidence, learns your real burn pattern, evaluates every 
 
 ## Install
 
-Use `AI-Usage-Setup-1.0.45-x64.exe` for a normal Windows installation. Running it over an existing installation upgrades in place and preserves the local database, settings, observations, and backups. Uninstalling first is neither required nor recommended. Install this version once to enable future updates through the app.
+Use `AI-Usage-Setup-1.0.46-x64.exe` for a normal Windows installation. Running it over an existing installation upgrades in place and preserves the local database, settings, observations, and backups. Uninstalling first is neither required nor recommended. Install this version once to enable future updates through the app.
 
-Use `AI-Usage-Portable-1.0.45-x64.exe` for a single executable that does not install the app. Windows SmartScreen may show an unknown-publisher warning because this personal build is not backed by a commercial code-signing certificate; verify the supplied SHA-256 hash before running it.
+Use `AI-Usage-Portable-1.0.46-x64.exe` for a single executable that does not install the app. Windows SmartScreen may show an unknown-publisher warning because this personal build is not backed by a commercial code-signing certificate; verify the supplied SHA-256 hash before running it.
 
 ## Personal private updates
 
@@ -185,6 +185,10 @@ Backups, restores, and CSV exports run in a dedicated background worker. Storage
 
 Closing the window keeps the tray app running. Use **Quit** from the tray menu to exit fully.
 
+After 30 seconds closed to the tray, the dashboard releases its window and detailed analytics caches. Reopening restores the selected page, analysis period, search and window bounds, with a brief reload. Settings, open dialogs, import previews and in-progress work keep the window loaded to protect unfinished edits. Minimising keeps the dashboard loaded. Starting with Windows in tray mode waits to create the dashboard until you open it. Collection and alerts continue on their configured schedule; idle collectors close their database connection and release their process after 30 seconds, then restart on demand.
+
+**Lower memory use** in **Settings → Appearance & updates** (on by default) draws the dashboard with the processor instead of the graphics card. Chromium's GPU process otherwise keeps roughly 200 MB of private memory after the dashboard has been drawn once, even while the window is released to the tray; software rendering keeps it near 30 MB. Scrolling is marginally less smooth. The choice is read before the app starts, so changing it shows a **Restart AI Usage** button. Setting `AI_USAGE_DISABLE_GPU=1` in the environment forces software rendering regardless of the setting. The private update component is loaded for the first update check rather than at launch, so portable and development builds never load it.
+
 ## Developer verification
 
 Requires Node.js and npm:
@@ -202,12 +206,14 @@ npm run build
 
 For a repeatable cost-analytics benchmark, run `node tools/benchmark-analytics.cjs` (optionally followed by a record count). It uses 30,000 synthetic records in an in-memory database by default, reports the median of seven measured runs after two warmups, and prints a checksum of the complete result. Compare the checksum as well as the timing when changing analytics. This measures backend cost aggregation, not collection or end-to-end UI latency, and never reads the installed app's data.
 
+For Windows memory and lifecycle checks, build the renderer and run `node tools/benchmark-memory.cjs . optimized`. To compare with an older built source tree using the same installed development Electron runtime, run `node tools/benchmark-memory.cjs <older-source-directory> baseline` first. The `hidden` mode checks startup in the tray. Each run creates a fresh profile and 30,000 synthetic records under `work/memory-*`, isolates provider discovery, disables autostart writes and notifications, and reports process working sets, private bytes and reopening time in `report.json`. The optimized check also verifies idle process release, restored navigation, protected Settings, collection restart and database integrity. Working-set sums include shared pages; results depend on workload and should not be treated as unique physical RAM savings.
+
 Linting uses oxlint (typescript-eslint does not yet support the TypeScript 7 compiler this project builds with) and Prettier formats the renderer source. The same steps run in GitHub Actions on every push and pull request. `npm run build` runs the tests and web build, creates both Windows artifacts without publishing, audits the packaged ASAR for source maps, private local data, and the SDK's optional Claude binary, verifies the private update feed and installer manifest, then writes `SHA256SUMS.txt` in the configured build output folder. The checksums cover the installer, portable executable, installer block map, and `latest.yml`. The source uses React, Vite, Electron, Node's built-in SQLite support, the official Claude Agent SDK, and local JSON-line collectors. Packaged builds use the already installed external Claude binary instead.
 
 ## Publish future private updates
 
 1. Update `package.json`, both root versions in `package-lock.json`, the current installer names in this README, the version contract test, and `CHANGELOG.md`. Keep the GitHub repository private and retain the matching `updateFeed` and `build.publish` settings in `package.json`; the separate `updateFeed` survives packaging so the installed app can verify its destination.
-2. Complete the checks above, review the changes, and merge them. Create and push the matching version tag, for example `v1.0.45` for version `1.0.45`.
+2. Complete the checks above, review the changes, and merge them. Create and push the matching version tag, for example `v1.0.46` for version `1.0.46`.
 3. The **Private Windows release** GitHub Actions workflow builds Windows x64 packages, checks the manifest and packaged contents, and creates a draft release. It uploads the Setup installer, portable executable, installer block map, `latest.yml`, and `SHA256SUMS.txt`, verifies each remote asset's size and SHA-256 digest, then publishes the release as latest. The normal pull-request CI job is unchanged.
 
 The release workflow can also be started manually with an existing version tag. It refuses a mismatched version, a public or different destination, a tag whose commit is not already on `main`, an existing release for that tag, or a version older than an existing stable release. If an upload fails, any created release stays a draft for inspection and is not offered to the app. Review and remove that incomplete draft before retrying; the workflow never overwrites existing release assets.
@@ -225,7 +231,7 @@ Choose **Sign in to Claude** and complete the account flow in your browser. AI U
 
 ### Review maintenance changes
 
-Local packaging output now defaults to `%LOCALAPPDATA%\AI Usage\Build\release`, with `AI_USAGE_BUILD_OUTPUT` available for an explicit alternative. CI keeps its `release` folder. Use the package scripts so the builder, release notes and audit resolve the same location. `npm run version:check` verifies release metadata; `node tools/bump-version.cjs 1.0.45` prepares a future version and its changelog entry without tagging or publishing.
+Local packaging output now defaults to `%LOCALAPPDATA%\AI Usage\Build\release`, with `AI_USAGE_BUILD_OUTPUT` available for an explicit alternative. CI keeps its `release` folder. Use the package scripts so the builder, release notes and audit resolve the same location. `npm run version:check` verifies release metadata; `node tools/bump-version.cjs 1.0.46` prepares a future version and its changelog entry without tagging or publishing.
 
 `npm test` uses two test processes, isolated provider folders, an explicit Europe/London test clock zone, fast SQLite settings for disposable fixtures, and cleanup of only the temporary folders created by that run. `npm run test:electron` repeats the suite with the shipped Electron runtime. Renderer interaction tests also exercise the real Chromium DOM with a fake bridge.
 

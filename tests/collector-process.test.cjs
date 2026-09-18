@@ -64,6 +64,75 @@ function fakeChild() {
   return child;
 }
 
+test('idle collectors close their store, exit, and restart without rejecting new work', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const children = [];
+  const host = createCollectorHost({ fork: () => {
+    const child = fakeChild();
+    child.kill = () => { child.killed = true; };
+    children.push(child); return child;
+  }, modulePath: 'x', config: {}, idleTimeoutMs: 30 });
+  t.after(() => host.stop());
+  const first = host.refreshAll();
+  const overlap = host.refreshClaude();
+  const a = children[0];
+  a.emit('message', { id: a.sent[0].id, ok: true, result: 1 });
+  await first;
+  t.mock.timers.tick(100);
+  assert.equal(a.sent.length, 2, 'never close while another request is pending');
+  a.emit('message', { id: a.sent[1].id, ok: true, result: 2 });
+  await overlap;
+  t.mock.timers.tick(29);
+  assert.equal(host.running, true);
+  t.mock.timers.tick(1);
+  assert.equal(a.sent.at(-1).type, 'close');
+  assert.equal(a.killed, false, 'wait for the database close acknowledgement');
+  assert.equal(host.running, false);
+  const next = host.refreshAll();
+  const b = children[1];
+  a.emit('message', { id: a.sent.at(-1).id, ok: true, result: { closed: true } });
+  assert.equal(a.killed, true);
+  a.emit('exit', 0);
+  b.emit('message', { id: b.sent[0].id, ok: true, result: 3 });
+  assert.equal(await next, 3);
+  assert.equal(host.running, true);
+});
+
+test('new collector work cancels idle exit and an unresponsive idle close is bounded', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const a = fakeChild();
+  const host = createCollectorHost({ fork: () => a, modulePath: 'x', config: {}, idleTimeoutMs: 30 });
+  t.after(() => host.stop());
+  const first = host.refreshAll();
+  a.emit('message', { id: a.sent[0].id, ok: true, result: 1 });
+  await first;
+  t.mock.timers.tick(29);
+  const next = host.refreshClaude();
+  t.mock.timers.tick(30);
+  assert.equal(a.sent.length, 2);
+  a.emit('message', { id: a.sent[1].id, ok: false, error: { message: 'provider offline' } });
+  await assert.rejects(next, /provider offline/);
+  t.mock.timers.tick(30);
+  assert.equal(a.sent.at(-1).type, 'close');
+  t.mock.timers.tick(5000);
+  assert.equal(a.killed, true);
+});
+
+test('a graceful service close waits for accepted collection to finish', async () => {
+  let finish;
+  const wait = new Promise((resolve) => { finish = resolve; });
+  const store = fakeStore();
+  const service = createCollectorService({ databasePath: 'db', openStore: () => store,
+    collectors: { codex: async () => wait, claude: async () => ({}) } });
+  const refresh = service.handle({ type: 'refresh-all' });
+  await new Promise((resolve) => setImmediate(resolve));
+  const closing = service.handle({ type: 'close' });
+  assert.equal(store.closed, false);
+  finish({});
+  await Promise.all([refresh, closing]);
+  assert.equal(store.closed, true);
+});
+
 test('the host spawns on demand, resolves by id, and fails in-flight requests if the child exits', async () => {
   const children = [];
   const host = createCollectorHost({
