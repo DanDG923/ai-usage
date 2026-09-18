@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.46
+## 1.0.46 — 18 September 2026
 
 - Releases the dashboard renderer after 30 seconds closed to the tray, restoring the selected page, analysis period, search and window bounds when reopened. Settings, open dialogs, import previews and in-progress operations keep the window loaded to protect unfinished work. Starting with Windows in tray mode no longer creates a dashboard renderer.
 - Closes idle collector database connections and releases their process after 30 seconds without pending requests. The next scheduled or manual collection starts a fresh process; overlapping work and late replies remain isolated.
