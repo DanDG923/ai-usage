@@ -47,8 +47,9 @@ function storagePaths() {
 // private memory after the dashboard has been drawn once, even with the window
 // released to the tray; software rendering keeps it near 30 MiB. Chromium only
 // honours the choice before the app is ready, so it is read ahead of the store.
+const renderingForced = process.env.AI_USAGE_DISABLE_GPU === '1';
 const renderingMode = (() => {
-  if (process.env.AI_USAGE_DISABLE_GPU === '1') return 'software';
+  if (renderingForced) return 'software';
   let softwareRendering = DEFAULT_SETTINGS.softwareRendering;
   try { softwareRendering = readStartupPreferences(storagePaths().databasePath).softwareRendering; } catch { /* Default applies. */ }
   return softwareRendering ? 'software' : 'hardware';
@@ -681,7 +682,7 @@ function registerIpc() {
     store, refreshAll, databaseJobs, invalidateSnapshot, applySettingsEffects, patchSnapshotSettings,
     updateTray, publishAfterWrite, refreshClaudeOnly, log, logRendererError, installClaudeHelper, getInboxPath,
     uninstallClaudeHelper, maintenance, dialog, getWindow: () => window, shell, app,
-    buildSummaryText, currentView, clipboard, setSnooze, updateChecker, renderingMode,
+    buildSummaryText, currentView, clipboard, setSnooze, updateChecker, renderingMode, renderingForced,
     relaunch: () => {
       if (isQuitting) return;
       // Quit drains storage and the maintenance worker first; the new

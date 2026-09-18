@@ -66,9 +66,21 @@ test('the renderer learns the active and requested rendering modes and can reque
     renderingMode: 'software',
     relaunch: () => { relaunches++; },
   });
-  assert.deepEqual(handlers.get('app:rendering-mode')(), { active: 'software', requested: 'hardware' });
+  assert.deepEqual(handlers.get('app:rendering-mode')(), { active: 'software', requested: 'hardware', forced: false });
   await handlers.get('app:relaunch')();
   assert.equal(relaunches, 1);
+});
+
+test('an environment override is reported as forced so the renderer never offers a pointless restart', () => {
+  const handlers = new Map();
+  registerIpc({
+    handleIpc: (name, fn) => handlers.set(name, fn),
+    store: { getSettings: () => ({ softwareRendering: false }) },
+    renderingMode: 'software',
+    renderingForced: true,
+    relaunch: () => {},
+  });
+  assert.deepEqual(handlers.get('app:rendering-mode')(), { active: 'software', requested: 'hardware', forced: true });
 });
 
 test('a rendering change is a cheap setting that never rebuilds the dashboard snapshot', async () => {

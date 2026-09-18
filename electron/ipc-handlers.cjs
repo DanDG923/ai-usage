@@ -9,7 +9,7 @@ function registerIpc(context) {
     invalidateSnapshot, applySettingsEffects, patchSnapshotSettings, updateTray,
     publishAfterWrite, refreshClaudeOnly, log, logRendererError, installClaudeHelper,
     getInboxPath, uninstallClaudeHelper, maintenance, dialog, getWindow, shell, app,
-    buildSummaryText, clipboard, setSnooze, updateChecker, renderingMode, relaunch,
+    buildSummaryText, clipboard, setSnooze, updateChecker, renderingMode, renderingForced, relaunch,
   } = context;
   handleIpc('claude-setup:status', () => claudeSetup.status());
   handleIpc('claude-setup:dismissed', () => claudeSetup.dismissed());
@@ -196,10 +196,13 @@ function registerIpc(context) {
   });
   handleIpc('app:get-version', () => app.getVersion());
   // Chromium fixes the rendering path at launch; the renderer compares the
-  // saved preference with the running instance to offer a restart.
+  // saved preference with the running instance to offer a restart. An
+  // environment override wins on every launch, so a restart could not apply
+  // the preference and the renderer must not offer one.
   handleIpc('app:rendering-mode', () => ({
     active: renderingMode === 'software' ? 'software' : 'hardware',
     requested: store.getSettings().softwareRendering ? 'software' : 'hardware',
+    forced: Boolean(renderingForced),
   }));
   handleIpc('app:relaunch', () => { relaunch(); });
   handleIpc('app:check-updates', async () => {

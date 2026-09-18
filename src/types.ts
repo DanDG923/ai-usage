@@ -334,6 +334,8 @@ export type RenderingMode = {
   /** How this running instance draws; changes apply at the next launch. */
   active: 'software' | 'hardware';
   requested: 'software' | 'hardware';
+  /** True when the environment forces software rendering, so a restart cannot apply the preference. */
+  forced: boolean;
 };
 
 export type UpdateStatus = {

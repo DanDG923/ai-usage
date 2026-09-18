@@ -139,7 +139,8 @@ export function AppearanceSection({
   const busy = Boolean(pending) || downloading || installing || checking;
   const downloaded = status?.status === 'downloaded';
   const requestedRendering = snapshot.settings.softwareRendering ? 'software' : 'hardware';
-  const restartNeeded = Boolean(renderingMode && renderingMode.active !== requestedRendering);
+  const renderingForced = Boolean(renderingMode?.forced);
+  const restartNeeded = Boolean(renderingMode && !renderingForced && renderingMode.active !== requestedRendering);
   const restart = async () => {
     const bridge = window.aiUsage;
     if (preview || !bridge?.relaunch || restarting) return;
@@ -174,6 +175,17 @@ export function AppearanceSection({
         checked={snapshot.settings.softwareRendering}
         onChange={(checked) => update({ softwareRendering: checked })}
       />
+      {renderingForced && !snapshot.settings.softwareRendering ? (
+        <div className="snooze-row update-summary">
+          <span role="status">
+            <strong>Software rendering is forced on this PC</strong>
+            <small>
+              The AI_USAGE_DISABLE_GPU environment variable keeps AI Usage drawing with the processor on every start.
+              Remove it to let this setting take effect.
+            </small>
+          </span>
+        </div>
+      ) : null}
       {restartNeeded ? (
         <div className="snooze-row update-summary">
           <span role="status">
