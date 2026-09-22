@@ -84,8 +84,9 @@ export function StorageSection({
         </p>
       )}
       <p className="restore-note">
-        Restoring merges a <code>.aiusage.json</code> export into the local database. Token records, observations, daily
-        totals and prices already held are kept as they are, so nothing is counted twice or rolled back.{' '}
+        Restoring merges a <code>.sqlite</code> backup or an <code>.aiusage.json</code> export into the local database;
+        large histories restore from the <code>.sqlite</code> backup. Token records, observations, daily totals and
+        prices already held are kept as they are, so nothing is counted twice or rolled back.{' '}
         <strong>Your settings are replaced by the ones in the export.</strong> A fresh backup is written first.
       </p>
       <div className="export-row">

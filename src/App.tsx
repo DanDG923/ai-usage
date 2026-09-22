@@ -285,7 +285,7 @@ export default function App() {
     try {
       const result = await window.aiUsage.createBackup();
       commitSnapshot(result.snapshot);
-      setNotice(`Backup saved to ${result.result.exportPath}`);
+      setNotice(`Backup saved to ${result.result.exportPath ?? result.result.databasePath}`);
     } catch (error) {
       failWith('Backup could not be created.')(error);
     } finally {

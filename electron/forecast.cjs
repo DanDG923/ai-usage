@@ -8,6 +8,8 @@ const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 const RESET_TOLERANCE_MS = 60_000;
 const HEAVY_HISTORY_DAYS = 7;
+// Readings further apart than this leave the time between them unobserved.
+const COVERAGE_GAP_MS = 6 * HOUR_MS;
 const EARLY_RESET_DAY_WEIGHT = 0.25;
 const RESET_EVIDENCE_PROVENANCES = new Set(OFFICIAL_PROVENANCES);
 const MAX_PROJECTION_MS = MAX_QUOTA_RESET_AHEAD_MS + QUOTA_CLOCK_SKEW_MS;
@@ -411,6 +413,11 @@ function deriveLearningSamples(observations, schedule, nowMs, excludedDates = []
     const sameWindow = sameWindowDrift(previous, after);
     previous = after;
     if (!sameWindow || after.usedPercent - anchor.usedPercent > 70) {
+      // The quiet span before a reset is learned like the excluded-day
+      // restart and the final tail: dropping it leaves only the bursts.
+      if (latest.observedAt - anchor.observedAt >= HOUR_MS) {
+        addIntervalSamples(samples, anchor, latest, schedule, nowMs);
+      }
       anchor = after;
       latest = after;
       continue;
@@ -657,6 +664,21 @@ function learnForecast({ normalised, current, currentCluster, clusters, schedule
   const activeDailyTotals = [...activeDayUsage.values()];
   const offDailyTotals = [...offDayUsage.values()];
   const sampleDays = new Set(samples.flatMap((sample) => (sample.dailyDeltas || []).map((entry) => entry.day)));
+  // A change sample allocates only its last poll interval, so a day polled
+  // throughout with no use would never be learned. Consecutive readings no
+  // more than COVERAGE_GAP_MS apart show the day was observed. The latest
+  // observed day is still partial and counts only once a sample learns it.
+  const partialDay = localDayKey(new Date(current.observedAt));
+  const covered = normalised.filter((row) => row.observedAt >= nowMs - FORECAST_LOOKBACK_MS && !excluded(row.observedAt, row.observedAt + 1));
+  for (let index = 1; index < covered.length; index += 1) {
+    const before = covered[index - 1].observedAt;
+    const after = covered[index].observedAt;
+    if (after - before > COVERAGE_GAP_MS) continue;
+    for (let cursor = before; cursor < after; cursor = Math.min(after, nextLocalHour(cursor))) {
+      const day = localDayKey(new Date(cursor));
+      if (day !== partialDay) sampleDays.add(day);
+    }
+  }
   const scheduleHoursPerDay = Math.max(1, schedule.endHour - schedule.startHour);
   // Off-schedule samples describe the pace of a discrete event, not the
   // probability that the user will be active throughout every future night.

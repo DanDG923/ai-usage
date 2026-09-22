@@ -199,6 +199,16 @@ function json(value, fallback = null) {
   }
 }
 
+// The settings a backup carries, whether exported or restored from its
+// SQLite copy: the known keys only, as the export has always written them.
+function backupSettings(database) {
+  const settings = { ...DEFAULT_SETTINGS };
+  for (const row of database.prepare('SELECT key, value_json FROM settings').iterate()) {
+    if (Object.hasOwn(DEFAULT_SETTINGS, row.key)) settings[row.key] = json(row.value_json, settings[row.key]);
+  }
+  return settings;
+}
+
 // Quota metadata is an object even when its JSON text parses successfully.
 // Keep the generic JSON decoder unchanged for settings and cursor values.
 function quotaMetadata(value) {
@@ -235,6 +245,16 @@ function dateKey(value, timeZone) {
   return `${values.year}-${values.month}-${values.day}`;
 }
 
+// A period of N days is the last N local calendar days, today included: its
+// total, its daily chart and the renderer's weekly tile share one window, and
+// its start moves only at local midnight. Zero days gives tomorrow's midnight.
+function periodStart(days, nowMs) {
+  const start = new Date(nowMs);
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() - (days - 1));
+  return start.getTime();
+}
+
 // The ledger is read in time order, so consecutive events nearly always fall
 // in the same quarter hour. Every zone offset is a multiple of fifteen
 // minutes, so a quarter-hour slot never straddles a local hour, day or DST
@@ -256,6 +276,13 @@ function createLocalPartsLookup(timeZone) {
 }
 
 const WEEKDAY_INDEX = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+
+// Analytics groups usage by the metadata that attributes it to a task or
+// agent. Per-request fields such as Claude's requestId are unique to every
+// event, so grouping on them would keep one aggregate row per request.
+const ATTRIBUTION_METADATA = `CASE WHEN json_valid(metadata_json)
+  THEN json_remove(metadata_json, '$.requestId', '$.entrypoint', '$.sidechain', '$.effort')
+  ELSE metadata_json END`;
 
 // SQLITE_CORRUPT and SQLITE_NOTADB: the file exists but SQLite cannot read it.
 const UNREADABLE_DATABASE_CODES = new Set([11, 26]);
@@ -1011,7 +1038,9 @@ class UsageStore {
   // latest row so a dormant bucket still surfaces as expired rather than
   // vanishing. The full history stays in the table for cycle history and
   // backups; it is simply not re-forecast on every snapshot.
-  getQuota(sourceId, settings = this.getSettings(), nowMs = Date.now()) {
+  // `tokenCapacity: false` skips the capacity estimate, which only the
+  // dashboard shows; the tray and notifications never read it.
+  getQuota(sourceId, settings = this.getSettings(), nowMs = Date.now(), { tokenCapacity = true } = {}) {
     const latestAllowed = iso(nowMs + QUOTA_CLOCK_SKEW_MS);
     const oldestRecent = iso(nowMs - FORECAST_LOOKBACK_MS);
     // Capture revisions before reading rows: a concurrent collector commit can
@@ -1102,12 +1131,12 @@ class UsageStore {
     // Decide replacement from every window before omitting any forecast: a
     // live provider window in an alternate Fable bucket can prevent projection.
     const projected = sourceId === 'claude-fable'
-      ? this.projectedFableWindow(windows, grouped.get(FABLE_BUCKET) || [], settings, forecastOptions, nowMs)
+      ? this.projectedFableWindow(windows, grouped.get(FABLE_BUCKET) || [], settings, forecastOptions, nowMs, tokenCapacity)
       : null;
     windows = windows.filter((window) => !projected || window.bucketId !== FABLE_BUCKET).map((window) => ({
       ...window,
       forecast: this.learnedForecast(sourceId, window.bucketId, grouped.get(window.bucketId), forecastOptions, quotaRevision),
-      tokenCapacity: Number(window.windowMinutes) === 10_080
+      tokenCapacity: tokenCapacity && Number(window.windowMinutes) === 10_080
         ? this.getTokenCapacity(sourceId, window.bucketId, grouped.get(window.bucketId), settings, nowMs, quotaRevision)
         : null,
     }));
@@ -1140,7 +1169,7 @@ class UsageStore {
   // from the official rows plus the projection's own series, in the same row
   // shape, so a helper-only machine keeps a learned pace without persisting
   // estimates that would outlive the settings they were computed under.
-  projectedFableWindow(windows, bucketRows, settings, forecastOptions, nowMs) {
+  projectedFableWindow(windows, bucketRows, settings, forecastOptions, nowMs, includeTokenCapacity = true) {
     const current = selectDisplayedWindows(windows, { nowMs }).primary;
     if (current && Date.parse(current.resetsAt) > nowMs && isOfficialWindow(current)) return null;
     const projection = this.getFableProjection(settings, nowMs);
@@ -1166,7 +1195,7 @@ class UsageStore {
       provenance: 'derived-tokens',
       metadata: { sharedWithOverall: true, projected: true, calibration: projection.calibration },
       forecast,
-      tokenCapacity: this.getTokenCapacity('claude-fable', FABLE_BUCKET, bucketRows, settings, nowMs),
+      tokenCapacity: includeTokenCapacity ? this.getTokenCapacity('claude-fable', FABLE_BUCKET, bucketRows, settings, nowMs) : null,
     };
   }
 
@@ -1236,20 +1265,23 @@ class UsageStore {
       FROM analytics_revisions WHERE domain = 'usage' AND source_id = ?`).get(sourceId).value;
     const cached = !this.db.isTransaction ? this.tokenCapacityEvidenceCache.get(sourceId) : null;
     if (cached && cached.revision === revision && nowMs >= cached.evaluatedAt && nowMs < cached.expiresAt) return cached;
+    // The lower bound moves in quarter hours, not with every event ageing out.
+    // The estimator applies its own horizon to these rows, so the few minutes
+    // of older rows this keeps change no result.
+    const since = Math.floor((nowMs - TOKEN_CAPACITY_LOOKBACK_MS) / QUARTER_HOUR_MS) * QUARTER_HOUR_MS;
     const rows = this.prepare(`SELECT source_id, occurred_at, model,
       input_tokens, cached_input_tokens, cache_write_input_tokens,
       output_tokens, reasoning_output_tokens
       FROM usage_events WHERE source_id = ? AND occurred_at >= ? AND occurred_at <= ?
-      ORDER BY occurred_at`).all(sourceId, iso(nowMs - TOKEN_CAPACITY_LOOKBACK_MS), iso(nowMs));
+      ORDER BY occurred_at`).all(sourceId, iso(since), iso(nowMs));
     const next = this.prepare(`SELECT MIN(occurred_at) AS at FROM usage_events
       WHERE source_id = ? AND occurred_at > ?`).get(sourceId, iso(nowMs)).at;
     // Writes bump the usage revision (triggers cover every connection), so the
-    // only time-driven changes are the oldest row ageing out of the learning
-    // horizon and a future-dated row arriving. No wall-clock cap is needed.
-    const expiresAt = Math.min(
-      rows.length ? Date.parse(rows[0].occurred_at) + TOKEN_CAPACITY_LOOKBACK_MS + 1 : Infinity,
-      next ? Date.parse(next) : Infinity,
-    );
+    // only time-driven changes are the quarter-hour lower bound passing the
+    // oldest row and a future-dated row arriving. No wall-clock cap is needed.
+    const oldest = rows.length ? Date.parse(rows[0].occurred_at) : Infinity;
+    const expiresAt = Math.min(TOKEN_CAPACITY_LOOKBACK_MS + (Math.floor(oldest / QUARTER_HOUR_MS) + 1) * QUARTER_HOUR_MS,
+      next ? Date.parse(next) : Infinity);
     const result = { rows, revision, evaluatedAt: nowMs, expiresAt };
     if (!this.db.isTransaction) this.tokenCapacityEvidenceCache.set(sourceId, result);
     return result;
@@ -1463,16 +1495,13 @@ class UsageStore {
       this.costAnalyticsCache.set(key, cached);
       return cached.value;
     }
-    const oldest = this.prepare('SELECT occurred_at FROM usage_events WHERE occurred_at >= ? AND occurred_at <= ? ORDER BY occurred_at ASC LIMIT 1')
-      .get(iso(nowMs - days * DAY_MS), iso(nowMs));
     const nextEvent = this.prepare('SELECT occurred_at FROM usage_events WHERE occurred_at > ? ORDER BY occurred_at ASC LIMIT 1')
       .get(iso(nowMs));
     const value = this.withPriceCache(() => this.buildAnalytics(days, settings, nowMs));
-    // The query includes its lower boundary; expire one millisecond after the
-    // oldest included event falls outside it, or when a future-dated record
-    // enters at its timestamp. Clock rollback also forces a read.
-    const expiresAt = Math.min(oldest ? Date.parse(oldest.occurred_at) + days * DAY_MS + 1 : Infinity,
-      nextEvent ? Date.parse(nextEvent.occurred_at) : Infinity);
+    // The period starts at a local midnight, so it moves only when the day
+    // changes; a future-dated record enters at its timestamp. Clock rollback
+    // also forces a read.
+    const expiresAt = Math.min(periodStart(0, nowMs), nextEvent ? Date.parse(nextEvent.occurred_at) : Infinity);
     this.costAnalyticsCache.delete(key);
     this.costAnalyticsCache.set(key, { at: nowMs, expiresAt, revision, value });
     if (this.costAnalyticsCache.size > 4) this.costAnalyticsCache.delete(this.costAnalyticsCache.keys().next().value);
@@ -1541,7 +1570,8 @@ class UsageStore {
         // Preserve per-request context tiers and legacy cache durations before
         // aggregation. Task metadata stays distinct so parent/agent attribution
         // cannot merge. Counts remain request counts, not aggregate row counts.
-        rows = this.prepare(`SELECT MIN(event_key) AS event_key, source_id, session_id, model, project, metadata_json,
+        rows = this.prepare(`SELECT MIN(event_key) AS event_key, source_id, session_id, model, project,
+          ${ATTRIBUTION_METADATA} AS metadata_json,
           MIN(occurred_at) AS first_occurred_at, MAX(occurred_at) AS occurred_at, COUNT(*) AS event_count,
           input_tokens + cache_write_input_tokens > ${OPENAI_LONG_CONTEXT_THRESHOLD} AS aggregateLongContext,
           SUM(input_tokens) AS input_tokens, SUM(cached_input_tokens) AS cached_input_tokens,
@@ -1551,20 +1581,22 @@ class UsageStore {
           SUM(output_tokens) AS output_tokens, SUM(reasoning_output_tokens) AS reasoning_output_tokens
           FROM usage_events WHERE occurred_at >= ? AND occurred_at <= ?
           GROUP BY source_id, session_id, CASE WHEN session_id IS NULL OR session_id = '' THEN event_key END,
-            model, project, metadata_json, substr(occurred_at, 1, 13), CAST(substr(occurred_at, 15, 2) AS INTEGER) / 15, aggregateLongContext
+            model, project, ${ATTRIBUTION_METADATA}, substr(occurred_at, 1, 13), CAST(substr(occurred_at, 15, 2) AS INTEGER) / 15, aggregateLongContext
           ORDER BY first_occurred_at, occurred_at`).all(lower, upper);
         if (!this.db.isTransaction) {
           this.analyticsDayCache.set(day, { revision, lower, upper, rows });
           if (this.analyticsDayCache.size > 367) this.analyticsDayCache.delete(this.analyticsDayCache.keys().next().value);
         }
       }
-      result.push(...rows);
+      // A spread passes every row as an argument, which overflows the call
+      // stack once one day holds about 125,000 groups.
+      for (const row of rows) result.push(row);
     }
     return result;
   }
 
   buildAnalytics(days, settings, nowMs) {
-    const since = iso(nowMs - days * DAY_MS);
+    const since = iso(periodStart(days, nowMs));
     const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     // Aggregate one row at a time instead of retaining the entire raw ledger
     // alongside the model, project, and session summaries.
@@ -1974,15 +2006,20 @@ class UsageStore {
     `).all(since);
   }
 
-  getTraySnapshot(nowMs = Date.now()) {
+  getTraySnapshot(nowMs = Date.now(), { tokenCapacity = false } = {}) {
     const settings = this.getSettings();
     const sources = this.prepare('SELECT * FROM sources ORDER BY CASE id WHEN \'codex\' THEN 1 WHEN \'claude\' THEN 2 ELSE 3 END').all()
       .map((row) => ({ ...row, metadata: json(row.metadata_json, {}) }));
     const quotas = {
-      codex: this.getQuota('codex', settings, nowMs),
-      claude: this.getQuota('claude', settings, nowMs),
-      fable: this.getQuota('claude-fable', settings, nowMs),
+      codex: this.getQuota('codex', settings, nowMs, { tokenCapacity }),
+      claude: this.getQuota('claude', settings, nowMs, { tokenCapacity }),
+      fable: this.getQuota('claude-fable', settings, nowMs, { tokenCapacity }),
     };
+    // A plan the provider names other than Max has no Fable allowance, so
+    // with no Fable reading there is nothing for the verdict to wait for.
+    const fableProjection = quotas.fable ? null : this.getFableProjection(settings, nowMs);
+    const fableApplies = Boolean(quotas.fable)
+      || !(fableProjection?.reason === 'fable-not-confirmed-in-shared-plan' && fableProjection.planType);
     const reportedResetCredits = quotas.codex?.metadata?.resetCredits;
     // The renderer compares and formats this count. Never coerce imported JSON.
     const resetCredits = Number.isSafeInteger(reportedResetCredits) && reportedResetCredits >= 0
@@ -1993,13 +2030,14 @@ class UsageStore {
       settings,
       sources,
       quotas,
-      dashboardVerdict: buildDashboardVerdict({ quotas, sources, settings }),
+      fableApplies,
+      dashboardVerdict: buildDashboardVerdict({ quotas, sources, settings, fableApplies }),
       resetCredits,
     };
   }
 
   getDashboardSnapshot(days = 30, nowMs = Date.now()) {
-    const snapshot = this.getTraySnapshot(nowMs);
+    const snapshot = this.getTraySnapshot(nowMs, { tokenCapacity: true });
     const { settings, quotas } = snapshot;
     return {
       ...snapshot,
@@ -2022,26 +2060,33 @@ class UsageStore {
 
   // `keep` names a backup file this run must not prune — the one the caller is
   // about to restore from. Opening a restore point should never delete it.
+  // `exportJson: false` writes the SQLite copy alone. The JSON export is also
+  // skipped once it outgrows what readExport accepts: the SQLite copy
+  // restores a ledger of any size, and the export would only cost time.
   createBackup(options = {}) {
     const stamp = `${new Date().toISOString().replaceAll(':', '-').replaceAll('.', '-')}-${require('node:crypto').randomUUID()}`;
     const databasePath = path.join(this.backupDirectory, `ai-usage-${stamp}.sqlite`);
     const exportPath = path.join(this.backupDirectory, `ai-usage-${stamp}.aiusage.json.gz`);
     const partialDatabase = `${databasePath}.partial`, partialExport = `${exportPath}.partial`;
+    let exported = options.exportJson !== false;
     this.sweepPartialBackups();
     try {
       this.db.prepare('VACUUM INTO ?').run(partialDatabase);
-      const copy = new DatabaseSync(partialDatabase, { readOnly: true });
-      try {
-        const settings = { ...DEFAULT_SETTINGS };
-        for (const row of copy.prepare('SELECT key, value_json FROM settings').iterate()) {
-          if (Object.hasOwn(DEFAULT_SETTINGS, row.key)) settings[row.key] = json(row.value_json, settings[row.key]);
-        }
-        require('./backup-export.cjs').writeExport(partialExport, copy, settings);
-      } finally { copy.close(); }
+      if (exported) {
+        const { writeExport, MAX_RESTORE_BYTES } = require('./backup-export.cjs');
+        const copy = new DatabaseSync(partialDatabase, { readOnly: true });
+        try {
+          writeExport(partialExport, copy, backupSettings(copy), { maxBytes: MAX_RESTORE_BYTES });
+        } catch (error) {
+          if (error?.code !== 'EXPORT_TOO_LARGE') throw error;
+          exported = false;
+        } finally { copy.close(); }
+        if (!exported) fs.rmSync(partialExport, { force: true });
+      }
       fs.renameSync(partialDatabase, databasePath);
-      fs.renameSync(partialExport, exportPath);
+      if (exported) fs.renameSync(partialExport, exportPath);
       this.prepare('INSERT INTO backups(created_at, database_path, export_path) VALUES (?, ?, ?)')
-        .run(iso(), databasePath, exportPath);
+        .run(iso(), databasePath, exported ? exportPath : '');
     } catch (error) {
       for (const file of [partialDatabase, partialExport, databasePath, exportPath]) {
         try { fs.unlinkSync(file); } catch { /* A later partial sweep retries locked files. */ }
@@ -2049,14 +2094,42 @@ class UsageStore {
       throw error;
     }
     this.pruneBackups(this.getSettings().backupRetentionCount, options.keep);
-    return { databasePath, exportPath };
+    return { databasePath, exportPath: exported ? exportPath : null };
   }
 
   // Reading is a separate step so a caller can load the export into memory
   // before taking its own backup: creating one prunes old sets, and the file
   // the user chose from the backup folder can be among them.
   readExport(filePath) {
+    if (/\.sqlite$/i.test(String(filePath || ''))) return this.readDatabaseBackup(filePath);
     return require('./backup-export.cjs').readExport(filePath);
+  }
+
+  // A SQLite backup restores a ledger of any size: its records are read as
+  // the merge consumes them, in the export's shape, so restoreFromExport
+  // applies the same validation and merge rules. The caller calls close().
+  readDatabaseBackup(filePath) {
+    if (!filePath || !fs.existsSync(filePath)) throw new Error('That backup file could not be found.');
+    let database;
+    try {
+      database = new DatabaseSync(filePath, { readOnly: true });
+      const tables = new Set(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name));
+      if (!['settings', 'quota_observations', 'usage_events'].every((table) => tables.has(table))) throw new Error('Not an AI Usage database.');
+      const rows = (table) => (tables.has(table) ? database.prepare(`SELECT * FROM ${table}`).iterate() : []);
+      return {
+        schemaVersion: 1,
+        settings: backupSettings(database),
+        observations: rows('quota_observations'),
+        usageEvents: rows('usage_events'),
+        dailyUsage: rows('account_daily_usage'),
+        prices: [...rows('price_catalog')],
+        desktopEstimates: [...rows('desktop_chat_estimates')],
+        close: () => database.close(),
+      };
+    } catch {
+      try { database?.close(); } catch { /* Report the unreadable file instead. */ }
+      throw new Error('That file is not a readable AI Usage backup.');
+    }
   }
 
   sweepPartialBackups(nowMs = Date.now()) {
@@ -2073,7 +2146,10 @@ class UsageStore {
   }
 
   restoreFromBackup(filePath) {
-    return this.restoreFromExport(this.readExport(filePath));
+    const payload = this.readExport(filePath);
+    try {
+      return this.restoreFromExport(payload);
+    } finally { payload.close?.(); }
   }
 
   // A backup nothing can read back is not a backup. Restore merges an export
@@ -2090,7 +2166,9 @@ class UsageStore {
     const schemaVersion = Number(payload.schemaVersion);
     if (!Number.isFinite(schemaVersion) || schemaVersion < 1) throw unreadable();
     if (schemaVersion > 1) throw new Error(`This backup was written by a newer version of AI Usage (schema ${schemaVersion}).`);
-    const list = (value) => (Array.isArray(value) ? value : []);
+    // Arrays from a JSON export, or row iterators from a SQLite backup.
+    const list = (value) => (Array.isArray(value)
+      || (value && typeof value === 'object' && typeof value[Symbol.iterator] === 'function') ? value : []);
     const knownSources = new Set(SOURCE_DEFINITIONS.map(([id]) => id));
     const counts = { settings: 0, observations: 0, usageEvents: 0, dailyUsage: 0, prices: 0, skipped: 0 };
     let restoredCodexEvents = 0;

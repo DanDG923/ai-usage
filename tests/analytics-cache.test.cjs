@@ -31,6 +31,12 @@ function event(store, key = 'one', at = NOW, tokens = 100000) {
 function costs(store, now = NOW, days = 7, settings = store.getSettings()) {
   return store.getCostAnalytics(days, settings, now);
 }
+function midnight(ms, days = 0) {
+  const date = new Date(ms);
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() + days);
+  return date.getTime();
+}
 
 test('unchanged analytics survive forecast time changes and selected-period switches', t => {
   const store = fixture(t);
@@ -42,12 +48,16 @@ test('unchanged analytics survive forecast time changes and selected-period swit
   assert.equal(first.actual, 1);
 });
 
-test('cache tracks the inclusive rolling boundary exactly and handles clock rollback', t => {
+test('cache tracks the inclusive local-midnight boundary exactly and handles clock rollback', t => {
   const store = fixture(t);
-  event(store, 'boundary', NOW - 7 * DAY);
+  // A 7-day period is the last seven local calendar days, today included.
+  const start = midnight(NOW, -6);
+  event(store, 'boundary', start);
+  event(store, 'earlier', start - 1);
   assert.equal(costs(store).actual, 1);
-  assert.equal(costs(store, NOW + 1).actual, 0);
-  assert.equal(costs(store, NOW - 1).actual, 1);
+  assert.equal(costs(store, midnight(NOW, 1) - 1).actual, 1);
+  assert.equal(costs(store, midnight(NOW, 1)).actual, 0);
+  assert.equal(costs(store, NOW).actual, 1);
 });
 
 test('local updates, price edits, currency and conversion changes cannot reuse stale costs', t => {
