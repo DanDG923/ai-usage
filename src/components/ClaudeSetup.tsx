@@ -18,6 +18,18 @@ export function ClaudeSetup({
   // Null until the user touches the checkbox: the default follows whether the
   // helper is already installed, so an upgrade never enables it unasked.
   const [helper, setHelper] = useState<boolean | null>(null);
+  // Each opening starts from the helper's current state: a choice or a status
+  // kept from an earlier opening could reinstall or remove the helper after it
+  // was changed in Settings. The primary action stays disabled until the fresh
+  // status arrives.
+  const [opened, setOpened] = useState(requested);
+  if (requested !== opened) {
+    setOpened(requested);
+    if (requested) {
+      setHelper(null);
+      setStatus(null);
+    }
+  }
   const helperChecked = helper ?? Boolean(status?.helperInstalled);
   const dialog = useRef<HTMLElement>(null);
   const visible = Boolean(window.aiUsage) && !(hidden && !requested) && Boolean(status || requested || error);

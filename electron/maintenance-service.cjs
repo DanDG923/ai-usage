@@ -50,16 +50,19 @@ function createMaintenanceService({ databasePath, backupDirectory, openStore = (
         return { removed, safetyBackup };
       }
       case 'create-backup':
-        return store.createBackup();
+        return store.createBackup({ exportJson: request.exportJson !== false });
       case 'scheduled-backup':
         return store.maybeCreateScheduledBackup();
       case 'restore-backup': {
         // Read first: retention can otherwise remove the selected export
         // while making its safety backup. Protect it from pruning as well.
+        // A SQLite backup is read as the merge runs, so it stays open until then.
         const payload = store.readExport(request.filePath);
-        const safetyBackup = store.createBackup({ keep: request.filePath });
-        const result = store.restoreFromExport(payload);
-        return { result, safetyBackup };
+        try {
+          const safetyBackup = store.createBackup({ keep: request.filePath });
+          const result = store.restoreFromExport(payload);
+          return { result, safetyBackup };
+        } finally { payload.close?.(); }
       }
       case 'export-csv': {
         const exported = store.exportLedgerCsv(request.days);

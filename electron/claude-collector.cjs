@@ -556,6 +556,9 @@ async function refreshClaude(store, inboxPath, options = {}) {
     signal: options.signal,
     fallbackObservedAt: statusLine.latestFableObservedAt,
   });
+  // One reading of the clock for every time check below, so an injected
+  // clock governs the whole status and no probe falls back to wall time.
+  const nowMs = options.clock ? new Date(options.clock()).getTime() : Date.now();
   const transcripts = fableTracking.imports || {
     importedFiles: 0,
     usageEvents: 0,
@@ -570,7 +573,7 @@ async function refreshClaude(store, inboxPath, options = {}) {
   } else {
     try {
       // Read-only: the estimate is projected when the snapshot is built.
-      fableDerived = deriveFableEstimate(store);
+      fableDerived = deriveFableEstimate(store, nowMs);
     } catch (error) {
       // A bad Fable estimate must never take down the whole Claude refresh.
       fableDerived = { derived: false, reason: `derive-failed: ${error.message}` };
@@ -586,16 +589,15 @@ async function refreshClaude(store, inboxPath, options = {}) {
   const helperUpdated = helperInstalled ? updateManagedHelper(helperPath, inboxPath) : false;
   // Existence probes, not getQuota: the status text needs a yes or no, and
   // getQuota forecasts every window of the source to produce one.
-  const hasQuota = store.hasUsableObservation('claude', Date.now(), { activeWithinMs: 8 * 24 * 60 * 60 * 1000 });
+  const hasQuota = store.hasUsableObservation('claude', nowMs, { activeWithinMs: 8 * 24 * 60 * 60 * 1000 });
   const providerScanSucceeded = Boolean(fableTracking.provider?.attemptSucceeded
     && ['observed', 'unavailable'].includes(fableTracking.provider.kind));
   const activityCurrent = fableTracking.health.activitySource === 'current';
-  const nowMs = options.clock ? new Date(options.clock()).getTime() : Date.now();
   const statuslineAge = nowMs - Date.parse(statusLine.latestClaudeObservedAt);
   const hasFreshClaudeEvidence = (statusLine.claudeObservations > 0 && statuslineAge >= -60_000 && statuslineAge <= 5 * 60_000)
     || Number(fableTracking.provider?.overallWindowsRecorded || 0) > 0;
   const claudeScanSucceeded = (hasFreshClaudeEvidence || providerScanSucceeded) && activityCurrent;
-  const fableObserved = store.hasUsableObservation('claude-fable');
+  const fableObserved = store.hasUsableObservation('claude-fable', nowMs);
   const extraUsage = fableTracking.provider?.extraUsage;
   let extraUsageDetail = '';
   if (extraUsage) {
