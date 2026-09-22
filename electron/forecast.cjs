@@ -666,17 +666,26 @@ function learnForecast({ normalised, current, currentCluster, clusters, schedule
   const sampleDays = new Set(samples.flatMap((sample) => (sample.dailyDeltas || []).map((entry) => entry.day)));
   // A change sample allocates only its last poll interval, so a day polled
   // throughout with no use would never be learned. Consecutive readings no
-  // more than COVERAGE_GAP_MS apart show the day was observed. The latest
-  // observed day is still partial and counts only once a sample learns it.
+  // more than COVERAGE_GAP_MS apart show where such a quiet day was observed,
+  // and it supplies only the off-schedule hours they cover: a brief pair of
+  // polls is not a fully observed day. The latest observed day is still
+  // partial and counts only once a sample learns it.
   const partialDay = localDayKey(new Date(current.observedAt));
+  const quietOffHours = new Map();
   const covered = normalised.filter((row) => row.observedAt >= nowMs - FORECAST_LOOKBACK_MS && !excluded(row.observedAt, row.observedAt + 1));
   for (let index = 1; index < covered.length; index += 1) {
     const before = covered[index - 1].observedAt;
     const after = covered[index].observedAt;
     if (after - before > COVERAGE_GAP_MS) continue;
-    for (let cursor = before; cursor < after; cursor = Math.min(after, nextLocalHour(cursor))) {
-      const day = localDayKey(new Date(cursor));
-      if (day !== partialDay) sampleDays.add(day);
+    let cursor = before;
+    while (cursor < after) {
+      const next = Math.min(after, nextLocalHour(cursor));
+      const midpoint = new Date((cursor + next) / 2);
+      const day = localDayKey(midpoint);
+      if (day !== partialDay && !sampleDays.has(day) && !isActiveHour(midpoint, schedule)) {
+        quietOffHours.set(day, (quietOffHours.get(day) || 0) + (next - cursor) / HOUR_MS);
+      }
+      cursor = next;
     }
   }
   const scheduleHoursPerDay = Math.max(1, schedule.endHour - schedule.startHour);
@@ -687,7 +696,8 @@ function learnForecast({ normalised, current, currentCluster, clusters, schedule
   // Each learned local day supplies its real off-schedule capacity: an
   // inactive day has all 24 hours, and a DST boundary may have 23 or 25.
   const offCapacityHours = [...sampleDays]
-    .reduce((sum, day) => sum + offScheduleHoursForLocalDay(day, schedule) * (dayWeights?.get(day) ?? 1), 0);
+    .reduce((sum, day) => sum + offScheduleHoursForLocalDay(day, schedule) * (dayWeights?.get(day) ?? 1), 0)
+    + [...quietOffHours].reduce((sum, [day, hours]) => sum + hours * (dayWeights?.get(day) ?? 1), 0);
   const offDailyPace = offCapacityHours > 0
     ? offDailyTotals.reduce((sum, value) => sum + value, 0) / offCapacityHours
     : 0;

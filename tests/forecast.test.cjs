@@ -471,6 +471,29 @@ test('off-schedule duty cycles use the 23-hour spring-forward day', () => {
   assert.ok(Math.abs(result.expectedRemaining - 77) < 1e-9, `expected ${result.expectedRemaining}`);
 });
 
+test('a quiet day adds off-schedule capacity only for the hours its readings cover', () => {
+  // One weekly window: a 4% burst on the first night, three days without use,
+  // then a small change this morning. Two polls ten minutes apart are not a
+  // fully observed quiet day, so they must not dilute the night pace the way
+  // days polled around the clock rightly do.
+  const reset = '2026-09-21T08:00:00.000Z';
+  const row = (observedAt, usedPercent) => ({
+    observedAt, usedPercent, remainingPercent: 100 - usedPercent, resetsAt: reset, provenance: 'official',
+  });
+  const brief = ['15', '16', '17'].flatMap((day) => [row(`2026-09-${day}T22:00:00Z`, 14), row(`2026-09-${day}T22:10:00Z`, 14)]);
+  const polled = [];
+  for (let at = Date.parse('2026-09-15T00:00:00Z'); at < Date.parse('2026-09-18T00:00:00Z'); at += 30 * 60_000) {
+    polled.push(row(new Date(at).toISOString(), 14));
+  }
+  const [unobserved, briefly, throughout] = [[], brief, polled].map((quiet) => forecastQuota([
+    row('2026-09-14T08:00:00Z', 10), row('2026-09-14T22:00:00Z', 10), row('2026-09-14T22:30:00Z', 14),
+    ...quiet,
+    row('2026-09-18T08:50:00Z', 14), row('2026-09-18T09:00:00Z', 20),
+  ], { now: '2026-09-18T09:00:00Z', schedule: { activeDays: [1, 2, 3, 4, 5, 6, 0], startHour: 8, endHour: 22 } }).expectedRemaining);
+  assert.ok(briefly - unobserved < 0.5, `brief polls ${briefly} vs unobserved ${unobserved}`);
+  assert.ok(throughout - unobserved > 2, `polled quiet days ${throughout} vs unobserved ${unobserved}`);
+});
+
 test('a fresh window after a reset inherits the prior window pace', () => {
   // Mirrors the real failure: the old window burned 9% over a week (observed
   // only during a three-hour burst), then the allowance reset. The new window
