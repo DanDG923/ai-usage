@@ -87,10 +87,17 @@ test('page navigation and search share a bounded aggregation cache and refresh o
 
 test('session period boundaries and rollback never expose stale or uncommitted sessions', (t) => {
   const store = fixture(t);
-  add(store, 1, { occurredAt: new Date(NOW - 7 * DAY).toISOString() });
+  // A 7-day period is the last seven local calendar days, today included.
+  const start = new Date(NOW);
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() - 6);
+  const nextDay = new Date(NOW);
+  nextDay.setHours(24, 0, 0, 0);
+  add(store, 1, { occurredAt: start.toISOString() });
+  add(store, 3, { occurredAt: new Date(start.getTime() - 1).toISOString() });
   assert.equal(page(store, { days: 7 }).total, 1);
-  assert.equal(page(store, { days: 7 }, NOW + 1).total, 0);
-  assert.equal(page(store, { days: 7 }, NOW - 1).total, 1);
+  assert.equal(page(store, { days: 7 }, nextDay.getTime()).total, 0);
+  assert.equal(page(store, { days: 7 }, NOW).total, 1);
   assert.throws(() => store.transaction(() => {
     add(store, 2);
     assert.equal(page(store, { days: 7 }).total, 2);

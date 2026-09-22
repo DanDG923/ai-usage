@@ -5,11 +5,41 @@
 // dies so a refresh can never hang on a process that is no longer there.
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10 * 60_000;
+const DEFAULT_IDLE_TIMEOUT_MS = 30_000;
 
-function createCollectorHost({ fork, modulePath, config, requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS, forkOptions = {}, onLog = () => {} }) {
+function createCollectorHost({ fork, modulePath, config, requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS, idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS, forkOptions = {}, onLog = () => {} }) {
   let child = null;
+  let idleTimer;
   let nextId = 1;
   const pending = new Map();
+  const retiring = new Map();
+
+  function finishRetirement(target) {
+    clearTimeout(retiring.get(target)?.timer);
+    retiring.delete(target);
+    try { target.kill(); } catch { /* Already gone. */ }
+  }
+
+  function scheduleIdle() {
+    clearTimeout(idleTimer);
+    if (!child || pending.size || !(idleTimeoutMs > 0)) return;
+    const target = child;
+    idleTimer = setTimeout(() => {
+      if (child !== target || pending.size) return;
+      // Detach before asking it to close: a new refresh gets a fresh child,
+      // never a connection which is already being closed. No work is pending.
+      child = null;
+      const id = nextId++;
+      const timer = setTimeout(() => finishRetirement(target), 5_000);
+      timer.unref?.();
+      retiring.set(target, { id, timer });
+      try {
+        // oxlint-disable-next-line unicorn/require-post-message-target-origin
+        target.postMessage({ id, type: 'close', payload: {} });
+      } catch { finishRetirement(target); }
+    }, idleTimeoutMs);
+    idleTimer.unref?.();
+  }
 
   // Fail the in-flight requests of one child (or of every child when no
   // owner is given). A recycled child's late exit event must not reject a
@@ -26,15 +56,22 @@ function createCollectorHost({ fork, modulePath, config, requestTimeoutMs = DEFA
   function spawn() {
     const spawned = fork(modulePath, [JSON.stringify(config)], { serviceName: 'AI Usage collectors', ...forkOptions });
     spawned.on('message', (message) => {
+      if (retiring.get(spawned)?.id === message?.id) {
+        finishRetirement(spawned);
+        return;
+      }
       const entry = pending.get(message?.id);
-      if (!entry) return;
+      if (!entry || entry.child !== spawned) return;
       pending.delete(message.id);
       clearTimeout(entry.timer);
       if (message.ok) entry.resolve(message.result);
       else entry.reject(new Error(message.error?.message || 'Collector request failed.'));
+      scheduleIdle();
     });
     spawned.on('exit', (code) => {
       if (child === spawned) child = null;
+      clearTimeout(retiring.get(spawned)?.timer);
+      retiring.delete(spawned);
       onLog(`Collector process exited with code ${code}.`);
       failAll(new Error(`The collector process stopped unexpectedly (code ${code}).`), spawned);
     });
@@ -42,6 +79,7 @@ function createCollectorHost({ fork, modulePath, config, requestTimeoutMs = DEFA
   }
 
   function request(type, payload = {}) {
+    clearTimeout(idleTimer);
     if (!child) spawn();
     const target = child;
     const id = nextId++;
@@ -61,11 +99,14 @@ function createCollectorHost({ fork, modulePath, config, requestTimeoutMs = DEFA
         pending.delete(id);
         clearTimeout(timer);
         reject(error);
+        scheduleIdle();
       }
     });
   }
 
   function stop() {
+    clearTimeout(idleTimer);
+    for (const target of retiring.keys()) finishRetirement(target);
     const current = child;
     child = null;
     if (!current) return;

@@ -179,7 +179,10 @@ test('a local session scan failure cannot block current app-server limits', asyn
   assert.equal(appServerCalls, 1);
   assert.equal(result.appServer.observations, 1);
   assert.match(result.localWarning, /session file was rotated/);
-  assert.equal(statuses[0][1], 'degraded');
+  // The official allowance is current; the local failure is reported, not
+  // presented to the verdict and alerts as stale data.
+  assert.equal(statuses[0][1], 'connected');
+  assert.match(statuses[0][2], /could not be scanned/);
 });
 
 test('optional daily history degradation still records a successful official scan', async () => {
@@ -197,7 +200,8 @@ test('optional daily history degradation still records a successful official sca
     }),
   });
 
-  assert.equal(statuses[0][1], 'degraded');
+  assert.equal(statuses[0][1], 'connected');
+  assert.match(statuses[0][2], /optional daily account history was unavailable/);
   assert.deepEqual(statuses[0][4], { scanSucceeded: true });
 });
 
@@ -336,7 +340,7 @@ test('CODEX_HOME relocates the session scan and a relative override is ignored',
   }
 });
 
-test('session logs the OS refused to read degrade the Codex status instead of passing silently', async () => {
+test('session logs the OS refused to read are reported in the Codex status instead of passing silently', async () => {
   const statuses = [];
   await refreshCodex({
     setSourceStatus: (...args) => statuses.push(args),
@@ -345,7 +349,7 @@ test('session logs the OS refused to read degrade the Codex status instead of pa
     importSessions: () => ({ importedFiles: 3, events: 9, observations: 1, readErrors: 2, lastReadError: 'EBUSY' }),
     collectAppServer: async () => ({ observations: 1, dailyBuckets: 0, resetCredits: null, usageWarning: null }),
   });
-  assert.equal(statuses[0][1], 'degraded');
+  assert.equal(statuses[0][1], 'connected');
   assert.match(statuses[0][2], /could not be scanned/);
   assert.match(statuses[0][3].localWarning, /2 Codex session logs could not be read \(EBUSY\)/);
 });

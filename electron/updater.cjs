@@ -23,6 +23,7 @@ function updateError(error) {
     return { status: 'auth-required', error: 'GitHub sign-in is unavailable. Sign in with GitHub CLI on this PC, then check again.' };
   }
   if (code === 'UPDATE_BACKUP_FAILED') return { status: 'error', error: 'The safety backup failed. Check your backup folder and free disk space, then restart the update.' };
+  if (code === 'UPDATE_MODULE_UNAVAILABLE') return { status: 'error', error: 'The update component could not be loaded. Reinstall AI Usage from the latest setup file.' };
   if (code === 'ERR_UPDATER_CHANNEL_FILE_NOT_FOUND' || /cannot find latest\.yml/i.test(message)) {
     return { status: 'error', error: 'The latest private release is missing its update manifest. Publish the complete release, then check again.' };
   }
@@ -74,7 +75,11 @@ function safeCode(error) {
 }
 
 function createUpdateChecker({
-  autoUpdater, enabled, isPackaged, pkg, getToken,
+  // Either the electron-updater instance or a function that loads it. The
+  // module tree is sizeable, so a build that can never update (development,
+  // portable) never loads it, and an installed one loads it for the first
+  // check rather than at launch.
+  autoUpdater: updaterOption, enabled, isPackaged, pkg, getToken,
   isPortable = Boolean(process.env.PORTABLE_EXECUTABLE_FILE || process.env.PORTABLE_EXECUTABLE_DIR),
   platform = process.platform, environment = process.env, beforeInstall = async () => {}, onInstallError = () => {},
   // When both are supplied the app verifies and launches the installer itself,
@@ -83,7 +88,10 @@ function createUpdateChecker({
   onStatus = () => {}, onLog = () => {},
 }) {
   const feed = releaseFeed(pkg);
-  const available = Boolean(autoUpdater && isPackaged && feed && !isPortable && platform === 'win32');
+  const lazy = typeof updaterOption === 'function';
+  const available = Boolean((lazy || updaterOption) && isPackaged && feed && !isPortable && platform === 'win32');
+  let loadedUpdater = lazy ? null : updaterOption;
+  let loaded = !lazy;
   let timer = null;
   let operation = null;
   let downloaded = false;
@@ -113,7 +121,17 @@ function createUpdateChecker({
     onLog(`Failed while ${stage}${code ? ` (${code})` : ''}: ${result.error}`);
   }
 
-  if (autoUpdater) {
+  function updater() {
+    if (!loaded) {
+      loaded = true;
+      try { loadedUpdater = updaterOption() || null; } catch { loadedUpdater = null; }
+      if (loadedUpdater) configure(loadedUpdater);
+    }
+    if (!loadedUpdater) throw Object.assign(new Error('The update module could not be loaded.'), { code: 'UPDATE_MODULE_UNAVAILABLE' });
+    return loadedUpdater;
+  }
+
+  function configure(autoUpdater) {
     autoUpdater.logger = null;
     autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = false;
@@ -151,6 +169,7 @@ function createUpdateChecker({
       if (installing) onInstallError();
     });
   }
+  if (loadedUpdater) configure(loadedUpdater);
 
   function run(task) {
     if (operation) return operation;
@@ -164,6 +183,7 @@ function createUpdateChecker({
     return run(async () => {
       candidate = false;
       change({ status: 'checking', error: null, progress: null, version: null, releaseNotes: null });
+      const autoUpdater = updater();
       if (feed.provider === 'github' && feed.private) {
         if (!getToken) throw Object.assign(new Error(), { code: 'UPDATE_AUTH_REQUIRED' });
         const token = await getToken();
@@ -184,7 +204,7 @@ function createUpdateChecker({
     return run(async () => {
       change({ status: 'downloading', progress: 0, error: null });
       onLog(`Download started: ${result.version || 'unknown version'}.`);
-      await autoUpdater.downloadUpdate();
+      await updater().downloadUpdate();
     });
   }
 
@@ -202,7 +222,7 @@ function createUpdateChecker({
           quitForInstall();
         } else {
           onLog('Installer launch delegated to electron-updater.');
-          autoUpdater.quitAndInstall(true, true);
+          updater().quitAndInstall(true, true);
         }
       } catch (error) {
         onInstallError();
