@@ -259,6 +259,12 @@ function usageFingerprint(info, sessionId, model, occurredAt) {
   return JSON.stringify([sessionId, ...values]);
 }
 
+// A fork's rollout begins with its own session_meta; Codex then copies the
+// parent's session_meta and history into it, stamped at the moment of the
+// copy. The fork keeps its own identity, and token counts stamped with that
+// copy are the parent's usage, recorded from the parent's own rollout.
+const COPIED_HISTORY_MS = 1000;
+
 function* sessionEntries(lines, state, onRejected = () => {}) {
   for (const line of lines) {
     let entry;
@@ -268,12 +274,23 @@ function* sessionEntries(lines, state, onRejected = () => {}) {
       continue;
     }
     if (entry.type === 'session_meta') {
-      if (entry.payload?.id) state.sessionId = entry.payload.id;
+      const id = entry.payload?.id;
+      if (state.ownId && typeof id === 'string' && id && id !== state.ownId) {
+        state.copiedFrom = id;
+        state.copiedUntil = Date.parse(entry.timestamp) + COPIED_HISTORY_MS;
+        continue;
+      }
+      if (id) state.sessionId = id;
       state.agent = codexAgentMetadata(entry.payload);
       state.taskId = null;
       state.lastTokenSnapshot = null;
       if (typeof entry.payload?.cwd === 'string' && entry.payload.cwd.trim()) state.project = entry.payload.cwd.trim();
+      // The first valid id is the file's own. Cursors from earlier versions
+      // carry no ownId and keep the identity they already recorded.
+      if (state.ownId === null && typeof id === 'string' && id.trim()) state.ownId = id;
     }
+    if (entry.type === 'event_msg' && entry.payload?.type === 'token_count'
+      && Date.parse(entry.timestamp) <= state.copiedUntil) continue;
     if (entry.type === 'turn_context') {
       state.model = entry.payload?.model || state.model;
       state.taskId = textId(entry.payload?.root_turn_id)
@@ -299,6 +316,30 @@ function eventKeyFor(state, timestamp) {
   }
   const base = `codex:${state.sessionId}:${timestamp}`;
   return state.sameInstantEvents ? `${base}#${state.sameInstantEvents}` : base;
+}
+
+// Before forks kept their own identity, a fork's records were filed under
+// its parent's session id. A rescan must not import them a second time.
+function parentFiledKey(store, state, eventKey) {
+  const prefix = `codex:${state.sessionId}:`;
+  if (!state.copiedFrom || !eventKey.startsWith(prefix)) return null;
+  const key = `codex:${state.copiedFrom}:${eventKey.slice(prefix.length)}`;
+  return store.prepare('SELECT 1 AS found FROM usage_events WHERE event_key = ?').get(key) ? key : null;
+}
+
+// Session logs repeat the same rate-limit reading on almost every token
+// count. A repeat is kept only when a quarter hour has passed since the last
+// kept reading; every one stored is re-read by each later forecast.
+const RATE_LIMIT_HEARTBEAT_MS = 15 * 60_000;
+
+// Everything a stored reading carries except its time: a changed plan or
+// limit name is a new reading, and must be validated like one.
+function rateLimitReading(raw) {
+  return JSON.stringify([raw.planType ?? raw.plan_type ?? null, raw.limitName ?? raw.limit_name ?? null,
+    ...['primary', 'secondary'].map((label) => {
+      const window = quotaWindow(raw[label]);
+      return window ? [window.usedPercent, window.windowMinutes, window.resetsAt] : null;
+    })]);
 }
 
 function codexUsageEvent(entry, state) {
@@ -452,7 +493,7 @@ function importLocalSessions(store, days = 120) {
     const startOffset = resumable ? plan.startOffset : 0;
     const state = resumable
       ? { ...previous.state }
-      : { sessionId: path.basename(fullPath, '.jsonl'), model: null, project: null, agentAttributionVersion: 1, accountingVersion: 1, eventKeyVersion: 1 };
+      : { sessionId: path.basename(fullPath, '.jsonl'), model: null, project: null, agentAttributionVersion: 1, accountingVersion: 1, eventKeyVersion: 1, ownId: null };
     let chunk;
     try {
       chunk = readCompleteLines(fullPath, startOffset, stat.size, { streaming: true });
@@ -480,9 +521,16 @@ function importLocalSessions(store, days = 120) {
       if (!reconciliationBackup && migration.backupNeeded) {
         reconciliationBackup = store.createBackup();
       }
+      const recordLocalRateLimit = (entry) => recordRateLimit(store, entry.payload.rate_limits, entry.timestamp, 'local-official', {}, {
+        onRejected: (error) => {
+          rejected += 1;
+          lastRejection = error instanceof Error ? error.message : String(error);
+        },
+      });
       // One commit per file: the rows and the cursor that says they were read
       // land together, and a first import no longer pays a WAL sync per event.
       store.transaction(() => {
+        const repeatedRateLimits = new Map();
         for (const entry of sessionEntries(chunk.lines, state, (message) => { rejected += 1; lastRejection = message; })) {
           if (entry.type !== 'event_msg' || entry.payload?.type !== 'token_count') continue;
           const usage = entry.payload?.info?.last_token_usage;
@@ -492,6 +540,7 @@ function importLocalSessions(store, days = 120) {
             const previousSnapshot = state.lastTokenSnapshot;
             const duplicate = fingerprint && fingerprint === previousSnapshot?.fingerprint
               && retainedSnapshotExists(store, previousSnapshot.eventKey, event);
+            const parentKey = !migration.blocked.has(event.eventKey) && !duplicate ? parentFiledKey(store, state, event.eventKey) : null;
             if (migration.blocked.has(event.eventKey)) {
               state.lastTokenSnapshot = null;
               rejected += 1;
@@ -502,6 +551,9 @@ function importLocalSessions(store, days = 120) {
                 reconciledEvents += store.prepare(`DELETE FROM usage_events WHERE ${DUPLICATE_ROW_GUARD}`)
                   .run(...duplicateRowParameters(event)).changes;
               }
+            } else if (parentKey) {
+              duplicateEvents += 1;
+              state.lastTokenSnapshot = fingerprint ? { fingerprint, eventKey: parentKey } : null;
             } else {
               // One malformed event must not stop the file; see the Claude importer.
               try {
@@ -517,13 +569,25 @@ function importLocalSessions(store, days = 120) {
             }
           }
           if (entry.payload?.rate_limits) {
-            observations += recordRateLimit(store, entry.payload.rate_limits, entry.timestamp, 'local-official', {}, {
-              onRejected: (error) => {
-                rejected += 1;
-                lastRejection = error instanceof Error ? error.message : String(error);
-              },
-            });
+            const raw = entry.payload.rate_limits;
+            const limitId = raw.limitId ?? raw.limit_id ?? 'codex';
+            const reading = rateLimitReading(raw);
+            const kept = state.keptRateLimits?.[limitId];
+            const at = Date.parse(entry.timestamp);
+            if (kept && kept.reading === reading && at - kept.at < RATE_LIMIT_HEARTBEAT_MS) {
+              repeatedRateLimits.set(limitId, entry);
+            } else {
+              repeatedRateLimits.delete(limitId);
+              observations += recordLocalRateLimit(entry);
+              state.keptRateLimits = { ...state.keptRateLimits, [limitId]: { reading, at } };
+            }
           }
+        }
+        // The last reading of each limit is kept, so the newest local reading
+        // is never older than the log.
+        for (const [limitId, entry] of repeatedRateLimits) {
+          observations += recordLocalRateLimit(entry);
+          state.keptRateLimits = { ...state.keptRateLimits, [limitId]: { ...state.keptRateLimits[limitId], at: Date.parse(entry.timestamp) } };
         }
         store.markImportedFile(fullPath, stat.mtimeMs, startOffset + chunk.consumedBytes, state);
       });
@@ -568,7 +632,9 @@ async function refreshCodex(store, {
 
   try {
     const appServer = await collectAppServer(store, binary);
-    const degraded = Boolean(appServer.usageWarning || localWarning);
+    // The official allowance was read, so the source is current. Optional
+    // extras that failed go in the detail: every consumer reads 'degraded' as
+    // stale data and would flip the verdict and send a cached-data alert.
     let detail = 'Connected through the local Codex app server.';
     if (appServer.usageWarning && localWarning) {
       detail = 'Official Codex allowance was updated; optional daily account history and local session records were unavailable.';
@@ -577,7 +643,7 @@ async function refreshCodex(store, {
     } else if (localWarning) {
       detail = 'Official Codex allowance was updated; local session records could not be scanned.';
     }
-    store.setSourceStatus('codex', degraded ? 'degraded' : 'connected', detail, {
+    store.setSourceStatus('codex', 'connected', detail, {
       binary,
       appServer,
       local,

@@ -35,10 +35,21 @@ contextBridge.exposeInMainWorld('aiUsage', {
   snoozeAlerts: (hours) => invoke('dashboard:snooze-alerts', hours),
   reportRendererError: (detail) => invoke('app:renderer-error', detail),
   getVersion: () => invoke('app:get-version'),
+  getRenderingMode: () => invoke('app:rendering-mode'),
+  relaunch: () => invoke('app:relaunch'),
   checkForUpdates: () => invoke('app:check-updates'),
   getUpdateStatus: () => invoke('app:update-status'),
   downloadUpdate: () => invoke('app:download-update'),
   installUpdate: () => invoke('app:install-update'),
+  onPrepareSleep: (callback) => {
+    const listener = (_event, token) => {
+      let allowed = false;
+      try { allowed = callback() === true; } catch { /* Keep unfinished UI alive. */ }
+      void invoke('dashboard:sleep-ready', token, allowed).catch(() => {});
+    };
+    ipcRenderer.on('dashboard:prepare-sleep', listener);
+    return () => ipcRenderer.removeListener('dashboard:prepare-sleep', listener);
+  },
   onUpdateStatus: (callback) => {
     const listener = (_event, status) => callback(status);
     ipcRenderer.on('app:update-status-changed', listener);

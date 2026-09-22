@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { shortDate } from '../../lib';
-import type { Settings, Snapshot, Theme, UpdateStatus } from '../../types';
+import type { RenderingMode, Settings, Snapshot, Theme, UpdateStatus } from '../../types';
 import { SectionHeading, ToggleRow } from './fields';
 import './updates.css';
 
@@ -65,6 +65,8 @@ export function AppearanceSection({
   const [version, setVersion] = useState('');
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [pending, setPending] = useState<'check' | 'download' | 'install' | null>(null);
+  const [renderingMode, setRenderingMode] = useState<RenderingMode | null>(null);
+  const [restarting, setRestarting] = useState(false);
   const statusRevision = useRef(0);
   const mounted = useRef(false);
   const actionPending = useRef(false);
@@ -83,6 +85,12 @@ export function AppearanceSection({
       ?.getVersion()
       .then((value) => {
         if (!cancelled) setVersion(value);
+      })
+      .catch(() => {});
+    void bridge
+      ?.getRenderingMode?.()
+      .then((value) => {
+        if (!cancelled) setRenderingMode(value);
       })
       .catch(() => {});
     void bridge
@@ -130,6 +138,19 @@ export function AppearanceSection({
   const checking = status?.status === 'checking' || pending === 'check';
   const busy = Boolean(pending) || downloading || installing || checking;
   const downloaded = status?.status === 'downloaded';
+  const requestedRendering = snapshot.settings.softwareRendering ? 'software' : 'hardware';
+  const renderingForced = Boolean(renderingMode?.forced);
+  const restartNeeded = Boolean(renderingMode && !renderingForced && renderingMode.active !== requestedRendering);
+  const restart = async () => {
+    const bridge = window.aiUsage;
+    if (preview || !bridge?.relaunch || restarting) return;
+    setRestarting(true);
+    try {
+      await bridge.relaunch();
+    } catch {
+      setRestarting(false);
+    }
+  };
   const progress =
     typeof status?.progress === 'number' && Number.isFinite(status.progress)
       ? Math.min(100, Math.max(0, status.progress))
@@ -148,6 +169,39 @@ export function AppearanceSection({
           </select>
         </label>
       </div>
+      <ToggleRow
+        title="Lower memory use"
+        description="Draws the dashboard with the processor instead of the graphics card. This keeps roughly 150 MB less in memory while AI Usage waits in the tray, at the cost of slightly smoother scrolling. Applies the next time AI Usage starts."
+        checked={snapshot.settings.softwareRendering}
+        onChange={(checked) => update({ softwareRendering: checked })}
+      />
+      {renderingForced && !snapshot.settings.softwareRendering ? (
+        <div className="snooze-row update-summary">
+          <span role="status">
+            <strong>Software rendering is forced on this PC</strong>
+            <small>
+              The AI_USAGE_DISABLE_GPU environment variable keeps AI Usage drawing with the processor on every start.
+              Remove it to let this setting take effect.
+            </small>
+          </span>
+        </div>
+      ) : null}
+      {restartNeeded ? (
+        <div className="snooze-row update-summary">
+          <span role="status">
+            <strong>Restart to apply the rendering change</strong>
+            <small>
+              AI Usage keeps using the {renderingMode?.active === 'software' ? 'processor' : 'graphics card'} until it
+              restarts. Your history and settings are kept.
+            </small>
+          </span>
+          <div className="action-row compact">
+            <button className="secondary-button" disabled={preview || restarting} onClick={() => void restart()}>
+              {restarting ? 'Restarting…' : 'Restart AI Usage'}
+            </button>
+          </div>
+        </div>
+      ) : null}
       <ToggleRow
         title="Check for updates automatically"
         description="Checks private GitHub releases shortly after launch and every few hours. Your usage history stays on this PC."

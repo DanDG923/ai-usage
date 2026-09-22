@@ -64,6 +64,7 @@ function createCollectorService({
       case 'ping':
         return { ok: true };
       case 'close':
+        await queue;
         close();
         return { closed: true };
       default:

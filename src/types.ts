@@ -276,6 +276,8 @@ export type Settings = {
   alertsSnoozedUntil: string | null;
   launchAtLogin: boolean;
   theme: Theme;
+  /** Draw with the CPU instead of the graphics card; applied at the next launch. */
+  softwareRendering: boolean;
   autoUpdate: boolean;
   backupFrequency: string;
   backupRetentionCount: number;
@@ -310,6 +312,8 @@ export type Snapshot = {
   settings: Settings;
   sources: Source[];
   quotas: { codex: Quota | null; claude: Quota | null; fable: Quota | null };
+  /** False when the named Claude plan has no Fable allowance and no Fable reading exists. */
+  fableApplies?: boolean;
   dashboardVerdict: DashboardVerdict;
   resetCredits: number;
   priceCatalog: PriceRow[];
@@ -326,6 +330,14 @@ export type ManualObservation = {
   resetsAt: string;
   observedAt?: string;
   note?: string;
+};
+
+export type RenderingMode = {
+  /** How this running instance draws; changes apply at the next launch. */
+  active: 'software' | 'hardware';
+  requested: 'software' | 'hardware';
+  /** True when the environment forces software rendering, so a restart cannot apply the preference. */
+  forced: boolean;
 };
 
 export type UpdateStatus = {
@@ -401,24 +413,28 @@ export type Bridge = {
       helperScriptRemoved: boolean;
     };
   }>;
-  createBackup(): Promise<{ snapshot?: Snapshot; result: { databasePath: string; exportPath: string } }>;
+  /** `exportPath` is null when the ledger is too large for a restorable export. */
+  createBackup(): Promise<{ snapshot?: Snapshot; result: { databasePath: string; exportPath: string | null } }>;
   restoreBackup(): Promise<{
     cancelled: boolean;
     snapshot?: Snapshot;
     result?: RestoreCounts;
-    safetyBackup?: { databasePath: string; exportPath: string };
+    safetyBackup?: { databasePath: string; exportPath: string | null };
   }>;
   openBackupDirectory(): Promise<void>;
   exportCsv(days: number): Promise<{ cancelled: boolean; filePath?: string; rows?: number; days?: number }>;
   copySummary(): Promise<{ text: string }>;
   snoozeAlerts(hours: number): Promise<{ snapshot: Snapshot }>;
   getVersion(): Promise<string>;
+  getRenderingMode?(): Promise<RenderingMode>;
+  relaunch?(): Promise<void>;
   checkForUpdates(): Promise<UpdateStatus>;
   getUpdateStatus(): Promise<UpdateStatus>;
   downloadUpdate(): Promise<UpdateStatus>;
   installUpdate(): Promise<UpdateStatus>;
   onUpdateStatus(callback: (status: UpdateStatus) => void): () => void;
   onUpdated?(callback: (snapshot: Snapshot) => void): () => void;
+  onPrepareSleep?(callback: () => boolean): () => void;
 };
 
 export type DesktopImportPreview = {

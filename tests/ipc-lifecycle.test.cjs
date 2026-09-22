@@ -77,6 +77,49 @@ test('settings edits do not reintroduce an expired cached forecast after collect
   assert.equal(h.run('patchSnapshotSettings().expired'), true);
 });
 
+test('window release drops full snapshots but preserves reset and fallback notification evidence', () => {
+  const h = mainHarness();
+  h.run(`globalThis.released = 0; store = { releaseDashboardCaches: () => released++ };
+    cachedSnapshot = { value: { costs: {} } }; lastFullSnapshot = cachedSnapshot.value;
+    previousSnapshot = { costs: { heavy: true }, quotas: { codex: { windows: [{ bucketId: 'weekly', resetsAt: 'later', usedPercent: 90, forecast: { series: [1, 2, 3] } }] } }, sources: [{ id: 'codex', status: 'connected', metadata: { heavy: true } }] };
+    releaseDashboardMemory();`);
+  assert.equal(h.run('cachedSnapshot'), null);
+  assert.equal(h.run('lastFullSnapshot'), null);
+  assert.equal(h.run('released'), 1);
+  assert.deepEqual(JSON.parse(h.run('JSON.stringify(previousSnapshot)')), {
+    quotas: { codex: { windows: [{ bucketId: 'weekly', resetsAt: 'later', usedPercent: 90 }] } },
+    sources: [{ id: 'codex', status: 'connected' }],
+  });
+});
+
+test('in-flight dashboard IPC keeps the hidden window alive until success or failure settles', async () => {
+  const h = mainHarness();
+  h.run("window = { isDestroyed: () => false, webContents: { mainFrame: {} } }; handleIpc('test', () => new Promise((resolve, reject) => { globalThis.resolveJob = resolve; globalThis.rejectJob = reject; }));");
+  const sender = h.run('window.webContents');
+  const event = { sender, senderFrame: sender.mainFrame };
+  const success = h.handlers.get('test')(event);
+  assert.equal(h.run('activeDashboardRequests'), 1);
+  h.run('resolveJob(42);');
+  assert.equal(await success, 42);
+  assert.equal(h.run('activeDashboardRequests'), 0);
+  const failure = h.handlers.get('test')(event);
+  h.run("rejectJob(Error('failed')); ");
+  await assert.rejects(failure, /failed/);
+  assert.equal(h.run('activeDashboardRequests'), 0);
+});
+
+test('tray copy retains the full cost summary without caching a dashboard', () => {
+  const h = mainHarness();
+  h.run(`globalThis.released = 0;
+    store = { getDashboardSnapshot: () => ({ quotas: {}, costs: { actual: 12.34, currency: 'GBP', periodDays: 90 } }), releaseDashboardCaches: () => released++ };
+    window = null; periodDays = 90;`);
+  assert.match(h.run('traySummary()'), /12.34/);
+  assert.match(h.run('traySummary()'), /90/);
+  assert.equal(h.run('released'), 2);
+  assert.equal(h.run('cachedSnapshot'), null);
+  assert.equal(h.run('lastFullSnapshot'), null);
+});
+
 test('closing IPC serves the last full snapshot rather than a tray-only notification view', () => {
   const handlers = new Map();
   registerIpc({ handleIpc: (name, fn) => handlers.set(name, fn), storageClosing: () => true,

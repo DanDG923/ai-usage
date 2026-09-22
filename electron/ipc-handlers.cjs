@@ -9,7 +9,7 @@ function registerIpc(context) {
     invalidateSnapshot, applySettingsEffects, patchSnapshotSettings, updateTray,
     publishAfterWrite, refreshClaudeOnly, log, logRendererError, installClaudeHelper,
     getInboxPath, uninstallClaudeHelper, maintenance, dialog, getWindow, shell, app,
-    buildSummaryText, clipboard, setSnooze, updateChecker,
+    buildSummaryText, clipboard, setSnooze, updateChecker, renderingMode, renderingForced, relaunch,
   } = context;
   handleIpc('claude-setup:status', () => claudeSetup.status());
   handleIpc('claude-setup:dismissed', () => claudeSetup.dismissed());
@@ -38,7 +38,7 @@ function registerIpc(context) {
     const settings = store.updateSettings(patch || {});
     // The Fable estimate is projected when the snapshot is built, so a saved
     // allowance change is reflected by the very next snapshot.
-    const cheapSettings = new Set(['theme', 'notifyDesktop', 'notifyResets', 'notifyFallback', 'dailyDigest', 'dailyDigestHour', 'alertsSnoozedUntil', 'autoUpdate', 'launchAtLogin', 'refreshIntervalMinutes']);
+    const cheapSettings = new Set(['theme', 'notifyDesktop', 'notifyResets', 'notifyFallback', 'dailyDigest', 'dailyDigestHour', 'alertsSnoozedUntil', 'autoUpdate', 'launchAtLogin', 'refreshIntervalMinutes', 'softwareRendering']);
     const affectsSnapshot = Object.keys(patch || {}).some((key) => !cheapSettings.has(key));
     if (affectsSnapshot) invalidateSnapshot();
     applySettingsEffects();
@@ -105,10 +105,11 @@ function registerIpc(context) {
   }));
   handleIpc('dashboard:restore-backup', async () => {
     const chosen = await dialog.showOpenDialog(getWindow() ?? undefined, {
-      title: 'Restore an AI Usage export',
+      title: 'Restore an AI Usage backup',
       defaultPath: store.backupDirectory,
       properties: ['openFile'],
-      filters: [{ name: 'AI Usage export', extensions: ['json', 'gz'] }],
+      // A .sqlite backup restores any ledger size; exports stop at 64 MB.
+      filters: [{ name: 'AI Usage backup', extensions: ['sqlite', 'gz', 'json'] }],
     });
     if (chosen.canceled || !chosen.filePaths?.length) return { cancelled: true };
     const { result, safetyBackup } = await databaseJobs.exclusive(async () => {
@@ -195,6 +196,16 @@ function registerIpc(context) {
     logRendererError(`Renderer error: ${detail.message.slice(0, 1000).replace(/[\r\n]+/g, ' ')} ${String(detail.componentStack || '').slice(0, 3000).replace(/[\r\n]+/g, ' ')}`);
   });
   handleIpc('app:get-version', () => app.getVersion());
+  // Chromium fixes the rendering path at launch; the renderer compares the
+  // saved preference with the running instance to offer a restart. An
+  // environment override wins on every launch, so a restart could not apply
+  // the preference and the renderer must not offer one.
+  handleIpc('app:rendering-mode', () => ({
+    active: renderingMode === 'software' ? 'software' : 'hardware',
+    requested: store.getSettings().softwareRendering ? 'software' : 'hardware',
+    forced: Boolean(renderingForced),
+  }));
+  handleIpc('app:relaunch', () => { relaunch(); });
   handleIpc('app:check-updates', async () => {
     if (!updateChecker) return { status: 'unavailable', available: false };
     await updateChecker.check();

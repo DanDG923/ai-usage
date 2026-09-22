@@ -29,8 +29,7 @@ export function Costs({
   const costs = snapshot.costs;
   const recent = useMemo(() => rollups(costs, new Date(snapshot.generatedAt)), [costs, snapshot.generatedAt]);
   const hitRate = useMemo(() => cacheHitRate(costs), [costs]);
-  const previous = recent.previousWeek;
-  const weekChange = previous && previous > 0 ? ((recent.week - previous) / previous) * 100 : null;
+  const weekChange = recent.weekChange == null ? null : recent.weekChange * 100;
   const unpriced = costs.unpricedModels
     .map((entry) => `${sourceLabel(entry.sourceId)} ${entry.model} (${compactNumber(entry.tokens)} tokens)`)
     .join(', ');
@@ -100,7 +99,7 @@ export function Costs({
             <small>
               {weekChange == null
                 ? 'Previous week unavailable'
-                : `${weekChange >= 0 ? '+' : ''}${Math.round(weekChange)}% vs previous week`}
+                : `${weekChange >= 0 ? '+' : ''}${Math.round(weekChange)}% vs previous week (full days)`}
             </small>
           </div>
           <div>
