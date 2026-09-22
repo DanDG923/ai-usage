@@ -106,6 +106,8 @@ export function buildDashboardVerdict(snapshot = {}) {
     if (!subscriptionVisible(snapshot.settings, source.id)) continue;
     const windows = quotaWindows(quotas[source.id]);
     if (!windows.length) {
+      // A plan without a Fable allowance has no Fable window to wait for.
+      if (source.id === 'fable' && snapshot.fableApplies === false) continue;
       missing.push(source.label);
       continue;
     }

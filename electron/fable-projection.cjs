@@ -255,7 +255,7 @@ function computeProjection(store, nowMs) {
   // model-scoped provider window remains authoritative for every plan.
   const planType = planEvidence(store, overallWindow, nowMs);
   if (planType !== 'max') {
-    return { derived: false, reason: 'fable-not-confirmed-in-shared-plan' };
+    return { derived: false, reason: 'fable-not-confirmed-in-shared-plan', planType };
   }
   const usedOf = allowanceAdjustedUsed(store, nowMs);
   const resetMs = new Date(overallWindow.resets_at).getTime();
@@ -397,7 +397,9 @@ function computeProjection(store, nowMs) {
 // learning series from this; the collector reports it as source status.
 function projectFableAllowance(store, nowMs = Date.now()) {
   const result = computeProjection(store, nowMs);
-  if (!result.derived) return { available: false, reason: result.reason };
+  // The plan is kept on this refusal: a named plan other than Max has no
+  // Fable allowance to wait for, while an unnamed one is only unknown.
+  if (!result.derived) return { available: false, reason: result.reason, ...(result.planType ? { planType: result.planType } : {}) };
   const { derived: _derived, ...projection } = result;
   return { available: true, reason: null, ...projection };
 }

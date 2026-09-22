@@ -174,7 +174,11 @@ function decideNotifications({ previous, current, state = emptyState(), nowMs = 
       const known = next.lastResetSignatures[key];
       resetSignatures[key] = signature;
       if (!before || !known || known === signature || window.forecast?.expired) continue;
-      const movedForward = Date.parse(window.resetsAt) - Date.parse(before.resetsAt) > 60 * 60 * 1000;
+      // Only a window that had usage to replenish can announce a reset. An idle
+      // window's reset rolls forward with the clock, and the poll after an
+      // early replenishment moves the timestamp of a window already at zero.
+      const movedForward = Number(before.usedPercent) > 2
+        && Date.parse(window.resetsAt) - Date.parse(before.resetsAt) > 60 * 60 * 1000;
       const replenished = Number(before.usedPercent) >= 5 && Number(window.usedPercent) <= 2;
       if (!movedForward && !replenished) continue;
       if (!settings.notifyResets || snoozed) continue;

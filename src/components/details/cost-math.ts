@@ -35,21 +35,28 @@ export function recentDayKeys(count: number, anchorMs: number) {
 }
 
 export type Rollups = {
+  /** The last seven calendar days, today included: the same window as a 7-day period's total. */
   week: number;
-  /** Null when the selected period does not reach back far enough. */
-  previousWeek: number | null;
+  /**
+   * The last seven full days against the seven before, as a fraction. Today is
+   * partial, so leaving it out of both keeps a steady pace at zero change.
+   * Null when the selected period does not reach back far enough.
+   */
+  weekChange: number | null;
 };
 
 /**
- * The last seven days against the seven before. Everything comes from the
- * daily chart series, so it only covers the selected period.
+ * The last seven days and how the last full week compares with the one
+ * before. Everything comes from the daily chart series, so it only covers
+ * the selected period.
  */
 export function rollups(costs: CostAnalytics, now = new Date()): Rollups {
   const byDate = new Map(costs.chart.map((point) => [point.date, point.codex + point.claude]));
   const sum = (keys: string[]) => keys.reduce((total, key) => total + (byDate.get(key) || 0), 0);
-  const last14 = recentDayKeys(14, now.getTime());
+  const days = recentDayKeys(15, now.getTime());
+  const previousWeek = costs.periodDays >= 15 ? sum(days.slice(0, 7)) : 0;
   return {
-    week: sum(last14.slice(7)),
-    previousWeek: costs.periodDays >= 14 ? sum(last14.slice(0, 7)) : null,
+    week: sum(days.slice(8)),
+    weekChange: previousWeek > 0 ? (sum(days.slice(7, 14)) - previousWeek) / previousWeek : null,
   };
 }

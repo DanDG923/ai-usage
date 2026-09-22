@@ -6,11 +6,13 @@ const {
   app, BrowserWindow, clipboard, dialog, ipcMain: electronIpcMain, Menu, nativeImage, nativeTheme, Notification,
   powerMonitor, session, shell, Tray, utilityProcess,
 } = require('electron');
-const { UsageStore } = require('./store.cjs');
+const { UsageStore, DEFAULT_SETTINGS } = require('./store.cjs');
+const { readStartupPreferences } = require('./startup-preferences.cjs');
 const { installClaudeHelper, uninstallClaudeHelper, isClaudeHelperInstalled } = require('./claude-collector.cjs');
 const { createClaudeSetup } = require('./claude-setup.cjs');
 const { createCollectorHost, createInlineCollectorHost } = require('./collector-host.cjs');
 const { createCollectorService } = require('./collector-service.cjs');
+const { createWindowIdleRelease } = require('./window-idle.cjs');
 const { createMaintenanceHost, createDatabaseQueue } = require('./maintenance-host.cjs');
 const { buildSummaryText, buildTrayTooltip, decideNotifications, emptyState } = require('./notifications.cjs');
 const { paintStateDot } = require('./tray-icon.cjs');
@@ -36,9 +38,29 @@ const pkg = require('../package.json');
 // and Codex executables the app spawns must still see the user's own values.
 const launchEnvironment = Object.freeze({ ...process.env });
 
-if (process.env.AI_USAGE_DISABLE_GPU === '1') app.disableHardwareAcceleration();
+function storagePaths() {
+  const root = process.env.AI_USAGE_TEST_ROOT || app.getPath('userData');
+  return { databasePath: path.join(root, 'ai-usage.sqlite'), backupDirectory: path.join(root, 'Backups') };
+}
+
+// With hardware acceleration Chromium's GPU process keeps roughly 200 MiB of
+// private memory after the dashboard has been drawn once, even with the window
+// released to the tray; software rendering keeps it near 30 MiB. Chromium only
+// honours the choice before the app is ready, so it is read ahead of the store.
+const renderingForced = process.env.AI_USAGE_DISABLE_GPU === '1';
+const renderingMode = (() => {
+  if (renderingForced) return 'software';
+  let softwareRendering = DEFAULT_SETTINGS.softwareRendering;
+  try { softwareRendering = readStartupPreferences(storagePaths().databasePath).softwareRendering; } catch { /* Default applies. */ }
+  return softwareRendering ? 'software' : 'hardware';
+})();
+if (renderingMode === 'software') app.disableHardwareAcceleration?.();
 
 let window;
+let windowIdle;
+let savedWindowBounds;
+let savedWindowMaximized = false;
+let activeDashboardRequests = 0;
 let tray;
 let store;
 let collectors;
@@ -190,6 +212,22 @@ function patchSnapshotSettings() {
   return snapshot();
 }
 
+function releaseDashboardMemory() {
+  cachedSnapshot = null;
+  lastFullSnapshot = null;
+  // Notifications compare only the old bucket identity/reset/usage and source
+  // status. Do not retain charts, ledger summaries or forecast series for it.
+  if (previousSnapshot) {
+    previousSnapshot = {
+      quotas: Object.fromEntries(Object.entries(previousSnapshot.quotas || {}).map(([key, quota]) => [key, quota && {
+        windows: (quota.windows?.length ? quota.windows : [quota]).map(({ bucketId, resetsAt, usedPercent }) => ({ bucketId, resetsAt, usedPercent })),
+      }])),
+      sources: (previousSnapshot.sources || []).map(({ id, status }) => ({ id, status })),
+    };
+  }
+  store?.releaseDashboardCaches();
+}
+
 function showFatalError(title, message, error) {
   const detail = error instanceof Error ? error.message : String(error || 'Unknown local error.');
   dialog.showErrorBox(title, `${message}\n\n${detail}`);
@@ -245,7 +283,8 @@ function createWindow() {
   const chrome = CHROME[resolvedTheme()];
   window = new BrowserWindow({
     ...WINDOW_BOUNDS,
-    show: !process.argv.includes('--hidden'),
+    ...savedWindowBounds,
+    show: false,
     backgroundColor: chrome.background,
     title: 'AI Usage',
     icon: loadAppIcon() ?? undefined,
@@ -262,6 +301,9 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // Numbers, dates and search terms need no dictionary; skipping the
+      // spellcheck service keeps its dictionaries out of memory.
+      spellcheck: false,
     },
   });
   const target = resolveWindowTarget({
@@ -270,13 +312,22 @@ function createWindow() {
     filePath: path.join(__dirname, '..', 'dist', 'index.html'),
   });
   const targetWindow = window;
+  windowIdle = createWindowIdleRelease({
+    window: targetWindow,
+    isBusy: () => isQuitting || storageClosing() || activeDashboardRequests > 0,
+    onRelease: () => {
+      savedWindowBounds = targetWindow.getNormalBounds();
+      savedWindowMaximized = targetWindow.isMaximized();
+      releaseDashboardMemory();
+    },
+  });
   void loadWindowContents(targetWindow, target).catch((error) => {
     showFatalError('AI Usage could not load', 'The dashboard load failure could not be displayed.', error);
   });
   window.on('close', (event) => {
     if (!isQuitting) {
       event.preventDefault();
-      window.hide();
+      targetWindow.hide();
     }
   });
   // Reopening from the tray must never present hours-old figures as current.
@@ -287,7 +338,8 @@ function createWindow() {
     }
     refreshIfStale();
   });
-  window.on('closed', () => { window = null; });
+  window.on('closed', () => { if (window === targetWindow) window = null; });
+  if (savedWindowMaximized) targetWindow.maximize();
   return window;
 }
 
@@ -318,12 +370,20 @@ function alertsSnoozed() {
   return Boolean(until) && Date.parse(until) > Date.now();
 }
 
+function traySummary() {
+  if (window && !window.isDestroyed() && window.isVisible()) return buildSummaryText(snapshot());
+  // An explicit copy still includes its cost summary. Build it transiently so
+  // this tray action cannot pin a full dashboard in memory until the next open.
+  try { return buildSummaryText(store.getDashboardSnapshot(periodDays)); }
+  finally { store.releaseDashboardCaches(); }
+}
+
 function buildTrayMenu() {
   const snoozed = alertsSnoozed();
   return Menu.buildFromTemplate([
     { label: 'Open AI Usage', click: () => showMainWindow() },
     { label: 'Refresh local data', click: () => { refreshAll().catch(() => {}); } },
-    { label: 'Copy usage summary', click: () => { try { clipboard.writeText(buildSummaryText(snapshot())); } catch { /* Clipboard denied. */ } } },
+    { label: 'Copy usage summary', click: () => { try { clipboard.writeText(traySummary()); } catch { /* Clipboard denied. */ } } },
     { type: 'separator' },
     snoozed
       ? { label: 'Resume alerts', click: () => { setSnooze(0).catch(() => {}); } }
@@ -379,7 +439,8 @@ function setSnooze(hours, { push = true } = {}) {
   return databaseJobs.run(() => {
     const until = hours > 0 ? new Date(Date.now() + hours * 60 * 60 * 1000).toISOString() : null;
     store.updateSettings({ alertsSnoozedUntil: until });
-    const current = patchSnapshotSettings();
+    const current = push && (!window || window.isDestroyed() || !window.isVisible())
+      ? store.getTraySnapshot(Date.now()) : patchSnapshotSettings();
     updateTray(current);
     if (push && window && !window.isDestroyed() && window.isVisible()) window.webContents.send('dashboard:updated', current);
     return current;
@@ -585,25 +646,54 @@ function assertDashboardSender(event) {
 function handleIpc(channel, handler) {
   electronIpcMain.handle(channel, (event, ...args) => {
     assertDashboardSender(event);
-    return handler(event, ...args);
+    activeDashboardRequests++;
+    try {
+      const result = handler(event, ...args);
+      if (result && typeof result.then === 'function') {
+        return Promise.resolve(result).finally(() => { activeDashboardRequests--; });
+      }
+      activeDashboardRequests--;
+      return result;
+    } catch (error) {
+      activeDashboardRequests--;
+      throw error;
+    }
   });
 }
 
 function hardenWebContents(contents) {
   contents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  contents.on('will-navigate', (event) => event.preventDefault());
+  // A page reloading itself is the only navigation allowed: Electron raises
+  // will-navigate for location.reload(), which the error screen offers.
+  contents.on('will-navigate', (event, url) => {
+    if ((event.url ?? url) !== contents.getURL()) event.preventDefault();
+  });
   contents.on('will-redirect', (event) => event.preventDefault());
   contents.on('will-attach-webview', (event) => event.preventDefault());
 }
 
 function registerIpc() {
+  handleIpc('dashboard:sleep-ready', (_event, token, allowed) => {
+    // This handler itself is the one active request; the idle controller's
+    // final check runs after its reply, when the count has returned to zero.
+    activeDashboardRequests--;
+    try { return windowIdle?.reply(token, allowed) ?? false; }
+    finally { activeDashboardRequests++; }
+  });
   require('./ipc-handlers.cjs').registerIpc({
     handleIpc, claudeSetup, storageClosing, getPreviousSnapshot: () => lastFullSnapshot,
     getCachedSnapshot: () => cachedSnapshot, setPeriodDays, snapshot, EMPTY_SESSION_PAGE,
     store, refreshAll, databaseJobs, invalidateSnapshot, applySettingsEffects, patchSnapshotSettings,
     updateTray, publishAfterWrite, refreshClaudeOnly, log, logRendererError, installClaudeHelper, getInboxPath,
     uninstallClaudeHelper, maintenance, dialog, getWindow: () => window, shell, app,
-    buildSummaryText, currentView, clipboard, setSnooze, updateChecker,
+    buildSummaryText, currentView, clipboard, setSnooze, updateChecker, renderingMode, renderingForced,
+    relaunch: () => {
+      if (isQuitting) return;
+      // Quit drains storage and the maintenance worker first; the new
+      // instance starts once this one has exited and released its lock.
+      relaunchApplication({ app, environment: launchEnvironment });
+      app.quit();
+    },
   });
 }
 
@@ -622,6 +712,7 @@ function publishUpdateStatus(status) {
 
 function stopForShutdown() {
   isQuitting = true;
+  windowIdle?.cancel();
   claudeSetup?.cancel();
   clearInterval(refreshTimer);
   clearTimeout(snoozeTimer);
@@ -659,7 +750,9 @@ async function prepareUpdateInstall() {
     // state. A failed backup releases the queue and resumes the application.
     await Promise.race([
       databaseJobs.prepareToClose(async () => {
-        const backup = await maintenance.request('create-backup');
+        // The SQLite copy alone: the JSON export is most of a backup's time,
+        // grows with the ledger, and would otherwise outgrow this deadline.
+        const backup = await maintenance.request('create-backup', { exportJson: false });
         backedUp = true;
         updateLog('Safety backup complete.');
         return backup;
@@ -744,8 +837,7 @@ if (isPrimaryInstance) {
     initialize: async () => {
       await app.whenReady();
       const testRoot = process.env.AI_USAGE_TEST_ROOT;
-      const databasePath = testRoot ? path.join(testRoot, 'ai-usage.sqlite') : path.join(app.getPath('userData'), 'ai-usage.sqlite');
-      const backupDirectory = testRoot ? path.join(testRoot, 'Backups') : path.join(app.getPath('userData'), 'Backups');
+      const { databasePath, backupDirectory } = storagePaths();
       store = new UsageStore(databasePath, backupDirectory);
       maintenance = createMaintenanceHost({ databasePath, backupDirectory });
       claudeSetup = createClaudeSetup({
@@ -758,7 +850,7 @@ if (isPrimaryInstance) {
       collectors = createCollectors();
       notificationState = loadNotificationState();
       updateChecker = createUpdateChecker({
-        autoUpdater: loadAutoUpdater(),
+        autoUpdater: loadAutoUpdater,
         enabled: () => Boolean(store.getSettings().autoUpdate),
         isPackaged: app.isPackaged,
         pkg,
@@ -779,16 +871,16 @@ if (isPrimaryInstance) {
       app.on('web-contents-created', (_event, contents) => hardenWebContents(contents));
       registerIpc();
       applyTheme(store.getSettings().theme);
-      createWindow();
+      if (!process.argv.includes('--hidden')) showMainWindow();
       createTray();
-      updateTray(snapshot());
+      updateTray(currentView());
       if (store.recoveredFrom) {
         log(`Storage: unreadable database moved to ${store.recoveredFrom}.`);
         void dialog.showMessageBox({
           type: 'warning',
           title: 'AI Usage started with an empty database',
           message: 'The local database could not be read, so it was set aside and a new one was created.',
-          detail: `The unreadable file was moved to:\n${store.recoveredFrom}\n\nRestore your latest export from Settings to bring the history back.`,
+          detail: `The unreadable file was moved to:\n${store.recoveredFrom}\n\nRestore your latest backup from Settings to bring the history back.`,
         });
       }
       nativeTheme.on('updated', () => applyWindowChrome());
