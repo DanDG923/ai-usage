@@ -105,10 +105,11 @@ function registerIpc(context) {
   }));
   handleIpc('dashboard:restore-backup', async () => {
     const chosen = await dialog.showOpenDialog(getWindow() ?? undefined, {
-      title: 'Restore an AI Usage export',
+      title: 'Restore an AI Usage backup',
       defaultPath: store.backupDirectory,
       properties: ['openFile'],
-      filters: [{ name: 'AI Usage export', extensions: ['json', 'gz'] }],
+      // A .sqlite backup restores any ledger size; exports stop at 64 MB.
+      filters: [{ name: 'AI Usage backup', extensions: ['sqlite', 'gz', 'json'] }],
     });
     if (chosen.canceled || !chosen.filePaths?.length) return { cancelled: true };
     const { result, safetyBackup } = await databaseJobs.exclusive(async () => {

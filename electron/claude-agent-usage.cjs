@@ -295,8 +295,10 @@ function createClaudeAgentSdkUsagePort({
         timeoutMs,
         abortController,
       );
+      // Only the plan rate limits are read. Without skipBehaviors Claude Code
+      // re-reads every transcript touched this week, inside this timeout.
       const raw = await usageWithinTimeout(
-        query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET(),
+        query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true }),
         timeoutMs,
         abortController,
       );

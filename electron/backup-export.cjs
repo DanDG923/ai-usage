@@ -5,12 +5,18 @@ const MAX_RESTORE_BYTES = 64 * 1024 * 1024;
 
 // Concatenated gzip members are a standard gzip stream. Keeping each member
 // bounded avoids both V8's maximum string length and retaining the ledger.
-function writeExport(filePath, database, settings) {
+// Past `maxBytes` of JSON the export stops with EXPORT_TOO_LARGE: a file
+// readExport would refuse costs backup time and disk and restores nothing.
+function writeExport(filePath, database, settings, { maxBytes = Infinity } = {}) {
   const fd = fs.openSync(filePath, 'wx');
   let pending = '';
+  let written = 0;
   const flush = () => {
     if (!pending) return;
-    const bytes = gzipSync(Buffer.from(pending));
+    const text = Buffer.from(pending);
+    written += text.length;
+    if (written > maxBytes) throw Object.assign(new Error('The export exceeds the restore limit.'), { code: 'EXPORT_TOO_LARGE' });
+    const bytes = gzipSync(text);
     let offset = 0;
     while (offset < bytes.length) offset += fs.writeSync(fd, bytes, offset, bytes.length - offset);
     pending = '';
@@ -34,14 +40,14 @@ function writeExport(filePath, database, settings) {
 
 function readExport(filePath) {
   if (!filePath || !fs.existsSync(filePath)) throw new Error('That backup file could not be found.');
-  if (fs.statSync(filePath).size > MAX_RESTORE_BYTES) throw new Error('This export exceeds the 64 MB restore limit. Use its paired SQLite backup for large-history recovery.');
+  if (fs.statSync(filePath).size > MAX_RESTORE_BYTES) throw new Error('This export exceeds the 64 MB restore limit. Restore its paired .sqlite backup instead.');
   try {
     const bytes = fs.readFileSync(filePath);
     const decoded = bytes[0] === 0x1f && bytes[1] === 0x8b
       ? gunzipSync(bytes, { maxOutputLength: MAX_RESTORE_BYTES }) : bytes;
     return JSON.parse(decoded.toString('utf8').replace(/^\uFEFF/, ''));
   } catch (error) {
-    if (error.code === 'ERR_BUFFER_TOO_LARGE') throw new Error('This export exceeds the 64 MB restore limit. Use its paired SQLite backup for large-history recovery.');
+    if (error.code === 'ERR_BUFFER_TOO_LARGE') throw new Error('This export exceeds the 64 MB restore limit. Restore its paired .sqlite backup instead.');
     throw new Error('That file is not a readable AI Usage export.');
   }
 }

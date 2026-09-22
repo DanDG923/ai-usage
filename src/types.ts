@@ -312,6 +312,8 @@ export type Snapshot = {
   settings: Settings;
   sources: Source[];
   quotas: { codex: Quota | null; claude: Quota | null; fable: Quota | null };
+  /** False when the named Claude plan has no Fable allowance and no Fable reading exists. */
+  fableApplies?: boolean;
   dashboardVerdict: DashboardVerdict;
   resetCredits: number;
   priceCatalog: PriceRow[];
@@ -411,12 +413,13 @@ export type Bridge = {
       helperScriptRemoved: boolean;
     };
   }>;
-  createBackup(): Promise<{ snapshot?: Snapshot; result: { databasePath: string; exportPath: string } }>;
+  /** `exportPath` is null when the ledger is too large for a restorable export. */
+  createBackup(): Promise<{ snapshot?: Snapshot; result: { databasePath: string; exportPath: string | null } }>;
   restoreBackup(): Promise<{
     cancelled: boolean;
     snapshot?: Snapshot;
     result?: RestoreCounts;
-    safetyBackup?: { databasePath: string; exportPath: string };
+    safetyBackup?: { databasePath: string; exportPath: string | null };
   }>;
   openBackupDirectory(): Promise<void>;
   exportCsv(days: number): Promise<{ cancelled: boolean; filePath?: string; rows?: number; days?: number }>;

@@ -159,8 +159,10 @@ test('a plan-less status-line row newer than the SDK reading cannot switch the p
   pro.overall(NOW - 25 * HOUR, 10, { planType: 'pro' });
   pro.usage('f1', NOW - 19 * HOUR, 'claude-fable-5', 4_000_000);
   pro.overall(NOW - HOUR, 20, { planType: 'pro' });
-  assert.deepEqual(projectFableAllowance(pro.store, NOW), { available: false, reason: 'fable-not-confirmed-in-shared-plan' });
+  assert.deepEqual(projectFableAllowance(pro.store, NOW), { available: false, reason: 'fable-not-confirmed-in-shared-plan', planType: 'pro' });
   assert.equal(pro.quota(), null);
+  // A named plan without a Fable allowance has no Fable window to wait for.
+  assert.equal(pro.store.getTraySnapshot(NOW).fableApplies, false);
 });
 
 test('the series carries one point per overall step plus the current estimate', (t) => {

@@ -663,7 +663,11 @@ function handleIpc(channel, handler) {
 
 function hardenWebContents(contents) {
   contents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  contents.on('will-navigate', (event) => event.preventDefault());
+  // A page reloading itself is the only navigation allowed: Electron raises
+  // will-navigate for location.reload(), which the error screen offers.
+  contents.on('will-navigate', (event, url) => {
+    if ((event.url ?? url) !== contents.getURL()) event.preventDefault();
+  });
   contents.on('will-redirect', (event) => event.preventDefault());
   contents.on('will-attach-webview', (event) => event.preventDefault());
 }
@@ -746,7 +750,9 @@ async function prepareUpdateInstall() {
     // state. A failed backup releases the queue and resumes the application.
     await Promise.race([
       databaseJobs.prepareToClose(async () => {
-        const backup = await maintenance.request('create-backup');
+        // The SQLite copy alone: the JSON export is most of a backup's time,
+        // grows with the ledger, and would otherwise outgrow this deadline.
+        const backup = await maintenance.request('create-backup', { exportJson: false });
         backedUp = true;
         updateLog('Safety backup complete.');
         return backup;
@@ -874,7 +880,7 @@ if (isPrimaryInstance) {
           type: 'warning',
           title: 'AI Usage started with an empty database',
           message: 'The local database could not be read, so it was set aside and a new one was created.',
-          detail: `The unreadable file was moved to:\n${store.recoveredFrom}\n\nRestore your latest export from Settings to bring the history back.`,
+          detail: `The unreadable file was moved to:\n${store.recoveredFrom}\n\nRestore your latest backup from Settings to bring the history back.`,
         });
       }
       nativeTheme.on('updated', () => applyWindowChrome());

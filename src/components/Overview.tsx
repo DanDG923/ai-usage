@@ -209,7 +209,10 @@ export function Overview({
     snapshot.sources,
   );
   const attention = insights(views, snapshot, nowMs);
-  const unknown = views.filter((view) => !hasForecast(view));
+  // A plan without a Fable allowance has no Fable evidence to wait for.
+  const unknown = views.filter(
+    (view) => !hasForecast(view) && !(view.id === 'fable' && snapshot.fableApplies === false),
+  );
   const waiting = views.every((view) => !view.current || view.current.forecast.expired);
   const needsReadings = unknown.length > 0 || views.some((view) => view.stale);
   if (!views.length) {
