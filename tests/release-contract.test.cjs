@@ -27,7 +27,7 @@ test('release metadata, dependency pin, package exclusions, and docs agree', () 
   // The release tooling and these tests load js-yaml and @electron/asar
   // directly, so they must be declared rather than borrowed from
   // electron-builder's transitive tree.
-  for (const [name, version] of [['js-yaml', '4.3.2'], ['@electron/asar', '3.4.1']]) {
+  for (const [name, version] of [['js-yaml', '4.3.2'], ['@electron/asar', '4.3.0']]) {
     assert.equal(pkg.devDependencies[name], version, `${name} is an exactly pinned devDependency`);
     assert.equal(lock.packages[''].devDependencies[name], version);
     assert.equal(lock.packages[`node_modules/${name}`].version, version);
