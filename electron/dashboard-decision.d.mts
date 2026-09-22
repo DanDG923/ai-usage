@@ -6,6 +6,7 @@ export function buildDashboardVerdict(snapshot?: {
   settings?: Partial<Settings>;
   quotas?: Snapshot['quotas'];
   sources?: Snapshot['sources'];
+  fableApplies?: boolean;
 }): DashboardVerdict;
 
 export function freshnessLimitHours(window: Partial<import('../src/types').QuotaWindow> | null | undefined): number;
