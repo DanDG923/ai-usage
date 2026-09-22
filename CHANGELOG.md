@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.47 — 22 September 2026
+
+- Restore a `.sqlite` backup with **Restore from backup…** under Settings → Storage & export. Its records stream into the usual restore merge, so a history too large for a JSON export can be restored in the app. A JSON export now stops once it outgrows what a restore accepts, and the paired `.sqlite` backup is kept. The safety backup taken before an update skips the JSON export, so it finishes within the update's time limit.
+- Count a forked Codex session once. A fork keeps its own session identity, history copied from its parent is not imported again, and a rescan no longer re-imports records that an earlier version filed under the parent.
+- Store a Codex rate-limit reading from local logs only when it changes or 15 minutes have passed, keeping the database smaller while retaining the latest reading. A successful official Codex read now shows as connected, with any optional details that failed listed alongside, instead of marking current data as stale.
+- Stop Claude Code rescanning a week of transcripts every time AI Usage reads Claude usage.
+- Learn from quiet time in forecasts: the stretch without usage before an allowance resets now counts, and days observed without use lower the expected pace outside active hours in proportion to the hours actually observed. Reset alerts appear only when there was usage to replenish, ending alerts for idle windows and repeated replenishments.
+- Show a dashboard verdict for Claude plans without a Fable 5 allowance instead of leaving it unknown.
+- Treat cost periods as the last N local calendar days, so the headline total, daily chart and 7-day tile agree, and compare the weekly change across full days. The Claude setup guide starts fresh each time it opens, and **Reload dashboard** on the error screen now works.
+- Build tray updates without token-capacity analysis, and stop rebuilding cost and capacity caches each time an old record ages out of the period, reducing background work. A very busy day no longer overflows the analytics calculation.
+- Update React, Vite, lucide-react, oxlint, js-yaml, @electron/asar and the GitHub Actions used to build and release.
+- Preserve local usage history, settings, observations, and backups during an in-place update.
+
 ## 1.0.46 — 18 September 2026
 
 - Releases the dashboard renderer after 30 seconds closed to the tray, restoring the selected page, analysis period, search and window bounds when reopened. Settings, open dialogs, import previews and in-progress operations keep the window loaded to protect unfinished work. Starting with Windows in tray mode no longer creates a dashboard renderer.
