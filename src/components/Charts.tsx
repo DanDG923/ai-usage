@@ -1,14 +1,18 @@
 /* oxlint-disable jsx-a11y/no-noninteractive-element-interactions -- Pointer tooltips supplement the keyboard-accessible data tables for each SVG. */
 import { useCallback, useId, useMemo, useRef, useState } from 'react';
+import { inactiveRanges, isActiveAt, type Schedule } from '../budget';
+import { niceScale } from '../chart-scale';
 import type { CostAnalytics, DailyUsage, Point } from '../types';
-import { LOCALE, compactNumber, formatInt, money, percent } from '../lib';
+import { LOCALE, compactNumber, dateTimeLabel, formatInt, money, percent, whenLabel } from '../lib';
 import type { ProviderView } from '../provider-view';
 import { recentDayKeys } from './details/cost-math';
 import { spreadRunwayLabels } from './details/runway-labels';
 
 // Built once: the charts label dozens of ticks and re-render on every mouse
 // move, so constructing a formatter per label was the largest cost of a hover.
+const WEEKDAY = new Intl.DateTimeFormat(LOCALE, { weekday: 'short' });
 const WEEKDAY_DAY = new Intl.DateTimeFormat(LOCALE, { weekday: 'short', day: 'numeric' });
+const HOUR = new Intl.DateTimeFormat(LOCALE, { hour: '2-digit', minute: '2-digit' });
 const DAY_MONTH = new Intl.DateTimeFormat(LOCALE, { day: 'numeric', month: 'short' });
 const WEEKDAY_DAY_MONTH = new Intl.DateTimeFormat(LOCALE, { weekday: 'short', day: 'numeric', month: 'short' });
 const WEEKDAY_DAY_MONTH_TIME = new Intl.DateTimeFormat(LOCALE, {
@@ -64,7 +68,21 @@ function valueAt(points: Point[], at: number): number | null {
   return points.at(-1)!.remaining;
 }
 
-const RUNWAY = { width: 960, height: 360, left: 46, right: 112, top: 22, bottom: 42 };
+const RUNWAY_SIZES = {
+  compact: { width: 360, height: 150, left: 32, right: 38, top: 10, bottom: 22, labelGap: 13, yTicks: [0, 50, 100] },
+  full: {
+    width: 800,
+    height: 300,
+    left: 42,
+    right: 50,
+    top: 24,
+    bottom: 28,
+    labelGap: 15,
+    yTicks: [0, 25, 50, 75, 100],
+  },
+} as const;
+
+export type RunwaySize = keyof typeof RUNWAY_SIZES;
 
 function observedWindow(points: Point[], startAt: number) {
   const after = points.filter((point) => point.at >= startAt);
@@ -77,270 +95,370 @@ function boundedValueAt(points: Point[], at: number) {
   return valueAt(points, at);
 }
 
-type Anchor = 'start' | 'middle' | 'end';
+/** The instant the headline window opened: its reset minus its length, or its first reading. */
+function windowStartOf(view: ProviderView) {
+  const current = view.current!;
+  const resetAt = Date.parse(current.resetsAt);
+  if (current.windowMinutes && current.windowMinutes > 0 && Number.isFinite(resetAt)) {
+    return resetAt - current.windowMinutes * 60_000;
+  }
+  return current.forecast.series.observed[0]?.at ?? resetAt - 7 * 86_400_000;
+}
 
-/**
- * Everything about the runway chart that depends only on the provider views:
- * the shared axis, the tick labels, and one path per series. Hover state
- * re-renders the component without recomputing any of it.
- */
-function runwayLayout(views: ProviderView[], height: number) {
-  const active = views.filter((view) => {
-    const series = view.current?.forecast.series;
-    return Boolean(
-      !view.expired && series && (series.observed.length || series.expected.length || series.heavy.length),
-    );
-  });
-  if (!active.length) return null;
+/** Whether a view has an expected and heavier projection worth drawing. */
+function hasProjection(view: ProviderView) {
+  return view.state !== 'unknown' && view.expectedRemaining != null && view.heavyRemaining != null;
+}
 
-  const expectedStarts = active
-    .map((view) => view.current!.forecast.series.expected[0]?.at)
-    .filter((at): at is number => Number.isFinite(at));
-  const nowAt = expectedStarts.length
-    ? Math.min(...expectedStarts)
-    : Math.max(...active.flatMap((view) => view.current!.forecast.series.observed.map((point) => point.at)));
-  const forecastEnds = active
-    .flatMap((view) => [
-      view.current!.forecast.series.expected.at(-1)?.at,
-      view.current!.forecast.series.heavy.at(-1)?.at,
-    ])
-    .filter((at): at is number => Number.isFinite(at));
-  const maxAt = forecastEnds.length ? Math.max(...forecastEnds) : nowAt + 86_400_000;
-  const historySpan = Math.min(48 * 3_600_000, Math.max(6 * 3_600_000, (maxAt - nowAt) * 0.22));
-  const minAt = nowAt - historySpan;
-  const plotWidth = RUNWAY.width - RUNWAY.left - RUNWAY.right;
-  const plotHeight = height - RUNWAY.top - RUNWAY.bottom;
-  const x = (at: number) => RUNWAY.left + ((at - minAt) / Math.max(1, maxAt - minAt)) * plotWidth;
-  const y = (remaining: number) => RUNWAY.top + (1 - remaining / 100) * plotHeight;
-  const scale = (points: Point[]) => points.map((point) => ({ x: x(point.at), y: y(point.remaining) }));
-  const futureSpan = maxAt - nowAt;
-  const tickTimes = [minAt, nowAt, nowAt + futureSpan / 3, nowAt + (futureSpan * 2) / 3, maxAt];
-  const ticks = tickTimes.map((at, index) => ({
-    at,
-    label: index === 1 ? 'Now' : WEEKDAY_DAY.format(new Date(at)),
-    anchor: (index === 0 ? 'start' : index === tickTimes.length - 1 ? 'end' : 'middle') as Anchor,
-  }));
-  const series = active.map((view) => {
-    const forecast = view.current!.forecast;
-    return {
-      view,
-      forecast,
-      observedPath: linePath(scale(observedWindow(forecast.series.observed, minAt))),
-      heavyPath: linePath(scale(forecast.series.heavy)),
-      expectedPath: linePath(scale(forecast.series.expected)),
-      endpoint: forecast.series.expected.at(-1) ?? null,
-      heavyEndpoint: forecast.series.heavy.at(-1) ?? null,
-    };
-  });
-  const summary = active
-    .map((view) =>
-      view.state === 'unknown' || view.expectedRemaining == null || view.heavyRemaining == null
-        ? `${view.name}: forecast is learning; observed balance ${percent(view.remaining)}`
-        : `${view.name}: expected ${percent(view.expectedRemaining)}, heavier ${percent(view.heavyRemaining)} at its reset`,
-    )
-    .join('. ');
-  const labels = spreadRunwayLabels(
-    series.flatMap(({ view, endpoint }) => (endpoint ? [{ view, endpoint, y: y(endpoint.remaining) - 2 }] : [])),
-    RUNWAY.top + 12,
-    RUNWAY.top + plotHeight - 15,
-  );
-  return { series, labels, nowAt, minAt, maxAt, x, y, plotWidth, plotHeight, ticks, summary, height };
+export function runwaySummary(view: ProviderView) {
+  const forecast = view.current?.forecast;
+  if (!forecast || !hasProjection(view)) {
+    return `${view.name}: forecast is learning; observed balance ${percent(view.remaining)}`;
+  }
+  const heavier = forecast.heavyExhaustsAt
+    ? `a heavier week runs out ${dateTimeLabel(forecast.heavyExhaustsAt)}`
+    : `a heavier week leaves ${percent(view.heavyRemaining)}`;
+  const expected = forecast.exhaustsAt
+    ? `expected to run out ${dateTimeLabel(forecast.exhaustsAt)}`
+    : `expected ${percent(view.expectedRemaining)} at reset`;
+  return `${view.name}: ${percent(view.remaining)} left now; ${expected}; ${heavier}`;
 }
 
 /**
- * The runway panel stretches to the height of the insights column beside it.
- * Follow the canvas box with the viewBox so the plot fills that height with
- * the x-axis on the panel's bottom edge, instead of letterboxing a fixed
- * aspect ratio. Width stays fixed so text and strokes keep their scale.
+ * Everything the runway needs that depends only on the view and schedule. The
+ * axis runs from the window's opening to its own reset, so each provider is
+ * drawn on its own clock rather than stretched onto another's calendar.
  */
-function useRunwayHeight(): [number, React.RefCallback<HTMLDivElement>] {
-  const [height, setHeight] = useState(RUNWAY.height);
-  // A callback ref rather than an effect over a ref object: the canvas is not
-  // rendered until the first observations exist, and an effect keyed on the
-  // ref object ran once, saw no element, and never looked again. Attaching
-  // when the element actually appears observes it whenever that happens, and
-  // the returned cleanup disconnects when it goes away.
-  const attach = useCallback<React.RefCallback<HTMLDivElement>>((canvas) => {
-    if (!canvas || typeof ResizeObserver === 'undefined') return undefined;
+function runwayLayout(view: ProviderView, schedule: Schedule, size: RunwaySize, width: number) {
+  const current = view.current;
+  if (!current || view.expired) return null;
+  const { observed, expected, heavy } = current.forecast.series;
+  if (!observed.length && !expected.length && !heavy.length) return null;
+  // The viewBox follows the rendered width, so labels keep their size on a
+  // narrow card and on a full-width one; the height grows gently with it.
+  const base = RUNWAY_SIZES[size];
+  const height =
+    size === 'full'
+      ? Math.round(Math.min(380, Math.max(base.height, width * 0.36)))
+      : Math.round(Math.min(220, Math.max(base.height, width * 0.4)));
+  const dims = { ...base, width, height };
+  const projection = hasProjection(view);
+  const resetAt = Date.parse(current.resetsAt);
+  const nowAt = expected[0]?.at ?? observed.at(-1)?.at ?? resetAt;
+  const lastProjection = projection ? Math.max(expected.at(-1)?.at ?? 0, heavy.at(-1)?.at ?? 0) : 0;
+  const maxAt = Math.max(Number.isFinite(resetAt) ? resetAt : 0, lastProjection, nowAt + 3_600_000);
+  const minAt = Math.min(windowStartOf(view), nowAt - 3_600_000);
+  const plotWidth = dims.width - dims.left - dims.right;
+  const plotHeight = dims.height - dims.top - dims.bottom;
+  const x = (at: number) => dims.left + ((at - minAt) / Math.max(1, maxAt - minAt)) * plotWidth;
+  const y = (remaining: number) => dims.top + (1 - Math.max(0, Math.min(100, remaining)) / 100) * plotHeight;
+  const scale = (points: Point[]) => points.map((point) => ({ x: x(point.at), y: y(point.remaining) }));
+  const expectedPoints = projection ? expected : [];
+  const heavyPoints = projection ? heavy : [];
+  // The band runs out along the expected path and back along the heavier one.
+  // Copy first; toReversed needs the ES2023 lib the renderer does not target.
+  // oxlint-disable-next-line unicorn/no-array-reverse
+  const heavyBack = scale([...heavyPoints].reverse());
+  const band =
+    expectedPoints.length && heavyPoints.length
+      ? `${linePath(scale(expectedPoints))} ${heavyBack.map((point) => `L${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(' ')} Z`
+      : '';
+  const inactive = inactiveRanges(minAt, maxAt, schedule).map((range) => ({
+    x: x(range.from),
+    width: Math.max(0, x(range.to) - x(range.from)),
+  }));
+  const span = maxAt - minAt;
+  const ticks: { at: number; label: string }[] = [];
+  if (span <= 2 * 86_400_000) {
+    const first = new Date(minAt);
+    first.setMinutes(0, 0, 0);
+    const stepHours = span <= 8 * 3_600_000 ? 1 : 6;
+    for (let at = first.getTime(); at <= maxAt; at += 3_600_000) {
+      if (at >= minAt && new Date(at).getHours() % stepHours === 0)
+        ticks.push({ at, label: HOUR.format(new Date(at)) });
+    }
+  } else {
+    const day = new Date(minAt);
+    day.setHours(12, 0, 0, 0);
+    for (let at = day.getTime(); at <= maxAt;) {
+      if (at >= minAt) ticks.push({ at, label: (size === 'full' ? WEEKDAY_DAY : WEEKDAY).format(new Date(at)) });
+      const next = new Date(at);
+      next.setDate(next.getDate() + 1);
+      at = next.getTime();
+    }
+  }
+  const expectedEnd = expectedPoints.at(-1) ?? null;
+  const heavyEnd = heavyPoints.at(-1) ?? null;
+  // Spaced at render time, once the heavier label is known to be shown or not.
+  const endLabels = [
+    ...(expectedEnd ? [{ kind: 'expected' as const, value: expectedEnd.remaining, y: y(expectedEnd.remaining) }] : []),
+    ...(heavyEnd ? [{ kind: 'heavy' as const, value: heavyEnd.remaining, y: y(heavyEnd.remaining) }] : []),
+  ];
+  const inRange = (value?: string | null) => {
+    const at = value ? Date.parse(value) : NaN;
+    return Number.isFinite(at) && at >= nowAt && at <= maxAt ? at : null;
+  };
+  return {
+    dims,
+    projection,
+    nowAt,
+    minAt,
+    maxAt,
+    x,
+    y,
+    plotWidth,
+    plotHeight,
+    observedPath: linePath(scale(observedWindow(observed, minAt))),
+    expectedPath: linePath(scale(expectedPoints)),
+    heavyPath: linePath(scale(heavyPoints)),
+    band,
+    inactive,
+    ticks,
+    endLabels,
+    nowValue: valueAt(observed, nowAt) ?? view.remaining ?? null,
+    exhaustsAt: projection ? inRange(current.forecast.exhaustsAt) : null,
+    heavyExhaustsAt: projection ? inRange(current.forecast.heavyExhaustsAt) : null,
+  };
+}
+
+/**
+ * The rendered width of a chart's box, so its viewBox can match it one to one.
+ * A callback ref attaches whenever the element appears; server rendering and
+ * browsers without ResizeObserver keep the initial width.
+ */
+function useMeasuredWidth(initial: number): [number, React.RefCallback<HTMLDivElement>] {
+  const [width, setWidth] = useState(initial);
+  const attach = useCallback<React.RefCallback<HTMLDivElement>>((node) => {
+    if (!node || typeof ResizeObserver === 'undefined') return undefined;
     const measure = () => {
-      const rect = canvas.getBoundingClientRect();
-      if (rect.width < 1) return;
-      setHeight(Math.max(RUNWAY.height, Math.round((rect.height / rect.width) * RUNWAY.width)));
+      const measured = node.getBoundingClientRect().width;
+      if (measured >= 1) setWidth(Math.round(Math.max(280, Math.min(1600, measured))));
     };
     measure();
     const observer = new ResizeObserver(measure);
-    observer.observe(canvas);
+    observer.observe(node);
     return () => observer.disconnect();
   }, []);
-  return [height, attach];
+  return [width, attach];
 }
 
 /**
- * One truthful calendar chart for every provider. Series share the same date
- * axis, but each stops at its own reset instead of being stretched to imply
- * that unlike allowance windows end together.
+ * One provider's allowance on its own clock: what was used so far, the expected
+ * path to the reset, and the range a heavier week could take. Hours outside the
+ * active schedule are shaded, which is why the projections flatten overnight.
  */
-export function CombinedRunwayChart({ views }: { views: ProviderView[] }) {
-  const plotClipId = useId();
+export function RunwayChart({
+  view,
+  schedule,
+  size = 'compact',
+  showHeavy = true,
+  reserve = 0,
+}: {
+  view: ProviderView;
+  schedule: Schedule;
+  size?: RunwaySize;
+  showHeavy?: boolean;
+  reserve?: number;
+}) {
+  const clipId = useId();
   const svgRef = useRef<SVGSVGElement>(null);
   const [hoverAt, setHoverAt] = useState<number | null>(null);
-  const [canvasHeight, canvasRef] = useRunwayHeight();
-  const layout = useMemo(() => runwayLayout(views, canvasHeight), [views, canvasHeight]);
-  if (!layout) return <div className="empty-chart tall">Runway appears after the first allowance observations.</div>;
-  const { series, labels, nowAt, minAt, maxAt, x, y, plotWidth, plotHeight, ticks, summary, height } = layout;
-  const labelX = RUNWAY.width - RUNWAY.right + 16;
+  const [width, measure] = useMeasuredWidth(RUNWAY_SIZES[size].width);
+  const layout = useMemo(() => runwayLayout(view, schedule, size, width), [view, schedule, size, width]);
+  if (!view.current || view.expired) return null;
+  if (!layout)
+    return <div className="empty-chart runway-empty">Runway appears after the first allowance observations.</div>;
+  const { dims, projection, nowAt, minAt, maxAt, x, y, plotWidth, plotHeight, ticks, endLabels, nowValue } = layout;
+  const forecast = view.current.forecast;
+  const interactive = size === 'full';
+  const labelX = dims.left + plotWidth + 6;
 
   const moveHover = (event: React.MouseEvent<SVGSVGElement>) => {
     const rect = svgRef.current?.getBoundingClientRect();
     if (!rect || rect.width < 1) return;
-    const canvasX = ((event.clientX - rect.left) / rect.width) * RUNWAY.width;
-    const fraction = (canvasX - RUNWAY.left) / plotWidth;
+    const fraction = (((event.clientX - rect.left) / rect.width) * dims.width - dims.left) / plotWidth;
     setHoverAt(fraction < 0 || fraction > 1 ? null : minAt + fraction * (maxAt - minAt));
   };
-
-  const hoverLabel = hoverAt == null ? '' : WEEKDAY_DAY_MONTH_TIME.format(new Date(hoverAt));
-  const tipLeft = hoverAt == null ? '0%' : `${Math.min(68, Math.max(2, (x(hoverAt) / RUNWAY.width) * 100 + 1))}%`;
+  const hover =
+    hoverAt == null
+      ? null
+      : {
+          observed: hoverAt <= nowAt ? boundedValueAt(forecast.series.observed, hoverAt) : null,
+          expected: projection && hoverAt >= nowAt ? boundedValueAt(forecast.series.expected, hoverAt) : null,
+          heavy: projection && showHeavy && hoverAt >= nowAt ? boundedValueAt(forecast.series.heavy, hoverAt) : null,
+        };
 
   return (
-    <div className="combined-runway-wrap">
-      <div className="combined-runway-canvas" ref={canvasRef}>
+    <figure className={`runway-figure ${size}`}>
+      <div className="runway-canvas" ref={measure}>
         <svg
           ref={svgRef}
-          className="combined-runway-chart"
-          viewBox={`0 0 ${RUNWAY.width} ${height}`}
+          className={`runway-chart ${size} ${view.id}`}
+          viewBox={`0 0 ${dims.width} ${dims.height}`}
           role="img"
-          aria-label={`Combined allowance runway on a shared calendar axis. ${summary}.`}
-          onMouseMove={moveHover}
-          onMouseLeave={() => setHoverAt(null)}
+          aria-label={`${runwaySummary(view)}.`}
+          onMouseMove={interactive ? moveHover : undefined}
+          onMouseLeave={interactive ? () => setHoverAt(null) : undefined}
         >
           <defs>
-            <clipPath id={plotClipId}>
-              <rect x={RUNWAY.left} y={RUNWAY.top} width={plotWidth} height={plotHeight} />
+            <clipPath id={clipId}>
+              <rect x={dims.left} y={dims.top - 1} width={plotWidth} height={plotHeight + 2} />
             </clipPath>
           </defs>
-          {[0, 25, 50, 75, 100].map((value) => (
+          <g clipPath={`url(#${clipId})`}>
+            {layout.inactive.map((range) => (
+              <rect
+                key={range.x}
+                className="runway-inactive"
+                x={range.x}
+                y={dims.top}
+                width={range.width}
+                height={plotHeight}
+              />
+            ))}
+          </g>
+          {dims.yTicks.map((value) => (
             <g key={value}>
               <line
-                x1={RUNWAY.left}
-                x2={RUNWAY.width - RUNWAY.right}
+                x1={dims.left}
+                x2={dims.left + plotWidth}
                 y1={y(value)}
                 y2={y(value)}
-                className="grid-line"
+                className={value === 0 ? 'grid-line baseline' : 'grid-line'}
               />
-              <text x="5" y={y(value) + 4}>
+              <text className="runway-axis" x="0" y={y(value) + 3.5}>
                 {value}%
               </text>
             </g>
           ))}
-          {ticks.map((tick, index) => (
-            <text key={index} x={x(tick.at)} y={height - 12} textAnchor={tick.anchor}>
+          {reserve > 0 && (
+            <g className="runway-reserve">
+              <line x1={dims.left} x2={dims.left + plotWidth} y1={y(reserve)} y2={y(reserve)} />
+              <text x={dims.left + 4} y={y(reserve) - 5}>
+                Reserve {Math.round(reserve)}%
+              </text>
+            </g>
+          )}
+          <g clipPath={`url(#${clipId})`}>
+            {showHeavy && layout.band && <path d={layout.band} className="runway-band" />}
+            {showHeavy && <path d={layout.heavyPath} className="runway-heavy" />}
+            <path d={layout.expectedPath} className="runway-expected" />
+            <path d={layout.observedPath} className="runway-observed" />
+          </g>
+          <line x1={x(nowAt)} x2={x(nowAt)} y1={dims.top} y2={dims.top + plotHeight} className="now-line" />
+          {size === 'full' && (
+            <text className="runway-axis" x={x(nowAt)} y={dims.top - 8} textAnchor="middle">
+              Now
+            </text>
+          )}
+          {nowValue != null && (
+            <circle className="runway-now" cx={x(nowAt)} cy={y(nowValue)} r={size === 'full' ? 5 : 4} />
+          )}
+          {showHeavy && layout.heavyExhaustsAt != null && (
+            <g className="runway-exhaust heavy">
+              <circle cx={x(layout.heavyExhaustsAt)} cy={y(0)} r={size === 'full' ? 5 : 4} />
+              {size === 'full' && (
+                <text
+                  x={x(layout.heavyExhaustsAt)}
+                  y={y(0) - 12}
+                  // Near the reset the label would run into the end labels, so it reads leftwards.
+                  textAnchor={x(layout.heavyExhaustsAt) > dims.left + plotWidth * 0.7 ? 'end' : 'middle'}
+                >
+                  Heavier week runs out {whenLabel(layout.heavyExhaustsAt, nowAt)}
+                </text>
+              )}
+            </g>
+          )}
+          {layout.exhaustsAt != null && (
+            <g className="runway-exhaust expected">
+              <circle cx={x(layout.exhaustsAt)} cy={y(0)} r={size === 'full' ? 5 : 4} />
+            </g>
+          )}
+          {spreadRunwayLabels(
+            endLabels.filter((label) => label.kind === 'expected' || showHeavy),
+            dims.top + 6,
+            dims.top + plotHeight,
+            dims.labelGap,
+          ).map((label) => (
+            <text key={label.kind} className={`runway-end ${label.kind}`} x={labelX} y={label.y + 3.5}>
+              {Math.round(label.value)}%
+            </text>
+          ))}
+          {ticks.map((tick) => (
+            <text key={tick.at} className="runway-axis" x={x(tick.at)} y={dims.height - 6} textAnchor="middle">
               {tick.label}
             </text>
           ))}
-          <line x1={x(nowAt)} x2={x(nowAt)} y1={RUNWAY.top} y2={RUNWAY.top + plotHeight} className="now-line" />
-          {series.map(({ view, observedPath, heavyPath, expectedPath, endpoint, heavyEndpoint }) => (
-            <g key={view.id} className={`combined-series ${view.id}`}>
-              <g clipPath={`url(#${plotClipId})`}>
-                <path d={observedPath} className="combined-observed" />
-                <path d={heavyPath} className="combined-heavy" />
-                <path d={expectedPath} className="combined-expected" />
-              </g>
-              {endpoint && (
-                <circle cx={x(endpoint.at)} cy={y(endpoint.remaining)} r="3.8" className="combined-endpoint" />
-              )}
-              {heavyEndpoint && (
-                <circle
-                  cx={x(heavyEndpoint.at)}
-                  cy={y(heavyEndpoint.remaining)}
-                  r="2.8"
-                  className="combined-heavy-endpoint"
-                />
-              )}
-            </g>
-          ))}
-          {labels.map(({ view, endpoint, y: labelY }) => (
-            <g key={view.id} className={`combined-series ${view.id}`}>
-              <line
-                className="combined-label-connector"
-                x1={x(endpoint.at) + 6}
-                y1={y(endpoint.remaining)}
-                x2={labelX - 5}
-                y2={labelY + 2}
-              />
-              <text x={labelX} y={labelY} className="combined-end-label">
-                <tspan>{view.name}</tspan>
-                <tspan x={labelX} dy="13">
-                  {Math.round(endpoint.remaining)}%
-                </tspan>
-              </text>
-            </g>
-          ))}
           {hoverAt != null && (
-            <line
-              className="forecast-hover"
-              x1={x(hoverAt)}
-              x2={x(hoverAt)}
-              y1={RUNWAY.top}
-              y2={RUNWAY.top + plotHeight}
-            />
+            <line className="forecast-hover" x1={x(hoverAt)} x2={x(hoverAt)} y1={dims.top} y2={dims.top + plotHeight} />
           )}
         </svg>
+        {hover && hoverAt != null && (
+          <div
+            className="runway-tip"
+            style={{ left: `${Math.min(74, Math.max(1, (x(hoverAt) / dims.width) * 100 + 1.5))}%` }}
+          >
+            <strong>{WEEKDAY_DAY_MONTH_TIME.format(new Date(hoverAt))}</strong>
+            {hover.observed != null && <span>Observed · {Math.round(hover.observed)}% left</span>}
+            {hover.expected != null && <span>Expected · {Math.round(hover.expected)}% left</span>}
+            {hover.heavy != null && <span>Heavier week · {Math.round(hover.heavy)}% left</span>}
+            <small>{isActiveAt(hoverAt, schedule) ? 'Inside your active hours' : 'Outside active hours'}</small>
+          </div>
+        )}
       </div>
-      {hoverAt != null && (
-        <div className="combined-runway-tip" style={{ left: tipLeft }}>
-          <strong>{hoverLabel}</strong>
-          {series.map(({ view, forecast }) => {
-            const observed = boundedValueAt(forecast.series.observed, hoverAt);
-            const expected = boundedValueAt(forecast.series.expected, hoverAt);
-            const heavy = boundedValueAt(forecast.series.heavy, hoverAt);
-            if (observed == null && expected == null && heavy == null) return null;
-            return (
-              <span key={view.id}>
-                <i className={`source-dot ${view.id}`} />
-                {view.name}:{' '}
-                {observed != null
-                  ? `${Math.round(observed)}% observed`
-                  : `${expected == null ? '—' : `${Math.round(expected)}% expected`} · ${heavy == null ? '—' : `${Math.round(heavy)}% heavy`}`}
-              </span>
-            );
-          })}
-        </div>
+      {size === 'full' && (
+        <details className="chart-data">
+          <summary>View runway data</summary>
+          <div className="table-scroll">
+            <table>
+              <caption>{view.name} allowance observations and projections</caption>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Series</th>
+                  <th>Remaining</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(['observed', 'expected', 'heavy'] as const).flatMap((kind) =>
+                  kind !== 'observed' && !projection
+                    ? []
+                    : forecast.series[kind]
+                        .filter((point) => point.at >= minAt && point.at <= maxAt)
+                        .map((point, index) => (
+                          <tr key={`${kind}:${index}`}>
+                            <td>{WEEKDAY_DAY_MONTH_TIME.format(new Date(point.at))}</td>
+                            <td>{kind === 'heavy' ? 'heavier week' : kind}</td>
+                            <td>{percent(point.remaining, 1)}</td>
+                          </tr>
+                        )),
+                )}
+              </tbody>
+            </table>
+          </div>
+        </details>
       )}
-      <details className="chart-data">
-        <summary>View runway data</summary>
-        <div className="table-scroll">
-          <table>
-            <caption>Allowance runway observations and projections</caption>
-            <thead>
-              <tr>
-                <th>Provider</th>
-                <th>Time</th>
-                <th>Series</th>
-                <th>Remaining</th>
-              </tr>
-            </thead>
-            <tbody>
-              {series.flatMap(({ view, forecast }) =>
-                (['observed', 'expected', 'heavy'] as const).flatMap((kind) =>
-                  forecast.series[kind]
-                    .filter((point) => point.at >= minAt && point.at <= maxAt)
-                    .map((point, index) => (
-                      <tr key={`${view.id}:${kind}:${index}`}>
-                        <td>{view.name}</td>
-                        <td>{WEEKDAY_DAY_MONTH_TIME.format(new Date(point.at))}</td>
-                        <td>{kind}</td>
-                        <td>{percent(point.remaining, 1)}</td>
-                      </tr>
-                    )),
-                ),
-              )}
-            </tbody>
-          </table>
-        </div>
-      </details>
-      <p className="combined-runway-note">Shared calendar · each provider line ends at its own reset</p>
-    </div>
+    </figure>
   );
+}
+
+const axisMoneyFormats = new Map<string, Intl.NumberFormat>();
+
+/** Axis money: whole units when every step is whole ("£20"), otherwise pence ("£2.50"). */
+function axisMoney(value: number, currency: string, step: number) {
+  const digits = Number.isInteger(step) ? 0 : 2;
+  const key = `${currency}|${digits}`;
+  let format = axisMoneyFormats.get(key);
+  if (!format) {
+    format = new Intl.NumberFormat(LOCALE, {
+      style: 'currency',
+      currency,
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    });
+    axisMoneyFormats.set(key, format);
+  }
+  return format.format(value);
 }
 
 const COST = { width: 880, height: 270, left: 56, right: 44, top: 20, bottom: 44 };
@@ -351,7 +469,8 @@ function costLayout(costs: CostAnalytics, todayMs: number) {
   const points = recentDayKeys(costs.periodDays, todayMs).map(
     (date) => byDate.get(date) || { date, codex: 0, claude: 0 },
   );
-  const max = Math.max(...points.map((point) => point.codex + point.claude), 1) * 1.15;
+  const axis = niceScale(Math.max(...points.map((point) => point.codex + point.claude), 0.01));
+  const max = axis.max;
   const plotWidth = COST.width - COST.left - COST.right;
   const plotHeight = COST.height - COST.top - COST.bottom;
   const x = (index: number) => COST.left + (index * plotWidth) / Math.max(1, points.length - 1);
@@ -367,9 +486,9 @@ function costLayout(costs: CostAnalytics, todayMs: number) {
     claudePath: linePath(points.map((point, index) => ({ x: x(index), y: y(point.claude) }))),
     totalPath: linePath(points.map((point, index) => ({ x: x(index), y: y(point.codex + point.claude) }))),
     barWidth: Math.max(2, (plotWidth / Math.max(points.length, 1)) * 0.72),
-    grid: [0, 0.25, 0.5, 0.75, 1].map((fraction) => ({
-      y: y(max * fraction),
-      label: money(max * fraction, costs.currency),
+    grid: axis.ticks.map((value) => ({
+      y: y(value),
+      label: axisMoney(value, costs.currency, axis.step),
     })),
     ticks: dayTicks(points.length).map((index) => ({
       index,
@@ -525,7 +644,8 @@ function dailyLayout(rows: DailyUsage[], days: number, todayMs: number) {
   const totals = new Map<string, number>();
   for (const row of rows) totals.set(row.date, (totals.get(row.date) || 0) + Number(row.tokens || 0));
   const points = recentDayKeys(days, todayMs).map((date) => ({ date, tokens: totals.get(date) || 0 }));
-  const max = Math.max(...points.map((point) => point.tokens), 1);
+  const axis = niceScale(Math.max(...points.map((point) => point.tokens), 1));
+  const max = axis.max;
   const plotWidth = DAILY.width - DAILY.left - DAILY.right;
   const plotHeight = DAILY.height - DAILY.top - DAILY.bottom;
   const baseline = DAILY.top + plotHeight;
@@ -536,9 +656,9 @@ function dailyLayout(rows: DailyUsage[], days: number, todayMs: number) {
     plotHeight,
     baseline,
     slot: plotWidth / Math.max(points.length, 1),
-    grid: [0, 0.5, 1].map((fraction) => ({
-      y: baseline - plotHeight * fraction,
-      label: compactNumber(max * fraction),
+    grid: axis.ticks.map((value) => ({
+      y: baseline - plotHeight * (value / max),
+      label: compactNumber(value),
     })),
     ticks: dayTicks(points.length).map((index) => ({
       index,

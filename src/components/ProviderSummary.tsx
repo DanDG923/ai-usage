@@ -1,3 +1,6 @@
+import { ChevronRight } from 'lucide-react';
+import { useMemo } from 'react';
+import { dailyBudget, scheduleOf } from '../budget';
 import {
   allowanceWindowLabel,
   dateTimeLabel,
@@ -10,35 +13,20 @@ import {
   whenLabel,
 } from '../lib';
 import type { ProviderView } from '../provider-view';
+import type { Settings } from '../types';
+import { RunwayChart } from './Charts';
+import { DailyBudgetStrip } from './DailyBudgetStrip';
+import { StatePill } from './StatePill';
 
-const STATE_WORD: Record<ProviderView['state'], string> = {
-  safe: 'On track',
-  watch: 'Watch',
-  risk: 'At risk',
-  critical: 'Critical',
-  unknown: 'Learning',
+type ScheduleSettings = Pick<Settings, 'activeDays' | 'activeStartHour' | 'activeEndHour' | 'reservePercent'>;
+
+/** The engine's own defaults, for callers that render a card without settings. */
+export const DEFAULT_SCHEDULE: ScheduleSettings = {
+  activeDays: [1, 2, 3, 4, 5, 6, 0],
+  activeStartHour: 8,
+  activeEndHour: 22,
+  reservePercent: 0,
 };
-
-function scenarioBar(view: ProviderView) {
-  const remaining = view.remaining ?? 0;
-  const expectedRemaining = view.expectedRemaining ?? remaining;
-  const heavyRemaining = view.heavyRemaining ?? expectedRemaining;
-  const used = Math.max(0, 100 - remaining);
-  const expectedUse = Math.max(0, remaining - expectedRemaining);
-  const heavyUse = Math.max(0, expectedRemaining - heavyRemaining);
-  const buffer = Math.max(0, 100 - used - expectedUse - heavyUse);
-  return { used, expectedUse, heavyUse, buffer, expectedRemaining, heavyRemaining };
-}
-
-function consequence(view: ProviderView, nowMs: number) {
-  const forecast = view.current?.forecast;
-  if (!forecast) return 'Waiting for a first observation';
-  if (forecast.exhaustsAt) return `Expected case runs out ${whenLabel(forecast.exhaustsAt, nowMs)}`;
-  if (forecast.heavyExhaustsAt) return `Heavy case runs out ${whenLabel(forecast.heavyExhaustsAt, nowMs)}`;
-  if (forecast.paceRatio > 1.05) return `${forecast.paceRatio.toFixed(1)}× safe pace`;
-  if (view.expectedRemaining != null) return `${percent(view.expectedRemaining)} expected at reset`;
-  return 'Learning from recent usage';
-}
 
 function ForecastAdjustmentNotes({ view }: { view: ProviderView }) {
   // Include a weekly adjustment even when the card headlines a more urgent
@@ -61,7 +49,7 @@ function ForecastAdjustmentNotes({ view }: { view: ProviderView }) {
  * be running warm while the weekly plan is on track; both facts belong on the
  * card, each with its own state.
  */
-function SessionWindows({ view, nowMs }: { view: ProviderView; nowMs: number }) {
+export function SessionWindows({ view, nowMs }: { view: ProviderView; nowMs: number }) {
   const renderWindow = (window: (typeof view.secondaryWindows)[number]) => {
     const remaining = Math.max(0, Math.min(100, displayedRemaining(window)));
     const expected = window.forecast.expectedRemaining;
@@ -75,7 +63,7 @@ function SessionWindows({ view, nowMs }: { view: ProviderView; nowMs: number }) 
             : 'learning';
     return (
       <p className="provider-session" key={window.bucketId}>
-        <span className={`state-pill ${window.forecast.state}`}>{STATE_WORD[window.forecast.state]}</span>
+        <StatePill state={window.forecast.state} />
         <strong>
           {isEstimated(window) ? '~' : ''}
           {Math.round(remaining)}%
@@ -105,17 +93,64 @@ function SessionWindows({ view, nowMs }: { view: ProviderView; nowMs: number }) 
   );
 }
 
-export function ProviderSummary({ view, nowMs }: { view: ProviderView; nowMs: number }) {
+/** Expected and heavier-week outcomes at the reset, as words rather than a bar to decode. */
+export function ProviderOutcomes({ view, nowMs }: { view: ProviderView; nowMs: number }) {
+  const forecast = view.current?.forecast;
+  if (!forecast || view.expectedRemaining == null) {
+    return <p className="provider-learning">Learning from recent usage before it forecasts the reset.</p>;
+  }
+  return (
+    <dl className="provider-outcomes">
+      <div>
+        <dt>Expected at reset</dt>
+        <dd className={forecast.exhaustsAt ? 'critical' : undefined}>
+          {forecast.exhaustsAt
+            ? `Runs out ${whenLabel(forecast.exhaustsAt, nowMs)}`
+            : `${percent(view.expectedRemaining)} left`}
+        </dd>
+      </div>
+      {view.heavyRemaining != null && (
+        <div>
+          <dt>Heavier week</dt>
+          <dd className={forecast.heavyExhaustsAt ? 'risk' : undefined}>
+            {forecast.heavyExhaustsAt
+              ? `Runs out ${whenLabel(forecast.heavyExhaustsAt, nowMs)}`
+              : `Leaves ${percent(view.heavyRemaining)}`}
+          </dd>
+        </div>
+      )}
+    </dl>
+  );
+}
+
+export function ProviderSummary({
+  view,
+  nowMs,
+  settings = DEFAULT_SCHEDULE,
+  onOpen,
+}: {
+  view: ProviderView;
+  nowMs: number;
+  settings?: ScheduleSettings;
+  onOpen?: () => void;
+}) {
+  const { activeDays, activeStartHour, activeEndHour } = settings;
+  const schedule = useMemo(
+    () => scheduleOf({ activeDays, activeStartHour, activeEndHour }),
+    [activeDays, activeStartHour, activeEndHour],
+  );
+
   if (!view.current || view.remaining == null) {
     return (
-      <article className={`provider-summary ${view.id} unknown`} aria-label={`${view.name} allowance`}>
-        <div className="provider-summary-head">
+      <article className={`provider-card ${view.id} unknown`} aria-label={`${view.name} allowance`}>
+        <header className="provider-card-head">
+          <span className={`swatch ${view.id}`} aria-hidden="true" />
           <div>
             <h2>{view.name}</h2>
             <span>{view.subtitle}</span>
           </div>
-          <span className="state-pill unknown">{view.expired ? 'Needs reading' : 'Learning'}</span>
-        </div>
+          <StatePill state="unknown" label={view.expired ? 'Needs reading' : 'Learning'} />
+        </header>
         <p className="provider-empty">
           {view.expired
             ? 'The last allowance window ended. Waiting for a new provider reading.'
@@ -127,41 +162,55 @@ export function ProviderSummary({ view, nowMs }: { view: ProviderView; nowMs: nu
             <span>Window ended {dateTimeLabel(view.current.resetsAt)}</span>
           </div>
         )}
+        {/* Past windows, token capacity and evidence live on the provider page. */}
+        {onOpen && (
+          <button type="button" className="provider-card-link" onClick={onOpen}>
+            {view.name} history and evidence
+            <ChevronRight aria-hidden="true" />
+          </button>
+        )}
       </article>
     );
   }
 
-  const bar = scenarioBar(view);
-  const aria = `${view.name}: ${Math.round(view.remaining)}% left. Expected usage before reset ${Math.round(bar.expectedUse)} percentage points, leaving ${Math.round(bar.expectedRemaining)}%. Additional heavy usage ${Math.round(bar.heavyUse)} percentage points, leaving ${Math.round(bar.heavyRemaining)}%.`;
+  const budget = dailyBudget(view.current, settings, nowMs);
   return (
-    <article className={`provider-summary ${view.id} ${view.state}`} aria-label={`${view.name} allowance`}>
-      <div className="provider-summary-head">
+    <article className={`provider-card ${view.id} ${view.state}`} aria-label={`${view.name} allowance`}>
+      <header className="provider-card-head">
+        <span className={`swatch ${view.id}`} aria-hidden="true" />
         <div>
           <h2>{view.name}</h2>
           <span title={view.subtitle}>{view.subtitle}</span>
         </div>
-        <span className={`state-pill ${view.state}`}>{STATE_WORD[view.state]}</span>
+        <StatePill state={view.state} />
+      </header>
+      <div className="provider-card-figures">
+        <p className="provider-left">
+          <strong>
+            {view.estimated ? '~' : ''}
+            {Math.round(view.remaining)}%
+          </strong>
+          <span>{view.estimated ? 'left · estimated' : 'left'}</span>
+        </p>
+        <p className="provider-reset" title={dateTimeLabel(view.resetAt)}>
+          Resets <strong>{whenLabel(view.resetAt, nowMs)}</strong>
+          <span>in {resetDistance(view.resetAt)}</span>
+        </p>
       </div>
-      <div className="provider-primary">
-        <strong>
-          {view.estimated ? '~' : ''}
-          {Math.round(view.remaining)}%
-        </strong>
-        <span>left</span>
-        <small>{consequence(view, nowMs)}</small>
-      </div>
-      <div className="scenario-bar" role="img" aria-label={aria} title={aria}>
-        <i className="scenario-used" style={{ width: `${bar.used}%` }} />
-        <i className="scenario-expected" style={{ width: `${bar.expectedUse}%` }} />
-        <i className="scenario-heavy" style={{ width: `${bar.heavyUse}%` }} />
-        <i className="scenario-buffer" style={{ width: `${bar.buffer}%` }} />
-      </div>
-      <div className="provider-meta">
-        <span>{view.estimated ? 'Estimated balance' : 'Current balance'}</span>
-        <span title={dateTimeLabel(view.resetAt!)}>Resets in {resetDistance(view.resetAt!)}</span>
-      </div>
+      <RunwayChart view={view} schedule={schedule} size="compact" />
+      <ProviderOutcomes view={view} nowMs={nowMs} />
+      {budget && <DailyBudgetStrip budget={budget} provider={view.id} />}
+      {view.stale && (
+        <p className="provider-stale">Projected from the last successful reading. A fresh reading is due.</p>
+      )}
       <SessionWindows view={view} nowMs={nowMs} />
       <ForecastAdjustmentNotes view={view} />
+      {onOpen && (
+        <button type="button" className="provider-card-link" onClick={onOpen}>
+          {view.name} details{budget ? ' and daily planner' : ''}
+          <ChevronRight aria-hidden="true" />
+        </button>
+      )}
     </article>
   );
 }

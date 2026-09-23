@@ -41,7 +41,11 @@ test.before(async () => {
     server.ssrLoadModule('/src/components/ErrorBoundary.tsx'),
     server.ssrLoadModule('/src/lib.ts'),
   ]);
+  ({ ProviderDetail } = await server.ssrLoadModule('/src/components/ProviderDetail.tsx'));
 });
+
+// The current-cycle table moved from the Overview to each provider's page.
+let ProviderDetail;
 
 test.after(async () => { await server?.close(); });
 
@@ -111,13 +115,11 @@ function expiredSnapshot() {
   return snapshot;
 }
 
-function currentCycleRow(snapshot) {
-  const html = render(Overview, {
-    snapshot, refreshing: false, onRefresh: async () => {}, onSetupClaude: () => {}, onSources: () => {},
-  });
-  const table = html.match(/<table class="overview-cycle-table">[\s\S]*?<\/table>/)?.[0];
-  assert.ok(table, 'the actual Overview rendered its current-cycle table');
-  return table.match(/<tbody><tr>[\s\S]*?<\/tr>/)?.[0];
+function currentCycleRow(snapshot, provider = 'codex') {
+  const html = render(ProviderDetail, { snapshot, provider, onBack() {} });
+  const table = html.match(/<table class="cycle-detail-table">[\s\S]*?<\/table>/)?.[0];
+  assert.ok(table, 'the provider page rendered its cycle table');
+  return table.match(/<tr class="current">[\s\S]*?<\/tr>/)?.[0];
 }
 
 test('manual Codex reading keeps rendered current cycles aligned with the main card', () => {
@@ -409,7 +411,7 @@ test('Spark limits are separate from the main Pro allowance and do not look like
   let view = providerViews(snapshot)[0];
   assert.equal(view.current.bucketId, 'codex:primary', 'main quota wins regardless of endpoint ordering');
   let html = render(ProviderSummary, { view, nowMs: Date.parse(snapshot.generatedAt) });
-  assert.match(text(html), /49% expected at reset/);
+  assert.match(text(html), /Expected at reset 49% left/);
   assert.match(html, /<details class="provider-model-allowances">/);
   assert.match(text(html), /GPT-5.3-Codex-Spark · weekly/);
   assert.match(text(html), /GPT-5.3-Codex-Spark · 5-hour/);
@@ -459,10 +461,44 @@ test('attention preserves late critical rows and sorts urgency before provider o
   }
   const current = lib.primaryWindow(snapshot.quotas.fable);
   current.forecast.exhaustsAt = new Date(Date.now() + 3600000).toISOString();
+  // With the status line about another allowance, the Fable row must stay listed and lead.
+  snapshot.dashboardVerdict = { ...snapshot.dashboardVerdict, details: [] };
   const html = render(Overview, { snapshot, refreshing: false, onRefresh: async () => {}, onSetupClaude() {}, onSources() {} });
   const attention = html.slice(html.indexOf('class="insight-list"'));
+  assert.ok(attention.indexOf('Fable 5 is expected to run out') >= 0);
   assert.ok(attention.indexOf('Fable 5 is expected to run out') < attention.indexOf('Codex is above its safe pace'));
   assert.match(attention, /Last 30 days/);
+});
+
+test('the status line states its window once, with a daily budget, and the list keeps every other note', () => {
+  const snapshot = structuredClone(demoSnapshot);
+  const html = render(Overview, {
+    snapshot, refreshing: false, onRefresh: async () => {}, onSetupClaude() {}, onSources() {}, onOpenProvider() {},
+  });
+  const status = text(html.slice(html.indexOf('class="overview-status'), html.indexOf('class="allowance-section"')));
+  assert.match(status, /Fable 5 could reach its limit under heavier usage/);
+  assert.match(status, /Keep Fable 5 under \d+(\.\d)?% of its allowance per active day to reach its .+ reset\./);
+  assert.match(status, /Plan Fable 5 usage/);
+  const attention = text(html.slice(html.indexOf('id="attention-heading"'), html.indexOf('id="value-heading"')));
+  assert.doesNotMatch(attention, /Fable 5 could run out under heavier usage/, 'the status line already says it');
+  assert.match(attention, /Codex reset credit banked/);
+});
+
+test('subscription value appears only with fees for visible subscriptions and keeps a lower bound', () => {
+  const snapshot = structuredClone(demoSnapshot);
+  const overview = (next) => text(render(Overview, {
+    snapshot: next, refreshing: false, onRefresh: async () => {}, onSetupClaude() {}, onSources() {},
+  }));
+  snapshot.settings = { ...snapshot.settings, codexPlanUsdPerMonth: 200, claudePlanUsdPerMonth: 0, usdToCurrency: 1 };
+  snapshot.costs = { ...snapshot.costs, actual: 600, isLowerBound: false, periodDays: 30 };
+  // 200 USD a month over 30 of 30.4375 days is 197.13; 600 / 197.13 = 3.04.
+  assert.match(overview(snapshot), /Subscription value 3\.0× vs .*197\.13 of plan fees/);
+  snapshot.costs.isLowerBound = true;
+  assert.match(overview(snapshot), /Subscription value ≥ 3\.0×/);
+  snapshot.settings.showCodexSubscription = false;
+  const hidden = overview(snapshot);
+  assert.doesNotMatch(hidden, /Subscription value/);
+  assert.match(hidden, /Add your monthly plan fees/);
 });
 
 test('short-window stale evidence requests refresh on the provider view', () => {
@@ -475,15 +511,35 @@ test('short-window stale evidence requests refresh on the provider view', () => 
 });
 
 test('learning runway descriptions never invent zero percent and exclude expired series', async () => {
-  const { CombinedRunwayChart } = await server.ssrLoadModule('/src/components/Charts.tsx');
+  const { RunwayChart } = await server.ssrLoadModule('/src/components/Charts.tsx');
+  const schedule = { activeDays: [0, 1, 2, 3, 4, 5, 6], startHour: 8, endHour: 22 };
   const snapshot = structuredClone(demoSnapshot);
   const views = providerViews(snapshot).map((view) => ({ ...view, expectedRemaining: null, heavyRemaining: null,
     current: { ...view.current, forecast: { ...view.current.forecast, expectedRemaining: null, heavyRemaining: null } } }));
-  const html = render(CombinedRunwayChart, { views });
-  assert.match(html, /forecast is learning/);
-  assert.doesNotMatch(html, /expected 0%/);
-  const expired = render(CombinedRunwayChart, { views: views.map((view) => ({ ...view, expired: true })) });
-  assert.doesNotMatch(expired, /combined-runway-chart/);
+  for (const view of views) {
+    const html = render(RunwayChart, { view, schedule, size: 'full' });
+    assert.match(html, /forecast is learning/);
+    assert.doesNotMatch(html, /expected 0%/);
+    assert.doesNotMatch(html, /runway-expected" d="M|runway-band/, 'no projection is drawn while learning');
+    assert.equal(render(RunwayChart, { view: { ...view, expired: true }, schedule }), '');
+  }
+});
+
+test('each runway runs on its own window, shades inactive hours and marks a heavier run-out', async () => {
+  const { RunwayChart } = await server.ssrLoadModule('/src/components/Charts.tsx');
+  const schedule = { activeDays: [0, 1, 2, 3, 4, 5, 6], startHour: 8, endHour: 22 };
+  const [codex, , fable] = providerViews(structuredClone(demoSnapshot));
+  const html = render(RunwayChart, { view: fable, schedule, size: 'full' });
+  assert.match(html, /class="runway-chart full fable"/);
+  assert.match(html, /class="runway-inactive"/);
+  assert.match(html, /class="runway-band"/);
+  assert.match(html, /Heavier week runs out/);
+  assert.match(html, /View runway data/);
+  assert.match(html, /aria-label="Fable 5: 72% left now; expected 41% at reset; a heavier week runs out /);
+  const compact = render(RunwayChart, { view: codex, schedule });
+  assert.doesNotMatch(compact, /View runway data/, 'cards leave the data table to the provider page');
+  assert.doesNotMatch(render(RunwayChart, { view: fable, schedule, size: 'full', showHeavy: false }), /runway-band|Heavier week runs out/);
+  assert.match(render(RunwayChart, { view: fable, schedule, size: 'full', reserve: 15 }), /Reserve 15%/);
 });
 
 test('empty hourly activity and chart data tables are available without pointer interaction', async () => {

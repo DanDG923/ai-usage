@@ -33,9 +33,29 @@ app.whenReady().then(async () => {
   await new Promise((resolve) => setTimeout(resolve, 100));
   assert.equal(await evaluate(() => [...document.querySelectorAll('.period-switch button')].find((button) => button.getAttribute('aria-pressed') === 'true').textContent.includes('90')), true, 'old push cannot undo selected period');
   await evaluate(() => document.querySelector('#tab-overview').click());
+  await until(() => document.querySelectorAll('.runway-chart').length === 3);
   await evaluate(() => { const next = window.testBridge.fixture(); for (const quota of Object.values(next.quotas)) { if (!quota) continue; for (const entry of [quota, ...quota.windows]) { entry.resetsAt = new Date(Date.now() + 250).toISOString(); entry.forecast.expired = false; } } window.testBridge.push(next); });
   await until(() => document.body.textContent.includes('The last allowance window ended'));
-  assert.equal(await evaluate(() => document.querySelector('.combined-runway-chart')), null, 'expired runway is removed without collection');
+  assert.equal(await evaluate(() => document.querySelector('.runway-chart')), null, 'expired runways are removed without collection');
+  // A provider page opens from its card and Escape returns to the Overview.
+  await evaluate(() => window.testBridge.push(window.testBridge.fixture()));
+  await until(() => document.querySelector('.provider-card.fable .provider-card-link'));
+  await evaluate(() => document.querySelector('.provider-card.fable .provider-card-link').click());
+  await until(() => document.querySelector('.detail-page .runway-chart.full'));
+  assert.match(await evaluate(() => document.querySelector('.breadcrumb [aria-current="page"]').textContent), /Fable 5/);
+  assert.equal(await evaluate(() => document.activeElement?.id), 'panel-overview', 'focus moves to the provider page');
+  // Trying a reserve re-plans the budget and draws the same reserve on the chart.
+  await evaluate(() => { const slider = document.querySelector('#planner-reserve'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(slider, '20'); slider.dispatchEvent(new Event('input', { bubbles: true })); });
+  await until(() => document.querySelector('.runway-reserve text')?.textContent.includes('Reserve 20%'));
+  // Escape pressed in the slider stays with the slider; the page remains open.
+  await evaluate(() => { document.querySelector('[aria-label="Dismiss message"]')?.click(); document.querySelector('#planner-reserve').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.ok(await evaluate(() => document.querySelector('.detail-page')), 'Escape in a field does not close the page');
+  // Escape dismisses a visible notice first, so clear any before leaving the page.
+  await evaluate(() => document.querySelector('[aria-label="Dismiss message"]')?.click());
+  await evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })));
+  await until(() => document.querySelector('.provider-card-grid'));
+  await until(() => document.activeElement?.classList.contains('provider-card-link'));
   await evaluate(() => document.querySelector('#tab-settings').click());
   await until(() => document.querySelector('#pricing'));
   assert.equal(await evaluate(() => Boolean(document.querySelector('#pricing').closest('details'))), false, 'API pricing is a visible section');

@@ -178,15 +178,25 @@ function CapacityCard({
   );
 }
 
-export function TokenCapacity({ snapshot }: { snapshot: Snapshot }) {
+export function TokenCapacity({
+  snapshot,
+  provider: only,
+}: {
+  snapshot: Snapshot;
+  /** Limit the panel to one provider, as on that provider's detail page. */
+  provider?: (typeof PROVIDERS)[number]['id'];
+}) {
   // A provider with no allowance reading at all has nothing to estimate yet;
   // the provider strip already explains how to connect it.
   const providers = PROVIDERS.filter(
-    (provider) => subscriptionVisible(snapshot.settings, provider.id) && snapshot.quotas[provider.id],
+    (provider) =>
+      (!only || provider.id === only) &&
+      subscriptionVisible(snapshot.settings, provider.id) &&
+      snapshot.quotas[provider.id],
   );
   if (!providers.length) return null;
   return (
-    <section className="panel token-capacity-panel" aria-labelledby="token-capacity-heading">
+    <section className={`panel token-capacity-panel${only ? ' single' : ''}`} aria-labelledby="token-capacity-heading">
       <div className="panel-heading">
         <div>
           <h2 id="token-capacity-heading">Weekly token capacity</h2>

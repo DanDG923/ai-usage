@@ -11,6 +11,7 @@ let server;
 let demoSnapshot;
 let TokenCapacity;
 let Overview;
+let ProviderDetail;
 
 test.before(async () => {
   const [{ createServer }, { default: react }] = await Promise.all([import('vite'), import('@vitejs/plugin-react')]);
@@ -19,10 +20,11 @@ test.before(async () => {
     server: { middlewareMode: true, watch: null, hmr: false, ws: false },
     optimizeDeps: { noDiscovery: true, include: [] }, appType: 'custom',
   });
-  [{ demoSnapshot }, { TokenCapacity }, { Overview }] = await Promise.all([
+  [{ demoSnapshot }, { TokenCapacity }, { Overview }, { ProviderDetail }] = await Promise.all([
     server.ssrLoadModule('/src/data/demo.ts'),
     server.ssrLoadModule('/src/components/TokenCapacity.tsx'),
     server.ssrLoadModule('/src/components/Overview.tsx'),
+    server.ssrLoadModule('/src/components/ProviderDetail.tsx'),
   ]);
 });
 
@@ -221,15 +223,20 @@ test('zero remaining tokens stays an explicit timestamped estimate rather than a
   assert.match(content, /Allowance reading/);
 });
 
-test('browser examples are explicitly labelled and the Overview places the runway above token capacity', () => {
-  const html = renderToStaticMarkup(React.createElement(Overview, {
-    snapshot: demoSnapshot, refreshing: false, onRefresh: async () => {}, onSetupClaude: () => {}, onSources: () => {},
+test('browser examples are explicitly labelled and a provider page places its runway above token capacity', () => {
+  const html = renderToStaticMarkup(React.createElement(ProviderDetail, {
+    snapshot: demoSnapshot, provider: 'codex', onBack() {},
   }));
   assert.match(text(html), /Example estimates/);
   assert.match(text(html), /Synthetic preview figures, not your actual account capacity/);
-  assert.ok(html.indexOf('id="token-capacity-heading"') > html.indexOf('class="provider-strip"'));
-  const runway = html.indexOf('<h2>Allowance runway</h2>');
-  assert.ok(runway > html.indexOf('class="provider-strip"'));
+  const runway = html.indexOf('id="runway-heading"');
+  assert.ok(runway > 0);
   assert.ok(runway < html.indexOf('id="token-capacity-heading"'));
-  assert.ok(html.indexOf('class="overview-workspace"') < html.indexOf('id="token-capacity-heading"'));
+  // The page is scoped to its provider: no other provider's capacity card.
+  assert.doesNotMatch(html, /token-capacity-card (claude|fable)/);
+  // The Overview no longer repeats the panel beside the allowance cards.
+  const overview = renderToStaticMarkup(React.createElement(Overview, {
+    snapshot: demoSnapshot, refreshing: false, onRefresh: async () => {}, onSetupClaude: () => {}, onSources: () => {},
+  }));
+  assert.doesNotMatch(overview, /id="token-capacity-heading"/);
 });
