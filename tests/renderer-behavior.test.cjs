@@ -517,7 +517,7 @@ test('subscription value weighs only the usage of plans with a visible fee, and 
   snapshot.settings = { ...snapshot.settings, codexPlanUsdPerMonth: 200, claudePlanUsdPerMonth: 0, usdToCurrency: 1 };
   // 600 of API-equivalent use in the period: 400 on Codex and 200 on Claude.
   snapshot.costs = {
-    ...snapshot.costs, actual: 600, isLowerBound: false, periodDays: 30,
+    ...snapshot.costs, actual: 600, isLowerBound: false, periodDays: 30, unpricedModels: [],
     chart: [{ date: '2026-09-01', codex: 250, claude: 150 }, { date: '2026-09-02', codex: 150, claude: 50 }],
   };
   // Only Codex has a fee: 200 USD a month over 30 of 30.4375 days is 197.13,
@@ -526,11 +526,17 @@ test('subscription value weighs only the usage of plans with a visible fee, and 
   // With a 50 USD Claude fee as well, all 600 counts against 246.41.
   snapshot.settings.claudePlanUsdPerMonth = 50;
   assert.match(overview(snapshot), /Subscription value 2\.4× vs .*246\.41 of plan fees/);
+  // Unpriced Claude usage makes that a lower bound, like the period's total…
   snapshot.costs.isLowerBound = true;
+  snapshot.costs.unpricedModels = [{ sourceId: 'claude', model: 'claude-unpriced', tokens: 1_000 }];
   assert.match(overview(snapshot), /Subscription value ≥ 2\.4×/);
-  // A hidden subscription leaves both its fee and its usage out.
+  // …but not the value of a Codex plan whose usage is fully priced. A hidden
+  // subscription leaves its fee, usage and unpriced models out.
   snapshot.settings.showClaudeSubscription = false;
-  assert.match(overview(snapshot), /Subscription value ≥ 2\.0× Codex usage vs .*197\.13 of plan fees/);
+  assert.match(overview(snapshot), /Subscription value 2\.0× Codex usage vs .*197\.13 of plan fees/);
+  assert.match(overview(snapshot), /≥ \D*600\.00 Lower bound · 1 model unpriced/, 'the period total stays a lower bound');
+  snapshot.costs.unpricedModels.push({ sourceId: 'codex', model: 'codex-unpriced', tokens: 1_000 });
+  assert.match(overview(snapshot), /Subscription value ≥ 2\.0× Codex usage/);
   snapshot.settings.showCodexSubscription = false;
   const hidden = overview(snapshot);
   assert.doesNotMatch(hidden, /Subscription value/);

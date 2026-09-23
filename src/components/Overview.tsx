@@ -179,7 +179,12 @@ function subscriptionValue(snapshot: Snapshot) {
   const monthlyUsd = plans.reduce((sum, [, , fee]) => sum + Number(fee), 0);
   const fees = monthlyUsd * (Number(settings.usdToCurrency) || 1) * (snapshot.costs.periodDays / (365.25 / 12));
   const value = snapshot.costs.chart.reduce((sum, day) => sum + plans.reduce((total, [id]) => total + day[id], 0), 0);
-  return { fees, multiple: value / fees, only: plans.length === 1 ? plans[0][1] : null };
+  // Only unpriced usage of a counted plan makes its value a lower bound. Costs
+  // file every source other than Codex under Claude, and so does this.
+  const lowerBound = snapshot.costs.unpricedModels.some(
+    (entry) => entry.tokens > 0 && plans.some(([id]) => (id === 'codex') === (entry.sourceId === 'codex')),
+  );
+  return { fees, multiple: value / fees, lowerBound, only: plans.length === 1 ? plans[0][1] : null };
 }
 
 export function Overview({
@@ -415,7 +420,7 @@ export function Overview({
               <div>
                 <dt>Subscription value</dt>
                 <dd>
-                  {snapshot.costs.isLowerBound ? '≥ ' : ''}
+                  {value.lowerBound ? '≥ ' : ''}
                   {value.multiple.toFixed(1)}×
                 </dd>
                 <small>
