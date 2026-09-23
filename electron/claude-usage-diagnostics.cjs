@@ -20,8 +20,10 @@ function createUsageDiagnostics() {
     const success = value.match(/fetchUtilization: (200) after \d+ attempt\(s\)/);
     if (success) state = { outcome: 'verified', code: null, httpStatus: 200 };
     const snapshot = value.match(/Usage read answered from a snapshot (\d+)s old; endpoint not asked/);
-    if (snapshot && Number(snapshot[1]) <= SNAPSHOT_MAX_AGE_S) {
-      state = { outcome: 'verified', code: null, httpStatus: null };
+    if (snapshot) {
+      // The latest read decides, so an old snapshot also clears an earlier fetch.
+      const fresh = Number(snapshot[1]) <= SNAPSHOT_MAX_AGE_S;
+      state = { outcome: fresh ? 'verified' : 'unverified', code: null, httpStatus: null };
     }
     if (!/Failed to load usage data:/.test(value)) return;
     const status = value.match(/(?:status(?: code)?[=: ]+|HTTP\s+)(401|403|429|500|502|503|504|529)\b/i);

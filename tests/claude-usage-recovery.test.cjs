@@ -95,6 +95,13 @@ test('a snapshot older than the CLI serves fails closed', async () => {
   assert.equal(f.calls(), 1);
 });
 
+test('an old snapshot after an earlier fetch leaves the read unverified', () => {
+  const d = createUsageDiagnostics();
+  d.write(ok);
+  d.write('[DEBUG] Usage read answered from a snapshot 61s old; endpoint not asked\n');
+  assert.deepEqual(d.finish(), { outcome: 'unverified', code: null, httpStatus: null });
+});
+
 for (const status of [401, 403, 429]) {
   test(`HTTP ${status} does not trigger an immediate retry`, async () => {
     const f = fixture([{ log: `[ERROR] Failed to load usage data: Request failed with status code ${status}\n` }]);
