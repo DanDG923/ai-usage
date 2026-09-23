@@ -1,10 +1,12 @@
 import { CheckCircle2, CircleAlert, Database, History } from 'lucide-react';
-import { dateTimeLabel, percent, shortDate } from '../lib';
+import { dateTimeLabel, percent, relativeTime, shortDate } from '../lib';
 import { providerViews } from '../provider-view';
 import type { Snapshot } from '../types';
 import { DailyUsageChart } from './Charts';
 import { ActivityHeatmap } from './details/ActivityHeatmap';
 import { CycleHistory } from './details/CycleHistory';
+import { RelativeTime } from './details/RelativeTime';
+import '../pages.css';
 
 function sourceState(status: string, expired: boolean) {
   if (expired) return { label: 'Needs reading', tone: 'watch', icon: CircleAlert };
@@ -14,8 +16,24 @@ function sourceState(status: string, expired: boolean) {
   return { label: status || 'Waiting', tone: 'unknown', icon: Database };
 }
 
+/**
+ * Relative age first, because freshness is what the column is for, then the
+ * exact instant. Past a day the relative form is already a date, so it is not
+ * repeated.
+ */
+function ObservedAt({ value, nowMs }: { value: string; nowMs: number }) {
+  const alreadyDated = relativeTime(value, nowMs) === shortDate(value);
+  return (
+    <>
+      <RelativeTime value={value} nowMs={nowMs} />
+      {alreadyDated ? null : <small>{dateTimeLabel(value)}</small>}
+    </>
+  );
+}
+
 export function Activity({ snapshot, days }: { snapshot: Snapshot; days: number }) {
   const views = providerViews(snapshot);
+  const nowMs = Date.parse(snapshot.generatedAt);
   const visibleCycles = {
     codex: snapshot.settings.showCodexSubscription !== false ? snapshot.cycles.codex : [],
     claude: snapshot.settings.showClaudeSubscription !== false ? snapshot.cycles.claude : [],
@@ -80,12 +98,16 @@ export function Activity({ snapshot, days }: { snapshot: Snapshot; days: number 
                           {state.label}
                         </span>
                       </td>
-                      <td>
-                        {view.current ? dateTimeLabel(view.current.observedAt) : 'Not observed'}
+                      <td className="evidence-time">
+                        {view.current ? <ObservedAt value={view.current.observedAt} nowMs={nowMs} /> : 'Not observed'}
                         <small>
-                          {view.source?.last_success_at
-                            ? `Source succeeded ${shortDate(view.source.last_success_at)}`
-                            : 'No successful source reading yet'}
+                          {view.source?.last_success_at ? (
+                            <>
+                              Source succeeded <RelativeTime value={view.source.last_success_at} nowMs={nowMs} />
+                            </>
+                          ) : (
+                            'No successful source reading yet'
+                          )}
                         </small>
                       </td>
                       <td>{view.provenance.replaceAll('-', ' ')}</td>
