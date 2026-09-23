@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.49 — 23 September 2026
+## 1.0.49 — 24 September 2026
 
 - Redesign the colour system so colour always means a provider or a status, never both. Fable's coral was nearly indistinguishable from the "at risk" red (ΔE 3.6) and Claude's green from "on track" (ΔE 3.8); providers are now Codex blue, Claude violet and Fable magenta, at least 17 ΔE from every status colour and checked for colour-blind separation in both themes. Neutrals move from blue-slate to graphite, and buttons, toggles, focus rings and selected states become monochrome so no control looks like Codex data. Every status now carries an icon and a word.
 - Replace the combined runway chart with one runway per provider on its own clock, from the window's start to its own reset: observed use, the dashed expected path, a shaded heavier-week range, run-out markers and shading for hours outside the active schedule, which explains why projections flatten overnight.
