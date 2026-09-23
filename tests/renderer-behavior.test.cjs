@@ -487,17 +487,28 @@ test('the status line states its window once, with a daily budget, and the list 
   assert.match(codexCard, /1 reset credit banked Reported by Codex. Never counted as allowance or used automatically./);
 });
 
-test('subscription value appears only with fees for visible subscriptions and keeps a lower bound', () => {
+test('subscription value weighs only the usage of plans with a visible fee, and keeps a lower bound', () => {
   const snapshot = structuredClone(demoSnapshot);
   const overview = (next) => text(render(Overview, {
     snapshot: next, refreshing: false, onRefresh: async () => {}, onSetupClaude() {}, onSources() {},
   }));
   snapshot.settings = { ...snapshot.settings, codexPlanUsdPerMonth: 200, claudePlanUsdPerMonth: 0, usdToCurrency: 1 };
-  snapshot.costs = { ...snapshot.costs, actual: 600, isLowerBound: false, periodDays: 30 };
-  // 200 USD a month over 30 of 30.4375 days is 197.13; 600 / 197.13 = 3.04.
-  assert.match(overview(snapshot), /Subscription value 3\.0× vs .*197\.13 of plan fees/);
+  // 600 of API-equivalent use in the period: 400 on Codex and 200 on Claude.
+  snapshot.costs = {
+    ...snapshot.costs, actual: 600, isLowerBound: false, periodDays: 30,
+    chart: [{ date: '2026-09-01', codex: 250, claude: 150 }, { date: '2026-09-02', codex: 150, claude: 50 }],
+  };
+  // Only Codex has a fee: 200 USD a month over 30 of 30.4375 days is 197.13,
+  // and Codex's 400 is 2.03 times that. Claude's 200 is not credited to it.
+  assert.match(overview(snapshot), /Subscription value 2\.0× Codex usage vs .*197\.13 of plan fees/);
+  // With a 50 USD Claude fee as well, all 600 counts against 246.41.
+  snapshot.settings.claudePlanUsdPerMonth = 50;
+  assert.match(overview(snapshot), /Subscription value 2\.4× vs .*246\.41 of plan fees/);
   snapshot.costs.isLowerBound = true;
-  assert.match(overview(snapshot), /Subscription value ≥ 3\.0×/);
+  assert.match(overview(snapshot), /Subscription value ≥ 2\.4×/);
+  // A hidden subscription leaves both its fee and its usage out.
+  snapshot.settings.showClaudeSubscription = false;
+  assert.match(overview(snapshot), /Subscription value ≥ 2\.0× Codex usage vs .*197\.13 of plan fees/);
   snapshot.settings.showCodexSubscription = false;
   const hidden = overview(snapshot);
   assert.doesNotMatch(hidden, /Subscription value/);

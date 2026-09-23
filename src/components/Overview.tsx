@@ -162,15 +162,24 @@ const STATUS_ICON = {
   unknown: CircleDashed,
 } as const;
 
-/** Monthly plan fees for the visible subscriptions, as a multiple of the period's API-equivalent value. */
+/**
+ * The period's API-equivalent value of each visible subscription with a fee,
+ * as a multiple of those fees. A plan that is hidden or has no fee is left out
+ * of both sides, so its usage is never credited to another plan's fee.
+ */
 function subscriptionValue(snapshot: Snapshot) {
   const settings = snapshot.settings;
-  const monthlyUsd =
-    (subscriptionVisible(settings, 'codex') ? Number(settings.codexPlanUsdPerMonth) || 0 : 0) +
-    (subscriptionVisible(settings, 'claude') ? Number(settings.claudePlanUsdPerMonth) || 0 : 0);
-  if (!(monthlyUsd > 0)) return null;
+  const plans = (
+    [
+      ['codex', 'Codex', settings.codexPlanUsdPerMonth],
+      ['claude', 'Claude', settings.claudePlanUsdPerMonth],
+    ] as const
+  ).filter(([id, , fee]) => subscriptionVisible(settings, id) && Number(fee) > 0);
+  if (!plans.length) return null;
+  const monthlyUsd = plans.reduce((sum, [, , fee]) => sum + Number(fee), 0);
   const fees = monthlyUsd * (Number(settings.usdToCurrency) || 1) * (snapshot.costs.periodDays / (365.25 / 12));
-  return { fees, multiple: snapshot.costs.actual / fees };
+  const value = snapshot.costs.chart.reduce((sum, day) => sum + plans.reduce((total, [id]) => total + day[id], 0), 0);
+  return { fees, multiple: value / fees, only: plans.length === 1 ? plans[0][1] : null };
 }
 
 export function Overview({
@@ -409,7 +418,9 @@ export function Overview({
                   {snapshot.costs.isLowerBound ? '≥ ' : ''}
                   {value.multiple.toFixed(1)}×
                 </dd>
-                <small>vs {money(value.fees, snapshot.costs.currency)} of plan fees</small>
+                <small>
+                  {value.only ? `${value.only} usage ` : ''}vs {money(value.fees, snapshot.costs.currency)} of plan fees
+                </small>
               </div>
             )}
           </dl>
