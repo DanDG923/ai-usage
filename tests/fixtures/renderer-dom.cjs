@@ -43,7 +43,8 @@ app.whenReady().then(async () => {
   await evaluate(() => document.querySelector('.provider-card.fable .provider-card-link').click());
   await until(() => document.querySelector('.detail-page .runway-chart.full'));
   assert.match(await evaluate(() => document.querySelector('.breadcrumb [aria-current="page"]').textContent), /Fable 5/);
-  assert.equal(await evaluate(() => document.activeElement?.id), 'panel-overview', 'focus moves to the provider page');
+  // Focus moves on the next animation frame, which a loaded test machine can delay.
+  await until(() => document.activeElement?.id === 'panel-overview');
   // Trying a reserve re-plans the budget and draws the same reserve on the chart.
   await evaluate(() => { const slider = document.querySelector('#planner-reserve'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(slider, '20'); slider.dispatchEvent(new Event('input', { bubbles: true })); });
   await until(() => document.querySelector('.runway-reserve text')?.textContent.includes('Reserve 20%'));
