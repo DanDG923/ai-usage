@@ -101,8 +101,8 @@ const EMPTY_SESSION_PAGE = Object.freeze({ rows: [], total: 0, page: 1, pageSize
 // Values follow --header-bg and --text-2 in src/professional.css, the
 // stylesheet that wins; a mismatch shows as a strip of the wrong shade.
 const CHROME = {
-  dark: { background: '#0c1116', symbol: '#cbd3da' },
-  light: { background: '#f4f6f8', symbol: '#3b4854' },
+  dark: { background: '#0f1012', symbol: '#c8c7c1' },
+  light: { background: '#f5f5f2', symbol: '#3a3a37' },
 };
 
 const appIconPath = path.join(__dirname, '..', 'build', 'icon.png');
