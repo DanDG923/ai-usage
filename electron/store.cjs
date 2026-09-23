@@ -24,7 +24,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // Provider rebounds must not erase the maximum shown in reset-cycle history.
 const COMPACT_AFTER_MS = 60 * DAY_MS;
 const OPENAI_LONG_CONTEXT_THRESHOLD = 272_000;
-const OPENAI_LONG_CONTEXT_MODELS = new Set(['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
+const OPENAI_LONG_CONTEXT_MODELS = new Set(['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
 
 const DEFAULT_SETTINGS = {
   showCodexSubscription: true,
@@ -160,6 +160,9 @@ function priceSourceUrl(value) {
 const PRICE_ROWS = [
   // Standard API rates verified 2026-09-04; OpenAI has one cache-write rate.
   ['gpt-6-astra', 10, 12.5, 12.5, 1, 50],
+  // GPT-6 Sol and Luna standard rates verified 2026-09-22.
+  ['gpt-6-sol', 2, 2.5, 2.5, 0.2, 10],
+  ['gpt-6-luna', 0.1, 0.125, 0.125, 0.01, 0.5],
   ['gpt-5.6-sol', 4, 5, 5, 0.4, 20],
   ['codex-auto-review', 4, 5, 5, 0.4, 20],
   ['gpt-5.6-terra', 2, 2.5, 2.5, 0.2, 12],
@@ -626,12 +629,13 @@ class UsageStore {
     `);
     for (const row of PRICE_ROWS) {
       const astra = row[0] === 'gpt-6-astra';
-      const source = astra
-        ? 'https://developers.openai.com/api/docs/models/gpt-6-astra'
+      const newGpt6 = row[0] === 'gpt-6-sol' || row[0] === 'gpt-6-luna';
+      const source = astra || newGpt6
+        ? `https://developers.openai.com/api/docs/models/${row[0]}`
         : row[0].startsWith('claude')
         ? 'https://platform.claude.com/docs/en/about-claude/pricing'
         : 'https://developers.openai.com/api/docs/models/compare';
-      insertPrice.run(...row, astra ? '2026-09-04' : '2026-08-01', source);
+      insertPrice.run(...row, newGpt6 ? '2026-09-22' : astra ? '2026-09-04' : '2026-08-01', source);
     }
     // Repair only the obsolete built-in Sonnet row. User-edited rows do not
     // match this complete old vector and are left alone.

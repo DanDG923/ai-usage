@@ -9,9 +9,9 @@ It imports local usage evidence, learns your real burn pattern, evaluates every 
 
 ## Install
 
-Use `AI-Usage-Setup-1.0.47-x64.exe` for a normal Windows installation. Running it over an existing installation upgrades in place and preserves the local database, settings, observations, and backups. Uninstalling first is neither required nor recommended. Install this version once to enable future updates through the app.
+Use `AI-Usage-Setup-1.0.48-x64.exe` for a normal Windows installation. Running it over an existing installation upgrades in place and preserves the local database, settings, observations, and backups. Uninstalling first is neither required nor recommended. Install this version once to enable future updates through the app.
 
-Use `AI-Usage-Portable-1.0.47-x64.exe` for a single executable that does not install the app. Windows SmartScreen may show an unknown-publisher warning because this personal build is not backed by a commercial code-signing certificate; verify the supplied SHA-256 hash before running it.
+Use `AI-Usage-Portable-1.0.48-x64.exe` for a single executable that does not install the app. Windows SmartScreen may show an unknown-publisher warning because this personal build is not backed by a commercial code-signing certificate; verify the supplied SHA-256 hash before running it.
 
 ## Personal private updates
 
@@ -119,7 +119,7 @@ The estimate divides visible prompt/reply Unicode character counts by four, roun
 
 Parsing runs locally in the storage worker. AI Usage persists only opaque hashed reply keys, dates, model evidence/assumptions, estimated counts and limitation flags, never conversation titles or text. Identical replies are deduplicated across imports; existing estimates and assumptions are kept unchanged. To replace an assumption, use **Remove imported estimates…** (which creates a safety backup) and reimport. Both SQLite and `.aiusage.json` backups include estimates; restore merges them without replacing existing rows. Import previews expire after 30 minutes and save the reviewed counts even if the source file changes meanwhile.
 
-OpenAI GPT-6 Astra and GPT-5.6 Sol, Terra, and Luna requests over the published 272,000-input-token threshold use the long-context multipliers, including cached prompt input when determining whether the threshold is crossed. Astra is included in the built-in catalogue at standard API rates of $10 input, $1 cached input, $12.50 cache writes, and $50 output per million tokens, verified against [OpenAI's model documentation](https://developers.openai.com/api/docs/models/gpt-6-astra) on 4 September 2026. Existing Astra token records are repriced automatically when the new catalogue loads, and saved custom prices are preserved. Unknown or future model names are not assigned a guessed price: their tokens remain visible, price coverage drops, and totals are labelled **At least** until you add the missing row.
+OpenAI GPT-6 Astra, Sol, and Luna and GPT-5.6 Sol, Terra, and Luna requests over the published 272,000-input-token threshold use the long-context multipliers, including cached prompt input when determining whether the threshold is crossed. Astra is included in the built-in catalogue at standard API rates of $10 input, $1 cached input, $12.50 cache writes, and $50 output per million tokens, verified against [OpenAI's model documentation](https://developers.openai.com/api/docs/models/gpt-6-astra) on 4 September 2026. [GPT-6 Sol](https://developers.openai.com/api/docs/models/gpt-6-sol) adds $2 input, $0.20 cached input, $2.50 cache writes, and $10 output; [GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna) adds $0.10 input, $0.01 cached input, $0.125 cache writes, and $0.50 output per million tokens, verified on 22 September 2026. Above the threshold, input and cache rates double and output rates increase by 50%. Existing token records are repriced automatically when the new catalogue loads, and saved custom prices are preserved. These are standard API-equivalent estimates, not ChatGPT subscription charges. Unknown or future model names are not assigned a guessed price: their tokens remain visible, price coverage drops, and totals are labelled **At least** until you add the missing row.
 
 These values are token-only comparisons, not provider invoices. They do not claim to include untracked tool charges, web-search charges, storage, taxes, subscription fees, or usage performed on another device that did not reach the local ledger. USD is the ledger currency; GBP and EUR use the manually saved display conversion rate and are not updated from a live foreign-exchange feed.
 
@@ -213,7 +213,7 @@ Linting uses oxlint (typescript-eslint does not yet support the TypeScript 7 com
 ## Publish future private updates
 
 1. Update `package.json`, both root versions in `package-lock.json`, the current installer names in this README, the version contract test, and `CHANGELOG.md`. Keep the GitHub repository private and retain the matching `updateFeed` and `build.publish` settings in `package.json`; the separate `updateFeed` survives packaging so the installed app can verify its destination.
-2. Complete the checks above, review the changes, and merge them. Create and push the matching version tag, for example `v1.0.47` for version `1.0.47`.
+2. Complete the checks above, review the changes, and merge them. Create and push the matching version tag, for example `v1.0.48` for version `1.0.48`.
 3. The **Private Windows release** GitHub Actions workflow builds Windows x64 packages, checks the manifest and packaged contents, and creates a draft release. It uploads the Setup installer, portable executable, installer block map, `latest.yml`, and `SHA256SUMS.txt`, verifies each remote asset's size and SHA-256 digest, then publishes the release as latest. The normal pull-request CI job is unchanged.
 
 The release workflow can also be started manually with an existing version tag. It refuses a mismatched version, a public or different destination, a tag whose commit is not already on `main`, an existing release for that tag, or a version older than an existing stable release. If an upload fails, any created release stays a draft for inspection and is not offered to the app. Review and remove that incomplete draft before retrying; the workflow never overwrites existing release assets.
@@ -231,7 +231,7 @@ Choose **Sign in to Claude** and complete the account flow in your browser. AI U
 
 ### Review maintenance changes
 
-Local packaging output now defaults to `%LOCALAPPDATA%\AI Usage\Build\release`, with `AI_USAGE_BUILD_OUTPUT` available for an explicit alternative. CI keeps its `release` folder. Use the package scripts so the builder, release notes and audit resolve the same location. `npm run version:check` verifies release metadata; `node tools/bump-version.cjs 1.0.47` prepares a future version and its changelog entry without tagging or publishing.
+Local packaging output now defaults to `%LOCALAPPDATA%\AI Usage\Build\release`, with `AI_USAGE_BUILD_OUTPUT` available for an explicit alternative. CI keeps its `release` folder. Use the package scripts so the builder, release notes and audit resolve the same location. `npm run version:check` verifies release metadata; `node tools/bump-version.cjs 1.0.48` prepares a future version and its changelog entry without tagging or publishing.
 
 `npm test` uses two test processes, isolated provider folders, an explicit Europe/London test clock zone, fast SQLite settings for disposable fixtures, and cleanup of only the temporary folders created by that run. `npm run test:electron` repeats the suite with the shipped Electron runtime. Renderer interaction tests also exercise the real Chromium DOM with a fake bridge.
 

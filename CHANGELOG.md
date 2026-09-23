@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.48 — 23 September 2026
+
+- Add built-in GPT-6 Sol and GPT-6 Luna API-equivalent pricing for input, cache reads, cache writes, and output, using official rates verified on 22 September 2026.
+- Apply published long-context rates above 272,000 input tokens, including recognised dated model variants. Existing recorded usage receives prices automatically; saved custom prices and usage history are preserved.
+- Update preview catalogue and pricing documentation, with regression coverage for upgrade repricing, custom-rate preservation, and the exact long-context boundary.
+- Fix Claude showing as stale after a refresh within a minute of another usage read. Claude Code now answers such a read from the snapshot it fetched in the last 60 seconds, and that answer is accepted as a fresh allowance reading; an older snapshot is still rejected.
+
 ## 1.0.47 — 22 September 2026
 
 - Restore a `.sqlite` backup with **Restore from backup…** under Settings → Storage & export. Its records stream into the usual restore merge, so a history too large for a JSON export can be restored in the app. A JSON export now stops once it outgrows what a restore accepts, and the paired `.sqlite` backup is kept. The safety backup taken before an update skips the JSON export, so it finishes within the update's time limit.
