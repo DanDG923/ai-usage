@@ -18,7 +18,11 @@ export type SettingsSectionMeta = {
 };
 
 export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
-  { id: 'subscriptions', title: 'Subscriptions', keywords: 'plans monthly fees value hide show' },
+  {
+    id: 'subscriptions',
+    title: 'Subscriptions',
+    keywords: 'plans monthly fees value hide show free resets banked expiry',
+  },
   { id: 'sources', title: 'Sources', keywords: 'collectors connections connected status refresh interval helper' },
   { id: 'forecast', title: 'Forecast', keywords: 'schedule working hours active days daily budget reserve' },
   { id: 'alerts', title: 'Alerts', keywords: 'notifications notify tray digest snooze startup login' },

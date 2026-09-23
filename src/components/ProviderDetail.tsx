@@ -1,5 +1,6 @@
 import { AlertTriangle, CheckCircle2, ChevronRight, ShieldCheck } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { bankedResetsFor } from '../banked-resets';
 import { dailyBudget, paceLabel, scheduleOf } from '../budget';
 import { currentCycleFor } from '../cycle-match';
 import { dateTimeLabel, dayDate, money, percent, relativeTime, resetDistance, shortDate, whenLabel } from '../lib';
@@ -313,6 +314,7 @@ export function ProviderDetail({
         ? views.find((entry) => entry.id === 'fable' && entry.current)
         : undefined;
   const source = view.source;
+  const banked = bankedResetsFor(view.id, snapshot, nowMs);
 
   return (
     <main className="page detail-page" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview" tabIndex={-1}>
@@ -514,6 +516,15 @@ export function ProviderDetail({
                   </dd>
                   <dt>Last good</dt>
                   <dd>{source.last_success_at ? shortDate(source.last_success_at) : 'Not yet'}</dd>
+                </>
+              )}
+              {banked && (
+                <>
+                  <dt>Banked resets</dt>
+                  <dd>
+                    {banked.label}
+                    <small>{banked.note}</small>
+                  </dd>
                 </>
               )}
               {forecast && forecast.learnedDays > 0 && (

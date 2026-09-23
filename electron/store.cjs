@@ -43,6 +43,10 @@ const DEFAULT_SETTINGS = {
   allowanceChanges: [],
   codexPlanUsdPerMonth: 0,
   claudePlanUsdPerMonth: 0,
+  // A free reset Claude offers in its own Usage settings. No Claude API
+  // reports it, so it is recorded by hand and hidden after its expiry date.
+  claudeFreeResets: 0,
+  claudeFreeResetsExpireOn: null,
   notifyDesktop: true,
   notifyResets: true,
   notifyFallback: true,
@@ -102,6 +106,8 @@ const SETTING_VALIDATORS = {
   allowanceChanges: (value) => isAllowanceChangeList(value),
   codexPlanUsdPerMonth: (value) => Number.isFinite(value) && value >= 0 && value <= 100_000,
   claudePlanUsdPerMonth: (value) => Number.isFinite(value) && value >= 0 && value <= 100_000,
+  claudeFreeResets: (value) => Number.isInteger(value) && value >= 0 && value <= 10,
+  claudeFreeResetsExpireOn: (value) => value === null || isForecastDate(value),
   notifyDesktop: (value) => typeof value === 'boolean',
   notifyResets: (value) => typeof value === 'boolean',
   notifyFallback: (value) => typeof value === 'boolean',

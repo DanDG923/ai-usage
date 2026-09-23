@@ -222,3 +222,51 @@ test('a status line about a five-hour session gives no per-day budget', async ()
   assert.match(status, /Claude 5-hour session could run out/);
   assert.doesNotMatch(status, /per active day|d{3}%/);
 });
+
+test('banked resets: Codex reports its own, Claude free resets are recorded by hand and hide after expiry', async () => {
+  const { bankedResetsFor } = await server.ssrLoadModule('/src/banked-resets.ts');
+  const { Overview } = await server.ssrLoadModule('/src/components/Overview.tsx');
+  const nowMs = new Date(2026, 8, 23, 22, 0).getTime();
+  const base = { resetCredits: 3, settings: { claudeFreeResets: 1, claudeFreeResetsExpireOn: '2026-10-22' } };
+  assert.equal(bankedResetsFor('codex', base, nowMs).label, '3 reset credits banked');
+  const claude = bankedResetsFor('claude', base, nowMs);
+  assert.equal(claude.label, '1 free reset available');
+  assert.match(claude.note, /Expires Thu 22 Oct\./);
+  assert.equal(bankedResetsFor('fable', base, nowMs), null, 'Fable shares the Claude pool');
+  assert.ok(bankedResetsFor('claude', base, new Date(2026, 9, 22, 23, 59).getTime()), 'still claimable on its last day');
+  assert.equal(bankedResetsFor('claude', base, new Date(2026, 9, 23, 0, 1).getTime()), null, 'hidden after expiry');
+  assert.equal(bankedResetsFor('claude', { ...base, settings: { claudeFreeResets: 0 } }, nowMs), null);
+  assert.equal(bankedResetsFor('codex', { ...base, resetCredits: 0 }, nowMs), null);
+
+  const snapshot = structuredClone(demoSnapshot);
+  snapshot.settings = { ...snapshot.settings, claudeFreeResets: 1, claudeFreeResetsExpireOn: '2099-12-31' };
+  const html = render(Overview, { snapshot, refreshing: false, onRefresh: async () => {}, onSetupClaude() {}, onSources() {} });
+  const claudeCard = text(html.slice(html.indexOf('aria-label="Claude allowance"'), html.indexOf('aria-label="Fable 5 allowance"')));
+  assert.match(claudeCard, /1 free reset available Recorded by you; claim it in Claude’s Usage settings\. Expires /);
+  const fableCard = text(html.slice(html.indexOf('aria-label="Fable 5 allowance"'), html.indexOf('id="attention-heading"')));
+  assert.doesNotMatch(fableCard, /free reset|reset credit/);
+});
+
+test('the Claude free-reset record is validated, saved and offered in Settings', async () => {
+  const { SubscriptionsSection } = await server.ssrLoadModule('/src/components/settings/SubscriptionsSection.tsx');
+  const { UsageStore } = require('../electron/store.cjs');
+  const store = new UsageStore(':memory:', require('node:os').tmpdir());
+  try {
+    assert.equal(store.getSettings().claudeFreeResets, 0);
+    assert.equal(store.getSettings().claudeFreeResetsExpireOn, null);
+    store.updateSettings({ claudeFreeResets: 1, claudeFreeResetsExpireOn: '2026-10-22' });
+    assert.equal(store.getSettings().claudeFreeResets, 1);
+    assert.equal(store.getSettings().claudeFreeResetsExpireOn, '2026-10-22');
+    for (const bad of [{ claudeFreeResets: -1 }, { claudeFreeResets: 1.5 }, { claudeFreeResets: 11 }, { claudeFreeResetsExpireOn: '22/10/2026' }]) {
+      assert.throws(() => store.updateSettings(bad), undefined, JSON.stringify(bad));
+    }
+  } finally {
+    store.close();
+  }
+  const snapshot = structuredClone(demoSnapshot);
+  const html = render(SubscriptionsSection, { snapshot, update: async () => true });
+  assert.match(text(html), /Claude free resets .*Free resets available.*Expires on/);
+  assert.match(html, /id="claude-free-resets"/);
+  snapshot.settings.showClaudeSubscription = false;
+  assert.doesNotMatch(render(SubscriptionsSection, { snapshot, update: async () => true }), /claude-free-resets/);
+});

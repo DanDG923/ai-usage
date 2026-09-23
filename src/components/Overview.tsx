@@ -8,6 +8,7 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import { subscriptionVisible } from '../../electron/dashboard-decision.mjs';
+import { bankedResetsFor } from '../banked-resets';
 import { dailyBudget, paceLabel } from '../budget';
 import {
   allowanceWindowLabel,
@@ -124,13 +125,7 @@ function insights(views: ProviderView[], snapshot: Snapshot, nowMs: number): Ins
       detail: 'A balance is available, but there is not enough evidence to say how much will remain at reset.',
     });
   }
-  if (snapshot.settings.showCodexSubscription !== false && snapshot.resetCredits > 0) {
-    rows.push({
-      tone: 'neutral',
-      title: `${snapshot.resetCredits} Codex reset credit${snapshot.resetCredits === 1 ? '' : 's'} banked`,
-      detail: 'Credits are recorded as context and are never treated as allowance or redeemed automatically.',
-    });
-  }
+  // Banked and free resets appear on their provider's card instead.
   const severity = { hot: 0, warm: 1, neutral: 2, good: 3 };
   return rows.sort((a, b) => severity[a.tone] - severity[b.tone]);
 }
@@ -322,6 +317,7 @@ export function Overview({
               view={view}
               nowMs={nowMs}
               settings={snapshot.settings}
+              banked={bankedResetsFor(view.id, snapshot, nowMs)}
               onOpen={onOpenProvider ? () => onOpenProvider(view.id) : undefined}
             />
           ))}

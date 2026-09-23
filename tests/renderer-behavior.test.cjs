@@ -481,7 +481,10 @@ test('the status line states its window once, with a daily budget, and the list 
   assert.match(status, /Plan Fable 5 usage/);
   const attention = text(html.slice(html.indexOf('id="attention-heading"'), html.indexOf('id="value-heading"')));
   assert.doesNotMatch(attention, /Fable 5 could run out under heavier usage/, 'the status line already says it');
-  assert.match(attention, /Codex reset credit banked/);
+  // Banked resets sit on their provider's card, not in the list.
+  assert.doesNotMatch(attention, /reset credit/);
+  const codexCard = text(html.slice(html.indexOf('aria-label="Codex allowance"'), html.indexOf('aria-label="Claude allowance"')));
+  assert.match(codexCard, /1 reset credit banked Reported by Codex. Never counted as allowance or used automatically./);
 });
 
 test('subscription value appears only with fees for visible subscriptions and keeps a lower bound', () => {

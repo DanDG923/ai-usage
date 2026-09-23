@@ -809,3 +809,14 @@
     forced-color-adjust: none;
   }
 }
+
+/* A date with its Clear button, as used for the Claude free-reset expiry. */
+.date-setting {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.date-setting input[type='date'] {
+  flex: 1 1 auto;
+  min-width: 0;
+}

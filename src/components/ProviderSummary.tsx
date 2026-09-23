@@ -1,5 +1,6 @@
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, Hourglass } from 'lucide-react';
 import { useMemo } from 'react';
+import type { BankedResets } from '../banked-resets';
 import { dailyBudget, scheduleOf } from '../budget';
 import {
   allowanceWindowLabel,
@@ -93,6 +94,19 @@ export function SessionWindows({ view, nowMs }: { view: ProviderView; nowMs: num
   );
 }
 
+/** Resets the provider lets you claim; context only, never counted as allowance. */
+export function BankedResetsRow({ banked }: { banked: BankedResets }) {
+  return (
+    <p className={`provider-banked ${banked.source}`}>
+      <Hourglass aria-hidden="true" />
+      <span>
+        <strong>{banked.label}</strong>
+        <small>{banked.note}</small>
+      </span>
+    </p>
+  );
+}
+
 /** Expected and heavier-week outcomes at the reset, as words rather than a bar to decode. */
 export function ProviderOutcomes({ view, nowMs }: { view: ProviderView; nowMs: number }) {
   const forecast = view.current?.forecast;
@@ -127,11 +141,14 @@ export function ProviderSummary({
   view,
   nowMs,
   settings = DEFAULT_SCHEDULE,
+  banked = null,
   onOpen,
 }: {
   view: ProviderView;
   nowMs: number;
   settings?: ScheduleSettings;
+  /** Banked or free resets for this provider, shown in the card's spare space. */
+  banked?: BankedResets | null;
   onOpen?: () => void;
 }) {
   const { activeDays, activeStartHour, activeEndHour } = settings;
@@ -162,6 +179,7 @@ export function ProviderSummary({
             <span>Window ended {dateTimeLabel(view.current.resetsAt)}</span>
           </div>
         )}
+        {banked && <BankedResetsRow banked={banked} />}
         {/* Past windows, token capacity and evidence live on the provider page. */}
         {onOpen && (
           <button type="button" className="provider-card-link" onClick={onOpen}>
@@ -200,6 +218,7 @@ export function ProviderSummary({
       <RunwayChart view={view} schedule={schedule} size="compact" />
       <ProviderOutcomes view={view} nowMs={nowMs} />
       {budget && <DailyBudgetStrip budget={budget} provider={view.id} />}
+      {banked && <BankedResetsRow banked={banked} />}
       {view.stale && (
         <p className="provider-stale">Projected from the last successful reading. A fresh reading is due.</p>
       )}

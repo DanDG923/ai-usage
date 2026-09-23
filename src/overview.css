@@ -1212,3 +1212,30 @@
 .header-actions {
   min-width: 0;
 }
+
+/* Banked and free resets: context in the card's spare space, never a status. */
+.provider-banked {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  font-size: 12.5px;
+}
+.provider-banked svg {
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  color: var(--text-2);
+}
+.provider-banked strong {
+  display: block;
+  font-weight: 600;
+}
+.provider-banked small,
+.evidence-panel dd small {
+  display: block;
+  color: var(--text-muted);
+  font-size: 12px;
+}

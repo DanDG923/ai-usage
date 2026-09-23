@@ -235,17 +235,26 @@ test('fee inputs commit the monthly fee settings with the stated limits', async 
     snapshot: structuredClone(demoSnapshot),
     update: async (patch) => { patches.push(patch); },
   });
-  const fees = elements(tree, (node) => node.type === fields.NumericSetting);
+  const numeric = elements(tree, (node) => node.type === fields.NumericSetting);
   assert.deepEqual(
-    fees.map(({ props }) => [props.label, props.min, props.max, props.step]),
+    numeric.map(({ props }) => [props.label, props.min, props.max, props.step]),
     [
       ['Codex subscription (USD per month)', 0, 100_000, 1],
       ['Claude subscription (USD per month)', 0, 100_000, 1],
+      ['Free resets available', 0, 10, 1],
     ],
   );
-  await fees[0].props.onCommit(20);
-  await fees[1].props.onCommit(100);
-  assert.deepEqual(patches, [{ codexPlanUsdPerMonth: 20 }, { claudePlanUsdPerMonth: 100 }]);
+  await numeric[0].props.onCommit(20);
+  await numeric[1].props.onCommit(100);
+  // Recording none also clears the expiry, so a stale date cannot linger.
+  await numeric[2].props.onCommit(0);
+  await numeric[2].props.onCommit(2);
+  assert.deepEqual(patches, [
+    { codexPlanUsdPerMonth: 20 },
+    { claudePlanUsdPerMonth: 100 },
+    { claudeFreeResets: 0, claudeFreeResetsExpireOn: null },
+    { claudeFreeResets: 2 },
+  ]);
 });
 
 test('switches expose their state as a switch and in words', () => {

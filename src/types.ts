@@ -268,6 +268,10 @@ export type Settings = {
   /** Monthly subscription fees in USD; zero means not set. */
   codexPlanUsdPerMonth: number;
   claudePlanUsdPerMonth: number;
+  /** Free resets offered in Claude's own Usage settings, recorded by hand; no API reports them. */
+  claudeFreeResets?: number;
+  /** Local date (YYYY-MM-DD) after which the recorded Claude free resets are hidden. */
+  claudeFreeResetsExpireOn?: string | null;
   notifyDesktop: boolean;
   notifyResets: boolean;
   notifyFallback: boolean;
