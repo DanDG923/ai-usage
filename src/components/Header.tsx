@@ -39,6 +39,11 @@ function refreshCadence(minutes: number) {
   return `auto every ${minutes} min`;
 }
 
+// A refresh can succeed without an official allowance: transcript-only Claude
+// activity is observed, a local Fable estimate is estimating. These are the
+// working states electron/notifications.cjs counts as healthy.
+const HEALTHY_STATUSES = new Set(['connected', 'ready', 'observing', 'estimating', 'activity-only']);
+
 /**
  * One line on the health of the sources behind the visible subscriptions:
  * "3 sources current", or the ones that need attention by name. The dot is
@@ -51,7 +56,7 @@ export function sourceHealth(snapshot: Snapshot) {
     .filter((row) => row.source);
   const failing = rows.filter((row) => row.source!.status === 'error');
   const stale = rows.filter((row) => ['stale', 'degraded'].includes(row.source!.status));
-  const connected = rows.filter((row) => row.source!.status === 'connected');
+  const connected = rows.filter((row) => HEALTHY_STATUSES.has(row.source!.status));
   const list = (entries: typeof rows) => entries.map((row) => row.label).join(' and ');
   if (failing.length) return { tone: 'critical', text: `${list(failing)} unavailable` };
   if (stale.length) return { tone: 'watch', text: `${list(stale)} ${stale.length === 1 ? 'needs' : 'need'} a refresh` };

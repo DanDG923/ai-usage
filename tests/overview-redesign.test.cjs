@@ -176,6 +176,15 @@ test('freshness reads as a relative time and source health names what needs atte
   snapshot.settings.showClaudeSubscription = true;
   snapshot.settings.showCodexSubscription = true;
   assert.deepEqual(header.sourceHealth(snapshot), { tone: 'safe', text: '3 sources current' });
+  // A successful refresh without an official allowance is still healthy.
+  const status = (id, value) => { snapshot.sources.find((source) => source.id === id).status = value; };
+  for (const [codex, claude, fable] of [['observing', 'ready', 'estimating'], ['connected', 'observing', 'activity-only']]) {
+    status('codex', codex); status('claude', claude); status('claude-fable', fable);
+    assert.deepEqual(header.sourceHealth(snapshot), { tone: 'safe', text: '3 sources current' }, `${codex}, ${claude}, ${fable}`);
+  }
+  status('claude', 'awaiting-installation');
+  assert.deepEqual(header.sourceHealth(snapshot), { tone: 'unknown', text: '2 of 3 sources connected' });
+  status('claude', 'connected');
   snapshot.sources.find((source) => source.id === 'codex').status = 'stale';
   assert.deepEqual(header.sourceHealth(snapshot), { tone: 'watch', text: 'Codex needs a refresh' });
   snapshot.sources.find((source) => source.id === 'claude').status = 'error';
