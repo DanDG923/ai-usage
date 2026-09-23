@@ -487,6 +487,28 @@ test('the status line states its window once, with a daily budget, and the list 
   assert.match(codexCard, /1 reset credit banked Reported by Codex. Never counted as allowance or used automatically./);
 });
 
+test('View sources opens Settings at its Sources section, not at the top', () => {
+  const snapshot = structuredClone(demoSnapshot);
+  snapshot.quotas.codex = null; // an allowance still waiting for its first reading
+  const opened = [];
+  let tree;
+  function Capture() {
+    tree = Overview({
+      snapshot, refreshing: false, onRefresh: async () => {}, onSetupClaude() {},
+      onSources: () => opened.push('settings'), onOpenSettings: (section) => opened.push(section),
+    });
+    return null;
+  }
+  render(Capture, {});
+  const find = (node) => {
+    if (Array.isArray(node)) return node.map(find).find(Boolean);
+    if (!node?.props) return null;
+    return node.type === 'button' && node.props.children === 'View sources' ? node : find(node.props.children);
+  };
+  find(tree).props.onClick();
+  assert.deepEqual(opened, ['sources']);
+});
+
 test('subscription value weighs only the usage of plans with a visible fee, and keeps a lower bound', () => {
   const snapshot = structuredClone(demoSnapshot);
   const overview = (next) => text(render(Overview, {

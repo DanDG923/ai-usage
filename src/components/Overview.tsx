@@ -369,7 +369,7 @@ export function Overview({
               <button className="secondary-button" disabled={refreshing} onClick={() => void onRefresh()}>
                 {refreshing ? 'Refreshing…' : 'Refresh allowances'}
               </button>
-              <button className="secondary-button" onClick={onSources}>
+              <button className="secondary-button" onClick={() => openSettings('sources')}>
                 View sources
               </button>
               {snapshot.settings.showClaudeSubscription !== false && !snapshot.quotas.claude && !snapshot.isPreview && (
