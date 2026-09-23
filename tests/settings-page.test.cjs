@@ -257,6 +257,24 @@ test('fee inputs commit the monthly fee settings with the stated limits', async 
   ]);
 });
 
+test('picking a free-reset expiry saves the date; an incomplete date is ignored and Clear removes it', async () => {
+  const patches = [];
+  const snapshot = structuredClone(demoSnapshot);
+  snapshot.settings.claudeFreeResets = 1;
+  const tree = captured(SubscriptionsSection, { snapshot, update: async (patch) => { patches.push(patch); } });
+  const [expiry] = elements(tree, (node) => typeof node.type === 'function' && node.type.name === 'FreeResetExpiry');
+  assert.equal(expiry.props.disabled, false);
+  const field = (value, predicate) => elements(captured(expiry.type, { ...expiry.props, value }), predicate)[0];
+  const dateInput = field(null, (node) => node.type === 'input' && node.props.type === 'date');
+  // A date input reports its value as yyyy-mm-dd, or '' while the date is incomplete.
+  dateInput.props.onChange({ target: { value: '2026-10-22' } });
+  dateInput.props.onChange({ target: { value: '' } });
+  assert.equal(field(null, (node) => node.type === 'button'), undefined, 'Clear only appears once a date is saved');
+  field('2026-10-22', (node) => node.type === 'button').props.onClick();
+  await new Promise(setImmediate);
+  assert.deepEqual(patches, [{ claudeFreeResetsExpireOn: '2026-10-22' }, { claudeFreeResetsExpireOn: null }]);
+});
+
 test('switches expose their state as a switch and in words', () => {
   const html = section(renderSettings(structuredClone(demoSnapshot)), 'alerts');
   assert.match(html, /<input type="checkbox" role="switch" aria-checked="true" aria-label="Risk notifications"/);
