@@ -374,6 +374,41 @@ function addIntervalSamples(samples, before, after, schedule, nowMs, rateElapsed
   }
 }
 
+// Claude Code redraws its status line with the limits from the session's last
+// request, so an unchanged status-line reading restates old evidence rather
+// than confirming that nothing was used since: another session, the desktop
+// app or the web may have spent allowance meanwhile. Such a repeat must not
+// become the lower bound that localises the next increase, or a rise first
+// seen by a fresh read just after the active hours end is filed entirely as
+// late-night use and projected across every remaining night.
+function restatesSessionLimits(row) {
+  return row.provenance === 'official-statusline';
+}
+
+// Usage never falls within an allowance window, so once a fresh read has
+// shown higher usage for the same reset, a lower status-line reading can only
+// be a session restating limits it fetched earlier. Left in, each fresh/stale
+// pair reads as an early replenishment followed by the same usage spent again:
+// one 12% rise was learned eight times over as late-night use. Readings stay
+// in time order; a fresh read with a new reset (or a clear replenishment)
+// replaces the reference, and status-line readings before any fresh read are
+// kept because nothing yet shows them to be stale.
+const STALE_RESTATEMENT_MARGIN = 0.5;
+function withoutStaleRestatements(rows) {
+  let fresh = null;
+  return rows.filter((row) => {
+    const parsed = normaliseObservation(row);
+    const used = usedPercentOf(parsed);
+    if (!restatesSessionLimits(parsed)) {
+      fresh = { resetsAt: parsed.resetsAt, used };
+      return true;
+    }
+    return !(fresh
+      && Math.abs(parsed.resetsAt - fresh.resetsAt) <= RESET_TOLERANCE_MS
+      && used < fresh.used - STALE_RESTATEMENT_MARGIN);
+  });
+}
+
 function deriveLearningSamples(observations, schedule, nowMs, excludedDates = []) {
   const excluded = typeof excludedDates === 'function' ? excludedDates : exclusionLookup(excludedDates);
   const rows = observations.map(normaliseObservation)
@@ -433,7 +468,7 @@ function deriveLearningSamples(observations, schedule, nowMs, excludedDates = []
       addIntervalSamples(samples, latest, after, schedule, nowMs, (after.observedAt - anchor.observedAt) / HOUR_MS);
       anchor = after;
       latest = after;
-    } else {
+    } else if (!restatesSessionLimits(after)) {
       latest = after;
     }
   }
@@ -972,7 +1007,8 @@ function collapseReadings(rows, nowMs) {
 function forecastQuota(observations, options = {}) {
   // Normalise once; each pass below would otherwise re-parse every timestamp.
   const nowMs = options.now != null ? new Date(options.now).getTime() : Date.now();
-  let normalised = rescaleObservations(observations.map(normaliseObservation), options);
+  let normalised = withoutStaleRestatements(rescaleObservations(observations.map(normaliseObservation), options)
+    .sort((a, b) => a.observedAt - b.observedAt));
   if (options.compactReadings) {
     normalised = normalised.filter((row) => validQuotaTime(row.observedAt, row.resetsAt, row.windowMinutes, nowMs))
       .sort((a, b) => a.observedAt - b.observedAt);
@@ -1003,4 +1039,4 @@ function forecastQuota(observations, options = {}) {
     series: { ...adjusted.series, heavy }, resetAdjustment: adjustment };
 }
 
-module.exports = { activeHoursBetween, clusterByWindow, sameWindowDrift, normaliseObservation, prepareObservation, deriveLearningSamples, exhaustionTime, forecastQuota, percentile };
+module.exports = { activeHoursBetween, clusterByWindow, sameWindowDrift, normaliseObservation, prepareObservation, deriveLearningSamples, exhaustionTime, forecastQuota, percentile, withoutStaleRestatements };

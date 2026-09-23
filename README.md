@@ -32,7 +32,7 @@ GitHub CLI manages the account credential. AI Usage reads it into main-process m
 3. Set your normal active hours and days. They shape when future use is expected, while the burn rate itself comes from observed history.
 4. Review **API pricing**. Detected models without prices are highlighted and keep the total visibly marked as a lower bound until all of their token categories have prices.
 
-The Claude status-line helper is optional. The automatic Claude usage reader is tried first on every refresh. Enable the helper only as a fallback for overall Claude allowance readings when the provider interface does not return them; it stores only capture time, model identity, and rate-limit fields, and disabling it restores the status line that was present before AI Usage changed the setting.
+The Claude status-line helper is optional. The automatic Claude usage reader is tried first on every refresh. Enable the helper only as a fallback for overall Claude allowance readings when the provider interface does not return them; it stores only capture time, model identity, and rate-limit fields, and disabling it restores the status line that was present before AI Usage changed the setting. The status line repeats the limits from the Claude Code session's last request each time it redraws, so it can lag behind use in other sessions, the desktop app or the web. When a fresh official reading shows higher usage for the same reset, a lower status-line reading is ignored, and an unchanged status-line reading never marks when later usage happened.
 
 ## Reading the dashboard
 

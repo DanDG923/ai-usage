@@ -7,7 +7,7 @@ const { buildDashboardVerdict } = require('./dashboard-decision.cjs');
 const { isOfficialWindow, selectDisplayedWindows } = require('./quota-selection.cjs');
 const { FABLE_BUCKET, projectFableAllowance } = require('./fable-projection.cjs');
 const { codexQuotaLabel } = require('./codex-quota-label.cjs');
-const { forecastQuota, normaliseObservation, prepareObservation, clusterByWindow } = require('./forecast.cjs');
+const { forecastQuota, normaliseObservation, prepareObservation, clusterByWindow, withoutStaleRestatements } = require('./forecast.cjs');
 const { TaskUsage } = require('./task-usage.cjs');
 const { estimateTokenCapacity, LOOKBACK_MS: TOKEN_CAPACITY_LOOKBACK_MS, STALENESS_MS: TOKEN_CAPACITY_STALENESS_MS } = require('./token-capacity.cjs');
 const { MAX_QUOTA_RESET_AHEAD_MS, QUOTA_CLOCK_SKEW_MS, FORECAST_LOOKBACK_MS, validQuotaTime } = require('./quota-time.cjs');
@@ -1096,6 +1096,9 @@ class UsageStore {
       if (!grouped.has(row.bucket_id)) grouped.set(row.bucket_id, []);
       grouped.get(row.bucket_id).push(row);
     }
+    // A stale status-line restatement must not become the card's current
+    // balance, a forecast reading or a token-capacity interval.
+    for (const [bucketId, bucketRows] of grouped) grouped.set(bucketId, withoutStaleRestatements(bucketRows));
     const schedule = {
       activeDays: settings.activeDays,
       startHour: settings.activeStartHour,
