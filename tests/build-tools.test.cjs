@@ -24,7 +24,7 @@ test('version tool updates all current metadata while preserving historical chan
 });
 
 test('release audit rejects missing runtime code, private data, source maps and bundled executables', () => {
-  const entries = ['dist/index.html', 'electron/main.cjs', 'electron/preload.cjs', 'electron/maintenance-host.cjs', 'electron/maintenance-service.cjs', 'electron/desktop-estimates.cjs', 'node_modules/@anthropic-ai/claude-agent-sdk/package.json'];
+  const entries = ['dist/index.html', 'dist/flyout.html', 'electron/main.cjs', 'electron/preload.cjs', 'electron/flyout-preload.cjs', 'electron/maintenance-host.cjs', 'electron/maintenance-service.cjs', 'electron/desktop-estimates.cjs', 'node_modules/@anthropic-ai/claude-agent-sdk/package.json'];
   assert.doesNotThrow(() => assertArchive(entries));
   assert.throws(() => assertArchive(entries.slice(1)), /required application file/);
   for (const name of ['dist/app.js.map', '.codex/auth.json', 'private/ledger.sqlite', 'node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/claude.exe']) {

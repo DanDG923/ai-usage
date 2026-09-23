@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
@@ -20,5 +21,13 @@ export default defineConfig({
   build: {
     target: 'es2022',
     sourcemap: 'hidden',
+    // Two pages: the dashboard and the tray flyout. The CSP plugin above
+    // rewrites every served page, so both get the dev loopback.
+    rolldownOptions: {
+      input: {
+        index: fileURLToPath(new URL('./index.html', import.meta.url)),
+        flyout: fileURLToPath(new URL('./flyout.html', import.meta.url)),
+      },
+    },
   },
 });

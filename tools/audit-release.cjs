@@ -35,8 +35,10 @@ function normalizedEntries() {
 function assertArchive(entries) {
   const required = [
     'dist/index.html',
+    'dist/flyout.html',
     'electron/main.cjs',
     'electron/preload.cjs',
+    'electron/flyout-preload.cjs',
     'electron/maintenance-host.cjs',
     'electron/maintenance-service.cjs',
     'electron/desktop-estimates.cjs',

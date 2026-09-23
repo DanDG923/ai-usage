@@ -362,6 +362,12 @@ export type UpdateStatus = {
   reason?: string | null;
 };
 
+/** A dashboard page requested from outside the dashboard, such as the tray flyout. */
+export type DashboardNavigation = {
+  tab: 'overview' | 'activity' | 'costs' | 'settings';
+  provider?: 'codex' | 'claude' | 'fable';
+};
+
 export type Bridge = {
   reportRendererError?(error: { message: string; componentStack: string }): Promise<void>;
   previewDesktopExport(): Promise<DesktopImportPreview | null>;
@@ -434,7 +440,34 @@ export type Bridge = {
   installUpdate(): Promise<UpdateStatus>;
   onUpdateStatus(callback: (status: UpdateStatus) => void): () => void;
   onUpdated?(callback: (snapshot: Snapshot) => void): () => void;
+  /**
+   * Pages requested from the tray flyout. Subscribing also delivers a request
+   * made while this page was loading or released; each request arrives once.
+   */
+  onNavigate?(callback: (target: DashboardNavigation) => void): () => void;
   onPrepareSleep?(callback: () => boolean): () => void;
+};
+
+/**
+ * The tray flyout's view: the tray snapshot without cost analytics, token
+ * capacity or forecast chart series. Fields may be absent; the flyout
+ * normalises what it receives.
+ */
+export type FlyoutSnapshot = Pick<Snapshot, 'generatedAt' | 'settings' | 'sources' | 'quotas' | 'dashboardVerdict'> &
+  Partial<Pick<Snapshot, 'timezone' | 'fableApplies' | 'resetCredits'>>;
+
+/** window.aiUsageFlyout, exposed by electron/flyout-preload.cjs to the tray flyout only. */
+export type FlyoutBridge = {
+  /** Null while storage is closing. */
+  getSnapshot(): Promise<FlyoutSnapshot | null>;
+  onUpdated(callback: (snapshot: FlyoutSnapshot) => void): () => void;
+  /** Runs the same collection as the tray menu; resolves with the snapshot after it. */
+  refresh(): Promise<FlyoutSnapshot | null>;
+  /** Shows the dashboard, on the overview unless a page is given, and hides the flyout. */
+  openDashboard(target?: DashboardNavigation): Promise<void>;
+  /** Snoozes alerts for the given hours; 0 resumes them. */
+  snooze(hours: number): Promise<FlyoutSnapshot | null>;
+  close(): Promise<void>;
 };
 
 export type DesktopImportPreview = {
@@ -468,6 +501,7 @@ export type DesktopEstimates = {
 declare global {
   interface Window {
     aiUsage?: Bridge;
+    aiUsageFlyout?: FlyoutBridge;
   }
 }
 

@@ -9,6 +9,29 @@ async function invoke(channel, ...args) {
   }
 }
 
+// A page requested from the tray flyout waits in the main process until this
+// page collects it, so a dashboard that is still loading, or was released and
+// recreated, still lands on it. The main process hands each request out once;
+// one collected while no listener is subscribed is held for the next.
+const navigationListeners = new Set();
+let heldNavigation = null;
+let navigationSignal = false;
+
+function deliverNavigation(target) {
+  if (!target || typeof target !== 'object') return;
+  if (!navigationListeners.size) {
+    heldNavigation = target;
+    return;
+  }
+  for (const listener of navigationListeners) {
+    try { listener(target); } catch { /* One listener must not stop the others. */ }
+  }
+}
+
+function collectNavigation() {
+  void invoke('dashboard:take-navigation').then(deliverNavigation, () => {});
+}
+
 contextBridge.exposeInMainWorld('aiUsage', {
   getClaudeSetup: () => invoke('claude-setup:status'),
   isClaudeSetupDismissed: () => invoke('claude-setup:dismissed'),
@@ -59,5 +82,21 @@ contextBridge.exposeInMainWorld('aiUsage', {
     const listener = (_event, snapshot) => callback(snapshot);
     ipcRenderer.on('dashboard:updated', listener);
     return () => ipcRenderer.removeListener('dashboard:updated', listener);
+  },
+  onNavigate: (callback) => {
+    const listener = (target) => callback(target);
+    navigationListeners.add(listener);
+    if (!navigationSignal) {
+      navigationSignal = true;
+      ipcRenderer.on('dashboard:navigation-pending', () => collectNavigation());
+    }
+    if (heldNavigation) {
+      const target = heldNavigation;
+      heldNavigation = null;
+      // Delivered after subscribing returns, to whichever listeners remain.
+      void Promise.resolve().then(() => deliverNavigation(target));
+    }
+    collectNavigation();
+    return () => { navigationListeners.delete(listener); };
   },
 });
