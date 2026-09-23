@@ -7,6 +7,7 @@ let requests = [];
 let heldPages = [];
 let pageDelay = false;
 let errors = [];
+let rejectSettings = false;
 const page = (kind, options) => {
   const rows = snapshot.costs[kind] || [];
   const data = { rows, total: rows.length, page: options.page, pageSize: options.pageSize, totalPages: 1 };
@@ -26,6 +27,7 @@ contextBridge.exposeInMainWorld('aiUsage', {
   getUpdateStatus: async () => ({ status: 'idle', available: false }),
   onUpdateStatus: () => () => {},
   updateSettings: async (patch) => {
+    if (rejectSettings) throw new Error('Deliberate settings rejection');
     const currency = patch.currency || snapshot.settings.currency;
     const rate = currency === 'USD' ? 1 : patch.usdToCurrency ?? snapshot.settings.currencyRates[currency];
     snapshot.settings = { ...snapshot.settings, ...patch, usdToCurrency: rate,
@@ -46,4 +48,5 @@ contextBridge.exposeInMainWorld('testBridge', {
   holdPages(value) { pageDelay = value; },
   releasePages() { pageDelay = false; for (const resolve of heldPages.splice(0)) resolve(); },
   errors: () => errors,
+  rejectSettings(value) { rejectSettings = value; },
 });

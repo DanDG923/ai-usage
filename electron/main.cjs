@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {
   app, BrowserWindow, clipboard, dialog, ipcMain: electronIpcMain, Menu, nativeImage, nativeTheme, Notification,
-  powerMonitor, session, shell, Tray, utilityProcess,
+  powerMonitor, screen, session, shell, Tray, utilityProcess,
 } = require('electron');
 const { UsageStore, DEFAULT_SETTINGS } = require('./store.cjs');
 const { readStartupPreferences } = require('./startup-preferences.cjs');
@@ -16,6 +16,10 @@ const { createWindowIdleRelease } = require('./window-idle.cjs');
 const { createMaintenanceHost, createDatabaseQueue } = require('./maintenance-host.cjs');
 const { buildSummaryText, buildTrayTooltip, decideNotifications, emptyState } = require('./notifications.cjs');
 const { paintStateDot } = require('./tray-icon.cjs');
+const {
+  FLYOUT_BACKGROUND, FLYOUT_DOUBLE_CLICK_HOLD_MS, createNavigationQueue, createTrayFlyout, flyoutPayload,
+  normalizeNavigationTarget,
+} = require('./flyout.cjs');
 const { createUpdateChecker } = require('./updater.cjs');
 const { installDirectoryWritable, launchInstaller, relaunchApplication, preserveInstallerEnvironment } = require('./installer-launch.cjs');
 const { createGitHubUpdateAuth } = require('./update-auth.cjs');
@@ -62,6 +66,9 @@ let savedWindowBounds;
 let savedWindowMaximized = false;
 let activeDashboardRequests = 0;
 let tray;
+// The tray flyout controller; its window exists only while shown or recently hidden.
+let trayFlyout = null;
+const dashboardNavigation = createNavigationQueue();
 let store;
 let collectors;
 let maintenance;
@@ -101,8 +108,8 @@ const EMPTY_SESSION_PAGE = Object.freeze({ rows: [], total: 0, page: 1, pageSize
 // Values follow --header-bg and --text-2 in src/professional.css, the
 // stylesheet that wins; a mismatch shows as a strip of the wrong shade.
 const CHROME = {
-  dark: { background: '#0c1116', symbol: '#cbd3da' },
-  light: { background: '#f4f6f8', symbol: '#3b4854' },
+  dark: { background: '#0f1012', symbol: '#c8c7c1' },
+  light: { background: '#f5f5f2', symbol: '#3a3a37' },
 };
 
 const appIconPath = path.join(__dirname, '..', 'build', 'icon.png');
@@ -242,6 +249,13 @@ function resolvedTheme() {
 function applyTheme(theme) {
   nativeTheme.themeSource = ['dark', 'light'].includes(theme) ? theme : 'system';
   applyWindowChrome();
+  applyFlyoutChrome();
+}
+
+function applyFlyoutChrome() {
+  const flyout = trayFlyout?.window();
+  if (!flyout) return;
+  try { flyout.setBackgroundColor(FLYOUT_BACKGROUND[resolvedTheme()]); } catch { /* Cosmetic only. */ }
 }
 
 function applyWindowChrome() {
@@ -397,7 +411,108 @@ function createTray() {
   tray = new Tray(trayIconFor('unknown'));
   tray.setToolTip('AI Usage');
   tray.setContextMenu(buildTrayMenu());
-  tray.on('double-click', () => showMainWindow());
+  trayFlyout = createTrayFlyout({
+    createWindow: createFlyoutWindow,
+    getAnchor: flyoutAnchor,
+    onReveal: ({ reused }) => {
+      // A reused window may have been hidden for up to a minute; a new one
+      // asks for its first snapshot itself.
+      if (reused) pushFlyout(flyoutSnapshot());
+      refreshIfStale();
+    },
+  });
+  // Left click toggles the flyout; right click keeps the context menu.
+  tray.on('click', () => { trayFlyout?.toggle(); });
+  // Windows raises 'click' first, so a double click has already opened the
+  // flyout; close it and ignore the clicks that belong to the double click.
+  tray.on('double-click', () => {
+    trayFlyout?.hide({ holdMs: FLYOUT_DOUBLE_CLICK_HOLD_MS });
+    showMainWindow();
+  });
+}
+
+function flyoutAnchor() {
+  if (!tray || tray.isDestroyed?.()) return null;
+  let trayBounds = tray.getBounds();
+  // Windows can report an empty rectangle for the icon. The pointer is on the
+  // icon when it has just been clicked, so it stands in for the icon.
+  if (!(trayBounds?.width > 0 && trayBounds?.height > 0)) {
+    const point = screen.getCursorScreenPoint();
+    trayBounds = { x: point.x, y: point.y, width: 1, height: 1 };
+  }
+  const display = screen.getDisplayMatching(trayBounds);
+  return { trayBounds, workArea: display.workArea, displayBounds: display.bounds };
+}
+
+function flyoutLoadTarget() {
+  const devUrl = process.env.VITE_DEV_SERVER_URL;
+  return resolveWindowTarget({
+    isPackaged: app.isPackaged,
+    devUrl: devUrl ? new URL('flyout.html', devUrl.endsWith('/') ? devUrl : `${devUrl}/`).href : undefined,
+    filePath: path.join(__dirname, '..', 'dist', 'flyout.html'),
+  });
+}
+
+// The same hardening as the dashboard: the session refuses every permission
+// and 'web-contents-created' denies navigation, pop-ups, redirects and web
+// views for this window too. Only its own preload and flyout:* channels exist.
+function createFlyoutWindow({ width, height }) {
+  const flyout = new BrowserWindow({
+    width,
+    height,
+    show: false,
+    frame: false,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    title: 'AI Usage',
+    backgroundColor: FLYOUT_BACKGROUND[resolvedTheme()],
+    webPreferences: {
+      preload: path.join(__dirname, 'flyout-preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      spellcheck: false,
+      // Reports the page's natural height so the window fits its content.
+      enablePreferredSizeMode: true,
+    },
+  });
+  const target = flyoutLoadTarget();
+  const loading = target.kind === 'url' ? flyout.loadURL(target.value) : flyout.loadFile(target.value);
+  loading.catch((error) => {
+    // A flyout that cannot load is dropped; the next click tries again and
+    // the dashboard and tray menu are unaffected.
+    log(`Tray flyout could not load: ${error instanceof Error ? error.message : String(error)}`);
+    if (!flyout.isDestroyed()) flyout.destroy();
+  });
+  return flyout;
+}
+
+// The flyout shows the tray's lightweight snapshot, never a full dashboard build.
+function flyoutSnapshot() {
+  if (!store || storageClosing()) return null;
+  return flyoutPayload(store.getTraySnapshot(Date.now()));
+}
+
+function pushFlyout(current) {
+  if (!trayFlyout?.window() || !current) return;
+  trayFlyout.send('flyout:updated', flyoutPayload(current));
+}
+
+// Shows the dashboard on the requested page. The page waits in the main
+// process until the dashboard renderer collects it: a released dashboard is
+// recreated and loading, and only its preload can tell when it is listening.
+function openDashboardAt(target) {
+  dashboardNavigation.request(target);
+  // Shown while the flyout still holds the foreground, so Windows lets the
+  // dashboard take focus; the flyout is hidden straight after.
+  showMainWindow();
+  trayFlyout?.hide();
+  if (window && !window.isDestroyed()) window.webContents.send('dashboard:navigation-pending');
 }
 
 let trayState = '';
@@ -405,6 +520,7 @@ let trayMenuSnoozed = null;
 
 function updateTray(current) {
   if (!tray) return;
+  pushFlyout(current);
   const state = current?.dashboardVerdict?.state || 'unknown';
   if (state !== trayState) {
     trayState = state;
@@ -661,6 +777,43 @@ function handleIpc(channel, handler) {
   });
 }
 
+// The flyout's channels mirror the dashboard's rule: only the flyout's own main
+// frame may call them, and assertDashboardSender refuses the flyout in turn.
+function assertFlyoutSender(event) {
+  if (!trayFlyout?.isSender(event)) {
+    throw new Error('This action is only available from the AI Usage tray flyout.');
+  }
+}
+
+function handleFlyoutIpc(channel, handler) {
+  electronIpcMain.handle(channel, (event, ...args) => {
+    assertFlyoutSender(event);
+    return handler(event, ...args);
+  });
+}
+
+function registerFlyoutIpc() {
+  handleFlyoutIpc('flyout:get-snapshot', () => flyoutSnapshot());
+  // The same collection the tray menu starts; its publish also reaches the
+  // flyout as flyout:updated, and the reply carries the result for this click.
+  handleFlyoutIpc('flyout:refresh', async () => {
+    await refreshAll();
+    return flyoutSnapshot();
+  });
+  handleFlyoutIpc('flyout:open-dashboard', (_event, value) => {
+    const target = normalizeNavigationTarget(value === undefined ? { tab: 'overview' } : value);
+    if (!target) throw new Error('Unknown dashboard page.');
+    openDashboardAt(target);
+  });
+  handleFlyoutIpc('flyout:snooze', async (_event, hours) => {
+    const parsed = Number(hours);
+    if (!Number.isFinite(parsed) || parsed < 0) throw new Error('Invalid snooze duration.');
+    // Zero resumes alerts, as in the tray menu and the settings screen.
+    return flyoutPayload(await setSnooze(parsed > 0 ? Math.min(72, parsed) : 0));
+  });
+  handleFlyoutIpc('flyout:close', () => { trayFlyout?.hide(); });
+}
+
 function hardenWebContents(contents) {
   contents.setWindowOpenHandler(() => ({ action: 'deny' }));
   // A page reloading itself is the only navigation allowed: Electron raises
@@ -680,6 +833,9 @@ function registerIpc() {
     try { return windowIdle?.reply(token, allowed) ?? false; }
     finally { activeDashboardRequests++; }
   });
+  // The dashboard collects a page requested from the tray flyout, once.
+  handleIpc('dashboard:take-navigation', () => dashboardNavigation.take());
+  registerFlyoutIpc();
   require('./ipc-handlers.cjs').registerIpc({
     handleIpc, claudeSetup, storageClosing, getPreviousSnapshot: () => lastFullSnapshot,
     getCachedSnapshot: () => cachedSnapshot, setPeriodDays, snapshot, EMPTY_SESSION_PAGE,
@@ -713,6 +869,8 @@ function publishUpdateStatus(status) {
 function stopForShutdown() {
   isQuitting = true;
   windowIdle?.cancel();
+  // Its snapshot, refresh and snooze all need the storage that is closing.
+  trayFlyout?.destroy();
   claudeSetup?.cancel();
   clearInterval(refreshTimer);
   clearTimeout(snoozeTimer);
@@ -883,7 +1041,10 @@ if (isPrimaryInstance) {
           detail: `The unreadable file was moved to:\n${store.recoveredFrom}\n\nRestore your latest backup from Settings to bring the history back.`,
         });
       }
-      nativeTheme.on('updated', () => applyWindowChrome());
+      nativeTheme.on('updated', () => {
+        applyWindowChrome();
+        applyFlyoutChrome();
+      });
       deferredWindowReveal.markReady();
       // A launch always earns one collection, whether or not automatic collection
       // is on. Showing the window fires first in practice; the staleness guard

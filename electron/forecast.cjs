@@ -374,6 +374,55 @@ function addIntervalSamples(samples, before, after, schedule, nowMs, rateElapsed
   }
 }
 
+// Claude Code redraws its status line with the limits from the session's last
+// request, so an unchanged status-line reading restates old evidence rather
+// than confirming that nothing was used since: another session, the desktop
+// app or the web may have spent allowance meanwhile. Such a repeat must not
+// become the lower bound that localises the next increase, or a rise first
+// seen by a fresh read just after the active hours end is filed entirely as
+// late-night use and projected across every remaining night.
+function restatesSessionLimits(row) {
+  return row.provenance === 'official-statusline';
+}
+
+// A status-line reading lower than the provider's last fresh read for the same
+// reset is either a session restating limits it fetched earlier or the first
+// sign of an early replenishment. Left in, stale restatements read as a
+// replenishment followed by the same usage spent again: one 12% rise was
+// learned eight times over as late-night use. The provider's next fresh read
+// tells the two apart. If it still shows the earlier usage, nothing was
+// replenished and the lower reading was stale; if it shows the drop as well,
+// the replenishment was real and the status line saw it first. Until that read
+// arrives the lower reading is held back, but only while the provider can
+// still be expected to answer. Once it has been silent for the grace period,
+// the status line is the best evidence left, so a genuine early reset still
+// reaches the card. Readings must be in time order; status-line readings
+// before any fresh read are kept because nothing yet shows them to be stale.
+const STALE_RESTATEMENT_MARGIN = 0.5;
+const FRESH_READ_GRACE_MS = 2 * HOUR_MS;
+function withoutStaleRestatements(rows, { nowMs = Date.now(), freshReadGraceMs = FRESH_READ_GRACE_MS } = {}) {
+  const parsed = rows.map(normaliseObservation);
+  const nextFresh = Array.from({ length: parsed.length }, () => null);
+  for (let index = parsed.length - 1, next = null; index >= 0; index -= 1) {
+    nextFresh[index] = next;
+    if (!restatesSessionLimits(parsed[index])) next = parsed[index];
+  }
+  let fresh = null;
+  return rows.filter((row, index) => {
+    const reading = parsed[index];
+    if (!restatesSessionLimits(reading)) {
+      fresh = reading;
+      return true;
+    }
+    const sameReset = (other) => other && Math.abs(other.resetsAt - reading.resetsAt) <= RESET_TOLERANCE_MS;
+    const freshUsed = fresh && usedPercentOf(fresh);
+    if (!sameReset(fresh) || usedPercentOf(reading) >= freshUsed - STALE_RESTATEMENT_MARGIN) return true;
+    const after = nextFresh[index];
+    if (after) return sameReset(after) && usedPercentOf(after) < freshUsed - STALE_RESTATEMENT_MARGIN;
+    return nowMs - fresh.observedAt > freshReadGraceMs;
+  });
+}
+
 function deriveLearningSamples(observations, schedule, nowMs, excludedDates = []) {
   const excluded = typeof excludedDates === 'function' ? excludedDates : exclusionLookup(excludedDates);
   const rows = observations.map(normaliseObservation)
@@ -433,7 +482,7 @@ function deriveLearningSamples(observations, schedule, nowMs, excludedDates = []
       addIntervalSamples(samples, latest, after, schedule, nowMs, (after.observedAt - anchor.observedAt) / HOUR_MS);
       anchor = after;
       latest = after;
-    } else {
+    } else if (!restatesSessionLimits(after)) {
       latest = after;
     }
   }
@@ -972,7 +1021,8 @@ function collapseReadings(rows, nowMs) {
 function forecastQuota(observations, options = {}) {
   // Normalise once; each pass below would otherwise re-parse every timestamp.
   const nowMs = options.now != null ? new Date(options.now).getTime() : Date.now();
-  let normalised = rescaleObservations(observations.map(normaliseObservation), options);
+  let normalised = withoutStaleRestatements(rescaleObservations(observations.map(normaliseObservation), options)
+    .sort((a, b) => a.observedAt - b.observedAt), { nowMs, freshReadGraceMs: options.freshReadGraceMs });
   if (options.compactReadings) {
     normalised = normalised.filter((row) => validQuotaTime(row.observedAt, row.resetsAt, row.windowMinutes, nowMs))
       .sort((a, b) => a.observedAt - b.observedAt);
@@ -1003,4 +1053,4 @@ function forecastQuota(observations, options = {}) {
     series: { ...adjusted.series, heavy }, resetAdjustment: adjustment };
 }
 
-module.exports = { activeHoursBetween, clusterByWindow, sameWindowDrift, normaliseObservation, prepareObservation, deriveLearningSamples, exhaustionTime, forecastQuota, percentile };
+module.exports = { activeHoursBetween, clusterByWindow, sameWindowDrift, normaliseObservation, prepareObservation, deriveLearningSamples, exhaustionTime, forecastQuota, percentile, withoutStaleRestatements };

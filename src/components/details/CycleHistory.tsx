@@ -4,18 +4,28 @@ import type { CycleRow, Snapshot } from '../../types';
 type CycleKey = keyof Snapshot['cycles'];
 const LABELS: Record<CycleKey, string> = { codex: 'Codex', claude: 'Claude', fable: 'Fable 5' };
 
-function CycleBars({ rows }: { rows: CycleRow[] }) {
+/** "Mon 14 Sept: 74% used", with the open window named, for the tooltip and the text alternative. */
+function cycleLabel(row: CycleRow) {
+  return `${dayDate(row.endsAt ?? row.resetsAt)}: ${percent(row.peakUsedPercent)} used${row.current ? ' (current)' : ''}`;
+}
+
+/**
+ * Peak use per window in the provider's colour: past windows are tinted, the
+ * open one is solid. The dashed line marks the full allowance; heights are
+ * clamped to it.
+ */
+function CycleBars({ rows, provider }: { rows: CycleRow[]; provider: CycleKey }) {
   // Copy first; toReversed needs the ES2023 lib the renderer does not target.
   // oxlint-disable-next-line unicorn/no-array-reverse
   const ordered = [...rows].reverse();
+  const description = `${LABELS[provider]} peak allowance used per reset cycle, oldest first: ${ordered.map(cycleLabel).join('; ')}.`;
   return (
-    <div className="cycle-bars" role="img" aria-label="Peak allowance used per reset cycle">
+    <div className={`cycle-bars ${provider}`} role="img" aria-label={description}>
+      <span className="cycle-limit" aria-hidden="true">
+        <span>100%</span>
+      </span>
       {ordered.map((row) => (
-        <div
-          key={row.resetsAt}
-          className={`cycle-bar${row.current ? ' current' : ''}`}
-          title={`${dayDate(row.endsAt ?? row.resetsAt)}: ${percent(row.peakUsedPercent)} used`}
-        >
+        <div key={row.resetsAt} className={`cycle-bar${row.current ? ' current' : ''}`} title={cycleLabel(row)}>
           <i style={{ height: `${Math.max(3, Math.min(100, row.peakUsedPercent))}%` }} />
         </div>
       ))}
@@ -51,7 +61,7 @@ export function CycleHistory({ cycles, currency }: { cycles: Snapshot['cycles'];
                   {cycles[key].length} window{cycles[key].length === 1 ? '' : 's'}
                 </span>
               </header>
-              <CycleBars rows={cycles[key]} />
+              <CycleBars rows={cycles[key]} provider={key} />
               <div className="table-scroll">
                 <table className="cycle-table">
                   <thead>

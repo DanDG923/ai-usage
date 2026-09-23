@@ -33,12 +33,34 @@ app.whenReady().then(async () => {
   await new Promise((resolve) => setTimeout(resolve, 100));
   assert.equal(await evaluate(() => [...document.querySelectorAll('.period-switch button')].find((button) => button.getAttribute('aria-pressed') === 'true').textContent.includes('90')), true, 'old push cannot undo selected period');
   await evaluate(() => document.querySelector('#tab-overview').click());
+  await until(() => document.querySelectorAll('.runway-chart').length === 3);
   await evaluate(() => { const next = window.testBridge.fixture(); for (const quota of Object.values(next.quotas)) { if (!quota) continue; for (const entry of [quota, ...quota.windows]) { entry.resetsAt = new Date(Date.now() + 250).toISOString(); entry.forecast.expired = false; } } window.testBridge.push(next); });
   await until(() => document.body.textContent.includes('The last allowance window ended'));
-  assert.equal(await evaluate(() => document.querySelector('.combined-runway-chart')), null, 'expired runway is removed without collection');
+  assert.equal(await evaluate(() => document.querySelector('.runway-chart')), null, 'expired runways are removed without collection');
+  // A provider page opens from its card and Escape returns to the Overview.
+  await evaluate(() => window.testBridge.push(window.testBridge.fixture()));
+  await until(() => document.querySelector('.provider-card.fable .provider-card-link'));
+  await evaluate(() => document.querySelector('.provider-card.fable .provider-card-link').click());
+  await until(() => document.querySelector('.detail-page .runway-chart.full'));
+  assert.match(await evaluate(() => document.querySelector('.breadcrumb [aria-current="page"]').textContent), /Fable 5/);
+  // Focus moves on the next animation frame, which a loaded test machine can delay.
+  await until(() => document.activeElement?.id === 'panel-overview');
+  // Trying a reserve re-plans the budget and draws the same reserve on the chart.
+  await evaluate(() => { const slider = document.querySelector('#planner-reserve'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(slider, '20'); slider.dispatchEvent(new Event('input', { bubbles: true })); });
+  await until(() => document.querySelector('.runway-reserve text')?.textContent.includes('Reserve 20%'));
+  // Escape pressed in the slider stays with the slider; the page remains open.
+  await evaluate(() => { document.querySelector('[aria-label="Dismiss message"]')?.click(); document.querySelector('#planner-reserve').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.ok(await evaluate(() => document.querySelector('.detail-page')), 'Escape in a field does not close the page');
+  // Escape dismisses a visible notice first, so clear any before leaving the page.
+  await evaluate(() => document.querySelector('[aria-label="Dismiss message"]')?.click());
+  await evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })));
+  await until(() => document.querySelector('.provider-card-grid'));
+  await until(() => document.activeElement?.classList.contains('provider-card-link'));
   await evaluate(() => document.querySelector('#tab-settings').click());
   await until(() => document.querySelector('#pricing'));
-  await evaluate(() => { document.querySelector('.settings-disclosure').open = true; const select = document.querySelector('#pricing select'); select.value = 'USD'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+  assert.equal(await evaluate(() => Boolean(document.querySelector('#pricing').closest('details'))), false, 'API pricing is a visible section');
+  await evaluate(() => { const select = document.querySelector('#pricing select'); select.value = 'USD'; select.dispatchEvent(new Event('change', { bubbles: true })); });
   await until(() => document.querySelector('#pricing select').value === 'USD');
   await evaluate(() => { const select = document.querySelector('#pricing select'); select.value = 'GBP'; select.dispatchEvent(new Event('change', { bubbles: true })); });
   await until(() => document.querySelector('#pricing select').value === 'GBP');
@@ -50,6 +72,56 @@ app.whenReady().then(async () => {
   await until(() => document.querySelector('[role="dialog"]'));
   await evaluate(() => document.querySelector('[role="dialog"]').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
   await until(() => !document.querySelector('[role="dialog"]'));
+  // Settings: a screen-reader title, a section list with live badges, navigation into disclosures, and search.
+  const searchSettings = (query) => window.webContents.executeJavaScript(`(() => { const input = document.querySelector('#panel-settings input[type="search"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(query)}); input.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  const shownSections = () => evaluate(() => [...document.querySelectorAll('[data-settings-section]')].filter((slot) => !slot.hidden).map((slot) => slot.dataset.settingsSection).join(' '));
+  assert.equal(await evaluate(() => document.querySelector('#panel-settings h1').className), 'sr-only');
+  assert.equal(await evaluate(() => [...document.querySelectorAll('.settings-nav a')].map((link) => link.getAttribute('href')).join(' ')), '#subscriptions #sources #forecast #alerts #pricing #storage #appearance #manual #diagnostics');
+  assert.match(await evaluate(() => document.querySelector('.settings-nav a[href="#sources"]').textContent), /3 connected/);
+  assert.match(await evaluate(() => document.querySelector('.settings-nav a[href="#pricing"]').textContent), /1 unpriced/);
+  assert.equal(await evaluate(() => document.querySelectorAll('#subscription-fees input[type="number"]').length), 2, 'monthly fee inputs are back');
+  assert.equal(await evaluate(() => document.querySelector('.advanced-disclosure').open), false);
+  await evaluate(() => document.querySelector('.settings-nav a[href="#diagnostics"]').click());
+  await until(() => document.activeElement && document.activeElement.id === 'diagnostics-heading');
+  assert.equal(await evaluate(() => document.querySelector('.advanced-disclosure').open), true, 'navigating into a closed disclosure opens it');
+  assert.equal(await evaluate(() => document.querySelector('.settings-nav [aria-current="true"]').getAttribute('href')), '#diagnostics');
+  await searchSettings('backup sets kept');
+  await until(() => document.querySelector('[data-settings-section="alerts"]').hidden);
+  assert.equal(await shownSections(), 'storage');
+  assert.equal(await evaluate(() => document.querySelector('.settings-nav a[href="#alerts"]').classList.contains('is-dimmed')), true);
+  assert.equal(await evaluate(() => document.querySelector('.advanced-disclosure').hidden), true);
+  await evaluate(() => document.querySelector('#panel-settings input[type="search"]').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })));
+  await until(() => !document.querySelector('[data-settings-section][hidden]') && document.querySelector('#panel-settings input[type="search"]').value === '');
+  await searchSettings('new-source fallback');
+  await until(() => document.querySelector('#forecast .inline-advanced').open);
+  assert.equal(await shownSections(), 'forecast', 'a match inside a collapsed disclosure opens it');
+  await searchSettings('no such setting');
+  await until(() => document.querySelector('.settings-empty'));
+  assert.match(await evaluate(() => document.querySelector('.settings-empty').textContent), /No settings match “no such setting”/);
+  await evaluate(() => [...document.querySelectorAll('.settings-empty button')].find((button) => button.textContent === 'Clear search').click());
+  await until(() => !document.querySelector('.settings-empty') && document.activeElement === document.querySelector('#panel-settings input[type="search"]'));
+  assert.equal(await evaluate(() => document.querySelector('#forecast .inline-advanced').open), false, 'clearing the search closes what it opened');
+  // A failed save puts the saved free-reset expiry back and says so.
+  await evaluate(() => { const next = window.testBridge.fixture(); next.settings = { ...next.settings, claudeFreeResets: 1, claudeFreeResetsExpireOn: '2026-10-22' }; window.testBridge.push(next); });
+  await until(() => document.querySelector('#claude-free-resets input[type="date"]')?.value === '2026-10-22');
+  await evaluate(() => { window.testBridge.rejectSettings(true); const input = document.querySelector('#claude-free-resets input[type="date"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, '2026-11-05'); input.dispatchEvent(new Event('input', { bubbles: true })); });
+  await until(() => document.querySelector('#claude-free-resets [role="alert"]'));
+  assert.equal(await evaluate(() => document.querySelector('#claude-free-resets input[type="date"]').value), '2026-10-22', 'a failed save restores the saved expiry');
+  assert.match(await evaluate(() => document.querySelector('#claude-free-resets [role="alert"]').textContent), /could not be saved/);
+  await evaluate(() => window.testBridge.rejectSettings(false));
+  if (process.env.AI_USAGE_RENDERER_QA_DIRECTORY) {
+    const capture = async (name) => { await new Promise((resolve) => setTimeout(resolve, 400)); window.webContents.invalidate(); await new Promise((resolve) => setTimeout(resolve, 200)); fs.writeFileSync(path.join(process.env.AI_USAGE_RENDERER_QA_DIRECTORY, name), (await window.webContents.capturePage()).toPNG()); };
+    fs.mkdirSync(process.env.AI_USAGE_RENDERER_QA_DIRECTORY, { recursive: true });
+    await evaluate(() => { document.documentElement.dataset.theme = 'dark'; document.documentElement.style.scrollBehavior = 'auto'; window.scrollTo(0, 0); });
+    await capture('renderer-settings.png');
+    await evaluate(() => document.querySelector('#forecast').scrollIntoView({ block: 'start' }));
+    await capture('renderer-settings-forecast.png');
+    window.setSize(820, 900);
+    await evaluate(() => { document.documentElement.dataset.theme = 'light'; window.scrollTo(0, 0); });
+    await capture('renderer-settings-light-820.png');
+    window.setSize(1280, 900);
+    await evaluate(() => { delete document.documentElement.dataset.theme; document.documentElement.style.scrollBehavior = ''; });
+  }
   await evaluate(() => { document.querySelector('#tab-costs').click(); });
   await until(() => document.querySelector('.table-search input'));
   await evaluate(() => document.querySelector('.table-search input').focus());
@@ -85,7 +157,7 @@ app.whenReady().then(async () => {
     await new Promise((resolve) => setTimeout(resolve, 200));
     fs.writeFileSync(path.join(process.env.AI_USAGE_RENDERER_QA_DIRECTORY, 'renderer-costs-light-900.png'), (await window.webContents.capturePage()).toPNG());
   }
-  console.log('RENDERER_DOM_PASS: pushes, retained tasks, periods, reset timer, currency, keyboard focus and alerts');
+  console.log('RENDERER_DOM_PASS: pushes, retained tasks, periods, reset timer, currency, settings navigation and search, keyboard focus and alerts');
   app.exit(0);
  } catch (error) { console.error(error); app.exit(1); }
 }).catch((error) => { console.error(error); app.exit(1); });

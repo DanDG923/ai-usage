@@ -1,4 +1,15 @@
-import { AlertTriangle, CheckCircle2, Gauge, ShieldCheck } from 'lucide-react';
+import {
+  AlertOctagon,
+  AlertTriangle,
+  CheckCircle2,
+  ChevronRight,
+  CircleDashed,
+  Gauge,
+  ShieldCheck,
+} from 'lucide-react';
+import { subscriptionVisible } from '../../electron/dashboard-decision.mjs';
+import { bankedResetsFor } from '../banked-resets';
+import { dailyBudget, paceLabel } from '../budget';
 import {
   allowanceWindowLabel,
   compactNumber,
@@ -6,18 +17,24 @@ import {
   money,
   percent,
   priceCoverage,
+  quotaWindows,
   shortDate,
   verdictSentence,
   whenLabel,
 } from '../lib';
-import { providerViews, type ProviderView } from '../provider-view';
+import { providerViews, type ProviderId, type ProviderView } from '../provider-view';
 import type { QuotaWindow, Snapshot } from '../types';
-import { CombinedRunwayChart } from './Charts';
 import { API_EQUIVALENT_EXPLAINER, InfoTip } from './InfoTip';
 import { ProviderSummary } from './ProviderSummary';
-import { TokenCapacity } from './TokenCapacity';
+import '../overview.css';
 
-type Insight = { tone: 'neutral' | 'good' | 'warm' | 'hot'; title: string; detail: string };
+type Insight = {
+  tone: 'neutral' | 'good' | 'warm' | 'hot';
+  title: string;
+  detail: string;
+  /** The allowance window the insight is about, when it is about one. */
+  about?: { provider: ProviderId; bucketId: string };
+};
 
 function hasForecast(view: ProviderView) {
   const forecast = view.current?.forecast;
@@ -36,8 +53,9 @@ function names(views: ProviderView[]) {
 
 // Every active window earns its own line: the weekly headline and any shorter
 // session window are separate allowances with separate resets.
-function windowInsights(name: string, window: QuotaWindow, nowMs: number): Insight[] {
+function windowInsights(provider: ProviderId, name: string, window: QuotaWindow, nowMs: number): Insight[] {
   const forecast = window.forecast;
+  const about = { provider, bucketId: window.bucketId };
   if (forecast.expired) return [];
   if (forecast.exhaustsAt) {
     return [
@@ -45,6 +63,7 @@ function windowInsights(name: string, window: QuotaWindow, nowMs: number): Insig
         tone: 'hot',
         title: `${name} is expected to run out`,
         detail: `${whenLabel(forecast.exhaustsAt, nowMs)}, before its ${dateTimeLabel(window.resetsAt)} reset.`,
+        about,
       },
     ];
   }
@@ -54,6 +73,7 @@ function windowInsights(name: string, window: QuotaWindow, nowMs: number): Insig
         tone: 'warm',
         title: `${name} could run out under heavier usage`,
         detail: `Expected usage leaves ${percent(forecast.expectedRemaining)}; the heavier case reaches zero ${whenLabel(forecast.heavyExhaustsAt, nowMs)}.`,
+        about,
       },
     ];
   }
@@ -64,6 +84,7 @@ function windowInsights(name: string, window: QuotaWindow, nowMs: number): Insig
         tone: forecast.paceRatio > 1.2 ? 'warm' : 'neutral',
         title: `${name} is above its safe pace`,
         detail: `${forecast.paceRatio.toFixed(1)}× the sustainable pace. Reduce active usage by about ${reduction}% to return to plan.`,
+        about,
       },
     ];
   }
@@ -75,9 +96,9 @@ function insights(views: ProviderView[], snapshot: Snapshot, nowMs: number): Ins
   for (const view of views) {
     const forecast = view.current?.forecast;
     if (!view.current || !forecast || forecast.expired) continue;
-    rows.push(...windowInsights(view.name, view.current, nowMs));
+    rows.push(...windowInsights(view.id, view.name, view.current, nowMs));
     for (const window of view.secondaryWindows) {
-      rows.push(...windowInsights(`${view.name} ${allowanceWindowLabel(window)}`, window, nowMs));
+      rows.push(...windowInsights(view.id, `${view.name} ${allowanceWindowLabel(window)}`, window, nowMs));
     }
     if (view.stale) {
       rows.push({
@@ -104,84 +125,66 @@ function insights(views: ProviderView[], snapshot: Snapshot, nowMs: number): Ins
       detail: 'A balance is available, but there is not enough evidence to say how much will remain at reset.',
     });
   }
-  if (snapshot.settings.showCodexSubscription !== false && snapshot.resetCredits > 0) {
-    rows.push({
-      tone: 'neutral',
-      title: `${snapshot.resetCredits} Codex reset credit${snapshot.resetCredits === 1 ? '' : 's'} banked`,
-      detail: 'Credits are recorded as context and are never treated as allowance or redeemed automatically.',
-    });
-  }
-  if (!rows.length) {
-    rows.push({
-      tone: 'good',
-      title: 'No allowance needs attention',
-      detail: 'Expected and heavier projections remain above zero through their next resets.',
-    });
-  }
+  // Banked and free resets appear on their provider's card instead.
   const severity = { hot: 0, warm: 1, neutral: 2, good: 3 };
   return rows.sort((a, b) => severity[a.tone] - severity[b.tone]);
 }
 
-function RecentCycles({ views, snapshot }: { views: ProviderView[]; snapshot: Snapshot }) {
-  return (
-    <section className="panel recent-cycles-panel">
-      <div className="panel-heading compact-heading">
-        <div>
-          <h2>Current cycles</h2>
-          <p>A compact evidence check; complete cycle history is under Activity.</p>
-        </div>
-      </div>
-      <div className="table-scroll compact-table-scroll">
-        <table className="overview-cycle-table">
-          <thead>
-            <tr>
-              <th>Provider</th>
-              <th>Reset</th>
-              <th className="num">Peak used</th>
-              <th className="num">API-equivalent</th>
-              <th>Forecast</th>
-            </tr>
-          </thead>
-          <tbody>
-            {views.map((view) => {
-              const rows = snapshot.cycles[view.id] ?? [];
-              // Cycle history follows the backend's primary bucket, which the
-              // shared display rule also makes the summary card's headline.
-              const quota = view.quota && !view.quota.forecast.expired ? view.quota : null;
-              const cycle = quota
-                ? rows.find(
-                    (row) =>
-                      row.current &&
-                      Math.abs(Date.parse(row.resetsAt) - Date.parse(quota.resetsAt)) <= 60_000 &&
-                      (!(quota.windowMinutes && quota.windowMinutes > 0) || row.windowMinutes === quota.windowMinutes),
-                  )
-                : null;
-              const forecast = quota?.forecast;
-              return (
-                <tr key={view.id}>
-                  <td>
-                    <span className={`source-dot ${view.id}`} aria-hidden="true" />
-                    <strong>{view.name}</strong>
-                    {quota && <small>{quota.bucketName}</small>}
-                  </td>
-                  <td>{quota ? dateTimeLabel(quota.resetsAt) : '—'}</td>
-                  <td className="num">{cycle ? percent(cycle.peakUsedPercent) : '—'}</td>
-                  <td className="num">{cycle ? money(cycle.cost, snapshot.costs.currency) : '—'}</td>
-                  <td className={`forecast-outcome ${forecast?.state ?? 'unknown'}`}>
-                    {!quota
-                      ? 'Awaiting current reading'
-                      : forecast?.expectedRemaining == null
-                        ? 'Learning'
-                        : `${percent(forecast.expectedRemaining)} expected at reset`}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </section>
+/**
+ * The allowance the status line is about: the backend verdict's first affected
+ * window that is still shown, with its budget when the forecast supports one.
+ */
+function verdictFocus(views: ProviderView[], snapshot: Snapshot, nowMs: number) {
+  if (snapshot.dashboardVerdict.state === 'safe') return null;
+  for (const detail of snapshot.dashboardVerdict.details ?? []) {
+    if (detail.state === 'safe') continue;
+    const view = views.find((entry) => entry.id === detail.sourceId);
+    if (!view?.current) continue;
+    const window =
+      quotaWindows(view.quota).find((entry) => entry.bucketId === detail.bucketId && !entry.forecast.expired) ??
+      view.current;
+    const secondary = window.bucketId !== view.current.bucketId;
+    return {
+      view,
+      window,
+      label: secondary ? `${view.name} ${allowanceWindowLabel(window)}` : view.name,
+      budget: dailyBudget(window, snapshot.settings, nowMs),
+    };
+  }
+  return null;
+}
+
+const STATUS_ICON = {
+  safe: CheckCircle2,
+  watch: AlertTriangle,
+  risk: AlertTriangle,
+  critical: AlertOctagon,
+  unknown: CircleDashed,
+} as const;
+
+/**
+ * The period's API-equivalent value of each visible subscription with a fee,
+ * as a multiple of those fees. A plan that is hidden or has no fee is left out
+ * of both sides, so its usage is never credited to another plan's fee.
+ */
+function subscriptionValue(snapshot: Snapshot) {
+  const settings = snapshot.settings;
+  const plans = (
+    [
+      ['codex', 'Codex', settings.codexPlanUsdPerMonth],
+      ['claude', 'Claude', settings.claudePlanUsdPerMonth],
+    ] as const
+  ).filter(([id, , fee]) => subscriptionVisible(settings, id) && Number(fee) > 0);
+  if (!plans.length) return null;
+  const monthlyUsd = plans.reduce((sum, [, , fee]) => sum + Number(fee), 0);
+  const fees = monthlyUsd * (Number(settings.usdToCurrency) || 1) * (snapshot.costs.periodDays / (365.25 / 12));
+  const value = snapshot.costs.chart.reduce((sum, day) => sum + plans.reduce((total, [id]) => total + day[id], 0), 0);
+  // Only unpriced usage of a counted plan makes its value a lower bound. Costs
+  // file every source other than Codex under Claude, and so does this.
+  const lowerBound = snapshot.costs.unpricedModels.some(
+    (entry) => entry.tokens > 0 && plans.some(([id]) => (id === 'codex') === (entry.sourceId === 'codex')),
   );
+  return { fees, multiple: value / fees, lowerBound, only: plans.length === 1 ? plans[0][1] : null };
 }
 
 export function Overview({
@@ -190,12 +193,17 @@ export function Overview({
   onRefresh,
   onSetupClaude,
   onSources,
+  onOpenProvider,
+  onOpenSettings,
 }: {
   snapshot: Snapshot;
   refreshing: boolean;
   onRefresh: () => Promise<void>;
   onSetupClaude: () => void;
   onSources: () => void;
+  onOpenProvider?: (provider: ProviderId) => void;
+  /** Opens Settings at a section; falls back to onSources when absent. */
+  onOpenSettings?: (section: string) => void;
 }) {
   const nowMs = Date.parse(snapshot.generatedAt);
   const views = providerViews(snapshot);
@@ -208,7 +216,7 @@ export function Overview({
     },
     snapshot.sources,
   );
-  const attention = insights(views, snapshot, nowMs);
+  const allInsights = insights(views, snapshot, nowMs);
   // A plan without a Fable allowance has no Fable evidence to wait for.
   const unknown = views.filter(
     (view) => !hasForecast(view) && !(view.id === 'fable' && snapshot.fableApplies === false),
@@ -242,11 +250,30 @@ export function Overview({
     : snapshot.dashboardVerdict.state === 'safe' && unknown.length
       ? 'Available allowances on track'
       : verdict.headline;
+  const focus = waiting ? null : verdictFocus(views, snapshot, nowMs);
+  const guidance =
+    focus?.budget && focus.window.resetsAt
+      ? `Keep ${focus.label} under ${paceLabel(focus.budget.budget)} of its allowance per active day to reach its ${whenLabel(focus.window.resetsAt, nowMs)} reset. At your expected pace it uses ${paceLabel(focus.budget.expected)}.`
+      : '';
   const secondary = unknown.length
     ? `${names(unknown)} ${unknown.length === 1 ? 'needs' : 'need'} more evidence before all allowances can be assessed.`
     : verdict.secondary;
   const statusTone = waiting ? 'unknown' : snapshot.dashboardVerdict.state;
+  const StatusIcon = STATUS_ICON[statusTone] ?? CircleDashed;
+  // The status line already states its window; list everything else once.
+  const attention = allInsights.filter(
+    (row) =>
+      !(
+        focus &&
+        row.about &&
+        row.about.provider === focus.view.id &&
+        row.about.bucketId === focus.window.bucketId &&
+        (row.tone === 'hot' || row.tone === 'warm')
+      ),
+  );
   const unpriced = snapshot.costs.unpricedModels.map((entry) => entry.model).join(', ');
+  const value = subscriptionValue(snapshot);
+  const openSettings = (section: string) => (onOpenSettings ? onOpenSettings(section) : onSources());
 
   return (
     <main
@@ -257,72 +284,69 @@ export function Overview({
       tabIndex={-1}
     >
       <section className={`overview-status ${statusTone}`} role="status" aria-live="polite">
-        <span className="status-dot" aria-hidden="true" />
+        <span className="status-icon" aria-hidden="true">
+          <StatusIcon />
+        </span>
         <div>
           <h1>{headline}</h1>
-          <p>{secondary || 'Forecasts compare expected and heavier usage through each provider’s next reset.'}</p>
+          <p>
+            {[guidance, secondary].filter(Boolean).join(' ') ||
+              'Forecasts compare expected and heavier usage through each provider’s next reset.'}
+          </p>
         </div>
+        {focus && onOpenProvider && (
+          <button type="button" className="primary-button status-action" onClick={() => onOpenProvider(focus.view.id)}>
+            Plan {focus.view.name} usage
+            <ChevronRight aria-hidden="true" />
+          </button>
+        )}
       </section>
 
-      <section className="provider-strip" aria-label="Allowance summaries">
-        <div className="provider-strip-head">
-          <h2>Allowances</h2>
-          <div className="scenario-key" aria-label="Forecast bar key">
+      <section className="allowance-section" aria-labelledby="allowances-heading">
+        <div className="allowance-section-head">
+          <h2 id="allowances-heading">Allowances</h2>
+          <div className="runway-key" role="group" aria-label="Chart key">
             <span>
-              <i className="expected" />
-              Expected usage
+              <i className="key-observed" aria-hidden="true" />
+              Observed
             </span>
             <span>
-              <i className="heavy" />
-              Additional heavy usage
+              <i className="key-expected" aria-hidden="true" />
+              Expected
+            </span>
+            <span>
+              <i className="key-band" aria-hidden="true" />
+              Heavier-week range
+            </span>
+            <span>
+              <i className="key-inactive" aria-hidden="true" />
+              Outside active hours
             </span>
           </div>
         </div>
-        <div className="provider-summary-grid">
+        <div className="provider-card-grid">
           {views.map((view) => (
-            <ProviderSummary key={view.id} view={view} nowMs={nowMs} />
+            <ProviderSummary
+              key={view.id}
+              view={view}
+              nowMs={nowMs}
+              settings={snapshot.settings}
+              banked={bankedResetsFor(view.id, snapshot, nowMs)}
+              onOpen={onOpenProvider ? () => onOpenProvider(view.id) : undefined}
+            />
           ))}
         </div>
       </section>
 
-      <div className="overview-workspace">
-        <section className="panel runway-panel">
-          <div className="panel-heading runway-heading">
-            <div>
-              <h2>Allowance runway</h2>
-              <p>Observed balance, expected forecast, and a heavier-usage case on the same 0–100% scale.</p>
-            </div>
-            <div className="chart-key" aria-label="Chart line key">
-              <span className="k-observed">
-                <i />
-                Observed
-              </span>
-              <span className="k-expected">
-                <i />
-                Expected
-              </span>
-              <span className="k-heavy">
-                <i />
-                Heavier
-              </span>
-            </div>
+      <div className="overview-lower">
+        <section className="panel attention-panel" aria-labelledby="attention-heading">
+          <div className="panel-heading compact-heading">
+            <h2 id="attention-heading">Also worth knowing</h2>
           </div>
-          <CombinedRunwayChart views={views} />
-        </section>
-
-        <aside className="overview-insights" aria-label="Overview insights">
-          <section className="panel attention-panel">
-            <div className="panel-heading compact-heading">
-              <h2>What needs attention</h2>
-            </div>
+          {attention.length ? (
             <div className="insight-list">
               {attention.map((row) => {
-                const Icon =
-                  row.tone === 'hot' || row.tone === 'warm'
-                    ? AlertTriangle
-                    : row.tone === 'good'
-                      ? CheckCircle2
-                      : Gauge;
+                const Icon = row.tone === 'hot' || row.tone === 'warm' ? AlertTriangle : Gauge;
                 return (
                   <article key={`${row.title}-${row.detail}`} className={`insight ${row.tone}`}>
                     <Icon aria-hidden="true" />
@@ -334,66 +358,92 @@ export function Overview({
                 );
               })}
             </div>
-            {needsReadings && (
-              <div className="action-row compact insight-actions">
-                <button className="secondary-button" disabled={refreshing} onClick={() => void onRefresh()}>
-                  {refreshing ? 'Refreshing…' : 'Refresh allowances'}
-                </button>
-                <button className="secondary-button" onClick={onSources}>
-                  View sources
-                </button>
-                {snapshot.settings.showClaudeSubscription !== false &&
-                  !snapshot.quotas.claude &&
-                  !snapshot.isPreview && (
-                    <button className="secondary-button" onClick={onSetupClaude}>
-                      Set up Claude
-                    </button>
-                  )}
-              </div>
-            )}
-          </section>
-
-          <section className="panel billing-summary">
-            <div className="panel-heading compact-heading">
-              <h2>Last {snapshot.costs.periodDays} days</h2>
+          ) : (
+            <div className="insight-list">
+              <article className="insight good">
+                <CheckCircle2 aria-hidden="true" />
+                <div>
+                  <strong>Nothing else needs attention</strong>
+                  <p>Every other allowance keeps its expected and heavier projections above zero until reset.</p>
+                </div>
+              </article>
             </div>
-            <dl>
-              <div className="billing-primary">
-                <dt>
-                  API-equivalent <InfoTip label="What API-equivalent cost means">{API_EQUIVALENT_EXPLAINER}</InfoTip>
-                </dt>
+          )}
+          {needsReadings && (
+            <div className="action-row compact insight-actions">
+              <button className="secondary-button" disabled={refreshing} onClick={() => void onRefresh()}>
+                {refreshing ? 'Refreshing…' : 'Refresh allowances'}
+              </button>
+              <button className="secondary-button" onClick={() => openSettings('sources')}>
+                View sources
+              </button>
+              {snapshot.settings.showClaudeSubscription !== false && !snapshot.quotas.claude && !snapshot.isPreview && (
+                <button className="secondary-button" onClick={onSetupClaude}>
+                  Set up Claude
+                </button>
+              )}
+            </div>
+          )}
+        </section>
+
+        <section className="panel billing-summary" aria-labelledby="value-heading">
+          <div className="panel-heading compact-heading">
+            <h2 id="value-heading">Last {snapshot.costs.periodDays} days at API prices</h2>
+          </div>
+          <dl>
+            <div className="billing-primary">
+              <dt>
+                API-equivalent value{' '}
+                <InfoTip label="What API-equivalent cost means">{API_EQUIVALENT_EXPLAINER}</InfoTip>
+              </dt>
+              <dd>
+                {snapshot.costs.isLowerBound ? '≥ ' : ''}
+                {money(snapshot.costs.actual, snapshot.costs.currency)}
+              </dd>
+              <small title={unpriced ? `Unpriced: ${unpriced}` : undefined}>
+                {snapshot.costs.isLowerBound
+                  ? `Lower bound · ${compactNumber(snapshot.costs.unpricedModels.length)} model${snapshot.costs.unpricedModels.length === 1 ? '' : 's'} unpriced`
+                  : `${snapshot.costs.periodDays}-day total`}
+              </small>
+            </div>
+            <div>
+              <dt>Saved by caching</dt>
+              <dd>{money(snapshot.costs.cacheSavings, snapshot.costs.currency)}</dd>
+              <small>{percent(snapshot.costs.cacheSavingsPercent * 100)} below uncached value</small>
+            </div>
+            <div>
+              <dt>Price coverage</dt>
+              <dd>{priceCoverage(snapshot.costs.coverage)}</dd>
+              <small>{unpriced ? 'of recorded tokens' : 'All tracked categories priced'}</small>
+            </div>
+            {value && (
+              <div>
+                <dt>Subscription value</dt>
                 <dd>
-                  {snapshot.costs.isLowerBound ? '≥ ' : ''}
-                  {money(snapshot.costs.actual, snapshot.costs.currency)}
+                  {value.lowerBound ? '≥ ' : ''}
+                  {value.multiple.toFixed(1)}×
                 </dd>
-                <small>{snapshot.costs.isLowerBound ? 'Lower bound' : `${snapshot.costs.periodDays}-day total`}</small>
-              </div>
-              <div>
-                <dt>Cache discount</dt>
-                <dd>{money(snapshot.costs.cacheSavings, snapshot.costs.currency)}</dd>
-                <small>{percent(snapshot.costs.cacheSavingsPercent * 100)} below uncached value</small>
-              </div>
-              <div>
-                <dt>Price coverage</dt>
-                <dd>{priceCoverage(snapshot.costs.coverage)}</dd>
-                <small title={unpriced ? `Unpriced: ${unpriced}` : undefined}>
-                  {unpriced
-                    ? `${compactNumber(snapshot.costs.unpricedModels.length)} unpriced model${snapshot.costs.unpricedModels.length === 1 ? '' : 's'}`
-                    : 'All tracked categories priced'}
+                <small>
+                  {value.only ? `${value.only} usage ` : ''}vs {money(value.fees, snapshot.costs.currency)} of plan fees
                 </small>
               </div>
-            </dl>
-            <div className="local-assurance">
-              <ShieldCheck aria-hidden="true" />
-              <span>Calculated locally from your own usage records.</span>
+            )}
+          </dl>
+          {!value && (
+            <div className="value-prompt">
+              <span>Add your monthly plan fees to see how many times over each subscription pays for itself.</span>
+              <button type="button" className="text-button" onClick={() => openSettings('subscription-fees')}>
+                Add fees
+              </button>
             </div>
-          </section>
-        </aside>
+          )}
+          <div className="local-assurance">
+            <ShieldCheck aria-hidden="true" />
+            <span>Calculated locally from your own usage records.</span>
+          </div>
+        </section>
       </div>
 
-      <TokenCapacity snapshot={snapshot} />
-
-      <RecentCycles views={views} snapshot={snapshot} />
       <p className="overview-freshness">
         Snapshot {shortDate(snapshot.generatedAt)} · {snapshot.timezone} · Local data only
       </p>

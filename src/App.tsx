@@ -6,12 +6,16 @@ import { Costs } from './components/Costs';
 import { BrandMark, Header, TABS, type Tab } from './components/Header';
 import { NoticeToast, createNoticeChannel } from './components/NoticeToast';
 import { Overview } from './components/Overview';
+import { ProviderDetail } from './components/ProviderDetail';
 import { Settings, type SettingsActions } from './components/Settings';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { snapshotAtTime } from './snapshot-time';
 import { readDashboardView, saveDashboardView } from './dashboard-view';
 import { formatInt } from './lib';
+import type { ProviderId } from './provider-view';
 import type { ManualObservation, PriceRow, Settings as SettingsType, Snapshot, Theme } from './types';
+
+const DETAIL_NAMES: Record<ProviderId, string> = { codex: 'Codex', claude: 'Claude', fable: 'Fable 5' };
 
 const BUSY_NOTICE = 'AI Usage is finishing an update; the dashboard will refresh shortly.';
 
@@ -23,7 +27,16 @@ function applyThemeAttribute(theme: Theme | undefined) {
 
 export default function App() {
   const [initialView] = useState(readDashboardView);
-  const [tab, setTab] = useState<Tab>(initialView.tab);
+  const [tab, setTabState] = useState<Tab>(initialView.tab);
+  // A provider page opened from the Overview; any section change returns to its list.
+  const [detail, setDetail] = useState<ProviderId | null>(initialView.provider ?? null);
+  // A Settings section to reveal when the page opens, such as "forecast".
+  const [settingsSection, setSettingsSection] = useState<string | null>(null);
+  const setTab = useCallback((next: Tab) => {
+    setTabState(next);
+    setDetail(null);
+    setSettingsSection(null);
+  }, []);
   const [costQuery, setCostQuery] = useState(initialView.costQuery);
   const [dataOperation, setDataOperation] = useState<SettingsActions['dataOperation']>(null);
   const [setupRequested, setSetupRequested] = useState(false);
@@ -46,9 +59,9 @@ export default function App() {
     return window.aiUsage?.onPrepareSleep?.(() => {
       if (!snapshot || loadError || refreshing || dataOperation || setupRequested || tab === 'settings') return false;
       if (document.querySelector('[role="dialog"], [aria-busy="true"], [data-keep-awake="true"]')) return false;
-      return saveDashboardView({ tab, days, costQuery });
+      return saveDashboardView({ tab, days, costQuery, provider: detail });
     });
-  }, [snapshot, loadError, refreshing, dataOperation, setupRequested, tab, days, costQuery]);
+  }, [snapshot, loadError, refreshing, dataOperation, setupRequested, tab, days, costQuery, detail]);
 
   const commitSnapshot = useCallback((next: Snapshot | null | undefined) => {
     if (!next) return;
@@ -192,21 +205,26 @@ export default function App() {
   // the notice. Typing fields and modifier chords are left alone. The listener
   // is registered once and reads the current refresh state through a ref
   // instead of being removed and re-added on every render.
-  const shortcutState = useRef({ refresh, refreshing });
+  const closeDetail = () => setDetail(null);
+  const shortcutState = useRef({ refresh, refreshing, detail, closeDetail });
   useEffect(() => {
-    shortcutState.current = { refresh, refreshing };
+    shortcutState.current = { refresh, refreshing, detail, closeDetail };
   });
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented || document.querySelector('[role="dialog"][aria-modal="true"]')) return;
       if (event.ctrlKey || event.metaKey || event.altKey) return;
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      const typing = Boolean(
+        target && (target.closest('input, select, textarea, [contenteditable="true"]') || target.isContentEditable),
+      );
       if (event.key === 'Escape') {
         if (notices.current()) notices.show('');
+        // Escape in a field (the reserve slider, a search box) stays with that field.
+        else if (shortcutState.current.detail && !typing) shortcutState.current.closeDetail();
         return;
       }
-      const target = event.target instanceof HTMLElement ? event.target : null;
-      if (target && (target.closest('input, select, textarea, [contenteditable="true"]') || target.isContentEditable))
-        return;
+      if (typing) return;
       const index = ['1', '2', '3', '4'].indexOf(event.key);
       if (index >= 0) {
         event.preventDefault();
@@ -221,7 +239,46 @@ export default function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [notices]);
+  }, [notices, setTab]);
+
+  const openProvider = useCallback((provider: ProviderId) => {
+    setTabState('overview');
+    setDetail(provider);
+    window.scrollTo({ top: 0 });
+  }, []);
+
+  const openSettings = useCallback(
+    (section?: string) => {
+      setTab('settings');
+      setSettingsSection(section ?? null);
+    },
+    [setTab],
+  );
+
+  // Opening a provider page unmounts the control that had focus, so focus moves
+  // to the page itself; closing it returns focus to that provider's card link.
+  const previousDetail = useRef(detail);
+  useEffect(() => {
+    const previous = previousDetail.current;
+    previousDetail.current = detail;
+    if (previous === detail || tab !== 'overview') return;
+    const frame = window.requestAnimationFrame(() => {
+      const link = previous
+        ? document.querySelector<HTMLElement>(`.provider-card.${previous} .provider-card-link`)
+        : null;
+      if (!detail && link) link.focus();
+      else document.getElementById('panel-overview')?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [detail, tab]);
+
+  // The tray flyout can open a section or a provider page.
+  useEffect(() => {
+    return window.aiUsage?.onNavigate?.((target) => {
+      if (target.tab === 'overview' && target.provider) openProvider(target.provider);
+      else setTab(target.tab);
+    });
+  }, [openProvider, setTab]);
 
   const changeDays = (period: number) => {
     if (!window.aiUsage) return;
@@ -474,12 +531,30 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <Header snapshot={snapshot} tab={tab} onTab={setTab} refreshing={refreshing} onRefresh={refresh} />
+      <Header
+        snapshot={snapshot}
+        tab={tab}
+        onTab={setTab}
+        refreshing={refreshing}
+        onRefresh={refresh}
+        detail={tab === 'overview' && detail ? DETAIL_NAMES[detail] : null}
+        onBack={closeDetail}
+      />
       {(snapshot.settings.showClaudeSubscription !== false || setupRequested) && (
         <ClaudeSetup requested={setupRequested} onClose={() => setSetupRequested(false)} onRefresh={refresh} />
       )}
-      <ErrorBoundary key={tab}>
-        {tab === 'overview' && (
+      <ErrorBoundary key={`${tab}:${detail ?? ''}`}>
+        {tab === 'overview' && detail && (
+          <ProviderDetail
+            snapshot={snapshot}
+            provider={detail}
+            onBack={closeDetail}
+            onOpenProvider={openProvider}
+            onOpenSettings={openSettings}
+            onSaveReserve={(percent) => settings({ reservePercent: percent })}
+          />
+        )}
+        {tab === 'overview' && !detail && (
           <Overview
             snapshot={snapshot}
             refreshing={refreshing}
@@ -489,6 +564,8 @@ export default function App() {
               setTab('settings');
               document.getElementById('tab-settings')?.focus();
             }}
+            onOpenProvider={openProvider}
+            onOpenSettings={openSettings}
           />
         )}
         {tab === 'activity' && <Activity snapshot={snapshot} days={days} />}
@@ -502,7 +579,7 @@ export default function App() {
             onSnapshot={commitSnapshot}
           />
         )}
-        {tab === 'settings' && <Settings snapshot={snapshot} actions={actions} />}
+        {tab === 'settings' && <Settings snapshot={snapshot} actions={actions} initialSection={settingsSection} />}
       </ErrorBoundary>
       <NoticeToast channel={notices} />
     </div>

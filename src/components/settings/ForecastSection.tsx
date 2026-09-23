@@ -1,8 +1,9 @@
-import { useRef, useState } from 'react';
+import { Fragment, useId, useRef, useState } from 'react';
 import type { Settings, Snapshot } from '../../types';
 import { AllowanceChanges } from './AllowanceChanges';
+import { budgetPreview } from './budget-preview';
 import { ForecastExcludedDates } from './ForecastExcludedDates';
-import { NumericSetting, SectionHeading, hourOptions } from './fields';
+import { NumericSetting, SettingNote, SettingRow, SettingsSection, hourOptions } from './fields';
 
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -14,8 +15,18 @@ export function ForecastSection({
   update: (patch: Partial<Settings>) => Promise<void | boolean>;
 }) {
   const { settings } = snapshot;
+  const id = useId();
   const [savingDays, setSavingDays] = useState(false);
   const daySavePending = useRef(false);
+  // The reserve being typed, previewed before it is saved. A newly saved
+  // reserve from the snapshot replaces it.
+  const [reserveDraft, setReserveDraft] = useState<number | null>(null);
+  const [savedReserve, setSavedReserve] = useState(settings.reservePercent);
+  if (savedReserve !== settings.reservePercent) {
+    setSavedReserve(settings.reservePercent);
+    setReserveDraft(null);
+  }
+  const preview = budgetPreview(snapshot, Math.round(reserveDraft ?? settings.reservePercent ?? 0));
   const toggleDay = async (index: number) => {
     // The snapshot is the last saved selection. Until the next one arrives,
     // another whole-array write would overwrite the first change.
@@ -34,63 +45,96 @@ export function ForecastSection({
     }
   };
   return (
-    <section id="schedule" className="panel settings-section">
-      <SectionHeading
-        title="Forecast"
-        description="Tell AI Usage when you normally work and how much allowance you prefer to keep back."
-      />
-      <div className="settings-fields">
-        <label>
-          <span>Active day starts</span>
+    <SettingsSection
+      id="forecast"
+      title="Forecast"
+      description="Tell AI Usage when you normally work and how much allowance you prefer to keep back."
+    >
+      <SettingRow
+        label="Active hours"
+        labelId={`${id}-hours`}
+        description="The part of each active day when you normally use Codex and Claude. Forecasts and daily budgets expect use in these hours."
+      >
+        <div className="hours-range" role="group" aria-labelledby={`${id}-hours`}>
           <select
+            aria-label="Active day starts"
             value={settings.activeStartHour}
             onChange={(event) => update({ activeStartHour: Number(event.target.value) })}
           >
             {hourOptions(0, 23)}
           </select>
-        </label>
-        <label>
-          <span>Active day ends</span>
+          <span aria-hidden="true">to</span>
           <select
+            aria-label="Active day ends"
             value={settings.activeEndHour}
             onChange={(event) => update({ activeEndHour: Number(event.target.value) })}
           >
             {hourOptions(1, 24)}
           </select>
-        </label>
-      </div>
-      <div className="day-picker" role="group" aria-label="Active days" aria-busy={savingDays}>
-        {DAY_NAMES.map((day, index) => {
-          const active = settings.activeDays.includes(index);
-          return (
-            <button
-              key={day}
-              aria-pressed={active}
-              disabled={savingDays}
-              className={active ? 'active' : ''}
-              onClick={() => toggleDay(index)}
-            >
-              {day}
-            </button>
-          );
-        })}
-      </div>
-      <div className="settings-fields budget-fields">
-        <NumericSetting
-          label="Keep in reserve"
-          value={settings.reservePercent}
-          min={0}
-          max={50}
-          step={1}
-          suffix="% of allowance"
-          onCommit={(value) => update({ reservePercent: Math.round(value) })}
-        />
-      </div>
+        </div>
+      </SettingRow>
+      <SettingRow label="Active days" description="Days that count as active in forecasts and daily budgets.">
+        <div className="day-picker" role="group" aria-label="Active days" aria-busy={savingDays}>
+          {DAY_NAMES.map((day, index) => {
+            const active = settings.activeDays.includes(index);
+            return (
+              <button
+                key={day}
+                aria-pressed={active}
+                disabled={savingDays}
+                className={active ? 'active' : ''}
+                onClick={() => toggleDay(index)}
+              >
+                {day}
+              </button>
+            );
+          })}
+        </div>
+      </SettingRow>
+      <NumericSetting
+        label="Keep in reserve"
+        description={
+          <>
+            <span>Allowance to leave untouched at each reset. Daily budgets stop short of it.</span>
+            <span className="budget-preview" aria-live="polite" aria-atomic="true">
+              {preview.length > 0 ? (
+                <>
+                  <span className="budget-preview-lead">Daily budgets now:</span>
+                  {preview.map((entry, index) => (
+                    <Fragment key={entry.id}>
+                      {index > 0 && (
+                        <span className="budget-preview-sep" aria-hidden="true">
+                          ·
+                        </span>
+                      )}
+                      <span className="budget-preview-item">
+                        <span className={`swatch ${entry.id}`} aria-hidden="true" />
+                        {entry.name} <strong>{entry.label}</strong>
+                      </span>
+                    </Fragment>
+                  ))}
+                  <span>per active day</span>
+                </>
+              ) : (
+                'Daily budgets appear here once a forecast has learned enough and active hours remain before its reset.'
+              )}
+            </span>
+          </>
+        }
+        value={settings.reservePercent}
+        min={0}
+        max={50}
+        step={1}
+        suffix="% of allowance"
+        onDraftChange={setReserveDraft}
+        onCommit={(value) => update({ reservePercent: Math.round(value) })}
+      />
       <details className="inline-advanced">
         <summary>Forecast model defaults</summary>
         <div className="inline-advanced-body">
           <NumericSetting
             label="New-source fallback"
+            description="The hourly pace assumed until a source has enough history of its own."
             value={settings.forecastFallbackRate}
             min={0.05}
             max={100}
@@ -98,14 +142,14 @@ export function ForecastSection({
             suffix="% / hour"
             onCommit={(value) => update({ forecastFallbackRate: value })}
           />
-          <p>
+          <SettingNote>
             History is weighted by recency, hour, weekday, and current momentum. Codex, Claude, and Fable 5 learn
             independently; the heavier case uses the busy end of each source’s observed pattern.
-          </p>
+          </SettingNote>
         </div>
       </details>
       <ForecastExcludedDates snapshot={snapshot} update={update} />
       <AllowanceChanges snapshot={snapshot} update={update} />
-    </section>
+    </SettingsSection>
   );
 }

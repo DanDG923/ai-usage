@@ -1,0 +1,470 @@
+/* Tray flyout. Colours come from the tokens in professional.css; every rule
+   here is scoped to the flyout page. The panel colour matches the native
+   window background set in electron/flyout.cjs (FLYOUT_BACKGROUND). */
+:root {
+  --flyout-bg: var(--surface-2);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    --flyout-bg: var(--surface);
+  }
+}
+
+:root[data-theme='light'] {
+  --flyout-bg: var(--surface);
+}
+
+html:has(.flyout-body),
+body.flyout-body {
+  background: var(--flyout-bg);
+}
+
+/* The window takes its height from the page, so nothing may be sized by the
+   viewport: professional.css gives body a 100vh minimum. */
+body.flyout-body {
+  min-height: 0;
+  overflow-x: hidden;
+  user-select: none;
+}
+
+.flyout {
+  font-family: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text);
+  background: var(--flyout-bg);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.flyout button {
+  font: inherit;
+}
+
+.flyout button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.flyout-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Header */
+.flyout-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 16px 12px;
+}
+
+.flyout-brand-mark {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--text);
+}
+
+.flyout-title {
+  font-weight: 600;
+}
+
+.flyout-updated {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.flyout-icon-button {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.flyout-icon-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.flyout-icon-button:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.flyout-refresh {
+  margin-right: -6px;
+}
+
+.flyout-refresh[aria-disabled='true'] {
+  cursor: default;
+}
+
+.flyout-refresh[aria-disabled='true']:hover {
+  background: transparent;
+  color: var(--text-2);
+}
+
+.flyout-spin {
+  animation: flyout-spin 0.9s linear infinite;
+}
+
+@keyframes flyout-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Verdict */
+.flyout-verdict {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-3);
+}
+
+.flyout-verdict-icon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  color: var(--text-muted);
+}
+
+.flyout-verdict strong {
+  display: block;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.flyout-verdict p {
+  margin: 2px 0 0;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.flyout-verdict.safe .flyout-verdict-icon {
+  color: var(--ok-text);
+}
+
+.flyout-verdict.warn {
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  border-color: color-mix(in srgb, var(--warn) 30%, transparent);
+}
+
+.flyout-verdict.warn .flyout-verdict-icon {
+  color: var(--warn-text);
+}
+
+.flyout-verdict.bad {
+  background: color-mix(in srgb, var(--bad) 10%, transparent);
+  border-color: color-mix(in srgb, var(--bad) 30%, transparent);
+}
+
+.flyout-verdict.bad .flyout-verdict-icon {
+  color: var(--bad-text);
+}
+
+.flyout-error {
+  margin: 8px 12px 0;
+  color: var(--bad-text);
+  font-size: 12px;
+}
+
+/* Provider rows */
+.flyout-list {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.flyout-list li + li .flyout-row {
+  border-top: 1px solid var(--line);
+}
+
+.flyout-row {
+  --provider: var(--text-muted);
+  display: block;
+  width: 100%;
+  padding: 12px 16px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.flyout-row[data-provider='codex'] {
+  --provider: var(--codex);
+}
+
+.flyout-row[data-provider='claude'] {
+  --provider: var(--claude);
+}
+
+.flyout-row[data-provider='fable'] {
+  --provider: var(--fable);
+}
+
+.flyout-row:hover {
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+
+.flyout .flyout-row:focus-visible {
+  outline-offset: -2px;
+}
+
+.flyout-row-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.flyout-swatch {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  background: var(--provider);
+}
+
+.flyout-row-name {
+  display: flex;
+  flex: 1;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.flyout-row-name strong {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.flyout-row-name span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.flyout-left {
+  display: inline-flex;
+  flex: none;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.flyout-left strong {
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.flyout-left small {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.flyout-left-none {
+  color: var(--text-faint);
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.flyout-track {
+  position: relative;
+  display: block;
+  height: 8px;
+  margin: 10px 0 8px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--surface-3);
+}
+
+.flyout-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  border-radius: 4px;
+}
+
+.flyout-fill-used {
+  background: color-mix(in srgb, var(--provider) 40%, transparent);
+}
+
+.flyout-fill-reset {
+  background: var(--provider);
+}
+
+/* A balance with no forecast yet: outlined, so it matches neither legend entry. */
+.flyout-fill-now {
+  border: 1.5px solid var(--provider);
+  background: transparent;
+}
+
+.flyout-row-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.flyout-status {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  font-weight: 600;
+}
+
+.flyout-status svg {
+  width: 14px;
+  height: 14px;
+}
+
+.flyout-status.ok {
+  color: var(--ok-text);
+}
+
+.flyout-status.warn {
+  color: var(--warn-text);
+}
+
+.flyout-status.bad {
+  color: var(--bad-text);
+}
+
+.flyout-status.muted {
+  color: var(--text-muted);
+}
+
+.flyout-row-detail {
+  min-width: 0;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* Legend */
+.flyout-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin: 0;
+  padding: 4px 16px 12px;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.flyout-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.flyout-chip {
+  display: inline-block;
+  width: 12px;
+  height: 6px;
+  border-radius: 2px;
+}
+
+.flyout-chip-reset {
+  background: var(--text-2);
+}
+
+.flyout-chip-used {
+  background: color-mix(in srgb, var(--text-2) 40%, transparent);
+}
+
+/* Footer */
+.flyout-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.flyout-primary {
+  flex: 1;
+  height: 36px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.flyout-primary:hover {
+  background: color-mix(in srgb, var(--accent) 88%, var(--flyout-bg));
+}
+
+.flyout-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.flyout-secondary svg {
+  width: 16px;
+  height: 16px;
+}
+
+.flyout-secondary:hover:not(:disabled) {
+  background: var(--surface-3);
+}
+
+.flyout-secondary:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.flyout-settings {
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--line-strong);
+  color: var(--text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flyout-spin {
+    animation: none;
+  }
+}

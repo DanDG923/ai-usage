@@ -1,10 +1,12 @@
 import type { Tab } from './components/Header';
+import type { ProviderId } from './provider-view';
 
-type DashboardView = { tab: Tab; days: number; costQuery: string };
+type DashboardView = { tab: Tab; days: number; costQuery: string; provider?: ProviderId | null };
 const KEY = 'ai-usage-dashboard-view';
+const PROVIDERS: ProviderId[] = ['codex', 'claude', 'fable'];
 
 export function readDashboardView(): DashboardView {
-  const fallback: DashboardView = { tab: 'overview', days: 30, costQuery: '' };
+  const fallback: DashboardView = { tab: 'overview', days: 30, costQuery: '', provider: null };
   if (!window.aiUsage) return fallback;
   try {
     const saved = JSON.parse(localStorage.getItem(KEY) || 'null');
@@ -13,6 +15,8 @@ export function readDashboardView(): DashboardView {
       tab: saved.tab,
       days: [7, 30, 90].includes(saved.days) ? saved.days : 30,
       costQuery: typeof saved.costQuery === 'string' ? saved.costQuery.slice(0, 2000) : '',
+      // A provider page only exists inside the Overview.
+      provider: saved.tab === 'overview' && PROVIDERS.includes(saved.provider) ? saved.provider : null,
     };
   } catch {
     return fallback;

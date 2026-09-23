@@ -1,5 +1,6 @@
 import { compactNumber, formatInt, projectName, shortDate, sourceLabel } from '../../lib';
 import type { SessionPageOptions, Snapshot, TaskCost, TaskUsageTotals } from '../../types';
+import { Disclosure } from './Disclosure';
 import { Pagination, usePagedQuery } from './paging';
 import { EquivalentValue, matchesQuery } from './Tables';
 
@@ -41,10 +42,12 @@ export function TaskTable({ snapshot, query }: { snapshot: Snapshot; query: stri
         </div>
         <span className="table-note">API-equivalent · not subscription charges</span>
       </div>
-      <p className="task-guidance">
-        Task IDs are used when recorded; otherwise usage is grouped by session. Unlinked usage stays separate. Activity
-        spans measure first to last recorded usage, including idle time—not execution time.
-      </p>
+      <Disclosure summary="How tasks are grouped" className="task-grouping">
+        <p>
+          Task IDs are used when recorded; otherwise usage is grouped by session. Unlinked usage stays separate.
+          Activity spans measure first to last recorded usage, including idle time—not execution time.
+        </p>
+      </Disclosure>
       {data?.rows.length ? (
         data.rows.map((task) => (
           <details className="task-card" key={`${selectionKey}:${task.key}`}>

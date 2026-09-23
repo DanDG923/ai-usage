@@ -3,12 +3,14 @@ import { useDeferredValue, useMemo } from 'react';
 import { compactNumber, formatInt, money, percent, priceCoverage, sourceLabel } from '../lib';
 import type { Snapshot } from '../types';
 import { CostChart } from './Charts';
-import { API_EQUIVALENT_EXPLAINER, InfoTip } from './InfoTip';
+import { API_EQUIVALENT_EXPLAINER } from './InfoTip';
 import { cacheHitRate, rollups } from './details/cost-math';
+import { Disclosure } from './details/Disclosure';
 import { ModelTable, ProjectTable } from './details/Tables';
 import { TaskTable } from './details/TaskTable';
 import { SessionTable } from './details/SessionTable';
 import { DesktopEstimates } from './DesktopEstimates';
+import '../pages.css';
 
 export function Costs({
   snapshot,
@@ -34,16 +36,28 @@ export function Costs({
     .map((entry) => `${sourceLabel(entry.sourceId)} ${entry.model} (${compactNumber(entry.tokens)} tokens)`)
     .join(', ');
   const withoutCache = Math.max(costs.withoutCache, costs.actual, 1);
+  // Unpriced tokens are left out of every priced sum, so each one is a floor.
+  const floor = costs.isLowerBound ? '≥ ' : '';
 
   return (
     <main className="page costs-page" id="panel-costs" role="tabpanel" aria-labelledby="tab-costs" tabIndex={-1}>
       <section className="page-lead product-lead">
         <div>
           <h1>API-equivalent costs</h1>
-          <p>
-            Tracked tokens repriced with the current local catalogue—not a subscription invoice.{' '}
-            <InfoTip label="What API-equivalent cost means">{API_EQUIVALENT_EXPLAINER}</InfoTip>
-          </p>
+          <p>Tracked Codex and Claude Code tokens, repriced at current API rates. Not an invoice.</p>
+          <Disclosure summary="What’s included and what isn’t" className="lead-disclosure">
+            <p>
+              Costs include models found in local Codex and Claude Code token records, including Opus, Sonnet, and
+              Haiku. Regular Claude desktop and web chats can be imported as{' '}
+              <a href="#desktop-estimates">separate text estimates below</a>. Their usage can also count toward the
+              account allowance shown on Overview.
+            </p>
+            <p>
+              Price coverage measures the recorded tokens we can price. Even 100% does not mean every chat on your
+              account was captured. Adding a model price does not import missing activity.
+            </p>
+            <p>{API_EQUIVALENT_EXPLAINER}</p>
+          </Disclosure>
         </div>
         <div className="period-switch" role="group" aria-label="Analysis period">
           {[7, 30, 90].map((period) => (
@@ -61,29 +75,11 @@ export function Costs({
         </div>
       </section>
 
-      <section className="panel" aria-labelledby="cost-scope-heading">
-        <div className="panel-heading">
-          <div>
-            <h2 id="cost-scope-heading">Which usage is included?</h2>
-            <p>
-              Costs include models found in local Codex and Claude Code token records, including Opus, Sonnet, and
-              Haiku. Regular Claude desktop and web chats can be imported as{' '}
-              <a href="#desktop-estimates">separate text estimates below</a>. Their usage can also count toward the
-              account allowance shown on Overview.
-            </p>
-            <p>
-              Price coverage measures the recorded tokens we can price. Even 100% does not mean every chat on your
-              account was captured. Adding a model price does not import missing activity.
-            </p>
-          </div>
-        </div>
-      </section>
-
       <section className="cost-summary" aria-label="Cost summary">
         <div className="cost-primary">
           <span>Last {costs.periodDays} days</span>
           <strong>
-            {costs.isLowerBound ? '≥ ' : ''}
+            {floor}
             {money(costs.actual, costs.currency)}
           </strong>
           <small>
@@ -95,7 +91,10 @@ export function Costs({
         <dl>
           <div>
             <dt>Last 7 days</dt>
-            <dd>{money(recent.week, costs.currency)}</dd>
+            <dd>
+              {floor}
+              {money(recent.week, costs.currency)}
+            </dd>
             <small>
               {weekChange == null
                 ? 'Previous week unavailable'
@@ -104,7 +103,10 @@ export function Costs({
           </div>
           <div>
             <dt>Cache discount</dt>
-            <dd>{money(costs.cacheSavings, costs.currency)}</dd>
+            <dd>
+              {floor}
+              {money(costs.cacheSavings, costs.currency)}
+            </dd>
             <small>{percent(costs.cacheSavingsPercent * 100)} below uncached value</small>
           </div>
           <div>
@@ -142,13 +144,21 @@ export function Costs({
           <div className="saving-bars">
             <div className="with-cache">
               <span>
-                With cache <b>{money(costs.actual, costs.currency)}</b>
+                With cache{' '}
+                <b>
+                  {floor}
+                  {money(costs.actual, costs.currency)}
+                </b>
               </span>
               <i style={{ '--fill': `${Math.max(2, (costs.actual / withoutCache) * 100)}%` } as React.CSSProperties} />
             </div>
             <div>
               <span>
-                Without cache <b>{money(costs.withoutCache, costs.currency)}</b>
+                Without cache{' '}
+                <b>
+                  {floor}
+                  {money(costs.withoutCache, costs.currency)}
+                </b>
               </span>
               <i style={{ '--fill': '100%' } as React.CSSProperties} />
             </div>

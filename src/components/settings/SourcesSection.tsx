@@ -1,6 +1,6 @@
 import { shortDate } from '../../lib';
 import type { Settings, Snapshot } from '../../types';
-import { SectionHeading } from './fields';
+import { SelectSetting, SettingBlock, SettingRow, SettingsSection } from './fields';
 
 export function sourceMark(id: string) {
   return id === 'codex' ? 'Cx' : id === 'claude-fable' ? 'F5' : 'Cl';
@@ -20,15 +20,12 @@ export function SourcesSection({
   onSetupClaude: () => void;
 }) {
   return (
-    <section id="sources" className="panel settings-section">
-      <SectionHeading
-        title="Sources"
-        description="Local activity files and official provider allowance checks. Setup can install Claude Code and help you sign in."
-      />
-      <button className="secondary-button" onClick={onSetupClaude}>
-        Set up Claude
-      </button>
-      <div className="source-list">
+    <SettingsSection
+      id="sources"
+      title="Sources"
+      description="Local activity files and official provider allowance checks. Setup can install Claude Code and help you sign in."
+    >
+      <SettingBlock className="source-list">
         {snapshot.sources.map((source) => (
           <div className="source-row" key={source.id}>
             <span className={`source-mark ${source.id}`} aria-hidden="true">
@@ -58,32 +55,31 @@ export function SourcesSection({
               ))}
           </div>
         ))}
-      </div>
-      <div className="settings-fields">
-        <label>
-          <span>Collect automatically</span>
-          <select
-            value={snapshot.settings.refreshIntervalMinutes}
-            onChange={(event) => update({ refreshIntervalMinutes: Number(event.target.value) })}
-          >
-            <option value={0}>Only when I refresh</option>
-            <option value={5}>Every 5 minutes</option>
-            <option value={10}>Every 10 minutes</option>
-            <option value={15}>Every 15 minutes</option>
-            <option value={30}>Every 30 minutes</option>
-            <option value={60}>Every hour</option>
-            <option value={240}>Every 4 hours</option>
-          </select>
-        </label>
-      </div>
-      <div className="learning-note">
-        <span>
-          <strong>Background collection</strong>
-          Alerts, scheduled backups, and the forecast are only as current as the last collection. While this is on, the
-          app also collects when the window is reopened and when Windows wakes. Collection runs in a separate process,
-          so a slow scan never freezes the dashboard.
-        </span>
-      </div>
-    </section>
+      </SettingBlock>
+      <SettingRow
+        label="Claude Code setup"
+        description="Install Claude Code and sign in so Claude allowances can be read. You can reopen this guide at any time."
+      >
+        <div className="action-row compact">
+          <button className="secondary-button" onClick={onSetupClaude}>
+            Set up Claude
+          </button>
+        </div>
+      </SettingRow>
+      <SelectSetting
+        label="Collect automatically"
+        description="Alerts, scheduled backups, and the forecast are only as current as the last collection. While this is on, the app also collects when the window is reopened and when Windows wakes. Collection runs in a separate process, so a slow scan never freezes the dashboard."
+        value={snapshot.settings.refreshIntervalMinutes}
+        onChange={(value) => void update({ refreshIntervalMinutes: Number(value) })}
+      >
+        <option value={0}>Only when I refresh</option>
+        <option value={5}>Every 5 minutes</option>
+        <option value={10}>Every 10 minutes</option>
+        <option value={15}>Every 15 minutes</option>
+        <option value={30}>Every 30 minutes</option>
+        <option value={60}>Every hour</option>
+        <option value={240}>Every 4 hours</option>
+      </SelectSetting>
+    </SettingsSection>
   );
 }

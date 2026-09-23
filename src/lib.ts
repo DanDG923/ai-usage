@@ -121,6 +121,18 @@ export function timeLabel(value?: string | number | null, nowMs = Date.now()) {
   return sameDay ? TIME.format(date) : shortDate(value);
 }
 
+/** "just now", "4 min ago", "2 h ago", then a dated form: how fresh a reading is. */
+export function relativeTime(value?: string | number | null, nowMs = Date.now()) {
+  if (!value) return 'never';
+  const date = parseDate(value);
+  if (!date) return '—';
+  const minutes = Math.round((nowMs - date.getTime()) / 60_000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes} min ago`;
+  if (minutes < 24 * 60) return `${Math.floor(minutes / 60)} h ago`;
+  return shortDate(value);
+}
+
 export function percent(value: number | null | undefined, digits = 0) {
   return value == null ? '—' : `${value.toFixed(digits)}%`;
 }
@@ -128,6 +140,20 @@ export function percent(value: number | null | undefined, digits = 0) {
 export function priceCoverage(value: number) {
   return value >= 1 ? '100%' : `${Math.min(99, Math.floor(Math.max(0, value) * 100 + 1e-9))}%`;
 }
+
+/**
+ * Source states that mean the last refresh worked. Not every success is an
+ * official allowance: transcript-only Claude activity is observing, and a local
+ * Fable estimate is estimating. The same set electron/notifications.cjs treats
+ * as healthy, so the command bar, the Settings badge and the Sources list agree.
+ */
+export const HEALTHY_SOURCE_STATUSES: ReadonlySet<string> = new Set([
+  'connected',
+  'ready',
+  'observing',
+  'estimating',
+  'activity-only',
+]);
 
 export function sourceLabel(id: string) {
   return SOURCES.find((source) => source.id === id || source.healthId === id)?.label ?? id;

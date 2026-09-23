@@ -7,7 +7,7 @@ const { buildDashboardVerdict } = require('./dashboard-decision.cjs');
 const { isOfficialWindow, selectDisplayedWindows } = require('./quota-selection.cjs');
 const { FABLE_BUCKET, projectFableAllowance } = require('./fable-projection.cjs');
 const { codexQuotaLabel } = require('./codex-quota-label.cjs');
-const { forecastQuota, normaliseObservation, prepareObservation, clusterByWindow } = require('./forecast.cjs');
+const { forecastQuota, normaliseObservation, prepareObservation, clusterByWindow, withoutStaleRestatements } = require('./forecast.cjs');
 const { TaskUsage } = require('./task-usage.cjs');
 const { estimateTokenCapacity, LOOKBACK_MS: TOKEN_CAPACITY_LOOKBACK_MS, STALENESS_MS: TOKEN_CAPACITY_STALENESS_MS } = require('./token-capacity.cjs');
 const { MAX_QUOTA_RESET_AHEAD_MS, QUOTA_CLOCK_SKEW_MS, FORECAST_LOOKBACK_MS, validQuotaTime } = require('./quota-time.cjs');
@@ -43,6 +43,10 @@ const DEFAULT_SETTINGS = {
   allowanceChanges: [],
   codexPlanUsdPerMonth: 0,
   claudePlanUsdPerMonth: 0,
+  // A free reset Claude offers in its own Usage settings. No Claude API
+  // reports it, so it is recorded by hand and hidden after its expiry date.
+  claudeFreeResets: 0,
+  claudeFreeResetsExpireOn: null,
   notifyDesktop: true,
   notifyResets: true,
   notifyFallback: true,
@@ -66,6 +70,13 @@ const SETTING_ALIASES = { notifyInApp: 'notifyDesktop' };
 
 function isIsoOrNull(value) {
   return value === null || (typeof value === 'string' && Number.isFinite(Date.parse(value)));
+}
+
+// How long a lower status-line reading waits for the provider's next read to
+// confirm or contradict it: two refreshes, and never less than two hours.
+function freshReadGraceMs(settings) {
+  const minutes = Number(settings.refreshIntervalMinutes);
+  return Math.max(2 * 60 * 60_000, minutes > 0 ? 2 * minutes * 60_000 : 0);
 }
 
 function isForecastDate(value) {
@@ -102,6 +113,8 @@ const SETTING_VALIDATORS = {
   allowanceChanges: (value) => isAllowanceChangeList(value),
   codexPlanUsdPerMonth: (value) => Number.isFinite(value) && value >= 0 && value <= 100_000,
   claudePlanUsdPerMonth: (value) => Number.isFinite(value) && value >= 0 && value <= 100_000,
+  claudeFreeResets: (value) => Number.isInteger(value) && value >= 0 && value <= 10,
+  claudeFreeResetsExpireOn: (value) => value === null || isForecastDate(value),
   notifyDesktop: (value) => typeof value === 'boolean',
   notifyResets: (value) => typeof value === 'boolean',
   notifyFallback: (value) => typeof value === 'boolean',
@@ -1096,6 +1109,12 @@ class UsageStore {
       if (!grouped.has(row.bucket_id)) grouped.set(row.bucket_id, []);
       grouped.get(row.bucket_id).push(row);
     }
+    // A stale status-line restatement must not become the card's current
+    // balance, a forecast reading or a token-capacity interval.
+    const restatementOptions = { nowMs, freshReadGraceMs: freshReadGraceMs(settings) };
+    for (const [bucketId, bucketRows] of grouped) {
+      grouped.set(bucketId, withoutStaleRestatements(bucketRows, restatementOptions));
+    }
     const schedule = {
       activeDays: settings.activeDays,
       startHour: settings.activeStartHour,
@@ -1110,6 +1129,7 @@ class UsageStore {
       reservePercent: settings.reservePercent,
       excludedDates: settings.forecastExcludedDates,
       allowanceChanges: settings.allowanceChanges,
+      freshReadGraceMs: restatementOptions.freshReadGraceMs,
       sourceId,
     };
     let windows = [...grouped.entries()].map(([bucketId, observations]) => {

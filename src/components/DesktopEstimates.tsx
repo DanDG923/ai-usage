@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { DesktopImportPreview, Snapshot } from '../types';
 import { compactNumber, money } from '../lib';
+import { Disclosure } from './details/Disclosure';
 
 function estimateMoney(value: number, currency: string) {
   return value > 0 && value < 0.01 ? `< ${money(0.01, currency)}` : money(value, currency);
@@ -84,12 +85,17 @@ export function DesktopEstimates({
       </div>
       <div className="desktop-estimates-body">
         <p>
-          In Claude, open Settings → Privacy → Export data. Download and extract the ZIP, then choose conversations.json
-          here. Processing stays on this PC; conversation text and titles are never saved by AI Usage. Desktop and web
-          chats cannot be distinguished in the export.
+          Import conversations.json from a Claude data export. Processing stays on this PC; conversation text and titles
+          are never saved by AI Usage.
         </p>
-        <details>
-          <summary>How the estimate works</summary>
+        <Disclosure summary="How to export your chats">
+          <p>
+            In Claude, open Settings → Privacy → Export data. Download and extract the ZIP, then choose
+            conversations.json here. Processing stays on this PC; conversation text and titles are never saved by AI
+            Usage. Desktop and web chats cannot be distinguished in the export.
+          </p>
+        </Disclosure>
+        <Disclosure summary="How the estimate works">
           <p>
             We divide the character count of each visible prompt and reply by four, round up, and apply the current
             model’s input and output prices. This rough text-value estimate counts the immediate prompt only; it does
@@ -101,9 +107,9 @@ export function DesktopEstimates({
             Only models explicitly attached to replies are used. A conversation’s current model cannot identify earlier
             replies after a model switch. Missing models remain unpriced unless you select an assumption during import.
             Reimports preserve existing replies and assumptions; remove estimates and reimport to replace them. Named
-            models without prices can be priced in Settings → Pricing and data management → API pricing.
+            models without prices can be priced in Settings → API pricing.
           </p>
-        </details>
+        </Disclosure>
         {!preview ? (
           <div className="action-row">
             <button className="secondary-button" disabled={busy} onClick={choose}>
