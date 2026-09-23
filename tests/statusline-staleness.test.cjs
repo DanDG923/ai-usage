@@ -36,24 +36,47 @@ function week({ withStaleStatusLine }) {
   return rows.sort((a, b) => Date.parse(a.observedAt) - Date.parse(b.observedAt));
 }
 
-test('a lower status-line reading after a fresh read is dropped; earlier and other-window readings are kept', () => {
+const times = (rows) => rows.map((row) => [row.observedAt.slice(11, 16), row.usedPercent]);
+
+test('a lower status-line reading is dropped when the provider’s next read shows no drop', () => {
   const kept = withoutStaleRestatements([
     reading('2026-09-22T17:00:00.000Z', 1, 'official-statusline'),
     reading('2026-09-22T21:00:00.000Z', 13, 'official-claude-usage'),
     reading('2026-09-22T21:05:00.000Z', 1, 'official-statusline'),
     reading('2026-09-22T21:10:00.000Z', 13, 'official-statusline'),
     { ...reading('2026-09-22T21:15:00.000Z', 1, 'official-statusline'), resetsAt: '2026-10-05T08:00:00.000Z' },
-  ]);
-  assert.deepEqual(kept.map((row) => [row.observedAt.slice(11, 16), row.usedPercent]), [
-    ['17:00', 1], ['21:00', 13], ['21:10', 13], ['21:15', 1],
-  ]);
+    reading('2026-09-22T22:00:00.000Z', 14, 'official-claude-usage'),
+  ], { nowMs: Date.parse('2026-09-23T09:00:00.000Z') });
+  // Earlier, equal and other-window readings stay; so does a fresh read.
+  assert.deepEqual(times(kept), [['17:00', 1], ['21:00', 13], ['21:10', 13], ['21:15', 1], ['22:00', 14]]);
   // A fresh read that shows a replenishment becomes the new reference.
   const replenished = withoutStaleRestatements([
     reading('2026-09-22T20:00:00.000Z', 40, 'official-claude-usage'),
     reading('2026-09-22T21:00:00.000Z', 1, 'official-claude-usage'),
     reading('2026-09-22T21:05:00.000Z', 1, 'official-statusline'),
-  ]);
+  ], { nowMs: Date.parse('2026-09-22T21:10:00.000Z') });
   assert.equal(replenished.length, 3);
+});
+
+test('an early replenishment the status line sees first is kept once the provider confirms it or stays silent', () => {
+  // Claude replenishes before its advertised reset moves: the status line
+  // reports 0% and 2% while the last provider read still says 40%.
+  const rows = [
+    reading('2026-09-22T20:00:00.000Z', 40, 'official-claude-usage'),
+    reading('2026-09-22T20:30:00.000Z', 0, 'official-statusline'),
+    reading('2026-09-22T20:50:00.000Z', 2, 'official-statusline'),
+  ];
+  const confirmed = withoutStaleRestatements([...rows, reading('2026-09-22T21:00:00.000Z', 3, 'official-claude-usage')]);
+  assert.deepEqual(times(confirmed), [['20:00', 40], ['20:30', 0], ['20:50', 2], ['21:00', 3]]);
+  // Awaiting the next provider read, the drop is held back for the grace period…
+  assert.deepEqual(times(withoutStaleRestatements(rows, { nowMs: Date.parse('2026-09-22T21:30:00.000Z') })), [['20:00', 40]]);
+  // …and once the provider has been silent longer, the status line is believed.
+  assert.equal(withoutStaleRestatements(rows, { nowMs: Date.parse('2026-09-22T22:30:00.000Z') }).length, 3);
+  assert.equal(
+    withoutStaleRestatements(rows, { nowMs: Date.parse('2026-09-22T22:30:00.000Z'), freshReadGraceMs: 4 * HOUR }).length,
+    1,
+    'a longer refresh interval waits longer',
+  );
 });
 
 test('interleaved stale status-line readings neither reset the window nor add late-night use', () => {
@@ -83,7 +106,7 @@ test('an unchanged status-line reading does not pin the next increase to its own
   assert.ok(active > 11, `active share ${active}`);
 });
 
-test('a card never shows a stale status-line restatement as the current balance', () => {
+test('a card shows a lower status-line reading only after the provider has been silent past the grace period', () => {
   const store = new UsageStore(':memory:', os.tmpdir());
   try {
     const now = Date.now();
@@ -94,11 +117,20 @@ test('a card never shows a stale status-line restatement as the current balance'
       provenance, confidence: 1, metadata: {},
     });
     record(now - 3 * HOUR, 1, 'official-statusline');
-    record(now - 2 * HOUR, 13, 'official-claude-usage');
+    record(now - HOUR, 13, 'official-claude-usage');
     record(now - MINUTE, 1, 'official-statusline');
-    const quota = store.getQuota('claude');
+    // The provider was read an hour ago, well within two 15-minute refreshes
+    // or the two-hour minimum, so the lower reading waits for its next read.
+    let quota = store.getQuota('claude', store.getSettings(), now);
     assert.equal(quota.remainingPercent, 87);
     assert.equal(quota.provenance, 'official-claude-usage');
+    // With the provider silent for three hours, the status line is the evidence.
+    quota = store.getQuota('claude', store.getSettings(), now + 2 * HOUR);
+    assert.equal(quota.remainingPercent, 99);
+    assert.equal(quota.provenance, 'official-statusline');
+    // A four-hour refresh interval allows eight hours before believing it.
+    store.updateSettings({ refreshIntervalMinutes: 240 });
+    assert.equal(store.getQuota('claude', store.getSettings(), now + 2 * HOUR).remainingPercent, 87);
   } finally {
     store.close();
   }

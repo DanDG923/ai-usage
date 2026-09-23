@@ -72,6 +72,13 @@ function isIsoOrNull(value) {
   return value === null || (typeof value === 'string' && Number.isFinite(Date.parse(value)));
 }
 
+// How long a lower status-line reading waits for the provider's next read to
+// confirm or contradict it: two refreshes, and never less than two hours.
+function freshReadGraceMs(settings) {
+  const minutes = Number(settings.refreshIntervalMinutes);
+  return Math.max(2 * 60 * 60_000, minutes > 0 ? 2 * minutes * 60_000 : 0);
+}
+
 function isForecastDate(value) {
   return typeof value === 'string' && /^(?:20\d{2}|2100)-\d{2}-\d{2}$/.test(value)
     && value >= '2020-01-01' && Number.isFinite(Date.parse(value))
@@ -1104,7 +1111,10 @@ class UsageStore {
     }
     // A stale status-line restatement must not become the card's current
     // balance, a forecast reading or a token-capacity interval.
-    for (const [bucketId, bucketRows] of grouped) grouped.set(bucketId, withoutStaleRestatements(bucketRows));
+    const restatementOptions = { nowMs, freshReadGraceMs: freshReadGraceMs(settings) };
+    for (const [bucketId, bucketRows] of grouped) {
+      grouped.set(bucketId, withoutStaleRestatements(bucketRows, restatementOptions));
+    }
     const schedule = {
       activeDays: settings.activeDays,
       startHour: settings.activeStartHour,
@@ -1119,6 +1129,7 @@ class UsageStore {
       reservePercent: settings.reservePercent,
       excludedDates: settings.forecastExcludedDates,
       allowanceChanges: settings.allowanceChanges,
+      freshReadGraceMs: restatementOptions.freshReadGraceMs,
       sourceId,
     };
     let windows = [...grouped.entries()].map(([bucketId, observations]) => {

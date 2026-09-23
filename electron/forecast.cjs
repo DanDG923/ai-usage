@@ -385,27 +385,41 @@ function restatesSessionLimits(row) {
   return row.provenance === 'official-statusline';
 }
 
-// Usage never falls within an allowance window, so once a fresh read has
-// shown higher usage for the same reset, a lower status-line reading can only
-// be a session restating limits it fetched earlier. Left in, each fresh/stale
-// pair reads as an early replenishment followed by the same usage spent again:
-// one 12% rise was learned eight times over as late-night use. Readings stay
-// in time order; a fresh read with a new reset (or a clear replenishment)
-// replaces the reference, and status-line readings before any fresh read are
-// kept because nothing yet shows them to be stale.
+// A status-line reading lower than the provider's last fresh read for the same
+// reset is either a session restating limits it fetched earlier or the first
+// sign of an early replenishment. Left in, stale restatements read as a
+// replenishment followed by the same usage spent again: one 12% rise was
+// learned eight times over as late-night use. The provider's next fresh read
+// tells the two apart. If it still shows the earlier usage, nothing was
+// replenished and the lower reading was stale; if it shows the drop as well,
+// the replenishment was real and the status line saw it first. Until that read
+// arrives the lower reading is held back, but only while the provider can
+// still be expected to answer. Once it has been silent for the grace period,
+// the status line is the best evidence left, so a genuine early reset still
+// reaches the card. Readings must be in time order; status-line readings
+// before any fresh read are kept because nothing yet shows them to be stale.
 const STALE_RESTATEMENT_MARGIN = 0.5;
-function withoutStaleRestatements(rows) {
+const FRESH_READ_GRACE_MS = 2 * HOUR_MS;
+function withoutStaleRestatements(rows, { nowMs = Date.now(), freshReadGraceMs = FRESH_READ_GRACE_MS } = {}) {
+  const parsed = rows.map(normaliseObservation);
+  const nextFresh = Array.from({ length: parsed.length }, () => null);
+  for (let index = parsed.length - 1, next = null; index >= 0; index -= 1) {
+    nextFresh[index] = next;
+    if (!restatesSessionLimits(parsed[index])) next = parsed[index];
+  }
   let fresh = null;
-  return rows.filter((row) => {
-    const parsed = normaliseObservation(row);
-    const used = usedPercentOf(parsed);
-    if (!restatesSessionLimits(parsed)) {
-      fresh = { resetsAt: parsed.resetsAt, used };
+  return rows.filter((row, index) => {
+    const reading = parsed[index];
+    if (!restatesSessionLimits(reading)) {
+      fresh = reading;
       return true;
     }
-    return !(fresh
-      && Math.abs(parsed.resetsAt - fresh.resetsAt) <= RESET_TOLERANCE_MS
-      && used < fresh.used - STALE_RESTATEMENT_MARGIN);
+    const sameReset = (other) => other && Math.abs(other.resetsAt - reading.resetsAt) <= RESET_TOLERANCE_MS;
+    const freshUsed = fresh && usedPercentOf(fresh);
+    if (!sameReset(fresh) || usedPercentOf(reading) >= freshUsed - STALE_RESTATEMENT_MARGIN) return true;
+    const after = nextFresh[index];
+    if (after) return sameReset(after) && usedPercentOf(after) < freshUsed - STALE_RESTATEMENT_MARGIN;
+    return nowMs - fresh.observedAt > freshReadGraceMs;
   });
 }
 
@@ -1008,7 +1022,7 @@ function forecastQuota(observations, options = {}) {
   // Normalise once; each pass below would otherwise re-parse every timestamp.
   const nowMs = options.now != null ? new Date(options.now).getTime() : Date.now();
   let normalised = withoutStaleRestatements(rescaleObservations(observations.map(normaliseObservation), options)
-    .sort((a, b) => a.observedAt - b.observedAt));
+    .sort((a, b) => a.observedAt - b.observedAt), { nowMs, freshReadGraceMs: options.freshReadGraceMs });
   if (options.compactReadings) {
     normalised = normalised.filter((row) => validQuotaTime(row.observedAt, row.resetsAt, row.windowMinutes, nowMs))
       .sort((a, b) => a.observedAt - b.observedAt);
