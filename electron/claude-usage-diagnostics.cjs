@@ -1,5 +1,11 @@
 'use strict';
 
+// Claude Code answers a usage read from the snapshot another process fetched
+// in the last minute instead of asking the endpoint again. That snapshot is
+// written only after a successful fetch, so a young one is as fresh as a new
+// fetch. An older one would mean the CLI changed its rules, and fails closed.
+const SNAPSHOT_MAX_AGE_S = 60;
+
 // Claude's usage control response can contain cached windows after a failed
 // HTTP fetch. Only usage-specific stderr events establish freshness. Raw debug
 // output stays in a bounded, transient buffer and is never stored or forwarded.
@@ -13,6 +19,12 @@ function createUsageDiagnostics() {
     }
     const success = value.match(/fetchUtilization: (200) after \d+ attempt\(s\)/);
     if (success) state = { outcome: 'verified', code: null, httpStatus: 200 };
+    const snapshot = value.match(/Usage read answered from a snapshot (\d+)s old; endpoint not asked/);
+    if (snapshot) {
+      // The latest read decides, so an old snapshot also clears an earlier fetch.
+      const fresh = Number(snapshot[1]) <= SNAPSHOT_MAX_AGE_S;
+      state = { outcome: fresh ? 'verified' : 'unverified', code: null, httpStatus: null };
+    }
     if (!/Failed to load usage data:/.test(value)) return;
     const status = value.match(/(?:status(?: code)?[=: ]+|HTTP\s+)(401|403|429|500|502|503|504|529)\b/i);
     const network = value.match(/\b(ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|CERT_HAS_EXPIRED|UNABLE_TO_VERIFY_LEAF_SIGNATURE)\b/);
