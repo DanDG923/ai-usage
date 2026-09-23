@@ -90,6 +90,31 @@ test('the daily budget, both paces and the chart endpoints always agree', () => 
   assert.ok(override.scaleMax >= Math.max(override.budget, override.expected, override.heavier));
 });
 
+test('after a stale reading the Now dot shows the estimated balance, where the expected path starts', async () => {
+  const { RunwayChart } = await server.ssrLoadModule('/src/components/Charts.tsx');
+  const nowMs = new Date(2026, 8, 23, 12, 0).getTime();
+  // The last reading, three hours old, was 60%; the engine estimates 52% now.
+  const current = window({ remaining: 60, nowMs: nowMs - 3 * HOUR });
+  current.forecast = {
+    ...current.forecast, currentIsEstimated: true, estimatedCurrentRemaining: 52,
+    series: {
+      observed: [{ at: nowMs - 30 * HOUR, remaining: 80 }, { at: nowMs - 3 * HOUR, remaining: 60 }],
+      expected: [{ at: nowMs, remaining: 52 }, { at: nowMs + 60 * HOUR, remaining: 30 }],
+      heavy: [{ at: nowMs, remaining: 52 }, { at: nowMs + 60 * HOUR, remaining: 10 }],
+    },
+  };
+  const view = {
+    id: 'codex', name: 'Codex', current, expired: false, state: 'safe',
+    remaining: lib.displayedRemaining(current), expectedRemaining: 30, heavyRemaining: 10,
+  };
+  const html = render(RunwayChart, { view, schedule: { activeDays: [0, 1, 2, 3, 4, 5, 6], startHour: 8, endHour: 22 } });
+  const dotY = Number(html.match(/<circle class="runway-now"[^>]*cy="([\d.]+)"/)[1]);
+  const pathStartY = Number(html.match(/<path d="M[\d.]+,([\d.]+)[^"]*" class="runway-expected"/)[1]);
+  const y = (remaining) => 10 + (1 - remaining / 100) * (150 - 10 - 22);
+  assert.ok(Math.abs(dotY - pathStartY) < 0.1, `dot ${dotY} vs expected path ${pathStartY}`);
+  assert.ok(Math.abs(dotY - y(52)) < 0.1, `dot ${dotY} is at 52%, not the stale 60% (${y(60)})`);
+});
+
 test('a heavier run-out is paced over the hours before it, and learning or expired windows have no budget', () => {
   const nowMs = new Date(2026, 8, 23, 12, 0).getTime();
   // Runs out at 19:00 tomorrow: 10 active hours today and 11 tomorrow.

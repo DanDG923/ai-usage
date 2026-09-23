@@ -215,7 +215,9 @@ function runwayLayout(view: ProviderView, schedule: Schedule, size: RunwaySize, 
     inactive,
     ticks,
     endLabels,
-    nowValue: valueAt(observed, nowAt) ?? view.remaining ?? null,
+    // The card's balance: after a stale reading that is the estimate the
+    // expected path starts from, not the last observation.
+    nowValue: view.remaining ?? valueAt(observed, nowAt),
     exhaustsAt: projection ? inRange(current.forecast.exhaustsAt) : null,
     heavyExhaustsAt: projection ? inRange(current.forecast.heavyExhaustsAt) : null,
   };

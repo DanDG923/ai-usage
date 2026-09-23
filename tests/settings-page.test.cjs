@@ -257,7 +257,7 @@ test('fee inputs commit the monthly fee settings with the stated limits', async 
   ]);
 });
 
-test('picking a free-reset expiry saves the date; an incomplete date is ignored and Clear removes it', async () => {
+test('the free-reset expiry saves whole days and an emptied field, and skips a date still being typed', async () => {
   const patches = [];
   const snapshot = structuredClone(demoSnapshot);
   snapshot.settings.claudeFreeResets = 1;
@@ -265,14 +265,28 @@ test('picking a free-reset expiry saves the date; an incomplete date is ignored 
   const [expiry] = elements(tree, (node) => typeof node.type === 'function' && node.type.name === 'FreeResetExpiry');
   assert.equal(expiry.props.disabled, false);
   const field = (value, predicate) => elements(captured(expiry.type, { ...expiry.props, value }), predicate)[0];
-  const dateInput = field(null, (node) => node.type === 'input' && node.props.type === 'date');
-  // A date input reports its value as yyyy-mm-dd, or '' while the date is incomplete.
-  dateInput.props.onChange({ target: { value: '2026-10-22' } });
-  dateInput.props.onChange({ target: { value: '' } });
+  const isDate = (node) => node.type === 'input' && node.props.type === 'date';
+  const type = (saved, ...values) => {
+    const input = field(saved, isDate);
+    for (const value of values) input.props.onChange({ target: { value } });
+  };
+  assert.deepEqual(
+    (({ min, max, value }) => ({ min, max, value }))(field('2026-10-22', isDate).props),
+    { min: '2020-01-01', max: '2100-12-31', value: '2026-10-22' },
+  );
+  // A date input reports '' while a date is incomplete, and years such as 0002
+  // while one is typed digit by digit; the store would reject those and 30 February.
+  type(null, '', '0002-10-22', '0202-10-22', '2026-02-30', '2026-10-22');
+  // Emptying a saved date clears it, as Clear does; picking the saved day again saves nothing.
+  type('2026-10-22', '2026-10-22', '');
   assert.equal(field(null, (node) => node.type === 'button'), undefined, 'Clear only appears once a date is saved');
   field('2026-10-22', (node) => node.type === 'button').props.onClick();
   await new Promise(setImmediate);
-  assert.deepEqual(patches, [{ claudeFreeResetsExpireOn: '2026-10-22' }, { claudeFreeResetsExpireOn: null }]);
+  assert.deepEqual(patches, [
+    { claudeFreeResetsExpireOn: '2026-10-22' },
+    { claudeFreeResetsExpireOn: null },
+    { claudeFreeResetsExpireOn: null },
+  ]);
 });
 
 test('switches expose their state as a switch and in words', () => {

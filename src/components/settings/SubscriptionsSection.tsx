@@ -8,7 +8,19 @@ export const SUBSCRIPTION_FEES_NOTE =
 export const CLAUDE_FREE_RESETS_NOTE =
   'Claude’s Usage settings can offer a free reset, for example to try a new model. No Claude API reports it, so record it here to see it on the Claude card. It hides itself after the expiry date and is never counted as allowance.';
 
-/** The last day a recorded Claude free reset can be claimed; saved as soon as a date is picked. */
+/** A day the settings store accepts: a real yyyy-mm-dd date from 2020 to 2100. */
+function isStorableDate(value: string) {
+  if (!/^(?:20\d{2}|2100)-\d{2}-\d{2}$/.test(value) || value < '2020-01-01') return false;
+  const [year, month, day] = value.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
+/**
+ * The last day a recorded Claude free reset can be claimed, saved as soon as
+ * the field holds a whole day or is emptied. It keeps its own draft, so typing
+ * a date one part at a time is not reset to the saved day between keystrokes.
+ */
 function FreeResetExpiry({
   value,
   disabled,
@@ -19,14 +31,19 @@ function FreeResetExpiry({
   onCommit: (value: string | null) => Promise<void | boolean>;
 }) {
   const id = useId();
-  const [saving, setSaving] = useState(false);
-  const save = async (next: string | null) => {
-    setSaving(true);
-    try {
-      await onCommit(next);
-    } finally {
-      setSaving(false);
-    }
+  const [draft, setDraft] = useState(value ?? '');
+  // A saved value arriving from a snapshot replaces the draft; typing does not.
+  const [committed, setCommitted] = useState(value);
+  if (committed !== value) {
+    setCommitted(value);
+    setDraft(value ?? '');
+  }
+  const change = (next: string) => {
+    setDraft(next);
+    // A date input reports '' once emptied and while a date is incomplete, and
+    // years such as 0002 while one is typed digit by digit; only days are saved.
+    const saved = next === '' ? null : isStorableDate(next) ? next : undefined;
+    if (saved !== undefined && saved !== value) void onCommit(saved);
   };
   return (
     <SettingRow label="Expires on" htmlFor={id} description="Optional. Leave empty if Claude shows no expiry.">
@@ -34,20 +51,14 @@ function FreeResetExpiry({
         <input
           id={id}
           type="date"
-          value={value ?? ''}
-          disabled={disabled || saving}
-          onChange={(event) => {
-            const next = event.target.value;
-            if (/^\d{4}-\d{2}-\d{2}$/.test(next)) void save(next);
-          }}
+          min="2020-01-01"
+          max="2100-12-31"
+          value={draft}
+          disabled={disabled}
+          onChange={(event) => change(event.target.value)}
         />
         {value && (
-          <button
-            type="button"
-            className="secondary-button"
-            disabled={disabled || saving}
-            onClick={() => void save(null)}
-          >
+          <button type="button" className="secondary-button" disabled={disabled} onClick={() => change('')}>
             Clear
           </button>
         )}
