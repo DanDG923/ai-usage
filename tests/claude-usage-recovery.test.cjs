@@ -81,6 +81,20 @@ test('a protocol change that removes freshness diagnostics fails closed', async 
   assert.equal(f.calls(), 1);
 });
 
+test('a read Claude Code answers from its shared snapshot of the last minute is fresh', async () => {
+  const f = fixture([{ log: '[DEBUG] Usage read answered from a snapshot 38s old; endpoint not asked\n' }]);
+  const result = await f.port.read();
+  assert.deepEqual(result, fresh);
+  assert.deepEqual(result.collectionDiagnostics.attempts.map(a => a.outcome), ['fresh']);
+  assert.equal(f.calls(), 1);
+});
+
+test('a snapshot older than the CLI serves fails closed', async () => {
+  const f = fixture([{ log: '[DEBUG] Usage read answered from a snapshot 61s old; endpoint not asked\n' }]);
+  await assert.rejects(f.port.read(), { code: 'claude-usage-unverified' });
+  assert.equal(f.calls(), 1);
+});
+
 for (const status of [401, 403, 429]) {
   test(`HTTP ${status} does not trigger an immediate retry`, async () => {
     const f = fixture([{ log: `[ERROR] Failed to load usage data: Request failed with status code ${status}\n` }]);
