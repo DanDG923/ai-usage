@@ -1,3 +1,4 @@
+import { HEALTHY_SOURCE_STATUSES } from '../../lib';
 import type { Snapshot, Source } from '../../types';
 
 /**
@@ -125,16 +126,16 @@ export function matchingSections(
   return matches;
 }
 
-// The statuses the Sources list draws with a green dot, and the ones every
-// consumer treats as stale data (see electron/store.cjs setSourceStatus).
-const CONNECTED_STATUSES = new Set(['connected', 'observing', 'ready']);
+// Healthy statuses are the ones the Sources list draws with a green dot; the
+// attention statuses are the ones every consumer treats as stale data (see
+// electron/store.cjs setSourceStatus).
 const ATTENTION_STATUSES = new Set(['error', 'stale', 'degraded']);
 
 export type SourcesBadge = { tone: 'ok' | 'warn' | 'neutral'; label: string; connected: number; attention: number };
 
 /** "3 connected", or "1 needs attention" as soon as any source is failing or serving cached data. */
 export function sourcesBadge(sources: readonly Pick<Source, 'status'>[]): SourcesBadge {
-  const connected = sources.filter((source) => CONNECTED_STATUSES.has(source.status)).length;
+  const connected = sources.filter((source) => HEALTHY_SOURCE_STATUSES.has(source.status)).length;
   const attention = sources.filter((source) => ATTENTION_STATUSES.has(source.status)).length;
   if (attention > 0) {
     return {

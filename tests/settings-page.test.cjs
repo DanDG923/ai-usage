@@ -142,7 +142,14 @@ test('the Sources badge counts connected sources and names failing ones in words
   const { sourcesBadge } = sections;
   const of = (...statuses) => statuses.map((status) => ({ status }));
   assert.deepEqual(sourcesBadge(of('connected', 'observing', 'ready')), { tone: 'ok', label: '3 connected', connected: 3, attention: 0 });
-  assert.equal(sourcesBadge(of('connected', 'waiting', 'estimating')).label, '1 connected');
+  // A local Fable estimate or activity-only tracking is a working source too.
+  assert.equal(sourcesBadge(of('connected', 'waiting', 'estimating')).label, '2 connected');
+  assert.equal(sourcesBadge(of('connected', 'observing', 'activity-only')).label, '3 connected');
+  assert.deepEqual(
+    [...lib.HEALTHY_SOURCE_STATUSES].sort(),
+    [...require('../electron/notifications.cjs').HEALTHY_SOURCE_STATUSES].sort(),
+    'the renderer and notifications agree on which sources are healthy',
+  );
   assert.deepEqual(sourcesBadge(of('pending', 'unavailable')), { tone: 'neutral', label: '0 connected', connected: 0, attention: 0 });
   assert.equal(sourcesBadge(of('connected', 'stale', 'observing')).label, '1 needs attention');
   const failing = sourcesBadge(of('error', 'degraded', 'connected'));

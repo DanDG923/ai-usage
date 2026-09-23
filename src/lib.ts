@@ -141,6 +141,20 @@ export function priceCoverage(value: number) {
   return value >= 1 ? '100%' : `${Math.min(99, Math.floor(Math.max(0, value) * 100 + 1e-9))}%`;
 }
 
+/**
+ * Source states that mean the last refresh worked. Not every success is an
+ * official allowance: transcript-only Claude activity is observing, and a local
+ * Fable estimate is estimating. The same set electron/notifications.cjs treats
+ * as healthy, so the command bar, the Settings badge and the Sources list agree.
+ */
+export const HEALTHY_SOURCE_STATUSES: ReadonlySet<string> = new Set([
+  'connected',
+  'ready',
+  'observing',
+  'estimating',
+  'activity-only',
+]);
+
 export function sourceLabel(id: string) {
   return SOURCES.find((source) => source.id === id || source.healthId === id)?.label ?? id;
 }

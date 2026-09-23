@@ -879,9 +879,12 @@ td small.path {
   border-radius: 50%;
   background: currentColor;
 }
+/* HEALTHY_SOURCE_STATUSES in src/lib.ts */
 .connection.connected,
 .connection.observing,
-.connection.ready {
+.connection.ready,
+.connection.estimating,
+.connection.activity-only {
   color: var(--ok-text) !important;
 }
 .connection.degraded,
