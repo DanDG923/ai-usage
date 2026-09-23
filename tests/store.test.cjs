@@ -228,6 +228,59 @@ test('Astra prices cached input, cache writes, and output at the exact long-cont
   assert.equal(store.resolvePrice('gpt-6-astra-unknown'), null);
 }));
 
+for (const [model, standardUsd, longUsd] of [
+  ['gpt-6-sol', 0.424, 0.843004],
+  ['gpt-6-luna', 0.0212, 0.0421502],
+]) {
+  test(`${model} prices every token category at the long-context boundary`, () => withStore((store) => {
+    for (const name of [model, `${model}-20260922`, `${model}-2026-09-22`]) {
+      const row = {
+        source_id: 'codex', model: name, input_tokens: 172_000, cached_input_tokens: 100_000,
+        cache_write_input_tokens: 100_000, cache_write_5m_input_tokens: 50_000,
+        cache_write_1h_input_tokens: 50_000, output_tokens: 1_000,
+      };
+      const standard = store.calculateCost(row);
+      assert.equal(standard.covered, true);
+      assert.equal(standard.longContext, false);
+      assert.ok(Math.abs(standard.actualUsd - standardUsd) < 1e-12);
+      const long = store.calculateCost({ ...row, input_tokens: 172_001 });
+      assert.equal(long.longContext, true);
+      assert.ok(Math.abs(long.actualUsd - longUsd) < 1e-12);
+    }
+    assert.equal(store.resolvePrice(`${model}-unknown`), null);
+  }));
+
+  test(`${model} upgrade prices existing history and preserves custom rates on reopen`, () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-test-'));
+    const file = path.join(root, 'test.sqlite');
+    let store = new UsageStore(file, path.join(root, 'Backups'));
+    try {
+      store.updateSettings({ currency: 'USD' });
+      store.db.prepare('DELETE FROM price_catalog WHERE model = ?').run(model);
+      store.recordUsageEvent({ eventKey: `${model}-existing`, sourceId: 'codex',
+        occurredAt: new Date().toISOString(), model, inputTokens: 100_000 });
+      assert.equal(store.getCostAnalytics(1).isLowerBound, true);
+      const original = store.db.prepare('SELECT * FROM usage_events').all();
+      store.close();
+      store = new UsageStore(file, path.join(root, 'Backups'));
+      assert.deepEqual(store.db.prepare('SELECT * FROM usage_events').all(), original);
+      const costs = store.getCostAnalytics(1);
+      assert.equal(costs.coverage, 1);
+      assert.equal(costs.isComplete, true);
+      assert.ok(Math.abs(costs.actual - (model === 'gpt-6-sol' ? 0.2 : 0.01)) < 1e-12);
+      assert.deepEqual(costs.unpricedModels, []);
+      assert.equal(store.resolvePrice(model).effective_from, '2026-09-22');
+      assert.equal(store.resolvePrice(model).source_url, `https://developers.openai.com/api/docs/models/${model}`);
+      store.updatePrice({ model, inputUsdPerMillion: 3, cacheWriteUsdPerMillion: 4,
+        cacheWrite1hUsdPerMillion: 4, cacheReadUsdPerMillion: 0.3, outputUsdPerMillion: 15 });
+      store.close();
+      store = new UsageStore(file, path.join(root, 'Backups'));
+      assert.equal(store.getCostAnalytics(1).actual, 0.3);
+      assert.equal(store.resolvePrice(model).is_seed, 0);
+    } finally { store.close(); }
+  });
+}
+
 test('scheduled backups are rate limited', () => withStore((store) => {
   const first = store.maybeCreateScheduledBackup();
   const second = store.maybeCreateScheduledBackup();
