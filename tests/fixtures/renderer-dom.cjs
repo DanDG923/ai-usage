@@ -101,6 +101,14 @@ app.whenReady().then(async () => {
   await evaluate(() => [...document.querySelectorAll('.settings-empty button')].find((button) => button.textContent === 'Clear search').click());
   await until(() => !document.querySelector('.settings-empty') && document.activeElement === document.querySelector('#panel-settings input[type="search"]'));
   assert.equal(await evaluate(() => document.querySelector('#forecast .inline-advanced').open), false, 'clearing the search closes what it opened');
+  // A failed save puts the saved free-reset expiry back and says so.
+  await evaluate(() => { const next = window.testBridge.fixture(); next.settings = { ...next.settings, claudeFreeResets: 1, claudeFreeResetsExpireOn: '2026-10-22' }; window.testBridge.push(next); });
+  await until(() => document.querySelector('#claude-free-resets input[type="date"]')?.value === '2026-10-22');
+  await evaluate(() => { window.testBridge.rejectSettings(true); const input = document.querySelector('#claude-free-resets input[type="date"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, '2026-11-05'); input.dispatchEvent(new Event('input', { bubbles: true })); });
+  await until(() => document.querySelector('#claude-free-resets [role="alert"]'));
+  assert.equal(await evaluate(() => document.querySelector('#claude-free-resets input[type="date"]').value), '2026-10-22', 'a failed save restores the saved expiry');
+  assert.match(await evaluate(() => document.querySelector('#claude-free-resets [role="alert"]').textContent), /could not be saved/);
+  await evaluate(() => window.testBridge.rejectSettings(false));
   if (process.env.AI_USAGE_RENDERER_QA_DIRECTORY) {
     const capture = async (name) => { await new Promise((resolve) => setTimeout(resolve, 400)); window.webContents.invalidate(); await new Promise((resolve) => setTimeout(resolve, 200)); fs.writeFileSync(path.join(process.env.AI_USAGE_RENDERER_QA_DIRECTORY, name), (await window.webContents.capturePage()).toPNG()); };
     fs.mkdirSync(process.env.AI_USAGE_RENDERER_QA_DIRECTORY, { recursive: true });

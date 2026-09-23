@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import type { Settings, Snapshot } from '../../types';
 import { NumericSetting, SettingNote, SettingRow, SettingsSection, ToggleRow } from './fields';
 
@@ -32,18 +32,30 @@ function FreeResetExpiry({
 }) {
   const id = useId();
   const [draft, setDraft] = useState(value ?? '');
+  const [error, setError] = useState('');
+  const latestSave = useRef(0);
   // A saved value arriving from a snapshot replaces the draft; typing does not.
   const [committed, setCommitted] = useState(value);
   if (committed !== value) {
     setCommitted(value);
     setDraft(value ?? '');
   }
-  const change = (next: string) => {
+  const change = async (next: string) => {
     setDraft(next);
     // A date input reports '' once emptied and while a date is incomplete, and
     // years such as 0002 while one is typed digit by digit; only days are saved.
     const saved = next === '' ? null : isStorableDate(next) ? next : undefined;
-    if (saved !== undefined && saved !== value) void onCommit(saved);
+    if (saved === undefined || saved === value) return;
+    // Typing a day can send two saves in a row; only the latest may roll back.
+    const attempt = ++latestSave.current;
+    setError('');
+    try {
+      if ((await onCommit(saved)) === false) throw new Error('Save failed');
+    } catch {
+      if (attempt !== latestSave.current) return;
+      setDraft(value ?? '');
+      setError('This date could not be saved. Try again.');
+    }
   };
   return (
     <SettingRow label="Expires on" htmlFor={id} description="Optional. Leave empty if Claude shows no expiry.">
@@ -55,14 +67,15 @@ function FreeResetExpiry({
           max="2100-12-31"
           value={draft}
           disabled={disabled}
-          onChange={(event) => change(event.target.value)}
+          onChange={(event) => void change(event.target.value)}
         />
         {value && (
-          <button type="button" className="secondary-button" disabled={disabled} onClick={() => change('')}>
+          <button type="button" className="secondary-button" disabled={disabled} onClick={() => void change('')}>
             Clear
           </button>
         )}
       </div>
+      {error && <small role="alert">{error}</small>}
     </SettingRow>
   );
 }
