@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- Redesign the colour system so colour always means a provider or a status, never both. Fable's coral was nearly indistinguishable from the "at risk" red (ΔE 3.6) and Claude's green from "on track" (ΔE 3.8); providers are now Codex blue, Claude violet and Fable magenta, at least 17 ΔE from every status colour and checked for colour-blind separation in both themes. Neutrals move from blue-slate to graphite, and buttons, toggles, focus rings and selected states become monochrome so no control looks like Codex data. Every status now carries an icon and a word.
+- Replace the combined runway chart with one runway per provider on its own clock, from the window's start to its own reset: observed use, the dashed expected path, a shaded heavier-week range, run-out markers and shading for hours outside the active schedule, which explains why projections flatten overnight.
+- Add a daily budget to each card and to the status line: the share of the allowance that fits in each remaining active day while keeping the reserve, with the expected and heavier paces marked against it. Every figure comes from the same endpoints the chart draws, so a pace fits exactly when its projection keeps the reserve.
+- Add a page for each provider, opened from its card or the status line's **Plan … usage** button: a full-size runway with hover and a data table, a heavier-week toggle, a daily-budget planner whose reserve slider re-plans live and can be saved, past weeks with the current window's forecast, weekly token capacity, the related Claude/Fable allowance, and the evidence behind the reading. Token capacity and the current-cycles table move here from the Overview.
+- Add a tray flyout: left-click the tray icon for the verdict, each allowance's balance and expected remainder at reset, refresh, snooze, and a link to the dashboard or a provider page. It has its own restricted bridge, opens beside the icon on any taskbar edge, and releases its renderer 60 seconds after closing.
+- State each thing once on the Overview: the status line carries the verdict and its daily guidance, each card its own provider, and the list beneath only what neither already says.
+- Show source health and relative freshness ("Updated 2 min ago") in the command bar, with a breadcrumb on provider pages; **Escape** returns to the Overview.
+- Reorganise Settings as one page with a section list that follows your scroll, badges for source health and unpriced models, and **Search settings**. Settings read as label-and-description beside the control, switches say On or Off, API pricing and Data & backups are no longer collapsed, and **Keep in reserve** previews each provider's daily budget as you type.
+- Restore the monthly subscription fee inputs that were dropped from Settings in 1.0.45 (now under Subscriptions → Monthly fees), and show the subscription value on the Overview again, with a prompt to add fees when none are set.
+- Give chart axes round steps (£0 / £20 / £40 instead of quarters of an arbitrary maximum).
+- Collapse long caveats on Costs, Activity and chat estimates into disclosures without removing any text; colour reset-cycle bars by provider with a 100% reference line; show observation times as relative times with the exact time kept; and mark every lower-bound cost figure with "≥".
+
 ## 1.0.48 — 23 September 2026
 
 - Add built-in GPT-6 Sol and GPT-6 Luna API-equivalent pricing for input, cache reads, cache writes, and output, using official rates verified on 22 September 2026.
