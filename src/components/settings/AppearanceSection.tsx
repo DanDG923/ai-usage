@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { shortDate } from '../../lib';
 import type { RenderingMode, Settings, Snapshot, Theme, UpdateStatus } from '../../types';
-import { SectionHeading, ToggleRow } from './fields';
+import { SelectSetting, SettingBlock, SettingsSection, ToggleRow } from './fields';
 import './updates.css';
 
 function updateLabel(status: UpdateStatus | null) {
@@ -157,18 +157,21 @@ export function AppearanceSection({
       : undefined;
 
   return (
-    <section id="appearance" className="panel settings-section">
-      <SectionHeading title="Appearance & updates" />
-      <div className="settings-fields">
-        <label>
-          <span>Theme</span>
-          <select value={snapshot.settings.theme} onChange={(event) => update({ theme: event.target.value as Theme })}>
-            <option value="system">Follow Windows</option>
-            <option value="dark">Dark</option>
-            <option value="light">Light</option>
-          </select>
-        </label>
-      </div>
+    <SettingsSection
+      id="appearance"
+      title="Appearance & updates"
+      description="Match Windows or choose a fixed theme, and control application updates."
+    >
+      <SelectSetting
+        label="Theme"
+        description="Follow the Windows light or dark mode, or keep one theme."
+        value={snapshot.settings.theme}
+        onChange={(value) => void update({ theme: value as Theme })}
+      >
+        <option value="system">Follow Windows</option>
+        <option value="dark">Dark</option>
+        <option value="light">Light</option>
+      </SelectSetting>
       <ToggleRow
         title="Lower memory use"
         description="Draws the dashboard with the processor instead of the graphics card. This keeps roughly 150 MB less in memory while AI Usage waits in the tray, at the cost of slightly smoother scrolling. Applies the next time AI Usage starts."
@@ -176,10 +179,10 @@ export function AppearanceSection({
         onChange={(checked) => update({ softwareRendering: checked })}
       />
       {renderingForced && !snapshot.settings.softwareRendering ? (
-        <div className="snooze-row update-summary">
-          <span role="status">
-            <strong>Software rendering is forced on this PC</strong>
-            <small>
+        <div className="setting-row update-notice">
+          <span className="setting-text" role="status">
+            <strong className="setting-label">Software rendering is forced on this PC</strong>
+            <small className="setting-description">
               The AI_USAGE_DISABLE_GPU environment variable keeps AI Usage drawing with the processor on every start.
               Remove it to let this setting take effect.
             </small>
@@ -187,18 +190,20 @@ export function AppearanceSection({
         </div>
       ) : null}
       {restartNeeded ? (
-        <div className="snooze-row update-summary">
-          <span role="status">
-            <strong>Restart to apply the rendering change</strong>
-            <small>
+        <div className="setting-row update-notice">
+          <span className="setting-text" role="status">
+            <strong className="setting-label">Restart to apply the rendering change</strong>
+            <small className="setting-description">
               AI Usage keeps using the {renderingMode?.active === 'software' ? 'processor' : 'graphics card'} until it
               restarts. Your history and settings are kept.
             </small>
           </span>
-          <div className="action-row compact">
-            <button className="secondary-button" disabled={preview || restarting} onClick={() => void restart()}>
-              {restarting ? 'Restarting…' : 'Restart AI Usage'}
-            </button>
+          <div className="setting-control">
+            <div className="action-row compact">
+              <button className="secondary-button" disabled={preview || restarting} onClick={() => void restart()}>
+                {restarting ? 'Restarting…' : 'Restart AI Usage'}
+              </button>
+            </div>
           </div>
         </div>
       ) : null}
@@ -208,40 +213,42 @@ export function AppearanceSection({
         checked={snapshot.settings.autoUpdate}
         onChange={(checked) => update({ autoUpdate: checked })}
       />
-      <div className="snooze-row update-summary">
-        <span role="status">
-          <small>Version {version || (preview ? 'preview' : '…')}</small>
-          <strong>{updateLabel(status)}</strong>
-          <small>{updateDescription(status, preview)}</small>
+      <div className="setting-row update-summary">
+        <span className="setting-text" role="status">
+          <small className="update-version">Version {version || (preview ? 'preview' : '…')}</small>
+          <strong className="setting-label">{updateLabel(status)}</strong>
+          <small className="setting-description">{updateDescription(status, preview)}</small>
         </span>
-        <div className="action-row compact">
-          <button
-            className="secondary-button"
-            disabled={busy || downloaded || status?.status === 'unavailable' || preview}
-            onClick={() => void runAction('check')}
-          >
-            {checking
-              ? 'Checking…'
-              : status?.status === 'error' || status?.status === 'auth-required'
-                ? 'Check again'
-                : 'Check now'}
-          </button>
-          {status?.status === 'available' || downloading ? (
-            <button className="primary-button" disabled={busy || preview} onClick={() => void runAction('download')}>
-              {downloading ? 'Downloading…' : 'Download update'}
+        <div className="setting-control">
+          <div className="action-row compact">
+            <button
+              className="secondary-button"
+              disabled={busy || downloaded || status?.status === 'unavailable' || preview}
+              onClick={() => void runAction('check')}
+            >
+              {checking
+                ? 'Checking…'
+                : status?.status === 'error' || status?.status === 'auth-required'
+                  ? 'Check again'
+                  : 'Check now'}
             </button>
-          ) : downloaded || installing ? (
-            <button className="primary-button" disabled={busy || preview} onClick={() => void runAction('install')}>
-              {installing ? 'Restarting…' : 'Restart and update'}
-            </button>
-          ) : null}
+            {status?.status === 'available' || downloading ? (
+              <button className="primary-button" disabled={busy || preview} onClick={() => void runAction('download')}>
+                {downloading ? 'Downloading…' : 'Download update'}
+              </button>
+            ) : downloaded || installing ? (
+              <button className="primary-button" disabled={busy || preview} onClick={() => void runAction('install')}>
+                {installing ? 'Restarting…' : 'Restart and update'}
+              </button>
+            ) : null}
+          </div>
         </div>
       </div>
       {downloading ? (
-        <div className="update-progress">
+        <SettingBlock className="update-progress">
           <progress aria-label="Update download progress" max={100} value={progress} />
           <span>{progress === undefined ? 'Starting download…' : `${Math.round(progress)}% downloaded`}</span>
-        </div>
+        </SettingBlock>
       ) : null}
       {status?.releaseNotes ? (
         <details className="update-release-notes">
@@ -249,6 +256,6 @@ export function AppearanceSection({
           <pre>{status.releaseNotes}</pre>
         </details>
       ) : null}
-    </section>
+    </SettingsSection>
   );
 }

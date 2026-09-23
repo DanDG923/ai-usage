@@ -1,9 +1,19 @@
-.update-summary {
-  flex-wrap: wrap;
+.update-summary .setting-text {
+  overflow-wrap: anywhere;
 }
 
-.update-summary > span {
-  flex-basis: 280px;
+.update-summary .update-version {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--text-faint);
+  font-size: 11.5px;
+}
+
+.update-notice {
+  background: color-mix(in srgb, var(--surface-2) 80%, transparent);
+}
+
+.update-notice .setting-text {
   overflow-wrap: anywhere;
 }
 
@@ -12,7 +22,6 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 10px;
-  margin-top: 14px;
   color: var(--text-muted);
   font-size: 12.5px;
 }
@@ -25,10 +34,7 @@
 }
 
 .update-release-notes {
-  margin-top: 14px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 12px 14px;
+  padding: 14px 20px;
   color: var(--text-2);
   font-size: 13px;
 }
@@ -36,6 +42,11 @@
 .update-release-notes summary {
   cursor: pointer;
   font-weight: 600;
+}
+
+.update-release-notes summary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }
 
 .update-release-notes pre {

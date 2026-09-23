@@ -1,0 +1,811 @@
+/*
+ * Settings: section list, search, and label/control rows. Loaded by
+ * Settings.tsx after professional.css, so equal-specificity rules here win.
+ * Chrome stays monochrome (--accent); colour appears only for providers
+ * (swatches, source marks) and status (connection dots, the unpriced chip).
+ */
+
+.settings-page {
+  --setting-control-width: 360px;
+  --settings-sticky-top: calc(var(--command-height) + 24px);
+  display: block;
+  max-width: 1240px;
+}
+
+.settings-layout {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 32px;
+  align-items: start;
+}
+
+/* Sidebar: search and the section list, sticky while the page scrolls. */
+.settings-sidebar {
+  position: sticky;
+  top: var(--settings-sticky-top);
+  max-height: calc(100vh - var(--settings-sticky-top) - 24px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+  display: grid;
+  gap: 16px;
+  /* Room for focus rings inside the scroll container. */
+  padding: 3px;
+  margin: -3px;
+}
+
+.settings-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 6px 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text-muted);
+}
+.settings-search:focus-within {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.settings-search > svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+.settings-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  outline: none;
+}
+.settings-search input:focus-visible {
+  outline: none;
+}
+.settings-search input::placeholder {
+  color: var(--text-faint);
+}
+.settings-search input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+.settings-search-clear {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.settings-search-clear:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+.settings-search-clear:focus-visible {
+  outline-offset: 0;
+}
+.settings-search-clear svg {
+  width: 14px;
+  height: 14px;
+}
+
+.settings-nav ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+}
+.settings-nav a {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  min-height: 34px;
+  padding: 6px 10px 6px 12px;
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.3;
+  text-decoration: none;
+}
+.settings-nav a:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface-3) 60%, transparent);
+}
+.settings-nav a[aria-current='true'] {
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.settings-nav a[aria-current='true']::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.settings-nav a:focus-visible {
+  outline-offset: -2px;
+}
+.settings-nav a.is-dimmed {
+  color: var(--text-faint);
+  opacity: 0.6;
+}
+.settings-nav-label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.settings-nav-group {
+  margin: 14px 10px 6px 12px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* Status beside Sources: a dot and words, never colour alone. */
+.settings-nav-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.settings-nav-status::before {
+  content: '';
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+.settings-nav-status.ok::before {
+  background: var(--ok);
+}
+.settings-nav-status.warn {
+  color: var(--warn-text);
+}
+.settings-nav-status.warn::before {
+  background: var(--warn);
+}
+.settings-nav-chip {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  /* Light amber text on its tint falls short of 4.5:1 at this size; deepen it there only. */
+  color: light-dark(color-mix(in srgb, var(--warn-text) 78%, #000), var(--warn-text));
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Main column */
+.settings-main {
+  min-width: 0;
+}
+.settings-page .settings-lead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  min-height: 34px;
+  margin: 0 2px 24px;
+}
+.settings-lead p {
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.settings-empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  margin-bottom: 24px;
+  padding: 18px 20px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 6px;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.settings-page .settings-content {
+  container: settings-content / inline-size;
+  display: grid;
+  gap: 32px;
+  max-width: none;
+}
+.settings-slot {
+  min-width: 0;
+}
+
+/* Sections: heading and description above one panel of rows. */
+.settings-page .settings-section {
+  scroll-margin-top: var(--settings-sticky-top);
+}
+.settings-section-head {
+  margin: 0 2px 12px;
+}
+.settings-page .settings-section-head h2 {
+  font-size: 16px;
+  line-height: 1.3;
+  border-radius: 2px;
+}
+.settings-section-head h2:focus {
+  outline: none;
+}
+.settings-section-head h2:focus-visible,
+.setting-group-head h3:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 4px;
+}
+.settings-page .settings-section-head p {
+  margin-top: 4px;
+  max-width: 760px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.settings-card {
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.settings-card > * {
+  border-top: 1px solid var(--line);
+}
+.settings-card > :first-child {
+  border-top: 0;
+  border-top-left-radius: 5px;
+  border-top-right-radius: 5px;
+}
+.settings-card > :last-child {
+  border-bottom-left-radius: 5px;
+  border-bottom-right-radius: 5px;
+}
+
+/* Rows: label and description left, control right. */
+.setting-row,
+.settings-card .toggle-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--setting-control-width);
+  align-items: center;
+  gap: 10px 32px;
+  margin: 0;
+  padding: 18px 20px;
+}
+.setting-row-top {
+  align-items: start;
+}
+.setting-text {
+  min-width: 0;
+}
+.setting-text:only-child {
+  grid-column: 1 / -1;
+}
+.settings-page .setting-label {
+  display: block;
+  margin: 0;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: 0;
+}
+.settings-page .setting-description {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.setting-control {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+.setting-control small[role='alert'],
+.setting-control p[role='alert'] {
+  color: var(--bad-text);
+  font-size: 12px;
+}
+.setting-control > select,
+.setting-control > input,
+.hours-range > select {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+}
+.setting-control > :is(select, input):disabled,
+.hours-range > select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.setting-control .input-suffix {
+  position: static;
+  display: flex;
+  align-items: center;
+  height: 32px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: var(--surface);
+}
+.setting-control .input-suffix:focus-within {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.setting-control .input-suffix:has(input[aria-invalid='true']) {
+  border-color: var(--bad);
+}
+.setting-control .input-suffix:has(input:disabled) {
+  opacity: 0.55;
+}
+.setting-control .input-suffix > input {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  outline: none;
+}
+.setting-control .input-suffix > input:disabled {
+  cursor: not-allowed;
+}
+.setting-control .input-suffix > span {
+  position: static;
+  flex: none;
+  padding: 0 10px 0 4px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.setting-control .action-row {
+  margin: 0;
+}
+.setting-control .action-row.compact select {
+  flex: 0 0 auto;
+  width: auto;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: var(--surface);
+}
+.action-row.stacked-actions {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+/* Switch rows: the whole row toggles; the switch sits at the control column's end. */
+.settings-card .toggle-row {
+  cursor: pointer;
+}
+.settings-card .toggle-row:focus-within {
+  outline: none;
+}
+.settings-card .toggle-row.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+.toggle-control {
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.toggle-state {
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+
+/* Full-width content and quiet footnotes inside a panel. */
+.setting-block {
+  min-width: 0;
+  padding: 18px 20px;
+}
+.setting-note,
+.settings-card .pricing-disclosure {
+  display: block;
+  margin: 0;
+  padding: 14px 20px;
+  border-radius: 0;
+  border-right: 0;
+  border-bottom: 0;
+  border-left: 0;
+  background: color-mix(in srgb, var(--surface-2) 80%, transparent);
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.setting-note strong,
+.settings-card .pricing-disclosure strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.settings-card .pricing-disclosure strong {
+  display: flex;
+  margin-bottom: 2px;
+}
+
+/* A titled group of rows inside a panel, e.g. the monthly fees. */
+.setting-group {
+  scroll-margin-top: var(--settings-sticky-top);
+}
+.setting-group-head {
+  padding: 18px 20px 2px;
+}
+.settings-page .setting-group-head h3 {
+  margin: 0;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+  border-radius: 2px;
+}
+.setting-group-head h3:focus {
+  outline: none;
+}
+.settings-page .setting-group-head p {
+  margin-top: 3px;
+  max-width: 760px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.setting-group > .setting-row + .setting-row,
+.manual-rows > .setting-row + .setting-row,
+.settings-card .inline-advanced-body > * + * {
+  border-top: 1px solid var(--line);
+}
+
+/* Sources */
+/* One grid for every source so statuses and actions line up across rows. */
+.setting-block.source-list {
+  display: grid;
+  /* Edge tracks size to content: a subgrid's padding is added to them. */
+  grid-template-columns: max-content minmax(0, 1fr) max-content max-content;
+  column-gap: 14px;
+  margin: 0;
+  padding: 0;
+}
+.settings-card .source-row {
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  row-gap: 8px;
+  padding: 16px 20px;
+  border-bottom: 0;
+}
+.settings-card .source-row > button {
+  grid-column: auto;
+  justify-self: end;
+}
+.settings-card .source-row + .source-row {
+  border-top: 1px solid var(--line);
+}
+
+/* Forecast */
+.hours-range {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+.hours-range > select {
+  flex: 1 1 0;
+}
+.setting-control .day-picker {
+  margin: 0;
+  gap: 6px;
+}
+.setting-control .day-picker button {
+  flex: 1 1 0;
+  min-width: 40px;
+  padding: 0 4px;
+}
+.budget-preview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-top: 8px;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+.budget-preview-lead {
+  color: var(--text-muted);
+}
+.budget-preview-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.budget-preview-item strong {
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.budget-preview-sep {
+  color: var(--text-faint);
+}
+.settings-card > .inline-advanced {
+  margin: 0;
+}
+.settings-card .inline-advanced > summary {
+  width: auto;
+  padding: 14px 20px;
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.settings-card .inline-advanced > summary:hover {
+  color: var(--text);
+}
+.settings-card .inline-advanced > summary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+.settings-card .inline-advanced-body {
+  display: block;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+}
+.settings-card .forecast-exclusions {
+  max-width: none;
+  margin: 0;
+  padding: 18px 20px;
+}
+.settings-card .forecast-exclusions h3 {
+  margin: 0;
+}
+.setting-control .settings-fields {
+  margin: 0;
+  gap: 10px;
+}
+.setting-control .settings-fields.forecast-exclusion-controls {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+}
+.setting-control .settings-fields.allowance-change-controls {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: stretch;
+}
+.setting-control .allowance-change-controls button {
+  justify-self: start;
+}
+.setting-control .forecast-exclusion-note {
+  margin: 0;
+}
+.setting-control .forecast-exclusion-list {
+  margin: 0;
+}
+
+/* Alerts, pricing, data */
+.pending-currency {
+  background: color-mix(in srgb, var(--surface-2) 80%, transparent);
+}
+.setting-block.price-table {
+  /* Contains the visually hidden header text, which would otherwise widen the page. */
+  position: relative;
+  margin: 0;
+  padding: 6px 12px 10px;
+}
+.settings-section .setting-description p.restore-note {
+  margin: 0;
+}
+.setting-control .storage-operation {
+  margin: 0;
+  font-size: 12px;
+}
+.path-list {
+  display: grid;
+  gap: 8px;
+}
+.path-list .path-card {
+  margin: 0;
+}
+
+/* Manual observation */
+.manual-submit .setting-control {
+  grid-column: 2;
+  align-items: flex-start;
+}
+
+/* The Advanced disclosure closes the page; its sections keep their own panels. */
+.settings-page .advanced-disclosure {
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.settings-page .advanced-disclosure > summary {
+  min-height: 56px;
+  padding: 12px 20px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+}
+.settings-page .advanced-disclosure > summary:hover {
+  background: var(--surface-2);
+}
+.settings-page .advanced-disclosure > summary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.settings-page .advanced-disclosure[open] > summary {
+  border-bottom: 1px solid var(--line);
+}
+.settings-page .advanced-disclosure > .settings-disclosure-body {
+  display: grid;
+  gap: 32px;
+  padding-top: 28px;
+}
+.settings-end {
+  height: 1px;
+}
+
+/* Narrow content column (beside the section list at mid widths): stack rows. */
+@container settings-content (max-width: 640px) {
+  .setting-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .settings-card .toggle-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .manual-submit .setting-control {
+    grid-column: auto;
+  }
+  .setting-block.source-list {
+    grid-template-columns: max-content minmax(0, 1fr);
+  }
+  .settings-card .source-row > .source-times,
+  .settings-card .source-row > button {
+    grid-column: 2;
+    justify-self: start;
+  }
+}
+
+/* Below 900 px the section list becomes a sticky, scrollable strip above the content. */
+@media (max-width: 900px) {
+  .settings-page {
+    --settings-sticky-top: calc(var(--command-height) + 64px);
+  }
+  .settings-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+  .settings-sidebar {
+    display: contents;
+  }
+  .settings-search {
+    margin-bottom: 12px;
+  }
+  .settings-nav {
+    position: sticky;
+    top: var(--command-height);
+    z-index: 6;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin: 0 calc(var(--page-gutter) * -1) 20px;
+    padding: 8px var(--page-gutter);
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-strong) transparent;
+    background: var(--bg);
+    border-bottom: 1px solid var(--line);
+  }
+  .settings-nav ul {
+    display: flex;
+    flex: none;
+    gap: 4px;
+  }
+  .settings-nav a {
+    flex-wrap: nowrap;
+    min-height: 32px;
+    padding: 5px 10px;
+    white-space: nowrap;
+  }
+  .settings-nav a[aria-current='true']::before {
+    top: auto;
+    right: 10px;
+    bottom: 0;
+    left: 10px;
+    width: auto;
+    height: 2px;
+  }
+  /* The group label becomes a divider; screen readers still hear it. */
+  .settings-nav-group {
+    flex: none;
+    width: 1px;
+    height: 20px;
+    margin: 0 4px;
+    padding: 0;
+    border: 0;
+    overflow: hidden;
+    background: var(--line-strong);
+    color: transparent;
+    font-size: 1px;
+  }
+}
+
+@media (max-width: 760px) {
+  .setting-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .settings-card .toggle-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .manual-submit .setting-control {
+    grid-column: auto;
+  }
+  .setting-block.source-list {
+    grid-template-columns: max-content minmax(0, 1fr);
+  }
+  .settings-card .source-row > .source-times,
+  .settings-card .source-row > button {
+    grid-column: 2;
+    justify-self: start;
+  }
+}
+
+@media (forced-colors: active) {
+  .settings-card,
+  .settings-page .advanced-disclosure > summary {
+    border: 1px solid CanvasText;
+  }
+  .settings-nav a[aria-current='true'] {
+    outline: 1px solid CanvasText;
+  }
+  .settings-nav-status::before,
+  .swatch {
+    forced-color-adjust: none;
+  }
+}

@@ -927,16 +927,13 @@ td small.path {
 }
 
 /* Forms */
-.settings-fields,
-.manual-form {
+.settings-fields {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
   margin-top: 16px;
 }
-.settings-fields label > span,
-.manual-form label > span,
-.currency-row label > span {
+.settings-fields label > span {
   display: block;
   color: var(--text-muted);
   font-size: 12px;
@@ -945,11 +942,6 @@ td small.path {
 }
 .settings-fields input,
 .settings-fields select,
-.manual-form input,
-.manual-form select,
-.export-row select,
-.currency-row input,
-.currency-row select,
 .price-table input,
 .copy-prices {
   width: 100%;
@@ -962,8 +954,7 @@ td small.path {
   font-size: 13px;
 }
 .settings-fields input:disabled,
-.settings-fields select:disabled,
-.currency-row input:disabled {
+.settings-fields select:disabled {
   opacity: 0.55;
 }
 .input-suffix {
@@ -1000,46 +991,6 @@ td small.path {
 }
 
 /* Quiet notes: no icon, no tint, just a bordered aside. */
-.learning-note,
-.snooze-row,
-.export-row {
-  display: flex;
-  gap: 14px;
-  border-radius: 6px;
-  padding: 12px 14px;
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  color: var(--text-muted);
-  margin-top: 14px;
-  align-items: center;
-}
-.learning-note strong,
-.learning-note span,
-.snooze-row strong,
-.snooze-row small,
-.export-row strong,
-.export-row small {
-  display: block;
-}
-.learning-note strong,
-.snooze-row strong,
-.export-row strong {
-  color: var(--text);
-  margin-bottom: 2px;
-  font-weight: 600;
-  font-size: 13px;
-}
-.learning-note span,
-.snooze-row small,
-.export-row small {
-  font-size: 12.5px;
-  line-height: 1.5;
-}
-.snooze-row > span,
-.export-row > div {
-  flex: 1;
-  min-width: 0;
-}
 
 /* Toggle rows */
 .toggle-row {
@@ -1142,13 +1093,6 @@ td small.path {
   width: auto;
   height: 30px;
 }
-.manual-form {
-  grid-template-columns: 1.1fr 0.7fr 1.15fr auto;
-  align-items: end;
-}
-.manual-form button {
-  height: 32px;
-}
 .settings-section p.restore-note {
   margin: 12px 0 0;
   color: var(--text-muted);
@@ -1165,12 +1109,6 @@ td small.path {
   border: 1px solid var(--line);
   border-radius: 4px;
   padding: 1px 5px;
-}
-.digest-fields {
-  margin-top: 8px;
-}
-.budget-fields {
-  margin-top: 14px;
 }
 
 /* Diagnostics */
@@ -1327,8 +1265,7 @@ td small.path {
   .settings-page {
     grid-template-columns: minmax(0, 1fr);
   }
-  .settings-fields,
-  .manual-form {
+  .settings-fields {
     grid-template-columns: 1fr 1fr;
   }
   .source-row {
@@ -1542,12 +1479,6 @@ a:focus-visible {
 }
 
 /* pricing.css */
-.currency-row {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(180px, 300px));
-  gap: 14px;
-  margin-top: 16px;
-}
 
 .price-table table {
   min-width: 780px;
@@ -1652,11 +1583,6 @@ a:focus-visible {
 .daily-usage-bar:hover,
 .daily-usage-bar.hovered {
   opacity: 1;
-}
-.alert-fields,
-.storage-fields,
-.plan-fields {
-  grid-template-columns: repeat(2, minmax(180px, 300px));
 }
 
 .unpriced-price-row td {
@@ -2752,45 +2678,9 @@ body {
   gap: 28px;
   max-width: 1040px;
 }
-.settings-group {
-  min-width: 0;
-}
-.settings-group-heading {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  gap: 10px;
-  align-items: start;
-  margin: 0 2px 12px;
-}
-.settings-group-heading > svg {
-  width: 17px;
-  height: 17px;
-  margin-top: 2px;
-  color: var(--text-muted);
-}
-.settings-group-heading h2 {
-  font-size: 15px;
-}
-.settings-group-heading p {
-  margin-top: 3px;
-  color: var(--text-muted);
-  font-size: 12px;
-}
-.settings-group > .settings-section,
 .settings-disclosure-body > .settings-section {
   border-radius: 0;
   border-bottom: 0;
-}
-.settings-group > .settings-section:first-of-type {
-  border-radius: 6px 6px 0 0;
-}
-.settings-group > .settings-section:last-child {
-  border-radius: 0 0 6px 6px;
-  border-bottom: 1px solid var(--line-strong);
-}
-.settings-group > .settings-section:only-of-type {
-  border-radius: 6px;
-  border-bottom: 1px solid var(--line-strong);
 }
 .settings-disclosure {
   overflow: hidden;

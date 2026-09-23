@@ -1,6 +1,6 @@
 import { formatInt, shortDate } from '../../lib';
 import type { Snapshot, Source } from '../../types';
-import { SectionHeading } from './fields';
+import { SettingBlock, SettingNote, SettingsSection } from './fields';
 import { sourceMark } from './SourcesSection';
 
 type Fact = { label: string; value: string };
@@ -114,12 +114,12 @@ function sourceFacts(source: Source): Fact[] {
 
 export function DiagnosticsSection({ snapshot }: { snapshot: Snapshot }) {
   return (
-    <section id="diagnostics" className="panel settings-section">
-      <SectionHeading
-        title="Diagnostics"
-        description="The raw outcome of the most recent collection, per source: latency, counters, and the reason for any fallback."
-      />
-      <div className="diagnostics-grid">
+    <SettingsSection
+      id="diagnostics"
+      title="Diagnostics"
+      description="The raw outcome of the most recent collection, per source: latency, counters, and the reason for any fallback."
+    >
+      <SettingBlock className="diagnostics-grid">
         {snapshot.sources.map((source) => (
           <article key={source.id} className="diagnostics-card">
             <header>
@@ -138,11 +138,11 @@ export function DiagnosticsSection({ snapshot }: { snapshot: Snapshot }) {
             </dl>
           </article>
         ))}
-      </div>
-      <p className="restore-note">
+      </SettingBlock>
+      <SettingNote>
         Snapshot generated {shortDate(snapshot.generatedAt)} · {snapshot.timezone} · database{' '}
         {(snapshot.storage.databaseSize / 1_048_576).toFixed(1)} MB
-      </p>
-    </section>
+      </SettingNote>
+    </SettingsSection>
   );
 }

@@ -38,7 +38,8 @@ app.whenReady().then(async () => {
   assert.equal(await evaluate(() => document.querySelector('.combined-runway-chart')), null, 'expired runway is removed without collection');
   await evaluate(() => document.querySelector('#tab-settings').click());
   await until(() => document.querySelector('#pricing'));
-  await evaluate(() => { document.querySelector('.settings-disclosure').open = true; const select = document.querySelector('#pricing select'); select.value = 'USD'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+  assert.equal(await evaluate(() => Boolean(document.querySelector('#pricing').closest('details'))), false, 'API pricing is a visible section');
+  await evaluate(() => { const select = document.querySelector('#pricing select'); select.value = 'USD'; select.dispatchEvent(new Event('change', { bubbles: true })); });
   await until(() => document.querySelector('#pricing select').value === 'USD');
   await evaluate(() => { const select = document.querySelector('#pricing select'); select.value = 'GBP'; select.dispatchEvent(new Event('change', { bubbles: true })); });
   await until(() => document.querySelector('#pricing select').value === 'GBP');
@@ -50,6 +51,48 @@ app.whenReady().then(async () => {
   await until(() => document.querySelector('[role="dialog"]'));
   await evaluate(() => document.querySelector('[role="dialog"]').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
   await until(() => !document.querySelector('[role="dialog"]'));
+  // Settings: a screen-reader title, a section list with live badges, navigation into disclosures, and search.
+  const searchSettings = (query) => window.webContents.executeJavaScript(`(() => { const input = document.querySelector('#panel-settings input[type="search"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(query)}); input.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  const shownSections = () => evaluate(() => [...document.querySelectorAll('[data-settings-section]')].filter((slot) => !slot.hidden).map((slot) => slot.dataset.settingsSection).join(' '));
+  assert.equal(await evaluate(() => document.querySelector('#panel-settings h1').className), 'sr-only');
+  assert.equal(await evaluate(() => [...document.querySelectorAll('.settings-nav a')].map((link) => link.getAttribute('href')).join(' ')), '#subscriptions #sources #forecast #alerts #pricing #storage #appearance #manual #diagnostics');
+  assert.match(await evaluate(() => document.querySelector('.settings-nav a[href="#sources"]').textContent), /3 connected/);
+  assert.match(await evaluate(() => document.querySelector('.settings-nav a[href="#pricing"]').textContent), /1 unpriced/);
+  assert.equal(await evaluate(() => document.querySelectorAll('#subscription-fees input[type="number"]').length), 2, 'monthly fee inputs are back');
+  assert.equal(await evaluate(() => document.querySelector('.advanced-disclosure').open), false);
+  await evaluate(() => document.querySelector('.settings-nav a[href="#diagnostics"]').click());
+  await until(() => document.activeElement && document.activeElement.id === 'diagnostics-heading');
+  assert.equal(await evaluate(() => document.querySelector('.advanced-disclosure').open), true, 'navigating into a closed disclosure opens it');
+  assert.equal(await evaluate(() => document.querySelector('.settings-nav [aria-current="true"]').getAttribute('href')), '#diagnostics');
+  await searchSettings('backup sets kept');
+  await until(() => document.querySelector('[data-settings-section="alerts"]').hidden);
+  assert.equal(await shownSections(), 'storage');
+  assert.equal(await evaluate(() => document.querySelector('.settings-nav a[href="#alerts"]').classList.contains('is-dimmed')), true);
+  assert.equal(await evaluate(() => document.querySelector('.advanced-disclosure').hidden), true);
+  await evaluate(() => document.querySelector('#panel-settings input[type="search"]').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })));
+  await until(() => !document.querySelector('[data-settings-section][hidden]') && document.querySelector('#panel-settings input[type="search"]').value === '');
+  await searchSettings('new-source fallback');
+  await until(() => document.querySelector('#forecast .inline-advanced').open);
+  assert.equal(await shownSections(), 'forecast', 'a match inside a collapsed disclosure opens it');
+  await searchSettings('no such setting');
+  await until(() => document.querySelector('.settings-empty'));
+  assert.match(await evaluate(() => document.querySelector('.settings-empty').textContent), /No settings match “no such setting”/);
+  await evaluate(() => [...document.querySelectorAll('.settings-empty button')].find((button) => button.textContent === 'Clear search').click());
+  await until(() => !document.querySelector('.settings-empty') && document.activeElement === document.querySelector('#panel-settings input[type="search"]'));
+  assert.equal(await evaluate(() => document.querySelector('#forecast .inline-advanced').open), false, 'clearing the search closes what it opened');
+  if (process.env.AI_USAGE_RENDERER_QA_DIRECTORY) {
+    const capture = async (name) => { await new Promise((resolve) => setTimeout(resolve, 400)); window.webContents.invalidate(); await new Promise((resolve) => setTimeout(resolve, 200)); fs.writeFileSync(path.join(process.env.AI_USAGE_RENDERER_QA_DIRECTORY, name), (await window.webContents.capturePage()).toPNG()); };
+    fs.mkdirSync(process.env.AI_USAGE_RENDERER_QA_DIRECTORY, { recursive: true });
+    await evaluate(() => { document.documentElement.dataset.theme = 'dark'; document.documentElement.style.scrollBehavior = 'auto'; window.scrollTo(0, 0); });
+    await capture('renderer-settings.png');
+    await evaluate(() => document.querySelector('#forecast').scrollIntoView({ block: 'start' }));
+    await capture('renderer-settings-forecast.png');
+    window.setSize(820, 900);
+    await evaluate(() => { document.documentElement.dataset.theme = 'light'; window.scrollTo(0, 0); });
+    await capture('renderer-settings-light-820.png');
+    window.setSize(1280, 900);
+    await evaluate(() => { delete document.documentElement.dataset.theme; document.documentElement.style.scrollBehavior = ''; });
+  }
   await evaluate(() => { document.querySelector('#tab-costs').click(); });
   await until(() => document.querySelector('.table-search input'));
   await evaluate(() => document.querySelector('.table-search input').focus());
@@ -85,7 +128,7 @@ app.whenReady().then(async () => {
     await new Promise((resolve) => setTimeout(resolve, 200));
     fs.writeFileSync(path.join(process.env.AI_USAGE_RENDERER_QA_DIRECTORY, 'renderer-costs-light-900.png'), (await window.webContents.capturePage()).toPNG());
   }
-  console.log('RENDERER_DOM_PASS: pushes, retained tasks, periods, reset timer, currency, keyboard focus and alerts');
+  console.log('RENDERER_DOM_PASS: pushes, retained tasks, periods, reset timer, currency, settings navigation and search, keyboard focus and alerts');
   app.exit(0);
  } catch (error) { console.error(error); app.exit(1); }
 }).catch((error) => { console.error(error); app.exit(1); });
