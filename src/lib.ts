@@ -121,6 +121,18 @@ export function timeLabel(value?: string | number | null, nowMs = Date.now()) {
   return sameDay ? TIME.format(date) : shortDate(value);
 }
 
+/** "just now", "4 min ago", "2 h ago", then a dated form: how fresh a reading is. */
+export function relativeTime(value?: string | number | null, nowMs = Date.now()) {
+  if (!value) return 'never';
+  const date = parseDate(value);
+  if (!date) return '—';
+  const minutes = Math.round((nowMs - date.getTime()) / 60_000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes} min ago`;
+  if (minutes < 24 * 60) return `${Math.floor(minutes / 60)} h ago`;
+  return shortDate(value);
+}
+
 export function percent(value: number | null | undefined, digits = 0) {
   return value == null ? '—' : `${value.toFixed(digits)}%`;
 }
