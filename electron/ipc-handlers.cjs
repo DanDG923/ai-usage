@@ -1,6 +1,7 @@
 'use strict';
 
 const path = require('node:path');
+const { REFRESH_TRIGGERS, refreshOptionsFor } = require('./refresh-policy.cjs');
 
 function registerIpc(context) {
   const {
@@ -19,7 +20,13 @@ function registerIpc(context) {
       case 'check': return claudeSetup.status();
       case 'install': return claudeSetup.install();
       case 'login': return claudeSetup.login();
-      case 'finish': return claudeSetup.finish({ enableHelper: enableHelper === true });
+      case 'finish': {
+        const finished = await claudeSetup.finish({ enableHelper: enableHelper === true });
+        // Finishing setup is not a refresh request: import local Claude activity
+        // (and the helper inbox) now, but never read plan usage.
+        void refreshClaudeOnly().catch((error) => log(`Refresh after Claude setup: ${error.message}`));
+        return finished;
+      }
       case 'skip': claudeSetup.skip(); return claudeSetup.status();
       default: throw new Error('Unknown Claude setup step.');
     }
@@ -33,7 +40,8 @@ function registerIpc(context) {
   const pageOptions = (options) => (options && typeof options === 'object' ? options : {});
   handleIpc('dashboard:get-sessions', (_event, options) => (storageClosing() ? EMPTY_SESSION_PAGE : store.getSessionPage(pageOptions(options))));
   handleIpc('dashboard:get-tasks', (_event, options) => (storageClosing() ? EMPTY_SESSION_PAGE : store.getTaskPage(pageOptions(options))));
-  handleIpc('dashboard:refresh', () => refreshAll());
+  // The dashboard's Refresh button: an explicit request, so it reads Claude plan usage.
+  handleIpc('dashboard:refresh', () => refreshAll(refreshOptionsFor(REFRESH_TRIGGERS.DASHBOARD_REFRESH)));
   handleIpc('dashboard:update-settings', (_event, patch) => databaseJobs.run(() => {
     const settings = store.updateSettings(patch || {});
     // The Fable estimate is projected when the snapshot is built, so a saved
@@ -122,7 +130,8 @@ function registerIpc(context) {
       return restored;
     });
     const current = snapshot();
-    void refreshAll().catch((error) => log(`Refresh after restore: ${error.message}`));
+    // Automatic: the user asked for a restore, not for plan usage to be read.
+    void refreshAll(refreshOptionsFor(REFRESH_TRIGGERS.BACKUP_RESTORE)).catch((error) => log(`Refresh after restore: ${error.message}`));
     return { cancelled: false, result, safetyBackup, snapshot: current };
   });
   handleIpc('dashboard:open-backup-directory', async () => {

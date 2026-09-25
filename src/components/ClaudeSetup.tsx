@@ -41,15 +41,7 @@ function SetupStep({
   );
 }
 
-export function ClaudeSetup({
-  requested,
-  onClose,
-  onRefresh,
-}: {
-  requested: boolean;
-  onClose: () => void;
-  onRefresh: () => Promise<void>;
-}) {
+export function ClaudeSetup({ requested, onClose }: { requested: boolean; onClose: () => void }) {
   const [status, setStatus] = useState<ClaudeSetupStatus | null>(null);
   const [hidden, setHidden] = useState(false);
   const [busy, setBusy] = useState('');
@@ -124,7 +116,6 @@ export function ClaudeSetup({
         setHidden(true);
         onClose();
       }
-      if (action === 'finish') await onRefresh();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Setup did not finish. Please try again.');
     } finally {

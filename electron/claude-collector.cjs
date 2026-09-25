@@ -5,7 +5,9 @@ const { claudeAgentMetadata } = require('./task-usage.cjs');
 const path = require('node:path');
 const { findClaudeBinary, providerHome } = require('./provider-executable.cjs');
 const { createClaudeAgentSdkUsagePort } = require('./claude-agent-usage.cjs');
-const { createFableUsageTracker } = require('./fable-tracker.cjs');
+const { createFableUsageTracker, providerReadingFresh } = require('./fable-tracker.cjs');
+const { QUOTA_CLOCK_SKEW_MS, validQuotaTime } = require('./quota-time.cjs');
+const { isProviderProvenance } = require('./quota-provenance.mjs');
 const { deriveFableEstimate } = require('./fable-projection.cjs');
 const { IncrementalReadError, planIncrementalRead, readCompleteLines } = require('./incremental-file.cjs');
 const { epochToIso } = require('./time.cjs');
@@ -531,7 +533,58 @@ function uninstallClaudeHelper() {
   return { helperPath, settingsPath, managed, restoredPreviousStatusLine, statusLineRemoved, helperScriptRemoved, restartRequired: true };
 }
 
+// The latest provider reading (SDK or status line; never a manual entry) of
+// each Claude window that is still running, and whether all of them are
+// recent by the dashboard verdict's freshness rule. An automatic refresh does
+// not read plan usage, so this is how it judges the Claude source.
+function latestPlanUsageReading(store, nowMs) {
+  const rows = store.prepare(`SELECT bucket_id, observed_at, resets_at, window_minutes, provenance FROM quota_observations
+    WHERE source_id = 'claude' AND observed_at <= ? AND observed_at >= ? ORDER BY observed_at DESC, id DESC`)
+    .all(new Date(nowMs + QUOTA_CLOCK_SKEW_MS).toISOString(), new Date(nowMs - 8 * 24 * 60 * 60 * 1000).toISOString());
+  const latest = new Map();
+  let lastPlanUsageReadMs = null;
+  for (const row of rows) {
+    if (!isProviderProvenance(row.provenance)) continue;
+    const observedMs = Date.parse(row.observed_at);
+    if (!validQuotaTime(observedMs, Date.parse(row.resets_at), row.window_minutes, nowMs)) continue;
+    // One plan-usage read records every window it returns at the same instant.
+    if (row.provenance === 'official-claude-usage') lastPlanUsageReadMs ??= observedMs;
+    if (!latest.has(row.bucket_id)) latest.set(row.bucket_id, row);
+  }
+  // A window the latest plan-usage read did not return (a model or app limit
+  // the provider stopped reporting) keeps its older row until it resets, and
+  // Refresh cannot renew it, so it does not decide whether Claude is current.
+  const active = [...latest.values()].filter((row) => Date.parse(row.resets_at) > nowMs
+    && (lastPlanUsageReadMs == null || Date.parse(row.observed_at) >= lastPlanUsageReadMs));
+  if (!active.length) return { lastReadAt: null, staleReadAt: null, fresh: false };
+  const lastReadAt = active.reduce((last, row) => laterIso(last, row.observed_at), null);
+  // The oldest reading that is out of date, which the stale detail quotes.
+  const staleReadAt = active.filter((row) => !providerReadingFresh(row, nowMs))
+    .reduce((oldest, row) => (!oldest || Date.parse(row.observed_at) < Date.parse(oldest) ? row.observed_at : oldest), null);
+  return { lastReadAt, staleReadAt, fresh: !staleReadAt };
+}
+
+function readingTime(value) {
+  return new Date(value).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+// The outcome of the last plan-usage read the user asked for, which an
+// automatic run carries forward so a failed Refresh stays visible until a
+// newer reading replaces it.
+function previousPlanUsageRequest(store) {
+  try {
+    const row = store.prepare("SELECT metadata_json FROM sources WHERE id = 'claude'").get();
+    const request = JSON.parse(row?.metadata_json || '{}')?.planUsage?.lastRequest;
+    return request && typeof request === 'object' && typeof request.at === 'string' ? request : null;
+  } catch { return null; }
+}
+
+// Claude plan usage is read through the user's own Claude Code (the Agent
+// SDK) only when `options.readPlanUsage` is true, which only an explicit user
+// refresh sets. Otherwise no usage port is created, nothing contacts
+// Anthropic, and the status-line inbox and the transcript import still run.
 async function refreshClaude(store, inboxPath, options = {}) {
+  const readPlanUsage = options.readPlanUsage === true;
   const binary = findClaudeBinary();
   let statusLine;
   try {
@@ -541,7 +594,7 @@ async function refreshClaude(store, inboxPath, options = {}) {
     // prevent the primary SDK read or the independent transcript import.
     statusLine = emptyInboxResult({ readErrors: 1, error: error.message });
   }
-  const usagePort = options.usagePort || createClaudeAgentSdkUsagePort({
+  const usagePort = !readPlanUsage ? null : options.usagePort || createClaudeAgentSdkUsagePort({
     // Reuse this refresh's discovery result so the SDK launches precisely the
     // external Claude binary whose presence the source status reports.
     findClaudeBinary: () => binary,
@@ -596,7 +649,20 @@ async function refreshClaude(store, inboxPath, options = {}) {
   const statuslineAge = nowMs - Date.parse(statusLine.latestClaudeObservedAt);
   const hasFreshClaudeEvidence = (statusLine.claudeObservations > 0 && statuslineAge >= -60_000 && statuslineAge <= 5 * 60_000)
     || Number(fableTracking.provider?.overallWindowsRecorded || 0) > 0;
-  const claudeScanSucceeded = (hasFreshClaudeEvidence || providerScanSucceeded) && activityCurrent;
+  // Plan usage not requested: judge the last reading by its age, and count
+  // the run a success when its local work succeeded.
+  const planReading = readPlanUsage ? null : latestPlanUsageReading(store, nowMs);
+  const lastRequest = readPlanUsage
+    ? { at: new Date(nowMs).toISOString(), succeeded: hasFreshClaudeEvidence || providerScanSucceeded, provider: fableTracking.provider }
+    : previousPlanUsageRequest(store);
+  // A failed Refresh that no reading has since replaced.
+  const failedSince = (observedAt) => !readPlanUsage && lastRequest?.succeeded === false
+    && !(Date.parse(observedAt) >= Date.parse(lastRequest.at));
+  const lastRequestFailed = failedSince(planReading?.lastReadAt);
+  const claudeFresh = hasFreshClaudeEvidence || (Boolean(planReading?.fresh) && !lastRequestFailed);
+  const claudeScanSucceeded = readPlanUsage
+    ? (hasFreshClaudeEvidence || providerScanSucceeded) && activityCurrent
+    : activityCurrent;
   const fableObserved = store.hasUsableObservation('claude-fable', nowMs);
   const extraUsage = fableTracking.provider?.extraUsage;
   let extraUsageDetail = '';
@@ -614,12 +680,28 @@ async function refreshClaude(store, inboxPath, options = {}) {
       extraUsageDetail = ' Extra usage credits are enabled; the provider did not return a current balance.';
     }
   }
+  const helperSentence = helperInstalled ? 'The minimized fallback status-line helper is installed.' : 'The status-line helper is available as an optional fallback for overall Claude allowance.';
   const claudeStatus = !activityCurrent ? 'degraded'
-    : hasFreshClaudeEvidence ? 'connected'
+    : claudeFresh ? 'connected'
     : hasQuota ? 'stale'
       : transcripts.usageEvents ? 'observing'
         : binary ? 'ready' : 'awaiting-installation';
-  const claudeDetail = (!activityCurrent
+  const lastRead = planReading?.lastReadAt ? readingTime(planReading.lastReadAt) : null;
+  const staleRead = planReading?.staleReadAt ? readingTime(planReading.staleReadAt) : null;
+  const claudeDetail = !readPlanUsage ? (!activityCurrent
+    ? `Claude plan usage is read only when you press Refresh, and the local transcript activity import failed; previously tracked token activity remains available. ${fableTracking.health.detail || ''}`
+    : claudeFresh
+    ? `Claude plan usage was last read ${lastRead || 'moments ago'}; it is read again when you press Refresh. Scanned ${transcripts.usageEvents} transcript messages.`
+    : hasQuota
+      ? `${staleRead ? `The last Claude plan usage reading (${staleRead}) is still active but out of date; press Refresh to read it again.` : 'The last official Claude allowance is still active but out of date; press Refresh to read plan usage.'} Scanned ${transcripts.usageEvents} transcript messages.`
+      : transcripts.usageEvents
+        ? `Scanned ${transcripts.usageEvents} Claude transcript messages. Claude plan usage is read when you press Refresh${binary ? '.' : ', but no Claude Code executable was found.'}`
+        : binary
+          ? `Claude Code was found. Plan usage is read when you press Refresh; no local transcript activity was available. ${helperSentence}`
+          : 'Claude Code is not currently installed or available locally. Plan usage is read through Claude Code when you press Refresh.')
+      // Outside the group: inside it, `+` would bind only to the last branch.
+      + (lastRequestFailed ? ` The last Refresh could not read Claude plan usage${lastRequest.provider?.errorCode ? ` (${lastRequest.provider.errorCode})` : ''}.` : '')
+    : (!activityCurrent
     ? `${hasFreshClaudeEvidence ? 'Official Claude allowance evidence was refreshed, but' : 'The allowance check completed, but'} the local transcript activity import failed; previously tracked token activity remains available. ${fableTracking.health.detail || ''}`
     : hasFreshClaudeEvidence
     ? `Official Claude allowance evidence was refreshed; scanned ${transcripts.usageEvents} transcript messages.`
@@ -628,7 +710,7 @@ async function refreshClaude(store, inboxPath, options = {}) {
       : transcripts.usageEvents
         ? `Scanned ${transcripts.usageEvents} Claude transcript messages; the provider did not return a current allowance${binary ? '.' : ' and no Claude Code executable was found.'}`
         : binary
-          ? `Claude Code was found. Automatic plan usage was checked, but no current allowance or local transcript activity was available. ${helperInstalled ? 'The minimized fallback status-line helper is installed.' : 'The status-line helper is available as an optional fallback for overall Claude allowance.'}`
+          ? `Claude Code was found. Automatic plan usage was checked, but no current allowance or local transcript activity was available. ${helperSentence}`
           : 'Claude Code is not currently installed or available locally.') + extraUsageDetail;
   store.setSourceStatus('claude', claudeStatus, claudeDetail, {
     binary,
@@ -637,10 +719,13 @@ async function refreshClaude(store, inboxPath, options = {}) {
     transcripts,
     helperInstalled,
     helperUpdated,
-    provider: fableTracking.provider,
+    // Diagnostics show "not attempted" when this run did not read plan usage.
+    provider: readPlanUsage ? fableTracking.provider : null,
+    planUsage: { requested: readPlanUsage, lastReadAt: planReading?.lastReadAt ?? null, lastRequest },
   }, { scanSucceeded: claudeScanSucceeded });
   const fableAuto = fableDerived.derived;
-  const providerCurrent = hasProviderScopedFable && fableTracking.health.officialSource === 'connected';
+  const providerCurrent = hasProviderScopedFable && fableTracking.health.officialSource === 'connected'
+    && !failedSince(fableTracking.allowance.observedAt);
   const providerStale = hasProviderScopedFable && !providerCurrent;
   const fableStatus = !activityCurrent ? 'degraded'
     : providerCurrent ? 'connected'
@@ -648,10 +733,16 @@ async function refreshClaude(store, inboxPath, options = {}) {
       : fableAuto ? 'estimating'
         : fableObserved ? 'observing'
           : fableTracking.activity.requests ? 'activity-only' : 'waiting';
+  const fableEvents = `${fableTracking.activity.requests} local Fable usage event${fableTracking.activity.requests === 1 ? '' : 's'}`;
+  const fableReadAt = hasProviderScopedFable ? readingTime(fableTracking.allowance.observedAt) : null;
   const fableDetail = !activityCurrent
-    ? `${providerCurrent ? 'The official model-scoped Fable allowance is current, but' : 'The allowance check completed, but'} the actual local activity import failed; previously tracked counts are retained. ${fableTracking.health.detail || ''}`
+    ? `${providerCurrent ? 'The official model-scoped Fable allowance is current, but' : readPlanUsage ? 'The allowance check completed, but' : 'Plan usage is read only when you press Refresh, and'} the actual local activity import failed; previously tracked counts are retained. ${fableTracking.health.detail || ''}`
+    : providerCurrent && !readPlanUsage
+    ? `Official model-scoped Fable allowance was last read ${fableReadAt}; it is read again when you press Refresh. ${fableEvents} are in the current window.`
     : providerCurrent
-    ? `Official model-scoped Fable allowance is collected automatically; ${fableTracking.activity.requests} local Fable usage event${fableTracking.activity.requests === 1 ? '' : 's'} are in the current window.`
+    ? `Official model-scoped Fable allowance is collected automatically; ${fableEvents} are in the current window.`
+    : providerStale && !readPlanUsage
+      ? `The last official model-scoped Fable allowance (${fableReadAt}) is still valid but out of date; press Refresh to read it again. Local activity remains available.`
     : providerStale
       ? 'The last official model-scoped Fable allowance is still valid, but this refresh could not replace it. Local activity remains available.'
       : fableAuto
@@ -662,8 +753,9 @@ async function refreshClaude(store, inboxPath, options = {}) {
             ? `Imported ${fableTracking.activity.requests} actual local Fable usage event${fableTracking.activity.requests === 1 ? '' : 's'}; the provider did not return a model-scoped allowance.`
             : 'Waiting for actual local Fable activity or a provider model-scoped allowance.';
   // Successful local activity collection is useful without an allowance.
-  // A stale provider-scoped reading still requires a provider refresh.
-  const fableScanSucceeded = activityCurrent && !providerStale;
+  // A stale provider-scoped reading still requires a provider refresh, unless
+  // this run was never asked to read the provider.
+  const fableScanSucceeded = activityCurrent && (!providerStale || !readPlanUsage);
   store.setSourceStatus('claude-fable', fableStatus, fableDetail, {
     sharedWithOverall: true,
     modelId: 'claude-fable-5',

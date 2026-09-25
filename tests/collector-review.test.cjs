@@ -112,7 +112,9 @@ test('replayed rotated inbox evidence does not claim a fresh connection, and tor
   write('inbox.jsonl.rotated-old', [{ captured_at: '2026-09-14T08:00:00Z', rate_limits: {
     seven_day: { used_percentage: 20, resets_at: '2026-09-18T12:00:00Z' },
   } }]);
-  await refreshClaude(store, inbox, { clock: () => new Date(now), usagePort: { read: async () => { throw new Error('Unavailable'); } },
+  // Updated deliberately: plan usage is read only on an explicit user refresh now,
+  // so this SDK-path test asks for one (readPlanUsage: true).
+  await refreshClaude(store, inbox, { readPlanUsage: true, clock: () => new Date(now), usagePort: { read: async () => { throw new Error('Unavailable'); } },
     activityReader: { import: async () => ({ usageEvents: 0 }) } });
   assert.equal(store.prepare("SELECT status FROM sources WHERE id = 'claude'").get().status, 'stale');
   const torn = `${inbox}.rotated-torn`;

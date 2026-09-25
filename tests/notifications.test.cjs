@@ -159,6 +159,40 @@ test('a collector falling back from healthy to stale notifies once', () => {
   assert.equal(again.notifications.length, 0);
 });
 
+// An automatic refresh does not read Claude plan usage, so Claude turning
+// 'stale' after one only means its last reading aged. That is no fallback;
+// a requested read that failed, or a degraded or failed collector, still is.
+test('a Claude reading that only aged on an automatic refresh raises no fallback notice', () => {
+  const healthy = snapshot();
+  const seeded = decideNotifications({ previous: null, current: healthy, state: emptyState(), nowMs: NOW });
+  const withClaude = (claude, fable) => snapshot({ sources: [
+    { id: 'codex', status: 'connected', status_detail: 'ok' },
+    { id: 'claude', status_detail: 'press Refresh', ...claude },
+    { id: 'claude-fable', status_detail: 'press Refresh', ...fable },
+  ] });
+  const decide = (current) => decideNotifications({ previous: healthy, current, state: seeded.state, nowMs: NOW }).notifications;
+
+  const aged = withClaude(
+    { status: 'stale', metadata: { planUsage: { requested: false } } },
+    { status: 'stale', metadata: { automatic: { provider: { kind: 'not-requested' } } } },
+  );
+  assert.deepEqual(decide(aged), []);
+
+  const failedRead = withClaude(
+    { status: 'stale', metadata: { planUsage: { requested: true } } },
+    { status: 'stale', metadata: { automatic: { provider: { kind: 'failed' } } } },
+  );
+  assert.deepEqual(decide(failedRead).map((entry) => entry.kind), ['fallback', 'fallback']);
+
+  for (const status of ['degraded', 'error']) {
+    const broken = withClaude(
+      { status, metadata: { planUsage: { requested: false } } },
+      { status, metadata: { automatic: { provider: { kind: 'not-requested' } } } },
+    );
+    assert.deepEqual(decide(broken).map((entry) => entry.kind), ['fallback', 'fallback'], status);
+  }
+});
+
 test('snoozed alerts drop every notification kind', () => {
   const current = snapshot({
     settings: { notifyDesktop: true, notifyResets: true, notifyFallback: true, notifyDigest: true, digestHour: 9, alertsSnoozedUntil: new Date(NOW + 3_600_000).toISOString() },

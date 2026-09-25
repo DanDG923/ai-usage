@@ -7,7 +7,8 @@ const { QUOTA_CLOCK_SKEW_MS, validQuotaTime } = require('./quota-time.cjs');
 const FABLE_SOURCE_ID = 'claude-fable';
 const FABLE_BUCKET_ID = 'fable_seven_day';
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-const { OFFICIAL_PROVENANCES } = require('./quota-provenance.mjs');
+const { OFFICIAL_PROVENANCES, isProviderProvenance } = require('./quota-provenance.mjs');
+const { freshnessLimitHours } = require('./dashboard-decision.cjs');
 const { PROVIDER_WINDOW_DESCRIPTORS } = require('./claude-window-descriptors.cjs');
 
 function isRecord(value) {
@@ -242,6 +243,16 @@ function getLastCurrentOfficial(store, nowMs) {
   return selectDisplayedWindows([window], { nowMs }).active[0]?.row ?? null;
 }
 
+// Whether a provider reading (the SDK or the status line, never a manual
+// entry) is recent enough to stand as current evidence on a refresh that did
+// not ask the provider. The rule is the dashboard verdict's own.
+function providerReadingFresh(row, nowMs) {
+  if (!row || !isProviderProvenance(row.provenance)) return false;
+  const ageMs = nowMs - Date.parse(row.observed_at);
+  return ageMs >= -QUOTA_CLOCK_SKEW_MS
+    && ageMs <= freshnessLimitHours({ windowMinutes: row.window_minutes }) * 60 * 60 * 1000;
+}
+
 function allowanceFromRow(row) {
   return {
     kind: 'official',
@@ -301,9 +312,15 @@ function previousActivitySuccess(store) {
   }
 }
 
+// `usagePort` is null when this refresh was not asked to read plan usage
+// (every automatic refresh). Nothing contacts the provider then, and the
+// provider outcome is 'not-requested': neither a success nor a failure.
 function createFableUsageTracker({ store, usagePort, activityReader, clock = () => new Date() }) {
   if (!store?.db || typeof store.recordObservation !== 'function') throw new TypeError('A UsageStore is required.');
-  if (typeof usagePort?.read !== 'function') throw new TypeError('usagePort.read is required.');
+  if (usagePort !== null && typeof usagePort?.read !== 'function') {
+    throw new TypeError('usagePort.read is required, or usagePort must be null when plan usage was not requested.');
+  }
+  const planUsageRequested = usagePort !== null;
   if (typeof activityReader?.import !== 'function') throw new TypeError('activityReader.import is required.');
   if (typeof clock !== 'function') throw new TypeError('clock must be a function.');
 
@@ -328,23 +345,23 @@ function createFableUsageTracker({ store, usagePort, activityReader, clock = () 
     // Finish synchronous imports before starting the SDK timeout clock.
     const activityRead = timed(() => activityReader.import({ signal: options.signal }));
     const [activityResult] = await Promise.allSettled([activityRead.promise]);
-    const usageRead = timed(() => usagePort.read({ signal: options.signal }));
-    const [usageResult] = await Promise.allSettled([usageRead.promise]);
+    const usageRead = planUsageRequested ? timed(() => usagePort.read({ signal: options.signal })) : null;
+    const [usageResult] = usageRead ? await Promise.allSettled([usageRead.promise]) : [null];
     const fetched = clock();
     nowMs = fetched instanceof Date ? fetched.getTime() : new Date(fetched).getTime();
     if (!Number.isFinite(nowMs)) throw new Error('The tracker clock returned an invalid time.');
     refreshedAt = new Date(nowMs).toISOString();
-    const usageDurationMs = usageRead.elapsed();
+    const usageDurationMs = usageRead ? usageRead.elapsed() : null;
     const activityDurationMs = activityRead.elapsed();
 
     let normalized;
     let providerFailure = null;
     let overallWindowsRecorded = 0;
-    if (usageResult.status === 'fulfilled') normalized = normalizeUsagePayload(usageResult.value, refreshedAt);
-    else providerFailure = usageResult.reason instanceof Error
+    if (usageResult?.status === 'fulfilled') normalized = normalizeUsagePayload(usageResult.value, refreshedAt);
+    else if (usageResult) providerFailure = usageResult.reason instanceof Error
       ? usageResult.reason : new Error(String(usageResult.reason || 'Unknown provider failure'));
 
-    if (!providerFailure && normalized.kind !== 'invalid'
+    if (normalized && !providerFailure && normalized.kind !== 'invalid'
       && (normalized.kind === 'observed' || normalized.overall.length)) {
       try {
         overallWindowsRecorded = recordProviderWindows(store, normalized, refreshedAt);
@@ -365,7 +382,20 @@ function createFableUsageTracker({ store, usagePort, activityReader, clock = () 
     let state;
     const details = [];
 
-    if (!providerFailure && normalized.kind === 'observed') {
+    if (!planUsageRequested) {
+      // Not asked this time: the last official reading stays the allowance,
+      // judged by its age rather than marked stale for not being re-read.
+      if (cached) {
+        const fresh = freshStatuslineFallback || providerReadingFresh(cached, nowMs);
+        allowance = allowanceFromRow(cached);
+        officialSource = fresh ? 'connected' : 'not-requested';
+        state = fresh ? 'current' : 'stale';
+      } else {
+        allowance = { kind: 'unavailable', reason: 'not-requested' };
+        officialSource = 'not-requested';
+        state = 'waiting';
+      }
+    } else if (!providerFailure && normalized.kind === 'observed') {
       // `cached` was read after this refresh's windows were recorded, so it
       // is already the row a second query would return.
       allowance = allowanceFromRow(cached);
@@ -392,8 +422,8 @@ function createFableUsageTracker({ store, usagePort, activityReader, clock = () 
     }
 
     if (providerFailure) details.push(providerFailure.message);
-    else if (normalized.kind === 'invalid') details.push(normalized.reason);
-    else if (normalized.kind === 'unavailable') details.push(normalized.reason);
+    else if (normalized?.kind === 'invalid') details.push(normalized.reason);
+    else if (normalized?.kind === 'unavailable') details.push(normalized.reason);
 
     const activity = localFableActivity(store, nowMs, allowance);
     let activitySource = 'current';
@@ -409,13 +439,21 @@ function createFableUsageTracker({ store, usagePort, activityReader, clock = () 
       activityLastSuccessfulAt = refreshedAt;
     }
 
-    const collectionDiagnostics = (usageResult.status === 'fulfilled'
+    const collectionDiagnostics = usageResult && (usageResult.status === 'fulfilled'
       ? usageResult.value : usageResult.reason)?.collectionDiagnostics;
     return {
       refreshedAt,
       allowance,
       activity,
-      provider: {
+      provider: !planUsageRequested ? {
+        kind: 'not-requested',
+        attempted: false,
+        attemptSucceeded: false,
+        overallWindowsRecorded: 0,
+        extraUsage: null,
+        durationMs: null,
+        errorCode: null,
+      } : {
         attemptSucceeded: usageResult.status === 'fulfilled',
         kind: providerFailure ? 'failed' : normalized.kind,
         overallWindowsRecorded,
@@ -442,4 +480,4 @@ function createFableUsageTracker({ store, usagePort, activityReader, clock = () 
 }
 
 module.exports = {
-  getLastCurrentOfficial, createFableUsageTracker, OFFICIAL_PROVENANCES };
+  getLastCurrentOfficial, createFableUsageTracker, providerReadingFresh, OFFICIAL_PROVENANCES };

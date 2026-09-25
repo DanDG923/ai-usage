@@ -37,28 +37,43 @@ function createCollectorService({
   // lane; waiting requests for the same source share their result.
   let queue = Promise.resolve();
   const pending = { codex: null, claude: null };
-  function queued(source, run) {
+  function queued(source, run, { readPlanUsage = false } = {}) {
     // Coalesce waiting requests, but preserve one follow-up when a request
     // arrives during an active scan. Serial sources prevent a synchronous
     // transcript import from starving another provider's initialization timer.
-    if (pending[source]) return pending[source];
-    const start = () => { pending[source] = null; return run(); };
-    const next = queue.then(start, start);
-    pending[source] = next;
-    queue = next.then(() => undefined, () => undefined);
-    return next;
+    const waiting = pending[source];
+    if (waiting) {
+      // A run that has not started yet reads its options when it starts, so a
+      // user's request to read plan usage is never swallowed by an automatic
+      // run it joins. A run already executing is never changed.
+      if (readPlanUsage === true) waiting.options.readPlanUsage = true;
+      return waiting.promise;
+    }
+    const entry = { options: { readPlanUsage: readPlanUsage === true }, promise: null };
+    const start = () => { pending[source] = null; return run({ ...entry.options }); };
+    entry.promise = queue.then(start, start);
+    pending[source] = entry;
+    queue = entry.promise.then(() => undefined, () => undefined);
+    return entry.promise;
   }
   const runCodex = () => queued('codex', () => collectors.codex(getStore()));
-  const runClaude = () => queued('claude', () => collectors.claude(getStore(), inboxPath));
+  const runClaude = (readPlanUsage) => queued(
+    'claude',
+    (options) => collectors.claude(getStore(), inboxPath, { readPlanUsage: options.readPlanUsage }),
+    { readPlanUsage },
+  );
 
   async function handle(request) {
     switch (request?.type) {
       case 'refresh-all': {
-        const outcomes = await runCollectors({ codex: runCodex, claude: runClaude });
+        // Only an explicit user refresh sets this; anything else is false.
+        const readPlanUsage = request.readPlanUsage === true;
+        const outcomes = await runCollectors({ codex: runCodex, claude: () => runClaude(readPlanUsage) });
         return { codex: serializeSettled(outcomes.codex), claude: serializeSettled(outcomes.claude) };
       }
       case 'refresh-claude': {
-        const outcomes = await runCollectors({ claude: runClaude });
+        // A Claude-only refresh follows a local change and never reads plan usage.
+        const outcomes = await runCollectors({ claude: () => runClaude(false) });
         return { claude: serializeSettled(outcomes.claude) };
       }
       case 'ping':

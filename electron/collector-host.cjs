@@ -115,8 +115,10 @@ function createCollectorHost({ fork, modulePath, config, requestTimeoutMs = DEFA
   }
 
   return {
-    refreshAll: () => request('refresh-all'),
-    refreshClaude: () => request('refresh-claude'),
+    // Claude plan usage is read only when the caller explicitly asks; a
+    // Claude-only refresh never reads it.
+    refreshAll: ({ readPlanUsage = false } = {}) => request('refresh-all', { readPlanUsage: readPlanUsage === true }),
+    refreshClaude: () => request('refresh-claude', { readPlanUsage: false }),
     request,
     stop,
     get running() { return Boolean(child); },
@@ -127,8 +129,8 @@ function createCollectorHost({ fork, modulePath, config, requestTimeoutMs = DEFA
 // utility processes (tests, or AI_USAGE_INLINE_COLLECTORS=1 for debugging).
 function createInlineCollectorHost(service) {
   return {
-    refreshAll: () => service.handle({ type: 'refresh-all' }),
-    refreshClaude: () => service.handle({ type: 'refresh-claude' }),
+    refreshAll: ({ readPlanUsage = false } = {}) => service.handle({ type: 'refresh-all', readPlanUsage: readPlanUsage === true }),
+    refreshClaude: () => service.handle({ type: 'refresh-claude', readPlanUsage: false }),
     request: (type, payload = {}) => service.handle({ type, ...payload }),
     stop: () => service.close(),
     get running() { return true; },

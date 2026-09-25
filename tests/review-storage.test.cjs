@@ -111,7 +111,10 @@ test('partial Claude transcript failures retain good scan times and reach the re
   store.prepare("UPDATE sources SET last_success_at = ? WHERE id IN ('claude', 'claude-fable')").run(previousSuccess);
   const { refreshClaude } = require('../electron/claude-collector.cjs');
   const resets_at = new Date(Date.now() + 86400000).toISOString();
+  // Updated deliberately: plan usage is read only on an explicit user refresh now,
+  // so this SDK-path test asks for one (readPlanUsage: true).
   const result = await refreshClaude(store, path.join(root, 'missing-inbox.jsonl'), {
+    readPlanUsage: true,
     usagePort: { read: async () => ({ subscription_type: 'max', rate_limits_available: true,
       rate_limits: { seven_day: { utilization: 10, resets_at },
         model_scoped: [{ display_name: 'Fable', utilization: 20, resets_at }] } }) },

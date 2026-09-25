@@ -12,6 +12,7 @@ const { installClaudeHelper, uninstallClaudeHelper, isClaudeHelperInstalled } = 
 const { createClaudeSetup } = require('./claude-setup.cjs');
 const { createCollectorHost, createInlineCollectorHost } = require('./collector-host.cjs');
 const { createCollectorService } = require('./collector-service.cjs');
+const { REFRESH_TRIGGERS, createRefreshCoalescer, refreshOptionsFor } = require('./refresh-policy.cjs');
 const { createWindowIdleRelease } = require('./window-idle.cjs');
 const { createMaintenanceHost, createDatabaseQueue } = require('./maintenance-host.cjs');
 const { buildSummaryText, buildTrayTooltip, decideNotifications, emptyState } = require('./notifications.cjs');
@@ -74,7 +75,6 @@ let collectors;
 let maintenance;
 let updateChecker;
 let claudeSetup;
-let refreshPromise;
 let refreshTimer;
 let lastRefreshAt = 0;
 let isQuitting = false;
@@ -351,7 +351,7 @@ function createWindow() {
       invalidateSnapshot();
       window.webContents.send('dashboard:updated', snapshot());
     }
-    refreshIfStale();
+    refreshIfStale({ trigger: REFRESH_TRIGGERS.WINDOW_SHOW });
   });
   window.on('closed', () => { if (window === targetWindow) window = null; });
   if (savedWindowMaximized) targetWindow.maximize();
@@ -397,7 +397,7 @@ function buildTrayMenu() {
   const snoozed = alertsSnoozed();
   return Menu.buildFromTemplate([
     { label: 'Open AI Usage', click: () => showMainWindow() },
-    { label: 'Refresh local data', click: () => { refreshAll().catch(() => {}); } },
+    { label: 'Refresh', click: () => { refreshAll(refreshOptionsFor(REFRESH_TRIGGERS.TRAY_MENU_REFRESH)).catch(() => {}); } },
     { label: 'Copy usage summary', click: () => { try { clipboard.writeText(traySummary()); } catch { /* Clipboard denied. */ } } },
     { type: 'separator' },
     snoozed
@@ -419,7 +419,7 @@ function createTray() {
       // A reused window may have been hidden for up to a minute; a new one
       // asks for its first snapshot itself.
       if (reused) pushFlyout(flyoutSnapshot());
-      refreshIfStale();
+      refreshIfStale({ trigger: REFRESH_TRIGGERS.FLYOUT_SHOW });
     },
   });
   // Left click toggles the flyout; right click keeps the context menu.
@@ -599,7 +599,7 @@ function scheduleAutomaticRefresh() {
   refreshIntervalMs = intervalMs;
   if (!intervalMs) return;
   refreshTimer = setInterval(() => {
-    if (Date.now() - lastRefreshAt >= intervalMs) refreshAll().catch(() => {});
+    if (Date.now() - lastRefreshAt >= intervalMs) refreshAll(refreshOptionsFor(REFRESH_TRIGGERS.SCHEDULE)).catch(() => {});
   }, Math.min(intervalMs, 60_000));
 }
 
@@ -635,12 +635,28 @@ function applySettingsEffects() {
 
 // `ignoreSchedule` is for the one collection a launch always earns. Turning
 // automatic collection off has to silence the show and resume triggers too,
-// or the setting means nothing.
-function refreshIfStale({ ignoreSchedule = false } = {}) {
-  if (!store || refreshPromise) return;
+// or the setting means nothing. Every caller is automatic, so the trigger's
+// policy never reads Claude plan usage here.
+function refreshIfStale({ trigger, ignoreSchedule = false } = {}) {
+  if (!store || refreshRuns.running) return;
   if (!ignoreSchedule && !automaticCollectionEnabled()) return;
   if (Date.now() - lastRefreshAt < STALE_AFTER_MS) return;
-  refreshAll().catch(() => {});
+  refreshAll(refreshOptionsFor(trigger)).catch(() => {});
+}
+
+// A launch always earns one collection, whether or not automatic collection
+// is on. Showing the window fires first in practice; the staleness guard
+// makes whichever arrives second a no-op rather than a second full scan.
+function scheduleLaunchRefresh() {
+  setTimeout(() => refreshIfStale({ trigger: REFRESH_TRIGGERS.LAUNCH, ignoreSchedule: true }), 900);
+}
+
+// A sleeping PC collects nothing, so waking is the moment the local records
+// are most likely to be behind.
+function onResume() {
+  clearTimeout(resumeTimer);
+  resumeTimer = setTimeout(() => { if (!isQuitting) refreshIfStale({ trigger: REFRESH_TRIGGERS.WAKE }); }, 15_000);
+  resumeTimer.unref?.();
 }
 
 function createCollectors() {
@@ -678,65 +694,70 @@ function publishAfterWrite(current, { push = true } = {}) {
   previousSnapshot = current;
 }
 
-async function refreshAll() {
-  if (refreshPromise) return refreshPromise;
-  refreshPromise = (async () => {
-    if (isQuitting) return { snapshot: undefined, backupError: null, collectors: {} };
-    let outcomes;
-    try {
-      outcomes = await databaseJobs.collect(() => collectors.refreshAll());
-    } catch (error) {
-      const detail = `Local collection failed: ${error?.message || 'Unknown local error.'}`;
-      outcomes = {
-        codex: { status: 'rejected', reason: { message: detail } },
-        claude: { status: 'rejected', reason: { message: detail } },
-      };
-    }
-    // Quitting stops the collectors, which rejects the in-flight run; that is
-    // not a source failure and must not be written as one for the next launch.
-    if (isQuitting) return { snapshot: undefined, backupError: null, collectors: {} };
-    const { codex, claude } = outcomes;
-    await databaseJobs.run(() => {
-      if (codex?.status === 'rejected') store.setSourceStatus('codex', 'error', `Codex refresh failed: ${codex.reason?.message || 'Unknown local error.'}`);
-      if (claude?.status === 'rejected') {
-        const detail = `Claude refresh failed: ${claude.reason?.message || 'Unknown local error.'}`;
-        store.setSourceStatus('claude', 'error', detail);
-        store.setSourceStatus('claude-fable', 'error', detail);
-      }
-      try {
-        store.compactObservations();
-      } catch { /* Housekeeping is best effort. */ }
-      invalidateSnapshot();
-      const updated = currentView();
-      lastRefreshAt = Date.now();
-      publishAfterWrite(updated);
-      return updated;
-    });
-    let backupError = null;
-    try {
-      const backup = await databaseJobs.exclusive(() => maintenance.request('scheduled-backup'));
-      if (backup) invalidateSnapshot();
-    } catch (error) {
-      backupError = error.message;
-    }
-    return {
-      // Collection publishes once. Returning a second snapshot repeats renders
-      // and could replace a newer settings or restore result.
-      snapshot: undefined,
-      backupError,
-      collectors: {
-        codex: collectorOutcome(codex),
-        claude: collectorOutcome(claude),
-      },
-    };
-  })();
-  try {
-    return await refreshPromise;
-  } finally {
-    refreshPromise = null;
-  }
+// Every caller passes refreshOptionsFor(trigger). Claude plan usage is read
+// only when that says so (an explicit user refresh); the default never reads
+// it. The coalescer joins overlapping requests, except that a user refresh
+// arriving during an automatic run gets its own plan-usage run afterwards.
+const refreshRuns = createRefreshCoalescer((options) => collectAll(options));
+
+function refreshAll({ readPlanUsage = false } = {}) {
+  return refreshRuns.request({ readPlanUsage: readPlanUsage === true });
 }
 
+async function collectAll({ readPlanUsage }) {
+  if (isQuitting) return { snapshot: undefined, backupError: null, collectors: {} };
+  let outcomes;
+  try {
+    outcomes = await databaseJobs.collect(() => collectors.refreshAll({ readPlanUsage }));
+  } catch (error) {
+    const detail = `Local collection failed: ${error?.message || 'Unknown local error.'}`;
+    outcomes = {
+      codex: { status: 'rejected', reason: { message: detail } },
+      claude: { status: 'rejected', reason: { message: detail } },
+    };
+  }
+  // Quitting stops the collectors, which rejects the in-flight run; that is
+  // not a source failure and must not be written as one for the next launch.
+  if (isQuitting) return { snapshot: undefined, backupError: null, collectors: {} };
+  const { codex, claude } = outcomes;
+  await databaseJobs.run(() => {
+    if (codex?.status === 'rejected') store.setSourceStatus('codex', 'error', `Codex refresh failed: ${codex.reason?.message || 'Unknown local error.'}`);
+    if (claude?.status === 'rejected') {
+      const detail = `Claude refresh failed: ${claude.reason?.message || 'Unknown local error.'}`;
+      store.setSourceStatus('claude', 'error', detail);
+      store.setSourceStatus('claude-fable', 'error', detail);
+    }
+    try {
+      store.compactObservations();
+    } catch { /* Housekeeping is best effort. */ }
+    invalidateSnapshot();
+    const updated = currentView();
+    lastRefreshAt = Date.now();
+    publishAfterWrite(updated);
+    return updated;
+  });
+  let backupError = null;
+  try {
+    const backup = await databaseJobs.exclusive(() => maintenance.request('scheduled-backup'));
+    if (backup) invalidateSnapshot();
+  } catch (error) {
+    backupError = error.message;
+  }
+  return {
+    // Collection publishes once. Returning a second snapshot repeats renders
+    // and could replace a newer settings or restore result.
+    snapshot: undefined,
+    backupError,
+    collectors: {
+      codex: collectorOutcome(codex),
+      claude: collectorOutcome(claude),
+    },
+  };
+}
+
+// Claude-only refreshes follow a local change (a manual observation, or the
+// status-line helper being enabled or disabled). None is a request to read
+// plan usage, so the collector host sends every one with readPlanUsage false.
 async function refreshClaudeOnly() {
   if (isQuitting) return previousSnapshot;
   const outcomes = await databaseJobs.collect(() => collectors.refreshClaude());
@@ -798,7 +819,7 @@ function registerFlyoutIpc() {
   // The same collection the tray menu starts; its publish also reaches the
   // flyout as flyout:updated, and the reply carries the result for this click.
   handleFlyoutIpc('flyout:refresh', async () => {
-    await refreshAll();
+    await refreshAll(refreshOptionsFor(REFRESH_TRIGGERS.FLYOUT_REFRESH));
     return flyoutSnapshot();
   });
   handleFlyoutIpc('flyout:open-dashboard', (_event, value) => {
@@ -1047,18 +1068,9 @@ if (isPrimaryInstance) {
         applyFlyoutChrome();
       });
       deferredWindowReveal.markReady();
-      // A launch always earns one collection, whether or not automatic collection
-      // is on. Showing the window fires first in practice; the staleness guard
-      // makes whichever arrives second a no-op rather than a second full scan.
-      setTimeout(() => refreshIfStale({ ignoreSchedule: true }), 900);
+      scheduleLaunchRefresh();
       applySettingsEffects();
-      // A sleeping PC collects nothing, so waking is the moment the local records
-      // are most likely to be behind.
-      powerMonitor.on('resume', () => {
-        clearTimeout(resumeTimer);
-        resumeTimer = setTimeout(() => { if (!isQuitting) refreshIfStale(); }, 15_000);
-        resumeTimer.unref?.();
-      });
+      powerMonitor.on('resume', onResume);
     },
     onFailure: (error) => {
       showFatalError('AI Usage could not start', 'Startup did not complete.', error);

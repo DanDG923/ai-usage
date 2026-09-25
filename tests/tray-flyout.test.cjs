@@ -497,6 +497,22 @@ test('flyout channels read the tray snapshot, refresh, snooze and close through 
   assert.equal(await call('flyout:get-snapshot'), null, 'no snapshot while storage closes');
 });
 
+// Claude plan usage is read only on an explicit refresh; showing the flyout or
+// the dashboard is automatic collection and must say so.
+test('showing the flyout or the dashboard asks only for an automatic refresh', async () => {
+  const h = mainHarness();
+  h.run('globalThis.staleRequests = []; refreshIfStale = (options) => { staleRequests.push(options); }; createTray();');
+  h.run('tray').emit('click');
+  const [flyout] = h.created();
+  flyout.emit('ready-to-show');
+  assert.deepEqual(plain(h.run('staleRequests')), [{ trigger: 'flyout-show' }]);
+  h.run('createWindow()');
+  const dashboard = h.created().at(-1);
+  dashboard.emit('show');
+  assert.deepEqual(plain(h.run('staleRequests')).at(-1), { trigger: 'window-show' });
+  await flush();
+});
+
 test('publishes reach an existing flyout as a light payload, and the theme sets its background', () => {
   const h = wiredHarness();
   h.run("trayIconFor = () => ({}); buildTrayMenu = () => null; store = { getSettings: () => ({}) };");

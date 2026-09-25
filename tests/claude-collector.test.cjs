@@ -634,7 +634,9 @@ test('persisted Claude allowance becomes stale when a failed refresh adds no evi
     store.setSourceStatus('claude', 'connected', 'Seed success.');
     const before = store.db.prepare("SELECT last_success_at FROM sources WHERE id = 'claude'").get().last_success_at;
     const inbox = path.join(root, 'missing-inbox.jsonl');
-    await refreshClaude(store, inbox, { usagePort: { read: async () => { throw new Error('provider down'); } } });
+    // Updated deliberately: plan usage is read only on an explicit user refresh now,
+    // so this SDK-path test asks for one (readPlanUsage: true).
+    await refreshClaude(store, inbox, { readPlanUsage: true, usagePort: { read: async () => { throw new Error('provider down'); } } });
     const source = store.db.prepare("SELECT status, last_success_at, last_attempt_at FROM sources WHERE id = 'claude'").get();
     assert.equal(source.status, 'stale');
     assert.equal(source.last_success_at, before);
@@ -664,7 +666,10 @@ test('schema-invalid provider data does not advance Claude last-success time', a
     const seeded = '2026-01-15T12:00:00.000Z';
     store.db.prepare("UPDATE sources SET last_success_at = ? WHERE id = 'claude'").run(seeded);
 
+    // Updated deliberately: plan usage is read only on an explicit user refresh now,
+    // so this SDK-path test asks for one (readPlanUsage: true).
     await refreshClaude(store, path.join(root, 'missing-inbox.jsonl'), {
+      readPlanUsage: true,
       activityReader: { import: async () => ({ filesFound: 0, usageEvents: 0, fableEvents: 0 }) },
       usagePort: { read: async () => ({
         subscription_type: 'max', rate_limits_available: true,
@@ -700,7 +705,10 @@ test('Claude refresh records model-scoped Fable allowance automatically and impo
   const store = new UsageStore(path.join(root, 'test.sqlite'), path.join(root, 'Backups'));
   const reset = new Date(Date.now() + 4 * 86_400_000).toISOString();
   try {
+    // Updated deliberately: plan usage is read only on an explicit user refresh now,
+    // so this SDK-path test asks for one (readPlanUsage: true).
     const result = await refreshClaude(store, path.join(root, 'missing-inbox.jsonl'), {
+      readPlanUsage: true,
       usagePort: { read: async () => ({
         subscription_type: 'max',
         rate_limits_available: true,
@@ -739,7 +747,10 @@ test('a current Fable allowance cannot hide a failed local activity import', asy
   const store = new UsageStore(path.join(root, 'test.sqlite'), path.join(root, 'Backups'));
   const reset = new Date(Date.now() + 4 * 86_400_000).toISOString();
   try {
+    // Updated deliberately: plan usage is read only on an explicit user refresh now,
+    // so this SDK-path test asks for one (readPlanUsage: true).
     await refreshClaude(store, path.join(root, 'missing-inbox.jsonl'), {
+      readPlanUsage: true,
       activityReader: { import: async () => { throw new Error('transcript scan failed'); } },
       usagePort: { read: async () => ({
         subscription_type: 'max', rate_limits_available: true,
@@ -806,7 +817,9 @@ test('fresh status-line Fable evidence stays current when the SDK is unavailable
     },
   })}\n`);
   try {
-    await refreshClaude(store, inbox, { usagePort: { read: async () => { throw new Error('provider down'); } } });
+    // Updated deliberately: plan usage is read only on an explicit user refresh now,
+    // so this SDK-path test asks for one (readPlanUsage: true).
+    await refreshClaude(store, inbox, { readPlanUsage: true, usagePort: { read: async () => { throw new Error('provider down'); } } });
     assert.equal(store.db.prepare("SELECT status FROM sources WHERE id = 'claude'").get().status, 'connected');
     assert.equal(store.db.prepare("SELECT status FROM sources WHERE id = 'claude-fable'").get().status, 'connected');
   } finally {
@@ -831,7 +844,9 @@ test('a rejected fallback row cannot prevent exact SDK Fable collection', async 
     rate_limits: { seven_day: { used_percentage: 140, resets_at: reset } },
   })}\n`);
   try {
-    const result = await refreshClaude(store, inbox, { usagePort: { read: async () => ({
+    // Updated deliberately: plan usage is read only on an explicit user refresh now,
+    // so this SDK-path test asks for one (readPlanUsage: true).
+    const result = await refreshClaude(store, inbox, { readPlanUsage: true, usagePort: { read: async () => ({
       subscription_type: 'pro', rate_limits_available: true,
       rate_limits: { model_scoped: [{ display_name: 'Fable', utilization: 33, resets_at: reset }] },
     }) } });

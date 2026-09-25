@@ -14,6 +14,16 @@ const RISK_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 const HEALTHY = new Set(['connected', 'ready', 'observing', 'estimating', 'activity-only']);
 const FALLEN_BACK = new Set(['stale', 'degraded', 'error']);
 
+// An automatic refresh does not read Claude plan usage, so a Claude source can
+// turn 'stale' only because its last reading aged past the freshness limit.
+// Nothing fell back then; only a requested read that failed is a fallback.
+function agedWithoutReading(source) {
+  if (source?.status !== 'stale') return false;
+  const metadata = source.metadata || {};
+  return metadata.planUsage?.requested === false
+    || metadata.automatic?.provider?.kind === 'not-requested';
+}
+
 function emptyState() {
   return {
     lastRiskSignature: '',
@@ -200,7 +210,7 @@ function decideNotifications({ previous, current, state = emptyState(), nowMs = 
     const signature = `${source.healthId}|${now.status}`;
     const known = next.lastFallbackSignatures[source.healthId];
     next.lastFallbackSignatures[source.healthId] = signature;
-    if (!FALLEN_BACK.has(now.status) || known === signature) continue;
+    if (!FALLEN_BACK.has(now.status) || known === signature || agedWithoutReading(now)) continue;
     const was = previousHealth.get(source.healthId);
     if (!was || !HEALTHY.has(was.status)) continue;
     if (!settings.notifyFallback || snoozed) continue;

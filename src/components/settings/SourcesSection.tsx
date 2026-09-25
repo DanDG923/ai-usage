@@ -108,7 +108,7 @@ export function SourcesSection({
         <div className="setting-col">
           <SelectSetting
             label="Collect automatically"
-            description="Alerts, scheduled backups, and the forecast are only as current as the last collection. While this is on, the app also collects when the window is reopened and when Windows wakes. Collection runs in a separate process, so a slow scan never freezes the dashboard."
+            description="Alerts, scheduled backups, and the forecast are only as current as the last collection. While this is on, the app also collects when the window is reopened and when Windows wakes. Collection runs in a separate process, so a slow scan never freezes the dashboard. Claude plan usage is read through Claude Code only when you press Refresh; local activity and the optional status-line helper are collected automatically."
             value={snapshot.settings.refreshIntervalMinutes}
             onChange={(value) => void update({ refreshIntervalMinutes: Number(value) })}
           >

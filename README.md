@@ -32,7 +32,9 @@ GitHub CLI manages the account credential. AI Usage reads it into main-process m
 3. Set your normal active hours and days. They shape when future use is expected, while the burn rate itself comes from observed history.
 4. Review **API pricing**. Detected models without prices are highlighted and keep the total visibly marked as a lower bound until all of their token categories have prices.
 
-The Claude status-line helper is optional. The automatic Claude usage reader is tried first on every refresh. Enable the helper only as a fallback for overall Claude allowance readings when the provider interface does not return them; it stores only capture time, model identity, and rate-limit fields, and disabling it restores the status line that was present before AI Usage changed the setting. The status line repeats the limits from the Claude Code session's last request each time it redraws, so it can lag behind use in other sessions, the desktop app or the web. When a fresh official reading shows higher usage for the same reset, a lower status-line reading is ignored, and an unchanged status-line reading never marks when later usage happened.
+Claude plan usage is read through your own Claude Code only when you choose **Refresh** (in the dashboard, the tray flyout, or the tray menu). Launch, scheduled, reopen, wake and after-restore collections import local activity, the optional status-line helper's readings and Codex, but never start Claude Code, which keeps automated access to your Claude subscription out of the app. Between refreshes, Claude is judged by the age of its last plan-usage reading, using the same freshness limit as the dashboard verdict; once that reading is out of date, Claude shows as needing a refresh and its status says to press **Refresh**.
+
+The Claude status-line helper is optional. The Claude usage reader runs when you choose **Refresh**. Enable the helper only as a fallback for overall Claude allowance readings when the provider interface does not return them; it stores only capture time, model identity, and rate-limit fields, and disabling it restores the status line that was present before AI Usage changed the setting. The status line repeats the limits from the Claude Code session's last request each time it redraws, so it can lag behind use in other sessions, the desktop app or the web. When a fresh official reading shows higher usage for the same reset, a lower status-line reading is ignored, and an unchanged status-line reading never marks when later usage happened.
 
 ## Reading the dashboard
 
@@ -42,14 +44,14 @@ The status line at the top of the Overview gives the overall verdict. Each provi
 
 **Settings** is one page with a section list beside it: Subscriptions (including monthly fees), Sources, Forecast, Alerts, API pricing, Data & backups, Appearance & updates, and an Advanced group for manual observations and diagnostics. The list follows your scroll, shows how many sources are connected or need attention and how many recorded models are unpriced, and **Search settings** filters the page to matching sections and opens any collapsed group that holds a match. **Keep in reserve** previews each provider's resulting daily budget as you type.
 
-## Fully automatic Fable tracking
+## Automatic Fable activity tracking
 
-Fable no longer needs a manual entry to start moving. Every Claude refresh performs two independent jobs:
+Fable no longer needs a manual entry to start moving. Two independent jobs keep it current: every Claude collection imports local activity, and a **Refresh** you choose also reads the official allowance (automatic collections do not, to keep automated access to your Claude subscription out of the app):
 
 | Evidence | Scope | Dashboard treatment |
 | --- | --- | --- |
-| Claude's official model-scoped usage reading | Account allowance, when the provider returns a Fable window | Exact provider percentage and reset |
-| Local Claude transcripts | Actual Fable token activity recorded on this computer | Imported automatically on every refresh |
+| Claude's official model-scoped usage reading | Account allowance, when the provider returns a Fable window | Exact provider percentage and reset, read when you choose **Refresh** and kept until the next one |
+| Local Claude transcripts | Actual Fable token activity recorded on this computer | Imported automatically on every collection |
 | Projected local estimate | Allowance estimate when exact model-scoped data is absent and shared-pool evidence is sufficient; computed when the dashboard is built, never stored | Clearly labelled local estimate |
 | Manual observation | Optional fallback | Re-anchors an estimate; never required as a trigger |
 
@@ -107,7 +109,7 @@ Expand a window's details to see the recorded model mix, input/cache/output spli
 
 ## Notifications
 
-Desktop notifications come from the tray process after a collection, so they are only as current as the collection interval. Four kinds can be enabled independently under **Alerts**: pace risk (one per episode, with the earliest run-out time), a window reset, a collector falling back to cached readings, and a daily digest at a chosen hour. **Snooze** pauses all of them for one, six, or twenty-four hours from the settings screen or the tray menu.
+Desktop notifications come from the tray process after a collection, so they are only as current as the collection interval. Automatic collections do not read Claude plan usage, so Claude's figures are as current as your last **Refresh** or the status-line helper. Four kinds can be enabled independently under **Alerts**: pace risk (one per episode, with the earliest run-out time), a window reset, a collector falling back to cached readings (a Claude reading that has simply aged since your last **Refresh** is not a fallback and raises no alert; a **Refresh** that fails to read plan usage is), and a daily digest at a chosen hour. **Snooze** pauses all of them for one, six, or twenty-four hours from the settings screen or the tray menu.
 
 ## Token API-equivalent costs
 
@@ -147,7 +149,7 @@ Keyboard shortcuts: **1** to **4** switch sections, **R** refreshes, and **Escap
 
 ## Source health and privacy
 
-Claude allowance readings must include confirmation of a successful provider fetch. If Claude returns cached figures after a failed connection, AI Usage retains the previous fresh reading and reports the failure. Temporary fetch failures and unexpectedly empty subscription responses receive one retry after a short delay; authentication failures and throttling wait for the next normal refresh. Diagnostics retain only safe error categories and attempt timings, never raw provider debug output.
+Claude allowance readings must include confirmation of a successful provider fetch. If Claude returns cached figures after a failed connection, AI Usage retains the previous fresh reading and reports the failure. Temporary fetch failures and unexpectedly empty subscription responses receive one retry after a short delay; authentication failures and throttling wait for your next **Refresh**. Diagnostics retain only safe error categories and attempt timings, never raw provider debug output.
 
 Each source shows three different timestamps where relevant:
 

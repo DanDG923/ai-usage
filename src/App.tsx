@@ -541,7 +541,7 @@ export default function App() {
     <div className="app-shell">
       <Header snapshot={snapshot} tab={tab} onTab={setTab} refreshing={refreshing} onRefresh={refresh} />
       {(snapshot.settings.showClaudeSubscription !== false || setupRequested) && (
-        <ClaudeSetup requested={setupRequested} onClose={() => setSetupRequested(false)} onRefresh={refresh} />
+        <ClaudeSetup requested={setupRequested} onClose={() => setSetupRequested(false)} />
       )}
       <PageTitle tab={tab} detail={tab === 'overview' && detail ? DETAIL_NAMES[detail] : null} onBack={closeDetail} />
       <ErrorBoundary key={`${tab}:${detail ?? ''}`}>
