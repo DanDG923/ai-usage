@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.50 — 25 September 2026
+
+- Redesign the whole app in a new "Flight Deck" style, built around one question per allowance: will it last until its reset? A glareshield bar with numbered page keys (1 Overview, 2 Activity, 3 Costs, 4 Settings) replaces the side rail and carries source health, freshness and **Refresh**; each page has a cockpit-style title, and a footer shows the snapshot time and keyboard shortcuts.
+- Land each allowance's runway on a fuel tape at its reset: the share left at reset, the share likely used before it, markers for the expected and heavier-week outcomes, a ring where a projection runs out, and a line for any reserve you keep. The daily budget becomes a fuel-flow gauge with a proper scale.
+- State the overall verdict in a Master Caution strip: filled for act-now states, outlined for advisory ones. A partial all-clear, where some allowances cannot be read yet, is shown neutral and never as a green check.
+- Use a night theme by default and turn the Light setting into a designed Daylight theme, with paper-white panels, ink text and status colours darkened for contrast; **System** follows Windows. Control outlines reach 3:1 contrast in both themes, and chart legends and stacked costs stay readable in Windows high-contrast mode.
+- Bundle the B612 and B612 Mono typefaces, designed for cockpit displays, inside the app under the SIL Open Font License, so no web fonts are loaded.
+- Rebuild Costs, Activity, Settings, the Claude setup guide and the tray flyout in the same style; the flyout shows each allowance as a mini fuel tape. The Light option is now labelled Daylight.
+- Read Claude plan usage only when you press **Refresh**: on the dashboard, in the tray flyout, or with the tray menu's item, now called **Refresh**. Reading it starts your own Claude Code through the Agent SDK, and Anthropic's Consumer Terms bar automated access to a Claude subscription, so launches, scheduled collections, reopening the window, waking the PC, backup restores, manual observations, helper changes and finishing Claude setup no longer read it. Local Claude Code activity, the optional status-line helper and Codex are still collected automatically.
+- Between refreshes, a Claude reading counts as current for as long as the dashboard verdict allows it (24 hours for the weekly window, one hour for the five-hour window); after that Claude asks for a Refresh. An aged reading no longer raises the fallback alert, while a failed Refresh still does. A Refresh pressed during an automatic collection now runs straight after it instead of being merged into it.
+- Preserve local usage history, settings, observations, and backups during an in-place update.
+
 ## 1.0.49 — 24 September 2026
 
 - Redesign the colour system so colour always means a provider or a status, never both. Fable's coral was nearly indistinguishable from the "at risk" red (ΔE 3.6) and Claude's green from "on track" (ΔE 3.8); providers are now Codex blue, Claude violet and Fable magenta, at least 17 ΔE from every status colour and checked for colour-blind separation in both themes. Neutrals move from blue-slate to graphite, and buttons, toggles, focus rings and selected states become monochrome so no control looks like Codex data. Every status now carries an icon and a word.
