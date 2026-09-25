@@ -627,6 +627,71 @@ test('the stale detail quotes the oldest out-of-date reading, not the newest', a
   assert.ok(claude.status_detail.includes(`(${readingLabel(sdkAt)}) is still active but out of date`), claude.status_detail);
 });
 
+test('importing a fresh helper window still judges every active Claude window', async (t) => {
+  for (const minutesAgo of [30, 30 * 60]) {
+    await t.test(`the other window is ${minutesAgo} minutes old`, async (tt) => {
+      const { refreshClaude, created } = collectorWithPortSpy();
+      const { store, source } = collectorFixture(tt);
+      const nowMs = Date.now();
+      recordRead(store, { minutesAgo, windows: { seven_day: 3 * 1440, seven_day_sonnet: 3 * 1440 }, nowMs });
+      const inbox = missingInbox(store);
+      fs.writeFileSync(inbox, `${JSON.stringify({
+        ai_usage_captured_at: new Date(nowMs).toISOString(),
+        rate_limits: { seven_day: { used_percentage: 35, resets_at: new Date(nowMs + 3 * 1440 * MINUTE).toISOString() } },
+      })}\n`);
+      const statuses = [];
+      for (let run = 0; run < 2; run += 1) {
+        const result = await refreshClaude(store, inbox, { activityReader: quietActivity, clock: () => new Date(nowMs) });
+        assert.equal(result.statusLine.claudeObservations, run === 0 ? 1 : 0);
+        statuses.push(source('claude').status);
+      }
+      const expected = minutesAgo < 1440 ? 'connected' : 'stale';
+      assert.deepEqual(statuses, [expected, expected], 'importing and then reusing the same evidence must agree');
+      assert.equal(created.length, 0, 'the helper import never starts a plan-usage read');
+    });
+  }
+});
+
+test('a failed Refresh after natural ageing alerts once through automatic runs', async (t) => {
+  const { decideNotifications, emptyState } = require('../electron/notifications.cjs');
+  const { refreshClaude } = collectorWithPortSpy();
+  const { store, source } = collectorFixture(t);
+  const nowMs = Date.now();
+  const userAt = nowMs - 150 * MINUTE;
+  let previous = null;
+  let state = emptyState();
+  const check = (at) => {
+    const current = store.getTraySnapshot(at);
+    current.settings.notifyFallback = true;
+    const result = decideNotifications({ previous, current, state, nowMs: at });
+    state = JSON.parse(JSON.stringify(result.state));
+    // The tray-idle lifecycle discards source metadata from the old snapshot.
+    previous = { sources: current.sources.map(({ id, status }) => ({ id, status })) };
+    return result.notifications.filter((entry) => entry.kind === 'fallback');
+  };
+  await refreshClaude(store, missingInbox(store), {
+    readPlanUsage: true, clock: () => new Date(userAt), activityReader: quietActivity,
+    usagePort: { read: async () => usageResponse({ five_hour: 240, seven_day: 3 * 1440 }, userAt) },
+  });
+  assert.deepEqual(check(userAt), []);
+  await refreshClaude(store, missingInbox(store), { clock: () => new Date(nowMs - 75 * MINUTE), activityReader: quietActivity });
+  assert.equal(source('claude').status, 'stale');
+  assert.deepEqual(check(nowMs - 75 * MINUTE), []);
+
+  const failure = Object.assign(new Error('Not signed in'), { code: 'authentication_failed' });
+  const fail = (at) => refreshClaude(store, missingInbox(store), {
+    readPlanUsage: true, clock: () => new Date(at), activityReader: quietActivity,
+    usagePort: { read: async () => { throw failure; } },
+  });
+  await fail(nowMs - 60 * MINUTE);
+  assert.equal(source('claude').status, 'stale');
+  assert.deepEqual(check(nowMs - 60 * MINUTE).map((entry) => entry.title), ['Claude readings are running on cached data']);
+  await refreshClaude(store, missingInbox(store), { clock: () => new Date(nowMs - 30 * MINUTE), activityReader: quietActivity });
+  assert.deepEqual(check(nowMs - 30 * MINUTE), []);
+  await fail(nowMs);
+  assert.deepEqual(check(nowMs), [], 'automatic runs must not rearm an ongoing failure');
+});
+
 test('five-hour and weekly windows from one read two hours ago are stale', async (t) => {
   const { refreshClaude } = collectorWithPortSpy();
   const { store, source } = collectorFixture(t);

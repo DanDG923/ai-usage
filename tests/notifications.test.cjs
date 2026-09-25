@@ -193,6 +193,40 @@ test('a Claude reading that only aged on an automatic refresh raises no fallback
   }
 });
 
+test('ageing preserves the next fallback alert without rearming an ongoing failure', () => {
+  for (const suppressed of [null, 'snoozed', 'disabled']) {
+    const healthy = snapshot();
+    const aged = snapshot();
+    aged.sources[1] = { id: 'claude', status: 'stale', metadata: { planUsage: { requested: false } } };
+    aged.sources[2] = { id: 'claude-fable', status: 'stale', metadata: { automatic: { provider: { kind: 'not-requested' } } } };
+    const failed = snapshot();
+    failed.sources[1] = { id: 'claude', status: 'stale', metadata: { planUsage: { requested: true } } };
+    failed.sources[2] = { id: 'claude-fable', status: 'stale', metadata: { automatic: { provider: { kind: 'failed' } } } };
+    let previous = null;
+    let state = emptyState();
+    const check = (current) => {
+      const result = decideNotifications({ previous, current, state, nowMs: NOW });
+      state = JSON.parse(JSON.stringify(result.state));
+      previous = { sources: current.sources.map(({ id, status }) => ({ id, status })) };
+      return result.notifications.filter((entry) => entry.kind === 'fallback').map((entry) => entry.title);
+    };
+    const expected = ['Claude readings are running on cached data', 'Fable 5 readings are running on cached data'];
+    assert.deepEqual(check(healthy), []);
+    assert.deepEqual(check(aged), []);
+    assert.deepEqual(check(aged), []);
+    if (suppressed === 'snoozed') failed.settings.alertsSnoozedUntil = new Date(NOW + 60_000).toISOString();
+    if (suppressed === 'disabled') failed.settings.notifyFallback = false;
+    assert.deepEqual(check(failed), suppressed ? [] : expected, suppressed || 'enabled');
+    failed.settings.alertsSnoozedUntil = null;
+    failed.settings.notifyFallback = true;
+    assert.deepEqual(check(aged), []);
+    assert.deepEqual(check(failed), [], 'one failure episode is not repeated or deferred');
+    assert.deepEqual(check(healthy), []);
+    assert.deepEqual(check(aged), []);
+    assert.deepEqual(check(failed), expected, 'recovery permits a new failure alert');
+  }
+});
+
 test('snoozed alerts drop every notification kind', () => {
   const current = snapshot({
     settings: { notifyDesktop: true, notifyResets: true, notifyFallback: true, notifyDigest: true, digestHour: 9, alertsSnoozedUntil: new Date(NOW + 3_600_000).toISOString() },

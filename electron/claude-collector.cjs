@@ -659,7 +659,9 @@ async function refreshClaude(store, inboxPath, options = {}) {
   const failedSince = (observedAt) => !readPlanUsage && lastRequest?.succeeded === false
     && !(Date.parse(observedAt) >= Date.parse(lastRequest.at));
   const lastRequestFailed = failedSince(planReading?.lastReadAt);
-  const claudeFresh = hasFreshClaudeEvidence || (Boolean(planReading?.fresh) && !lastRequestFailed);
+  // A helper import can refresh only one window. Automatic runs must judge
+  // all active windows even when this run just imported fresh evidence.
+  const claudeFresh = readPlanUsage ? hasFreshClaudeEvidence : Boolean(planReading?.fresh) && !lastRequestFailed;
   const claudeScanSucceeded = readPlanUsage
     ? (hasFreshClaudeEvidence || providerScanSucceeded) && activityCurrent
     : activityCurrent;
