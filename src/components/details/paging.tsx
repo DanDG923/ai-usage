@@ -156,13 +156,14 @@ export function Pagination({
   const { pagination, data, loading, first, last, goToPage } = state;
   if (!pagination || pagination.total <= 0) return null;
   return (
-    <div className="session-pagination">
+    <div className="costs-paging">
       <span role="status">
         {loading ? loadingLabel : `${formatInt(first)}–${formatInt(last)} of ${formatInt(pagination.total)} ${unit}`}
       </span>
-      <div className="action-row compact" role="group" aria-label={groupLabel}>
+      <div className="costs-pager" role="group" aria-label={groupLabel}>
         <button
-          className="secondary-button"
+          type="button"
+          className="btn"
           disabled={!loading && pagination.page <= 1}
           aria-disabled={loading || pagination.page <= 1}
           onClick={() => {
@@ -175,7 +176,8 @@ export function Pagination({
           Page {pagination.page} of {pagination.totalPages}
         </span>
         <button
-          className="secondary-button"
+          type="button"
+          className="btn"
           disabled={!loading && pagination.page >= pagination.totalPages}
           aria-disabled={loading || pagination.page >= pagination.totalPages}
           onClick={() => {

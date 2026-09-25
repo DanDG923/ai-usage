@@ -1,0 +1,702 @@
+/*
+ * Activity, the flight log: the ECAM title and its cycle count, the source
+ * evidence table (status as icon + word, the current → expected fuel tape),
+ * the hour-by-weekday heat grid, the daily Codex usage panel and the reset
+ * cycles per provider. Imported by Activity.tsx after pages.css, which keeps
+ * the provider colour rules for the cycle bars.
+ *
+ * Provider hue marks data only (swatches, tape fills, bars); text stays ink
+ * and grey; status tones always travel with their icon and word. Every colour
+ * is a token, so night and Daylight both follow tokens.css, including the heat
+ * ramp, which runs light to dark in Daylight.
+ */
+
+.activity-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+/* Wide tables scroll inside their panel rather than widen the page. */
+.activity-page .table-scroll,
+.activity-page .log-scroll {
+  overflow-x: auto;
+}
+/* A scroller with no focusable content takes keyboard focus itself: it wears
+   the one focus ring, not the browser's own. */
+.activity-page .table-scroll:focus-visible,
+.activity-page .log-scroll:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+/* The evidence table answers to its panel's width, not the window's. */
+.log-scroll {
+  container: evidence / inline-size;
+}
+
+/* ---------- Title row ---------- */
+
+.activity-page .log-lead {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--sp-5);
+  margin: 0;
+}
+.activity-page .log-lead p {
+  max-width: 760px;
+}
+.log-count {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Panels ---------- */
+
+.log-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.log-heading p,
+.log-none p {
+  margin-top: var(--sp-1);
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  line-height: 1.45;
+}
+
+/* ---------- Source evidence ---------- */
+
+.evidence-table {
+  table-layout: fixed;
+}
+.evidence-table th,
+.evidence-table td {
+  padding: 8px var(--sp-4) 8px 0;
+}
+.evidence-table td {
+  padding-block: 10px;
+  vertical-align: middle;
+}
+.evidence-table th:last-child,
+.evidence-table td:last-child {
+  padding-right: 0;
+}
+.evidence-table tbody tr:first-child td {
+  border-top: 0;
+}
+.evidence-table tbody tr:last-child td {
+  border-bottom: 1px solid var(--rule-soft);
+}
+/* The artboard's grid: 1.3fr 130px 1.4fr 110px 1.6fr with 16px gutters. Each
+   cell's right padding is the gutter, so the fixed columns are 146px and
+   126px. A fixed-layout table cannot size a column with calc(% - px), so the
+   flexible columns step with the panel's width to keep close to 1.3 : 1.4 : 1.6. */
+.evidence-table .log-col-provider {
+  width: 20%;
+}
+.evidence-table .log-col-status {
+  width: 146px;
+}
+.evidence-table .log-col-time {
+  width: 22%;
+}
+.evidence-table .log-col-provenance {
+  width: 126px;
+}
+.evidence-table th {
+  white-space: normal;
+}
+@container evidence (min-width: 900px) {
+  .evidence-table .log-col-provider {
+    width: 23%;
+  }
+  .evidence-table .log-col-time {
+    width: 24.5%;
+  }
+}
+@container evidence (min-width: 1200px) {
+  .evidence-table .log-col-provider {
+    width: 24.5%;
+  }
+  .evidence-table .log-col-time {
+    width: 26.5%;
+  }
+}
+
+/* The swatch hangs in the cell's left padding, level with the name. */
+.evidence-table td.log-provider {
+  padding-left: 20px;
+}
+.log-provider .swatch {
+  width: 10px;
+  height: 10px;
+  margin: 0 10px 0 -20px;
+  vertical-align: -0.5px;
+}
+.log-provider strong {
+  font-weight: 700;
+}
+.evidence-table td small {
+  display: block;
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  line-height: 1.45;
+}
+
+/* Status: an icon and a caps word in the status colour. */
+.evidence-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+  font-size: var(--fs-11);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 14px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.evidence-state svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+.evidence-state.safe {
+  color: var(--ok);
+}
+.evidence-state.watch {
+  color: var(--caution);
+}
+.evidence-state.critical {
+  color: var(--warning);
+}
+
+/* Freshness first, exact instant beneath, the source's own success last. */
+.evidence-time {
+  font-variant-numeric: tabular-nums;
+}
+.evidence-time > time {
+  display: block;
+  color: var(--text);
+  font-size: var(--fs-13);
+  font-weight: 700;
+}
+.evidence-table .evidence-time > small:last-child {
+  color: var(--text-3);
+}
+.evidence-time small time {
+  color: inherit;
+  font-weight: inherit;
+}
+
+/* Current → expected at reset: figure, horizontal fuel tape, figure. */
+.log-tape-row {
+  display: grid;
+  grid-template-columns: 48px minmax(40px, 1fr) 48px;
+  align-items: center;
+  gap: 10px;
+}
+.log-tape-row > strong {
+  font-size: var(--fs-15);
+  font-weight: 700;
+}
+.log-tape-row > span.num {
+  grid-column: 3;
+  color: var(--text-2);
+  text-align: right;
+}
+.log-tape {
+  --series: var(--text-2);
+  position: relative;
+  display: block;
+  height: 12px;
+  border: 1px solid var(--rule);
+  background: var(--panel-2);
+}
+.log-tape.codex {
+  --series: var(--codex);
+}
+.log-tape.claude {
+  --series: var(--claude);
+}
+.log-tape.fable {
+  --series: var(--fable);
+}
+.log-tape i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  max-width: 100%;
+}
+.log-tape .log-tape-used {
+  background: color-mix(in srgb, var(--series) 35%, transparent);
+}
+.log-tape .log-tape-left {
+  background: var(--series);
+}
+.log-tape-key {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px var(--sp-4);
+  color: var(--text-2);
+  font-size: var(--fs-12);
+}
+.log-tape-key span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.log-tape-key i {
+  width: 12px;
+  height: 10px;
+  background: var(--text-2);
+}
+.log-tape-key i.used {
+  background: color-mix(in srgb, var(--text-2) 35%, transparent);
+}
+
+/* A narrow panel (900px windows and below) leaves the tape column too little
+   room for figure, tape and figure side by side: the two figures share a line
+   and the tape runs full width beneath them. */
+@container evidence (max-width: 860px) {
+  .log-tape-row {
+    grid-template-columns: 1fr auto;
+    row-gap: 6px;
+  }
+  .log-tape-row > span.num {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .log-tape-row > .log-tape {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}
+
+/* ---------- Heat grid and daily usage ---------- */
+
+.log-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  gap: var(--sp-4);
+  align-items: stretch;
+}
+.log-grid > :only-child {
+  grid-column: 1 / -1;
+}
+@media (max-width: 1180px) {
+  .log-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.log-panel .empty-chart {
+  flex: 1;
+}
+
+.heatmap-panel {
+  gap: var(--sp-3);
+}
+/* Room above the grid for the busiest-hour callout. */
+.heatmap-frame {
+  position: relative;
+  padding-top: 34px;
+}
+.heatmap-callout {
+  position: absolute;
+  top: 2px;
+  padding: 4px 10px;
+  border: 1px solid var(--link);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: var(--fs-12);
+  font-weight: 700;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.heatmap {
+  display: grid;
+  grid-template-columns: 40px repeat(24, minmax(0, 1fr));
+  gap: 2px;
+}
+.hm-row {
+  display: contents;
+}
+.hm-row-label {
+  align-self: center;
+  color: var(--text-2);
+  font-size: var(--fs-11);
+  line-height: 1;
+}
+.hm-cell {
+  display: block;
+  height: 28px;
+  background: var(--heat-0);
+}
+/* Hover: a hairline of ink in the 2px gutter around the cell, so it reads on
+   every step of the ramp, the brightest included. */
+.hm-cell:hover {
+  position: relative;
+  z-index: 2;
+  outline: 1px solid var(--text);
+  outline-offset: 1px;
+}
+.hm-cell.h1,
+.heatmap-legend .h1 {
+  background: var(--heat-1);
+}
+.hm-cell.h2,
+.heatmap-legend .h2 {
+  background: var(--heat-2);
+}
+.hm-cell.h3,
+.heatmap-legend .h3 {
+  background: var(--heat-3);
+}
+.hm-cell.h4,
+.heatmap-legend .h4 {
+  background: var(--heat-4);
+}
+.hm-cell.h5,
+.heatmap-legend .h5 {
+  background: var(--heat-5);
+}
+/* The busiest hour: a panel-coloured gap inside the cell, an ink ring outside. */
+.hm-cell.busiest {
+  position: relative;
+  z-index: 1;
+  box-shadow: inset 0 0 0 3px var(--panel);
+  outline: 1.5px solid var(--text);
+  outline-offset: 1px;
+}
+.hm-axis .hm-col-label {
+  padding-top: 4px;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 14px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.heatmap-foot {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  margin-top: auto;
+}
+.heatmap-foot details.chart-data {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+.heatmap-legend {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  color: var(--text-2);
+  font-size: var(--fs-12);
+}
+.heatmap-legend i {
+  display: block;
+  width: 16px;
+  height: 12px;
+}
+
+.log-daily .cost-chart-wrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+.log-daily .cost-chart-wrap details.chart-data {
+  margin-top: auto;
+}
+
+/* The opened data tables, as the artboard draws them: a compact 12px ledger
+   (6px header, 3px rows, 12px gutters) no wider than its columns need, the
+   caption a left-aligned note above it. */
+.activity-page details.chart-data .table-scroll {
+  max-width: 360px;
+}
+.heatmap-foot details.chart-data .table-scroll {
+  max-width: 320px;
+}
+.activity-page details.chart-data caption {
+  padding-bottom: 6px;
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  text-align: left;
+}
+.activity-page details.chart-data th {
+  padding: 6px 12px 6px 0;
+}
+.activity-page details.chart-data td {
+  padding: 3px 12px 3px 0;
+  font-size: var(--fs-12);
+}
+.activity-page details.chart-data th:last-child,
+.activity-page details.chart-data td:last-child {
+  padding-right: 0;
+}
+.heatmap-foot details.chart-data th:nth-child(-n + 2) {
+  width: 82px;
+}
+.log-daily details.chart-data th:first-child {
+  width: 142px;
+}
+
+/* ---------- Reset cycles ---------- */
+
+.log-cycles {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  margin-top: var(--sp-2);
+}
+.log-cycles-heading {
+  padding-bottom: var(--sp-3);
+  border-bottom: 1px solid var(--rule-strong);
+}
+.log-cycles-heading h2 {
+  font-size: var(--fs-13);
+  letter-spacing: 0.12em;
+  line-height: 1.45;
+  text-transform: uppercase;
+}
+.log-cycles-heading p {
+  max-width: 980px;
+  margin-top: var(--sp-1);
+  color: var(--text-2);
+}
+.cycle-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));
+  gap: var(--sp-4);
+  align-items: start;
+}
+.cycle-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-width: 0;
+  padding: var(--sp-4);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+.cycle-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+.cycle-card header strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-15);
+  font-weight: 700;
+}
+.cycle-card header strong .swatch {
+  width: 10px;
+  height: 10px;
+}
+.cycle-card header > span {
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Peak use per window: a 100% rule on top, the 0% baseline beneath, 36px of
+   axis labels on the left, each bar with its figure above and date below. */
+.cycle-bars {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-evenly;
+  gap: 8px;
+  height: 104px;
+  margin: 22px 0 22px;
+  padding-left: 36px;
+}
+.cycle-bars::after {
+  content: '';
+  position: absolute;
+  left: 36px;
+  right: 0;
+  bottom: 0;
+  border-top: 1px solid var(--rule-strong);
+}
+.cycle-limit {
+  position: absolute;
+  top: 0;
+  left: 36px;
+  right: 0;
+  border-top: 1px solid var(--text-3);
+  pointer-events: none;
+}
+.cycle-limit span,
+.cycle-zero {
+  position: absolute;
+  width: 30px;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 10px;
+  text-align: right;
+}
+.cycle-limit span {
+  top: -6px;
+  right: calc(100% + 6px);
+}
+.cycle-zero {
+  left: 0;
+  bottom: -5px;
+}
+.cycle-bar {
+  position: relative;
+  z-index: 1;
+  flex: 0 1 40px;
+  min-width: 14px;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+}
+.cycle-bar i {
+  position: relative;
+  display: block;
+  width: 100%;
+}
+.cycle-bar b {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  color: var(--text);
+  font-size: var(--fs-12);
+  font-weight: 700;
+  line-height: 14px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.cycle-bar b.inside {
+  top: 3px;
+  bottom: auto;
+}
+.cycle-bar small {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 12px;
+  white-space: nowrap;
+}
+
+.cycle-table {
+  table-layout: auto;
+}
+.cycle-table th,
+.cycle-table td {
+  padding: 6px 0 6px 8px;
+  font-size: var(--fs-12);
+}
+.cycle-table th {
+  font-size: 10px;
+  line-height: 12px;
+  vertical-align: top;
+  white-space: normal;
+}
+.cycle-table th:first-child,
+.cycle-table td:first-child {
+  padding-left: 0;
+}
+.cycle-table td {
+  vertical-align: middle;
+  font-variant-numeric: tabular-nums;
+}
+.cycle-table th.num {
+  width: 1%;
+}
+.cycle-table td.num {
+  white-space: nowrap;
+}
+.cycle-table td.cycle-peak {
+  font-weight: 700;
+}
+.cycle-table tbody tr:last-child td {
+  border-bottom: 1px solid var(--rule-soft);
+}
+.cycle-when {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+/* The open window's chip is one step brighter and tighter than a provenance chip. */
+.cycle-when .chip {
+  padding: 0 4px;
+  border-color: var(--text-2);
+  color: var(--text);
+  font-size: 9px;
+  line-height: 13px;
+}
+.cycle-table td small {
+  display: block;
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-11);
+}
+
+/* ---------- Narrow windows ---------- */
+
+@media (max-width: 760px) {
+  .activity-page .log-lead {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--sp-3);
+  }
+  .heatmap-foot {
+    flex-direction: column-reverse;
+    gap: 0;
+  }
+}
+
+@media (forced-colors: active) {
+  .log-tape,
+  .cycle-card {
+    border: 1px solid CanvasText;
+  }
+  .log-tape .log-tape-left,
+  .log-tape-key i {
+    background: CanvasText;
+    forced-color-adjust: none;
+  }
+  .log-tape .log-tape-used,
+  .log-tape-key i.used {
+    background: GrayText;
+    forced-color-adjust: none;
+  }
+  .hm-cell,
+  .heatmap-legend i {
+    forced-color-adjust: none;
+  }
+  .hm-cell.busiest {
+    outline-color: Highlight;
+  }
+  .cycle-bars::after,
+  .cycle-limit {
+    border-color: CanvasText;
+  }
+}

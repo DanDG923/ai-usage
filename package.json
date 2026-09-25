@@ -67,7 +67,8 @@
       "!node_modules/@anthropic-ai/claude-agent-sdk-win32-*/**",
       "!node_modules/@anthropic-ai/claude-agent-sdk/bridge.mjs",
       "!node_modules/@anthropic-ai/claude-agent-sdk/browser-sdk.js",
-      "!dist/assets/demo-*.js"
+      "!dist/assets/demo-*.js",
+      "!dist/assets/flyout-preview-*.js"
     ],
     "directories": {
       "output": "release"

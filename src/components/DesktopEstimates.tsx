@@ -1,6 +1,7 @@
+import { AlertOctagon, Info, Upload } from 'lucide-react';
 import { useState } from 'react';
 import type { DesktopImportPreview, Snapshot } from '../types';
-import { compactNumber, money } from '../lib';
+import { compactNumber, formatInt, money } from '../lib';
 import { Disclosure } from './details/Disclosure';
 
 function estimateMoney(value: number, currency: string) {
@@ -71,17 +72,19 @@ export function DesktopEstimates({
   return (
     <section
       id="desktop-estimates"
-      className="panel desktop-estimates"
+      className="panel costs-panel desktop-estimates"
       aria-labelledby="desktop-estimates-heading"
       aria-busy={busy}
       data-keep-awake={preview ? 'true' : undefined}
     >
-      <div className="panel-heading">
+      <div className="costs-head">
         <div>
-          <h2 id="desktop-estimates-heading">Claude desktop & web chat estimates</h2>
+          <h3 id="desktop-estimates-heading" className="pnl-title">
+            Claude desktop & web chat estimates
+          </h3>
           <p>Separate from recorded costs and allowance forecasts. Last {snapshot.costs.periodDays} days.</p>
         </div>
-        <span className="table-note">Manual export import · text only</span>
+        <span className="badge">Manual export import · text only</span>
       </div>
       <div className="desktop-estimates-body">
         <p>
@@ -111,36 +114,63 @@ export function DesktopEstimates({
           </p>
         </Disclosure>
         {!preview ? (
-          <div className="action-row">
-            <button className="secondary-button" disabled={busy} onClick={choose}>
+          <div className="costs-actions">
+            <button type="button" className="btn" disabled={busy} aria-busy={busy} onClick={choose}>
+              <Upload aria-hidden="true" />
               {busy ? 'Working…' : 'Import Claude export…'}
             </button>
             {!!estimates?.storedReplies && (
-              <button className="secondary-button" disabled={busy} onClick={clear}>
+              <button type="button" className="btn" disabled={busy} onClick={clear}>
                 Remove imported estimates…
               </button>
             )}
           </div>
         ) : (
-          <div className="desktop-import-preview">
-            <h3>Review chat import</h3>
-            <p>
-              {preview.conversations} conversations · {preview.replies} replies · {preview.skipped} unsupported or
-              unusable entries skipped.
-            </p>
+          <div className="desktop-import-preview" role="group" aria-labelledby="desktop-import-heading">
+            <h4 id="desktop-import-heading" className="pnl-title">
+              Review chat import
+            </h4>
+            <dl className="desktop-import-facts">
+              <div className="cr">
+                <dt>Conversations</dt>
+                <span className="lead" aria-hidden="true" />
+                <dd>{formatInt(preview.conversations)}</dd>
+              </div>
+              <div className="cr">
+                <dt>Replies</dt>
+                <span className="lead" aria-hidden="true" />
+                <dd>{formatInt(preview.replies)}</dd>
+              </div>
+              <div className="cr">
+                <dt>Unsupported or unusable entries skipped</dt>
+                <span className="lead" aria-hidden="true" />
+                <dd>{formatInt(preview.skipped)}</dd>
+              </div>
+              <div className="cr">
+                <dt>Replies with no model</dt>
+                <span className="lead" aria-hidden="true" />
+                <dd>{formatInt(preview.unknownModelReplies)}</dd>
+              </div>
+              <div className="cr">
+                <dt>Replies with missing prompts or excluded content</dt>
+                <span className="lead" aria-hidden="true" />
+                <dd>{formatInt(preview.excludedContentReplies)}</dd>
+              </div>
+            </dl>
             <p>
               {preview.models.length
                 ? `Reply models found: ${preview.models.join(', ')}`
                 : 'No reply model information was found.'}
             </p>
-            <p>
-              {preview.unknownModelReplies} replies have no model. {preview.excludedContentReplies} replies have missing
-              prompts or excluded content.
-            </p>
             {!!preview.unknownModelReplies && (
               <label className="desktop-model-choice">
-                <span>Pricing assumption for replies with no model</span>
-                <select value={assumedModel} disabled={busy} onChange={(event) => setAssumedModel(event.target.value)}>
+                <span className="lbl">Pricing assumption for replies with no model</span>
+                <select
+                  className="fld"
+                  value={assumedModel}
+                  disabled={busy}
+                  onChange={(event) => setAssumedModel(event.target.value)}
+                >
                   <option value="">Keep unknown and unpriced</option>
                   {snapshot.priceCatalog
                     .filter((row) => row.model.startsWith('claude-'))
@@ -153,25 +183,38 @@ export function DesktopEstimates({
               </label>
             )}
             {assumedModel && (
-              <p>
-                This applies {assumedModel} to every reply missing a model in this import. It does not verify which
-                model you used.
+              <p className="desktop-import-caution">
+                <Info aria-hidden="true" />
+                <span>
+                  This applies {assumedModel} to every reply missing a model in this import. It does not verify which
+                  model you used.
+                </span>
               </p>
             )}
-            <div className="action-row">
-              <button className="primary-button" disabled={busy} onClick={save}>
+            <div className="costs-actions">
+              <button type="button" className="btn btn-p" disabled={busy} aria-busy={busy} onClick={save}>
                 {busy ? 'Working…' : 'Save chat estimates'}
               </button>
-              <button className="secondary-button" disabled={busy} onClick={cancel}>
+              <button type="button" className="btn" disabled={busy} onClick={cancel}>
                 Cancel import
               </button>
             </div>
           </div>
         )}
-        {notice && <p role="status">{notice}</p>}
-        {error && <p role="alert">{error}</p>}
+        {notice && (
+          <p className="costs-message" role="status">
+            <Info aria-hidden="true" />
+            <span>{notice}</span>
+          </p>
+        )}
+        {error && (
+          <p className="costs-message is-error" role="alert">
+            <AlertOctagon aria-hidden="true" />
+            <span>{error}</span>
+          </p>
+        )}
         {!!estimates?.replies && (
-          <p>
+          <p className="desktop-estimate-total">
             <strong>{estimateMoney(estimates.estimatedCost, estimates.currency)}</strong> estimated visible-text value
             for priced replies · {estimates.replies} replies imported in this period · {estimates.unpricedReplies}{' '}
             unpriced. Excluded from the recorded cost total above.
@@ -179,7 +222,7 @@ export function DesktopEstimates({
         )}
       </div>
       <div className="table-scroll">
-        <table>
+        <table className="costs-table desktop-table">
           <thead>
             <tr>
               <th>Model</th>
@@ -194,8 +237,8 @@ export function DesktopEstimates({
             {estimates?.byModel.length ? (
               estimates.byModel.map((row) => (
                 <tr key={`${row.model}-${row.modelOrigin}`}>
-                  <td>
-                    <strong>{row.model || 'Unknown model'}</strong>
+                  <td className="costs-name">
+                    <span className="costs-model">{row.model || 'Unknown model'}</span>
                     {!!row.incompleteReplies && (
                       <small>{row.incompleteReplies} with missing prompts or excluded content</small>
                     )}
@@ -211,9 +254,11 @@ export function DesktopEstimates({
                   <td className="num">{compactNumber(row.inputTokens)}</td>
                   <td className="num">{compactNumber(row.outputTokens)}</td>
                   <td className="num">
-                    {row.estimatedCost === null
-                      ? 'Unpriced'
-                      : `≈ ${estimateMoney(row.estimatedCost, estimates.currency)}`}
+                    {row.estimatedCost === null ? (
+                      <span className="costs-figure unpriced">Unpriced</span>
+                    ) : (
+                      <strong>{`≈ ${estimateMoney(row.estimatedCost, estimates.currency)}`}</strong>
+                    )}
                   </td>
                 </tr>
               ))

@@ -1,0 +1,1072 @@
+/*
+ * Costs: the fuel ledger. The ECAM title and period keys, the readouts row,
+ * the daily cost instrument and cache savings, then the cost evidence: tasks
+ * and sub-agents, cost by model, by project, sessions, and the separate
+ * Claude desktop and web chat estimates.
+ *
+ * Built from the shared parts (components.css: .panel, .pnl-title, .lbl,
+ * .btn, .seg, .fld, .badge, .swatch, .disclosure, .cr/.lead) and charts.css
+ * (the chart itself). Provider colour appears only on swatches and chart
+ * marks; every figure is tabular; "Unpriced" is a word, never a guess.
+ * Everything is scoped to .costs-page, so nothing here reaches another page.
+ */
+
+.costs-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- ECAM title, lead and period keys ---------- */
+
+.costs-page .costs-lead {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--sp-5);
+  margin: 0;
+}
+.costs-page .costs-title {
+  min-width: 0;
+}
+.costs-page .costs-title p {
+  max-width: 760px;
+}
+.costs-page .costs-period {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+.costs-page .costs-period > span {
+  color: var(--text-3);
+  font-size: var(--fs-12);
+  text-align: right;
+}
+/* The pressed key keeps its ink face even when the preview disables it. */
+.costs-page .period-switch {
+  background: var(--control-face);
+}
+.costs-page .period-switch > .btn {
+  min-width: 52px;
+  height: 32px;
+}
+.costs-page .period-switch > .btn[aria-pressed='true']:disabled {
+  border-color: transparent;
+  background: var(--text);
+  color: var(--on-ink);
+}
+.costs-page .period-switch > .btn:hover:not(:disabled):not([aria-pressed='true']) {
+  background: var(--current);
+}
+
+/* Disclosures on this page: the Deck disclosure at the body size. */
+.costs-page .disclosure {
+  font-size: var(--fs-13);
+}
+.costs-page .disclosure-body p {
+  max-width: none;
+  color: var(--text-2);
+  line-height: 1.55;
+}
+.costs-page .lead-disclosure {
+  margin-top: calc(var(--sp-2) * -1);
+}
+
+/* ---------- Readouts row ---------- */
+
+.cost-summary,
+.cost-summary dl {
+  font-variant-numeric: tabular-nums;
+}
+.cost-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 4fr);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+.cost-summary dl {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0;
+}
+.cost-summary .cost-primary,
+.cost-summary dl > div {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: var(--sp-4);
+}
+.cost-summary dl > div {
+  border-left: 1px solid var(--rule);
+}
+.cost-summary .cost-primary > span,
+.cost-summary dt {
+  color: var(--text-2);
+  font-size: var(--fs-11);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 14px;
+  text-transform: uppercase;
+}
+.cost-summary .cost-primary > strong,
+.cost-summary dd {
+  margin: 6px 0 0;
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+}
+.cost-summary .cost-primary > small,
+.cost-summary dl small {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  line-height: 1.4;
+}
+
+/* ---------- Daily cost and cache savings ---------- */
+
+.costs-page .cost-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: var(--sp-4);
+  align-items: stretch;
+}
+.costs-page .panel {
+  padding: var(--sp-4);
+}
+.costs-page .costs-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-5);
+  margin: 0;
+}
+.costs-page .costs-head > div {
+  min-width: 0;
+}
+.costs-page .costs-head p,
+.costs-page .savings-panel > p {
+  max-width: 760px;
+  margin: 4px 0 0;
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  line-height: 1.45;
+}
+.costs-page .costs-head > .badge {
+  flex: none;
+}
+.costs-page .costs-note {
+  flex: none;
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  white-space: nowrap;
+}
+
+/* The chart draws its own key and style keys; the style keys join the
+   panel heading, top right, as on the instrument panels. */
+.costs-page .cost-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+.costs-page .cost-panel > .costs-head {
+  padding-right: 170px;
+}
+.costs-page .cost-panel .chart-toolbar .chart-mode {
+  position: absolute;
+  top: var(--sp-4);
+  right: var(--sp-4);
+}
+.costs-page .cost-panel details.chart-data {
+  border-top: 1px solid var(--rule);
+}
+
+.costs-page .savings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+.costs-page .savings-panel > p {
+  margin: 0;
+}
+.costs-page .savings-figure {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin: 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--rule);
+}
+.costs-page .savings-figure strong {
+  font-family: var(--font-sans);
+  font-size: var(--fs-44);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0;
+}
+.costs-page .savings-figure span {
+  color: var(--text-2);
+}
+.costs-page .saving-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 4px 0 0;
+  padding: 0;
+  font-variant-numeric: tabular-nums;
+}
+.costs-page .saving-bars > div {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.costs-page .saving-bars > div > span {
+  display: flex;
+  align-items: baseline;
+  gap: 0;
+}
+.costs-page .saving-bars .lead {
+  margin: 0 8px 4px;
+}
+.costs-page .saving-bars b {
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+/* Magnitudes, not states: the cached cost in ink, the uncached in grey. */
+.costs-page .saving-bars i {
+  display: block;
+  height: 14px;
+  border-radius: 0;
+  background: var(--panel-2);
+}
+.costs-page .saving-bars i::after {
+  content: '';
+  display: block;
+  width: var(--fill, 100%);
+  height: 100%;
+  border-radius: 0;
+  background: var(--bar-mid);
+}
+.costs-page .saving-bars .with-cache i::after {
+  background: var(--text);
+}
+
+/* ---------- Cost evidence ---------- */
+
+.costs-page .costs-evidence {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  margin-top: var(--sp-2);
+}
+.costs-page .table-tools {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--sp-5);
+  margin: 0;
+  padding-bottom: var(--sp-3);
+  border-bottom: 1px solid var(--rule-strong);
+}
+.costs-page .table-tools h2 {
+  font-size: var(--fs-13);
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  line-height: 1.45;
+  text-transform: uppercase;
+}
+.costs-page .table-tools p {
+  margin-top: 4px;
+  color: var(--text-2);
+  font-size: var(--fs-13);
+}
+/* The filter is a Deck field with its search glyph inside; the ring sits on
+   the whole field (the input itself draws none). */
+.costs-page .table-search {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 320px;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--control);
+  border-radius: var(--radius);
+  background: var(--control-face);
+  color: var(--text-2);
+  cursor: text;
+}
+.costs-page .table-search:hover {
+  border-color: var(--control-hover);
+}
+.costs-page .table-search:focus-within {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.costs-page .table-search svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: var(--text-2);
+}
+.costs-page .table-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--fs-13);
+}
+.costs-page .table-search input:focus-visible {
+  outline: 0;
+}
+.costs-page .table-search input::placeholder {
+  color: var(--text-3);
+  opacity: 1;
+}
+
+.costs-page .costs-panel,
+.costs-page .task-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+}
+
+/* ---------- Tables ---------- */
+
+.costs-page .costs-panel .table-scroll,
+.costs-page .task-panel .table-scroll {
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--rule-strong) transparent;
+}
+.costs-page .costs-table {
+  font-size: var(--fs-13);
+}
+.costs-page .costs-table th {
+  padding: 8px 6px;
+  border-bottom: 1px solid var(--rule);
+  white-space: normal;
+  vertical-align: bottom;
+}
+.costs-page .costs-table td {
+  padding: 10px 6px;
+  border-top: 0;
+  border-bottom: 1px solid var(--rule-soft);
+  font-variant-numeric: tabular-nums;
+}
+.costs-page .costs-table th:first-child,
+.costs-page .costs-table td:first-child {
+  padding-left: 0;
+}
+.costs-page .costs-table th:last-child,
+.costs-page .costs-table td:last-child {
+  padding-right: 0;
+}
+.costs-page .costs-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.costs-page .costs-table td strong {
+  color: var(--text);
+  font-weight: 700;
+}
+.costs-page .costs-table td small {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-2);
+  font-size: var(--fs-11);
+  line-height: 1.4;
+}
+.costs-page .costs-table td.num small {
+  color: var(--text-3);
+}
+.costs-page .costs-table td.num .partly-priced small,
+.costs-page .costs-table td.num .unpriced-cost small {
+  color: var(--text-2);
+}
+.costs-page .costs-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.costs-page .costs-name small.path {
+  max-width: 420px;
+  overflow: hidden;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.costs-page .costs-model {
+  display: block;
+  letter-spacing: 0.02em;
+}
+.costs-page .costs-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.costs-page .costs-source .swatch {
+  width: 10px;
+  height: 10px;
+}
+.costs-page .costs-figure {
+  display: block;
+  white-space: nowrap;
+}
+
+/* Unpriced is shown, never guessed: the word in grey, the row set apart. */
+.costs-page .costs-figure.unpriced,
+.costs-page .unpriced-cost strong,
+.costs-page .costs-table td .unpriced-cost strong {
+  color: var(--text-2);
+  font-style: italic;
+  font-weight: 400;
+  font-synthesis-style: auto;
+}
+/* The slanted word leans past its box; the scroll frame would clip its last
+   letter in a right-aligned final column. */
+.costs-page .costs-figure.unpriced,
+.costs-page .unpriced-cost strong {
+  padding-right: 0.15em;
+}
+.costs-page .unpriced-cost,
+.costs-page .partly-priced {
+  display: block;
+  border: 0;
+  background: none;
+  padding: 0;
+}
+.costs-page .partly-priced strong {
+  color: var(--text);
+}
+.costs-page .costs-table tr.unpriced-row td {
+  border-bottom: 1px dashed var(--rule-strong);
+  background: var(--panel-2);
+}
+
+/* Cost by model */
+.costs-page .model-table {
+  min-width: 980px;
+}
+.costs-page .model-table td.costs-name {
+  width: 230px;
+}
+.costs-page .model-table .costs-source {
+  color: var(--text-2);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 14px;
+  text-transform: uppercase;
+}
+.costs-page .model-table .costs-model {
+  margin-top: 2px;
+}
+.costs-page .model-table td.num:last-child {
+  width: 170px;
+}
+.costs-page .share {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+.costs-page .share-bar {
+  flex: none;
+  display: block;
+  width: 56px;
+  height: 8px;
+  background: var(--current);
+}
+.costs-page .share-bar i {
+  display: block;
+  width: var(--fill, 0%);
+  height: 100%;
+  background: var(--text-2);
+}
+
+/* By project */
+.costs-page .project-table {
+  min-width: 760px;
+}
+.costs-page .project-table td {
+  font-size: var(--fs-12);
+}
+.costs-page .project-table td.costs-name strong,
+.costs-page .project-table td.num strong {
+  font-size: var(--fs-13);
+}
+.costs-page .project-table td:not(.costs-name) {
+  white-space: nowrap;
+}
+.costs-page .project-table td.costs-name {
+  max-width: 0;
+  width: 40%;
+}
+
+/* Sessions */
+.costs-page .session-table {
+  min-width: 600px;
+  font-size: var(--fs-12);
+}
+.costs-page .session-table td {
+  padding-top: 9px;
+  padding-bottom: 9px;
+  font-size: var(--fs-12);
+  vertical-align: middle;
+}
+.costs-page .session-table .session-id {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-size: var(--fs-12);
+}
+
+/* Empty, loading and failed tables: a dashed well, the words centred. */
+.costs-page .empty-cell,
+.costs-page .costs-table tbody tr td.empty-cell {
+  padding: 24px 16px;
+  border: 1px dashed var(--rule-strong);
+  color: var(--text-2);
+  text-align: center;
+}
+.costs-page .costs-table tbody tr:hover td.empty-cell {
+  background: none;
+}
+.costs-page .session-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.costs-page .session-error [role='alert'] {
+  color: var(--text);
+}
+
+/* Paging */
+.costs-page .costs-paging {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-12);
+}
+.costs-page .costs-pager {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.costs-page .costs-pager > span {
+  white-space: nowrap;
+}
+.costs-page .costs-pager .btn[aria-disabled='true']:not(:disabled) {
+  color: var(--text-3);
+  cursor: progress;
+}
+
+/* ---------- Tasks & sub-agents ---------- */
+
+.costs-page .task-panel .task-grouping {
+  margin: 0;
+}
+.costs-page .task-list {
+  display: flex;
+  flex-direction: column;
+}
+.costs-page .task-columns,
+.costs-page .task-card > summary {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, 1fr) 150px;
+  gap: var(--sp-3);
+}
+.costs-page .task-columns {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--rule);
+  color: var(--text-2);
+  font-size: var(--fs-11);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 14px;
+  text-transform: uppercase;
+}
+.costs-page .task-columns > :nth-child(4),
+.costs-page .task-columns > :nth-child(5) {
+  text-align: right;
+}
+.costs-page .task-card {
+  border-top: 0;
+  border-bottom: 1px solid var(--rule-soft);
+}
+.costs-page .task-card > summary {
+  align-items: center;
+  padding: 8px 0;
+  list-style: none;
+  cursor: pointer;
+}
+.costs-page .task-card > summary::-webkit-details-marker {
+  display: none;
+}
+.costs-page .task-card > summary:hover {
+  background: var(--panel-2);
+}
+.costs-page .task-card > summary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+/* The toggle looks like the Deck icon key; the summary is the control. */
+.costs-page .task-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--control);
+  border-radius: var(--radius);
+  background: var(--control-face);
+  color: var(--text);
+}
+.costs-page .task-card > summary:hover .task-toggle {
+  border-color: var(--control-hover);
+  background: var(--current);
+}
+.costs-page .task-toggle svg {
+  width: 16px;
+  height: 16px;
+  transition: transform 150ms ease;
+}
+.costs-page .task-card[open] .task-toggle svg {
+  transform: rotate(90deg);
+}
+.costs-page .task-identity {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.costs-page .task-identity strong {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+}
+.costs-page .task-identity strong::before {
+  content: none;
+}
+.costs-page .task-identity .swatch {
+  width: 10px;
+  height: 10px;
+}
+.costs-page .task-identity small {
+  display: block;
+  margin-top: 1px;
+  color: var(--text-2);
+  font-size: var(--fs-12);
+}
+.costs-page .task-identity code {
+  display: inline;
+  color: var(--text-2);
+}
+.costs-page .task-agents {
+  color: var(--text-2);
+}
+.costs-page .task-tokens,
+.costs-page .task-total {
+  text-align: right;
+}
+.costs-page .task-total strong {
+  font-weight: 700;
+}
+.costs-page .task-total small {
+  display: block;
+  color: var(--text-2);
+  font-size: var(--fs-11);
+}
+
+.costs-page .task-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 0 12px 44px;
+  padding: 12px 14px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+}
+.costs-page .task-split {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 32px;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+}
+.costs-page .task-subtotal {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 150px;
+}
+.costs-page .task-subtotal .lbl {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.costs-page .task-subtotal-figure {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 6px;
+}
+.costs-page .task-subtotal-figure .partly-priced,
+.costs-page .task-subtotal-figure .unpriced-cost {
+  display: contents;
+}
+.costs-page .task-subtotal-figure strong {
+  font-size: var(--fs-15);
+  font-weight: 700;
+}
+.costs-page .task-subtotal-figure small {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-13);
+}
+.costs-page .task-subtotal-figure small::before {
+  content: '· ';
+}
+.costs-page .task-key {
+  flex: none;
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  background: var(--text);
+}
+.costs-page .task-key.subagent {
+  background: var(--mix-3);
+}
+.costs-page .task-key.unknown {
+  background: var(--mix-4);
+}
+.costs-page .task-split-bar {
+  flex: 1 1 240px;
+  display: flex;
+  gap: 2px;
+  min-width: 160px;
+  height: 12px;
+}
+.costs-page .task-split-bar .task-key {
+  flex-basis: 0;
+  width: auto;
+  height: 100%;
+}
+.costs-page .task-panel .task-guidance {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.costs-page .task-guidance code {
+  color: var(--text);
+}
+/* A fixed grid so every expanded task's agent columns line up. */
+.costs-page .agent-table {
+  min-width: 720px;
+  table-layout: fixed;
+}
+.costs-page .agent-table th:first-child {
+  width: 34%;
+}
+.costs-page .agent-table th:last-child {
+  width: 14%;
+}
+.costs-page .agent-table th,
+.costs-page .agent-table td {
+  padding-top: 6px;
+  padding-bottom: 6px;
+  font-size: var(--fs-12);
+}
+.costs-page .agent-table tbody tr:hover td {
+  background: none;
+}
+.costs-page .task-agent-name {
+  min-width: 220px;
+  overflow-wrap: anywhere;
+}
+.costs-page .task-agent-name small code {
+  display: inline;
+  font-size: 1em;
+}
+
+/* ---------- Sessions beside chat estimates ---------- */
+
+.costs-page .costs-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-4);
+  align-items: start;
+}
+
+.costs-page .desktop-estimates {
+  gap: 14px;
+}
+.costs-page .desktop-estimates-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0;
+}
+.costs-page .desktop-estimates-body > p {
+  max-width: 100ch;
+  margin: 0;
+  color: var(--text);
+  line-height: 1.5;
+}
+.costs-page .desktop-estimates-body .disclosure {
+  margin: 0;
+}
+.costs-page .costs-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.costs-page .desktop-import-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+}
+.costs-page .desktop-import-preview > p {
+  color: var(--text-2);
+}
+.costs-page .desktop-import-facts {
+  margin: 0;
+}
+.costs-page .desktop-import-facts .cr {
+  padding: 7px 0;
+}
+.costs-page .desktop-import-facts dt {
+  color: var(--text-2);
+}
+.costs-page .desktop-import-facts dd {
+  font-weight: 700;
+}
+.costs-page .desktop-model-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 420px;
+}
+.costs-page .desktop-model-choice .fld {
+  width: 100%;
+}
+.costs-page .desktop-import-caution,
+.costs-page .costs-message {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  color: var(--text);
+}
+.costs-page .desktop-import-caution svg,
+.costs-page .costs-message svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  color: var(--text-2);
+}
+.costs-page .costs-message.is-error svg {
+  color: var(--warning);
+}
+.costs-page .desktop-estimate-total {
+  color: var(--text-2);
+}
+.costs-page .desktop-estimate-total strong {
+  color: var(--text);
+  font-weight: 700;
+}
+.costs-page .desktop-table {
+  min-width: 520px;
+  font-size: var(--fs-12);
+}
+.costs-page .desktop-table td {
+  font-size: var(--fs-12);
+}
+
+/* ---------- Narrower windows ---------- */
+
+@media (max-width: 1320px) {
+  .costs-page .costs-pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 1200px) {
+  .cost-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .cost-summary dl > div:first-child {
+    border-left: 0;
+  }
+  .cost-summary dl {
+    border-top: 1px solid var(--rule);
+  }
+  /* Cost by model drops its wide-window minimum so every column stays in
+     view instead of scrolling sideways. */
+  .costs-page .model-table {
+    min-width: 0;
+  }
+  .costs-page .model-table td.costs-name {
+    width: 160px;
+  }
+  .costs-page .model-table td.num:last-child {
+    width: auto;
+  }
+}
+
+@media (max-width: 1000px) {
+  .costs-page .cost-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .cost-summary dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .cost-summary dl > div:nth-child(3) {
+    border-left: 0;
+  }
+  .cost-summary dl > div:nth-child(n + 3) {
+    border-top: 1px solid var(--rule);
+  }
+  .cost-summary .cost-primary > strong,
+  .cost-summary dd {
+    font-size: var(--fs-22);
+  }
+  .costs-page .task-columns,
+  .costs-page .task-card > summary {
+    grid-template-columns: 32px minmax(0, 1.6fr) minmax(0, 1fr) 130px;
+  }
+  .costs-page .task-columns > :nth-child(3),
+  .costs-page .task-agents {
+    display: none;
+  }
+  .costs-page .table-tools {
+    align-items: stretch;
+    flex-direction: column;
+    gap: var(--sp-3);
+  }
+  .costs-page .table-search {
+    width: 100%;
+  }
+  /* The agent and project ledgers size their columns to their content
+     again, so the API-equivalent column never hides behind a sideways
+     scroll. */
+  .costs-page .agent-table {
+    min-width: 0;
+    table-layout: auto;
+  }
+  .costs-page .project-table {
+    min-width: 0;
+  }
+  .costs-page .agent-table th:first-child,
+  .costs-page .agent-table th:last-child {
+    width: auto;
+  }
+}
+
+@media (max-width: 800px) {
+  .costs-page .costs-lead {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .costs-page .costs-period {
+    align-items: flex-start;
+  }
+  .costs-page .costs-period > span {
+    text-align: left;
+  }
+  .costs-page .costs-head {
+    flex-wrap: wrap;
+    gap: var(--sp-2);
+  }
+  .costs-page .cost-panel > .costs-head {
+    padding-right: 0;
+  }
+  .costs-page .cost-panel .chart-toolbar .chart-mode {
+    position: static;
+  }
+  .costs-page .task-detail {
+    margin-left: 0;
+  }
+  /* At the window floor the agent name column gives up some width. */
+  .costs-page .task-agent-name {
+    min-width: 140px;
+  }
+  /* Cost by model tightens its gutters to fit the window floor. */
+  .costs-page .model-table th,
+  .costs-page .model-table td {
+    padding-right: 4px;
+    padding-left: 4px;
+  }
+  .costs-page .model-table th:first-child,
+  .costs-page .model-table td:first-child {
+    padding-left: 0;
+  }
+  .costs-page .model-table th:last-child,
+  .costs-page .model-table td:last-child {
+    padding-right: 0;
+  }
+  /* The share keeps its figure; the bar beside it only repeats it. */
+  .costs-page .model-table .share-bar {
+    display: none;
+  }
+  /* Model names break at their hyphens, never mid-word. */
+  .costs-page .model-table td.costs-name {
+    overflow-wrap: normal;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .costs-page .task-toggle svg {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .cost-summary {
+    border: 1px solid CanvasText;
+  }
+  .costs-page .saving-bars i::after,
+  .costs-page .share-bar i,
+  .costs-page .task-key {
+    forced-color-adjust: none;
+    background: CanvasText;
+  }
+}

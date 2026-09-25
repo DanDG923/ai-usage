@@ -1,4 +1,5 @@
 /* oxlint-disable jsx-a11y/no-noninteractive-element-interactions -- Pointer tooltips supplement the keyboard-accessible data tables for each SVG. */
+import { ChevronRight } from 'lucide-react';
 import { useCallback, useId, useMemo, useRef, useState } from 'react';
 import { inactiveRanges, isActiveAt, type Schedule } from '../budget';
 import { niceScale } from '../chart-scale';
@@ -23,9 +24,22 @@ const WEEKDAY_DAY_MONTH_TIME = new Intl.DateTimeFormat(LOCALE, {
   minute: '2-digit',
 });
 
+// The icon set's warning triangle and critical octagon (24-unit grid), drawn
+// inside SVG annotations where a component icon cannot go.
+const ICON_CAUTION =
+  'M10.3 4.2L2.6 17.6A2 2 0 0 0 4.3 20.6h15.4a2 2 0 0 0 1.7-3L13.7 4.2a2 2 0 0 0-3.4 0z M12 9.5v4.5 M12 17.3v.2';
+const ICON_WARNING = 'M8.2 3h7.6L21 8.2v7.6L15.8 21H8.2L3 15.8V8.2z M12 8v5 M12 16.2v.2';
+
 function linePath(points: { x: number; y: number }[]) {
   if (!points.length) return '';
   return points.map((point, index) => `${index ? 'L' : 'M'}${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(' ');
+}
+
+/** A square turned on its corner: the heavier-week glyph wherever it appears. */
+function diamond(cx: number, cy: number, size: number) {
+  const x = cx.toFixed(1);
+  const y = cy.toFixed(1);
+  return `M${x},${(cy - size).toFixed(1)} L${(cx + size).toFixed(1)},${y} L${x},${(cy + size).toFixed(1)} L${(cx - size).toFixed(1)},${y} Z`;
 }
 
 /** Local noon today, as a stable number the memoised layouts can key on. */
@@ -45,12 +59,31 @@ function axisFormat(count: number) {
   return count > 45 ? DAY_MONTH : WEEKDAY_DAY;
 }
 
-/** Indices to label along a day axis so labels never crowd. */
-function dayTicks(count: number, maxLabels = 8) {
-  const step = Math.max(1, Math.ceil(count / maxLabels));
+// At most eight day labels, and at least this far apart (px between label
+// centres) at the rendered width: a 10px B612 Mono label such as "Mon 21" or
+// "21 Sept" is about 42px wide, and the last one is anchored at its end.
+const MAX_DAY_LABELS = 8;
+const DAY_LABEL_SPACING = 80;
+
+/** Indices to label along a day axis so labels never crowd; `slot` is one day's width in px. */
+function dayTicks(count: number, slot: number) {
+  const step = Math.max(1, Math.ceil(count / MAX_DAY_LABELS), Math.ceil(DAY_LABEL_SPACING / Math.max(1, slot)));
   const ticks: number[] = [];
   for (let index = count - 1; index >= 0; index -= step) ticks.unshift(index);
   return ticks;
+}
+
+/**
+ * Where a hover readout sits: beside the guide while it is in the left part of
+ * the chart, and mirrored to the other side once the guide passes 60%, so the
+ * box never runs off the chart. `gap` is the distance from the guide to the
+ * box's near edge; a negative gap lets the box overhang the guide instead.
+ */
+function tipStyle(x: number, width: number, top: number, gap: number): React.CSSProperties {
+  const at = `${((x / Math.max(1, width)) * 100).toFixed(2)}%`;
+  return x > width * 0.6
+    ? { top, left: `calc(${at} - ${gap}px)`, transform: 'translateX(-100%)' }
+    : { top, left: `calc(${at} + ${gap}px)` };
 }
 
 function valueAt(points: Point[], at: number): number | null {
@@ -68,19 +101,27 @@ function valueAt(points: Point[], at: number): number | null {
   return points.at(-1)!.remaining;
 }
 
+// Padding is sized for B612 Mono: the top holds the NOW and RESET captions,
+// the left the right-aligned "100%" ticks, and the right the fuel tape at the
+// reset plus leader lines and 12px end labels ("100%" is about 29px wide).
 const RUNWAY_SIZES = {
-  compact: { width: 360, height: 150, left: 32, right: 38, top: 10, bottom: 22, labelGap: 13, yTicks: [0, 50, 100] },
+  compact: { width: 360, height: 180, left: 38, right: 58, top: 22, bottom: 26, labelGap: 16, yTicks: [0, 50, 100] },
   full: {
     width: 800,
-    height: 300,
-    left: 42,
-    right: 50,
-    top: 24,
-    bottom: 28,
-    labelGap: 15,
+    height: 330,
+    left: 48,
+    right: 74,
+    top: 34,
+    bottom: 36,
+    labelGap: 16,
     yTicks: [0, 25, 50, 75, 100],
   },
 } as const;
+
+/** The full chart writes each run-out as a line under the plot; each line adds this much height. */
+const NOTE_LINE = 24;
+/** Half the fuel tape's width; the tape is centred on the reset. */
+const TAPE_HALF = 6;
 
 export type RunwaySize = keyof typeof RUNWAY_SIZES;
 
@@ -134,20 +175,29 @@ function runwayLayout(view: ProviderView, schedule: Schedule, size: RunwaySize, 
   if (!current || view.expired) return null;
   const { observed, expected, heavy } = current.forecast.series;
   if (!observed.length && !expected.length && !heavy.length) return null;
-  // The viewBox follows the rendered width, so labels keep their size on a
-  // narrow card and on a full-width one; the height grows gently with it.
-  const base = RUNWAY_SIZES[size];
-  const height =
-    size === 'full'
-      ? Math.round(Math.min(380, Math.max(base.height, width * 0.36)))
-      : Math.round(Math.min(220, Math.max(base.height, width * 0.4)));
-  const dims = { ...base, width, height };
   const projection = hasProjection(view);
   const resetAt = Date.parse(current.resetsAt);
   const nowAt = expected[0]?.at ?? observed.at(-1)?.at ?? resetAt;
   const lastProjection = projection ? Math.max(expected.at(-1)?.at ?? 0, heavy.at(-1)?.at ?? 0) : 0;
   const maxAt = Math.max(Number.isFinite(resetAt) ? resetAt : 0, lastProjection, nowAt + 3_600_000);
   const minAt = Math.min(windowStartOf(view), nowAt - 3_600_000);
+  const inRange = (value?: string | null) => {
+    const at = value ? Date.parse(value) : NaN;
+    return Number.isFinite(at) && at >= nowAt && at <= maxAt ? at : null;
+  };
+  const exhaustsAt = projection ? inRange(current.forecast.exhaustsAt) : null;
+  const heavyExhaustsAt = projection ? inRange(current.forecast.heavyExhaustsAt) : null;
+  // The viewBox follows the rendered width, so labels keep their size on a
+  // narrow card and on a full-width one; the height grows gently with it. The
+  // full chart keeps a line under the plot for each run-out, also while the
+  // heavier range is hidden, so toggling the range never moves the chart.
+  const base = RUNWAY_SIZES[size];
+  const notes = size === 'full' ? (exhaustsAt != null ? 1 : 0) + (heavyExhaustsAt != null ? 1 : 0) : 0;
+  const frame =
+    size === 'full'
+      ? Math.round(Math.min(420, Math.max(base.height, width * 0.415)))
+      : Math.round(Math.min(240, Math.max(base.height, width * 0.5)));
+  const dims = { ...base, width, height: frame + notes * NOTE_LINE, bottom: base.bottom + notes * NOTE_LINE };
   const plotWidth = dims.width - dims.left - dims.right;
   const plotHeight = dims.height - dims.top - dims.bottom;
   const x = (at: number) => dims.left + ((at - minAt) / Math.max(1, maxAt - minAt)) * plotWidth;
@@ -167,6 +217,15 @@ function runwayLayout(view: ProviderView, schedule: Schedule, size: RunwaySize, 
     x: x(range.from),
     width: Math.max(0, x(range.to) - x(range.from)),
   }));
+  // A faint line at each local midnight, so a night band reads as "the night of" a day.
+  const midnights: number[] = [];
+  const midnight = new Date(minAt);
+  midnight.setHours(0, 0, 0, 0);
+  midnight.setDate(midnight.getDate() + 1);
+  while (midnight.getTime() < maxAt) {
+    midnights.push(x(midnight.getTime()));
+    midnight.setDate(midnight.getDate() + 1);
+  }
   const span = maxAt - minAt;
   const ticks: { at: number; label: string }[] = [];
   if (span <= 2 * 86_400_000) {
@@ -194,10 +253,7 @@ function runwayLayout(view: ProviderView, schedule: Schedule, size: RunwaySize, 
     ...(expectedEnd ? [{ kind: 'expected' as const, value: expectedEnd.remaining, y: y(expectedEnd.remaining) }] : []),
     ...(heavyEnd ? [{ kind: 'heavy' as const, value: heavyEnd.remaining, y: y(heavyEnd.remaining) }] : []),
   ];
-  const inRange = (value?: string | null) => {
-    const at = value ? Date.parse(value) : NaN;
-    return Number.isFinite(at) && at >= nowAt && at <= maxAt ? at : null;
-  };
+  const plotRight = dims.left + plotWidth;
   return {
     dims,
     projection,
@@ -213,13 +269,17 @@ function runwayLayout(view: ProviderView, schedule: Schedule, size: RunwaySize, 
     heavyPath: linePath(scale(heavyPoints)),
     band,
     inactive,
+    midnights,
     ticks,
     endLabels,
+    // The destination: the fuel tape and the end labels stand at the reset.
+    hasReset: Number.isFinite(resetAt),
+    resetX: Number.isFinite(resetAt) ? Math.max(dims.left, Math.min(plotRight, x(resetAt))) : plotRight,
     // The card's balance: after a stale reading that is the estimate the
     // expected path starts from, not the last observation.
     nowValue: view.remaining ?? valueAt(observed, nowAt),
-    exhaustsAt: projection ? inRange(current.forecast.exhaustsAt) : null,
-    heavyExhaustsAt: projection ? inRange(current.forecast.heavyExhaustsAt) : null,
+    exhaustsAt,
+    heavyExhaustsAt,
   };
 }
 
@@ -245,8 +305,10 @@ function useMeasuredWidth(initial: number): [number, React.RefCallback<HTMLDivEl
 }
 
 /**
- * One provider's allowance on its own clock: what was used so far, the expected
- * path to the reset, and the range a heavier week could take. Hours outside the
+ * One provider's allowance on its own clock, drawn as a flight plan that lands
+ * on a fuel tape: what was used so far, the expected path to the reset and the
+ * range a heavier week could take, then at the reset a tape showing what is
+ * likely to be left and what is likely to be used before it. Hours outside the
  * active schedule are shaded, which is why the projections flatten overnight.
  */
 export function RunwayChart({
@@ -273,7 +335,32 @@ export function RunwayChart({
   const { dims, projection, nowAt, minAt, maxAt, x, y, plotWidth, plotHeight, ticks, endLabels, nowValue } = layout;
   const forecast = view.current.forecast;
   const interactive = size === 'full';
-  const labelX = dims.left + plotWidth + 6;
+  const plotBottom = dims.top + plotHeight;
+  const { resetX } = layout;
+  const tapeX = resetX - TAPE_HALF;
+  const nowX = x(nowAt);
+  // The tape reads the card's own figures, so it always agrees with them.
+  const expectedAtReset = projection ? view.expectedRemaining : null;
+  const heavyAtReset = projection && showHeavy ? view.heavyRemaining : null;
+  const labelX = resetX + 18;
+  const rings = [
+    ...(showHeavy && layout.heavyExhaustsAt != null ? [x(layout.heavyExhaustsAt)] : []),
+    ...(layout.exhaustsAt != null ? [x(layout.exhaustsAt)] : []),
+  ];
+  const placedLabels = spreadRunwayLabels(
+    endLabels.filter((label) => label.kind === 'expected' || showHeavy).map((label) => ({ ...label, from: label.y })),
+    dims.top,
+    plotBottom,
+    dims.labelGap,
+  );
+  const notes = [
+    ...(layout.exhaustsAt != null
+      ? [{ kind: 'expected' as const, text: `Expected to run out ${whenLabel(layout.exhaustsAt, nowAt)}` }]
+      : []),
+    ...(showHeavy && layout.heavyExhaustsAt != null
+      ? [{ kind: 'heavy' as const, text: `Heavier week runs out ${whenLabel(layout.heavyExhaustsAt, nowAt)}` }]
+      : []),
+  ];
 
   const moveHover = (event: React.MouseEvent<SVGSVGElement>) => {
     const rect = svgRef.current?.getBoundingClientRect();
@@ -289,6 +376,16 @@ export function RunwayChart({
           expected: projection && hoverAt >= nowAt ? boundedValueAt(forecast.series.expected, hoverAt) : null,
           heavy: projection && showHeavy && hoverAt >= nowAt ? boundedValueAt(forecast.series.heavy, hoverAt) : null,
         };
+  const rows =
+    size === 'full'
+      ? (['observed', 'expected', 'heavy'] as const).flatMap((kind) =>
+          kind !== 'observed' && !projection
+            ? []
+            : forecast.series[kind]
+                .filter((point) => point.at >= minAt && point.at <= maxAt)
+                .map((point, index) => ({ kind, point, key: `${kind}:${index}` })),
+        )
+      : [];
 
   return (
     <figure className={`runway-figure ${size}`}>
@@ -318,6 +415,9 @@ export function RunwayChart({
                 height={plotHeight}
               />
             ))}
+            {layout.midnights.map((at) => (
+              <line key={at} className="runway-midnight" x1={at} x2={at} y1={dims.top} y2={plotBottom} />
+            ))}
           </g>
           {dims.yTicks.map((value) => (
             <g key={value}>
@@ -326,91 +426,177 @@ export function RunwayChart({
                 x2={dims.left + plotWidth}
                 y1={y(value)}
                 y2={y(value)}
-                className={value === 0 ? 'grid-line baseline' : 'grid-line'}
+                className={value === 0 ? 'runway-grid baseline' : 'runway-grid'}
               />
-              <text className="runway-axis" x="0" y={y(value) + 3.5}>
+              <text className="runway-axis" x={dims.left - 8} y={y(value) + 3.5} textAnchor="end">
                 {value}%
               </text>
             </g>
           ))}
-          {reserve > 0 && (
-            <g className="runway-reserve">
-              <line x1={dims.left} x2={dims.left + plotWidth} y1={y(reserve)} y2={y(reserve)} />
-              <text x={dims.left + 4} y={y(reserve) - 5}>
-                Reserve {Math.round(reserve)}%
-              </text>
-            </g>
-          )}
           <g clipPath={`url(#${clipId})`}>
             {showHeavy && layout.band && <path d={layout.band} className="runway-band" />}
             {showHeavy && <path d={layout.heavyPath} className="runway-heavy" />}
             <path d={layout.expectedPath} className="runway-expected" />
             <path d={layout.observedPath} className="runway-observed" />
           </g>
-          <line x1={x(nowAt)} x2={x(nowAt)} y1={dims.top} y2={dims.top + plotHeight} className="now-line" />
-          {size === 'full' && (
-            <text className="runway-axis" x={x(nowAt)} y={dims.top - 8} textAnchor="middle">
-              Now
+          <line x1={nowX} x2={nowX} y1={dims.top - 10} y2={plotBottom} className="now-line" />
+          {(!layout.hasReset || Math.abs(nowX - resetX) >= 42) && (
+            <text className="runway-cap" x={Math.max(dims.left + 12, nowX)} y={dims.top - 14} textAnchor="middle">
+              NOW
             </text>
           )}
-          {nowValue != null && (
-            <circle className="runway-now" cx={x(nowAt)} cy={y(nowValue)} r={size === 'full' ? 5 : 4} />
+          {nowValue != null && <circle className="runway-now" cx={nowX} cy={y(nowValue)} r="4" />}
+          <g className="runway-tape">
+            <rect className="runway-tape-well" x={tapeX} y={dims.top} width={TAPE_HALF * 2} height={plotHeight} />
+            {nowValue != null && expectedAtReset != null && (
+              <>
+                <rect
+                  className="runway-tape-used"
+                  x={tapeX}
+                  y={y(nowValue)}
+                  width={TAPE_HALF * 2}
+                  height={Math.max(0, y(expectedAtReset) - y(nowValue))}
+                />
+                <rect
+                  className="runway-tape-reset"
+                  x={tapeX}
+                  y={y(expectedAtReset)}
+                  width={TAPE_HALF * 2}
+                  height={Math.max(0, plotBottom - y(expectedAtReset))}
+                />
+              </>
+            )}
+            {nowValue != null && expectedAtReset == null && (
+              // Without a forecast the balance is outlined: neither what is left
+              // at the reset nor what is used before it is known yet.
+              <rect
+                className="runway-tape-balance"
+                x={tapeX + 0.5}
+                y={y(nowValue)}
+                width={TAPE_HALF * 2 - 1}
+                height={Math.max(0, plotBottom - y(nowValue) - 0.5)}
+              />
+            )}
+          </g>
+          {reserve > 0 && (
+            <g className="runway-reserve">
+              <line x1={dims.left} x2={dims.left + plotWidth} y1={y(reserve)} y2={y(reserve)} />
+              <line className="runway-bingo" x1={tapeX - 5} x2={tapeX + 17} y1={y(reserve)} y2={y(reserve)} />
+              <text x={dims.left + 6} y={y(reserve) - 5}>
+                Reserve {Math.round(reserve)}%
+              </text>
+            </g>
           )}
+          {nowValue != null && (
+            <path
+              className="runway-tape-pointer"
+              d={`M${(tapeX - 1).toFixed(1)},${y(nowValue).toFixed(1)} l-7,-5 v10 z`}
+            />
+          )}
+          {layout.hasReset && (
+            <text className="runway-cap" x={resetX} y={dims.top - 14} textAnchor="middle">
+              RESET
+            </text>
+          )}
+          {placedLabels.map((label) => (
+            <g key={label.kind} className={`runway-end-label ${label.kind}`}>
+              <path
+                className="runway-leader"
+                d={`M${(resetX + 8).toFixed(1)},${label.from.toFixed(1)} L${(labelX - 3).toFixed(1)},${label.y.toFixed(1)}`}
+              />
+              {label.kind === 'expected' ? (
+                <circle className="runway-glyph expected" cx={labelX + 3} cy={label.y} r="3" />
+              ) : (
+                <path className="runway-glyph heavy" d={diamond(labelX + 3, label.y, 4)} />
+              )}
+              <text className={`runway-end ${label.kind}`} x={labelX + 10} y={label.y + 4}>
+                {Math.round(label.value)}%
+              </text>
+            </g>
+          ))}
+          {expectedAtReset != null && (
+            <circle className="runway-bug expected" cx={resetX} cy={y(expectedAtReset)} r="4.5" />
+          )}
+          {heavyAtReset != null && <path className="runway-bug heavy" d={diamond(resetX, y(heavyAtReset), 6)} />}
           {showHeavy && layout.heavyExhaustsAt != null && (
             <g className="runway-exhaust heavy">
-              <circle cx={x(layout.heavyExhaustsAt)} cy={y(0)} r={size === 'full' ? 5 : 4} />
-              {size === 'full' && (
-                <text
-                  x={x(layout.heavyExhaustsAt)}
-                  y={y(0) - 12}
-                  // Near the reset the label would run into the end labels, so it reads leftwards.
-                  textAnchor={x(layout.heavyExhaustsAt) > dims.left + plotWidth * 0.7 ? 'end' : 'middle'}
-                >
-                  Heavier week runs out {whenLabel(layout.heavyExhaustsAt, nowAt)}
-                </text>
-              )}
+              <circle className="runway-ring" cx={x(layout.heavyExhaustsAt)} cy={y(0)} r="9" />
             </g>
           )}
           {layout.exhaustsAt != null && (
             <g className="runway-exhaust expected">
-              <circle cx={x(layout.exhaustsAt)} cy={y(0)} r={size === 'full' ? 5 : 4} />
+              <circle className="runway-ring" cx={x(layout.exhaustsAt)} cy={y(0)} r="9" />
             </g>
           )}
-          {spreadRunwayLabels(
-            endLabels.filter((label) => label.kind === 'expected' || showHeavy),
-            dims.top + 6,
-            dims.top + plotHeight,
-            dims.labelGap,
-          ).map((label) => (
-            <text key={label.kind} className={`runway-end ${label.kind}`} x={labelX} y={label.y + 3.5}>
-              {Math.round(label.value)}%
-            </text>
-          ))}
-          {ticks.map((tick) => (
-            <text key={tick.at} className="runway-axis" x={x(tick.at)} y={dims.height - 6} textAnchor="middle">
-              {tick.label}
-            </text>
-          ))}
-          {hoverAt != null && (
-            <line className="forecast-hover" x1={x(hoverAt)} x2={x(hoverAt)} y1={dims.top} y2={dims.top + plotHeight} />
+          {ticks
+            // A run-out ring on the baseline would sit on top of a day label right under it.
+            .filter((tick) => !rings.some((ringX) => Math.abs(ringX - x(tick.at)) < 14))
+            .map((tick) => (
+              <text key={tick.at} className="runway-axis" x={x(tick.at)} y={plotBottom + 18} textAnchor="middle">
+                {tick.label}
+              </text>
+            ))}
+          {size === 'full' &&
+            notes.map((note, index) => (
+              <g
+                key={note.kind}
+                className={`runway-note ${note.kind}`}
+                transform={`translate(${(resetX + 60).toFixed(1)} ${plotBottom + 44 + index * NOTE_LINE})`}
+              >
+                <svg x="-16" y="-12" width="15" height="15" viewBox="0 0 24 24">
+                  <path d={note.kind === 'heavy' ? ICON_CAUTION : ICON_WARNING} />
+                </svg>
+                <text x="-22" y="0" textAnchor="end">
+                  {note.text}
+                </text>
+              </g>
+            ))}
+          {hover && hoverAt != null && (
+            <g className="runway-hover">
+              <line className="chart-hover-line" x1={x(hoverAt)} x2={x(hoverAt)} y1={dims.top} y2={plotBottom} />
+              {hover.observed != null && (
+                <circle className="runway-hover-mark observed" cx={x(hoverAt)} cy={y(hover.observed)} r="4" />
+              )}
+              {hover.heavy != null && (
+                <path className="runway-hover-mark heavy" d={diamond(x(hoverAt), y(hover.heavy), 5)} />
+              )}
+              {hover.expected != null && (
+                <circle className="runway-hover-mark expected" cx={x(hoverAt)} cy={y(hover.expected)} r="4" />
+              )}
+            </g>
           )}
         </svg>
         {hover && hoverAt != null && (
-          <div
-            className="runway-tip"
-            style={{ left: `${Math.min(74, Math.max(1, (x(hoverAt) / dims.width) * 100 + 1.5))}%` }}
-          >
+          <div className={`chart-tip ${view.id}`} style={tipStyle(x(hoverAt), dims.width, dims.top + 6, 14)}>
             <strong>{WEEKDAY_DAY_MONTH_TIME.format(new Date(hoverAt))}</strong>
-            {hover.observed != null && <span>Observed · {Math.round(hover.observed)}% left</span>}
-            {hover.expected != null && <span>Expected · {Math.round(hover.expected)}% left</span>}
-            {hover.heavy != null && <span>Heavier week · {Math.round(hover.heavy)}% left</span>}
+            {hover.observed != null && (
+              <span>
+                <i className="tip-glyph observed" aria-hidden="true" />
+                Observed · {Math.round(hover.observed)}% left
+              </span>
+            )}
+            {hover.expected != null && (
+              <span>
+                <i className="tip-glyph expected" aria-hidden="true" />
+                Expected · {Math.round(hover.expected)}% left
+              </span>
+            )}
+            {hover.heavy != null && (
+              <span>
+                <i className="tip-glyph heavy" aria-hidden="true" />
+                Heavier week · {Math.round(hover.heavy)}% left
+              </span>
+            )}
             <small>{isActiveAt(hoverAt, schedule) ? 'Inside your active hours' : 'Outside active hours'}</small>
           </div>
         )}
       </div>
       {size === 'full' && (
         <details className="chart-data">
-          <summary>View runway data</summary>
+          <summary>
+            <ChevronRight aria-hidden="true" />
+            View runway data <span className="chart-data-count">· {rows.length} rows</span>
+          </summary>
           <div className="table-scroll">
             <table>
               <caption>{view.name} allowance observations and projections</caption>
@@ -422,19 +608,13 @@ export function RunwayChart({
                 </tr>
               </thead>
               <tbody>
-                {(['observed', 'expected', 'heavy'] as const).flatMap((kind) =>
-                  kind !== 'observed' && !projection
-                    ? []
-                    : forecast.series[kind]
-                        .filter((point) => point.at >= minAt && point.at <= maxAt)
-                        .map((point, index) => (
-                          <tr key={`${kind}:${index}`}>
-                            <td>{WEEKDAY_DAY_MONTH_TIME.format(new Date(point.at))}</td>
-                            <td>{kind === 'heavy' ? 'heavier week' : kind}</td>
-                            <td>{percent(point.remaining, 1)}</td>
-                          </tr>
-                        )),
-                )}
+                {rows.map(({ kind, point, key }) => (
+                  <tr key={key}>
+                    <td>{WEEKDAY_DAY_MONTH_TIME.format(new Date(point.at))}</td>
+                    <td>{kind === 'heavy' ? 'heavier week' : kind}</td>
+                    <td>{percent(point.remaining, 1)}</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
@@ -463,9 +643,18 @@ function axisMoney(value: number, currency: string, step: number) {
   return format.format(value);
 }
 
-const COST = { width: 880, height: 270, left: 56, right: 44, top: 20, bottom: 44 };
+/** Anchor for a day label: the outermost labels keep inside the chart instead of centring off its edge. */
+function dayAnchor(x: number, width: number) {
+  if (x < 26) return 'start';
+  if (x > width - 26) return 'end';
+  return 'middle';
+}
 
-function costLayout(costs: CostAnalytics, todayMs: number) {
+// The top holds the hover readout above the bars, with a leader down to the
+// hovered day, so the readout never covers the data it describes.
+const COST = { width: 880, height: 340, left: 48, right: 8, top: 80, bottom: 30 };
+
+function costLayout(costs: CostAnalytics, todayMs: number, width: number) {
   if (!costs.chart.length) return null;
   const byDate = new Map(costs.chart.map((point) => [point.date, point]));
   const points = recentDayKeys(costs.periodDays, todayMs).map(
@@ -473,26 +662,29 @@ function costLayout(costs: CostAnalytics, todayMs: number) {
   );
   const axis = niceScale(Math.max(...points.map((point) => point.codex + point.claude), 0.01));
   const max = axis.max;
-  const plotWidth = COST.width - COST.left - COST.right;
+  const plotWidth = width - COST.left - COST.right;
   const plotHeight = COST.height - COST.top - COST.bottom;
-  const x = (index: number) => COST.left + (index * plotWidth) / Math.max(1, points.length - 1);
+  const slot = plotWidth / Math.max(points.length, 1);
+  const x = (index: number) => COST.left + slot * (index + 0.5);
   const y = (value: number) => COST.top + plotHeight - (value / max) * plotHeight;
   const format = axisFormat(points.length);
   return {
     points,
     x,
     y,
+    slot,
     baseline: y(0),
     plotWidth,
+    plotHeight,
     codexPath: linePath(points.map((point, index) => ({ x: x(index), y: y(point.codex) }))),
     claudePath: linePath(points.map((point, index) => ({ x: x(index), y: y(point.claude) }))),
     totalPath: linePath(points.map((point, index) => ({ x: x(index), y: y(point.codex + point.claude) }))),
-    barWidth: Math.max(2, (plotWidth / Math.max(points.length, 1)) * 0.72),
+    barWidth: Math.max(2, Math.min(32, slot * 0.66)),
     grid: axis.ticks.map((value) => ({
       y: y(value),
       label: axisMoney(value, costs.currency, axis.step),
     })),
-    ticks: dayTicks(points.length).map((index) => ({
+    ticks: dayTicks(points.length, slot).map((index) => ({
       index,
       date: points[index].date,
       label: dateLabel(points[index].date, format),
@@ -504,17 +696,18 @@ export function CostChart({ costs }: { costs: CostAnalytics }) {
   const [mode, setMode] = useState<'lines' | 'stacked'>('stacked');
   const [hover, setHover] = useState<number | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
+  const [width, measure] = useMeasuredWidth(COST.width);
   const todayMs = todayNoon();
-  const layout = useMemo(() => costLayout(costs, todayMs), [costs, todayMs]);
+  const layout = useMemo(() => costLayout(costs, todayMs, width), [costs, todayMs, width]);
   if (!layout) return <div className="empty-chart tall">Token history will build this cost chart automatically.</div>;
-  const { points, x, y, baseline, plotWidth, codexPath, claudePath, totalPath, barWidth, grid, ticks } = layout;
+  const { points, x, y, slot, baseline, plotHeight, codexPath, claudePath, totalPath, barWidth, grid, ticks } = layout;
   const hovered = hover == null ? null : points[hover];
 
   const moveHover = (event: React.MouseEvent<SVGSVGElement>) => {
     const rect = svgRef.current?.getBoundingClientRect();
     if (!rect || rect.width < 1) return;
-    const fraction = ((event.clientX - rect.left) / rect.width) * COST.width;
-    const index = Math.round(((fraction - COST.left) / plotWidth) * (points.length - 1));
+    const at = ((event.clientX - rect.left) / rect.width) * width;
+    const index = Math.floor((at - COST.left) / slot);
     setHover(index < 0 || index >= points.length ? null : index);
   };
 
@@ -545,64 +738,103 @@ export function CostChart({ costs }: { costs: CostAnalytics }) {
           </button>
         </div>
       </div>
-      <svg
-        ref={svgRef}
-        className="cost-chart"
-        viewBox={`0 0 ${COST.width} ${COST.height}`}
-        role="img"
-        aria-label={`${costs.periodDays} day API equivalent cost history`}
-        onMouseMove={moveHover}
-        onMouseLeave={() => setHover(null)}
-      >
-        {grid.map((line, index) => (
-          <g key={index}>
-            <line x1={COST.left} x2={COST.width - COST.right} y1={line.y} y2={line.y} className="grid-line" />
-            <text x="4" y={line.y + 4}>
-              {line.label}
-            </text>
-          </g>
-        ))}
-        {mode === 'stacked' ? (
-          points.map((point, index) => (
-            <g key={point.date} className={hover === index ? 'bar hovered' : 'bar'}>
-              <rect
-                x={x(index) - barWidth / 2}
-                y={y(point.codex)}
-                width={barWidth}
-                height={Math.max(0, baseline - y(point.codex))}
-                className="cost-codex-bar"
-                rx="1.5"
-              />
-              <rect
-                x={x(index) - barWidth / 2}
-                y={y(point.codex + point.claude)}
-                width={barWidth}
-                height={Math.max(0, y(point.codex) - y(point.codex + point.claude))}
-                className="cost-claude-bar"
-                rx="1.5"
-              />
+      <div className="chart-canvas" ref={measure}>
+        <svg
+          ref={svgRef}
+          className="cost-chart"
+          viewBox={`0 0 ${width} ${COST.height}`}
+          role="img"
+          aria-label={`${costs.periodDays} day API equivalent cost history`}
+          onMouseMove={moveHover}
+          onMouseLeave={() => setHover(null)}
+        >
+          {grid.map((line, index) => (
+            <g key={index}>
+              <line x1={COST.left} x2={width - COST.right} y1={line.y} y2={line.y} className="chart-grid" />
+              <text className="chart-axis" x={COST.left - 8} y={line.y + 3.5} textAnchor="end">
+                {line.label}
+              </text>
             </g>
-          ))
-        ) : (
-          <>
-            <path
-              d={`${totalPath} L${x(points.length - 1)},${baseline} L${COST.left},${baseline} Z`}
-              className="total-area"
+          ))}
+          {hover != null && (
+            <rect className="chart-hover-band" x={x(hover) - slot / 2} y={COST.top} width={slot} height={plotHeight} />
+          )}
+          {mode === 'stacked' ? (
+            <>
+              {points.map((point, index) => (
+                <g key={point.date} className={hover === index ? 'bar hovered' : 'bar'}>
+                  <rect
+                    x={x(index) - barWidth / 2}
+                    y={y(point.codex)}
+                    width={barWidth}
+                    height={Math.max(0, baseline - y(point.codex))}
+                    className="cost-codex-bar"
+                  />
+                  <rect
+                    x={x(index) - barWidth / 2}
+                    y={y(point.codex + point.claude)}
+                    width={barWidth}
+                    height={Math.max(0, y(point.codex) - y(point.codex + point.claude))}
+                    className="cost-claude-bar"
+                  />
+                </g>
+              ))}
+              <path d={totalPath} className="cost-total-line" />
+            </>
+          ) : (
+            <>
+              <path
+                d={`${totalPath} L${x(points.length - 1).toFixed(1)},${baseline} L${x(0).toFixed(1)},${baseline} Z`}
+                className="total-area"
+              />
+              <path d={codexPath} className="cost-codex-line" />
+              <path d={claudePath} className="cost-claude-line" />
+              <path d={totalPath} className="cost-total-line" />
+            </>
+          )}
+          {ticks.map((tick) => (
+            <text
+              key={tick.date}
+              className="chart-axis"
+              x={x(tick.index)}
+              y={COST.height - 12}
+              textAnchor={dayAnchor(x(tick.index), width)}
+            >
+              {tick.label}
+            </text>
+          ))}
+          {hovered && hover != null && (
+            <line
+              className="chart-leader"
+              x1={x(hover)}
+              x2={x(hover)}
+              y1={12}
+              y2={y(hovered.codex + hovered.claude) - 2}
             />
-            <path d={codexPath} className="cost-codex-line" />
-            <path d={claudePath} className="cost-claude-line" />
-            <path d={totalPath} className="cost-total-line" />
-          </>
+          )}
+        </svg>
+        {hovered && hover != null && (
+          <div className="chart-tip" style={tipStyle(x(hover), width, 4, -10)}>
+            <strong>
+              {dateLabel(hovered.date, WEEKDAY_DAY_MONTH)} · total{' '}
+              {money(hovered.codex + hovered.claude, costs.currency)}
+            </strong>
+            <span>
+              <i className="tip-swatch codex" aria-hidden="true" />
+              Codex {money(hovered.codex, costs.currency)}
+            </span>
+            <span>
+              <i className="tip-swatch claude" aria-hidden="true" />
+              Claude {money(hovered.claude, costs.currency)}
+            </span>
+          </div>
         )}
-        {ticks.map((tick) => (
-          <text key={tick.date} x={x(tick.index)} y={COST.height - 14} textAnchor="middle">
-            {tick.label}
-          </text>
-        ))}
-        {hover != null && <line className="forecast-hover" x1={x(hover)} x2={x(hover)} y1={COST.top} y2={baseline} />}
-      </svg>
+      </div>
       <details className="chart-data">
-        <summary>View cost data</summary>
+        <summary>
+          <ChevronRight aria-hidden="true" />
+          View cost data <span className="chart-data-count">· Date / Codex / Claude + Fable / Total</span>
+        </summary>
         <div className="table-scroll">
           <table>
             <caption>Daily API-equivalent cost</caption>
@@ -627,42 +859,38 @@ export function CostChart({ costs }: { costs: CostAnalytics }) {
           </table>
         </div>
       </details>
-      {hovered && hover != null && (
-        <div className="forecast-tip" style={{ left: `${Math.min(84, Math.max(2, (x(hover) / COST.width) * 100))}%` }}>
-          {dateLabel(hovered.date, WEEKDAY_DAY_MONTH)} · total {money(hovered.codex + hovered.claude, costs.currency)} ·
-          Codex {money(hovered.codex, costs.currency)} · Claude {money(hovered.claude, costs.currency)}
-        </div>
-      )}
     </div>
   );
 }
 
-// Wider than the cost chart because it spans the full page; the viewBox keeps
-// its text at a sensible on-screen size once scaled to the panel.
-const DAILY = { width: 1320, height: 300, left: 64, right: 40, top: 14, bottom: 40 };
+// The top holds the one-line hover readout above the bars.
+const DAILY = { width: 640, height: 260, left: 44, right: 8, top: 44, bottom: 28 };
 
-function dailyLayout(rows: DailyUsage[], days: number, todayMs: number) {
+function dailyLayout(rows: DailyUsage[], days: number, todayMs: number, width: number) {
   if (!rows.length) return null;
   const totals = new Map<string, number>();
   for (const row of rows) totals.set(row.date, (totals.get(row.date) || 0) + Number(row.tokens || 0));
   const points = recentDayKeys(days, todayMs).map((date) => ({ date, tokens: totals.get(date) || 0 }));
   const axis = niceScale(Math.max(...points.map((point) => point.tokens), 1));
   const max = axis.max;
-  const plotWidth = DAILY.width - DAILY.left - DAILY.right;
+  const plotWidth = width - DAILY.left - DAILY.right;
   const plotHeight = DAILY.height - DAILY.top - DAILY.bottom;
   const baseline = DAILY.top + plotHeight;
+  const slot = plotWidth / Math.max(points.length, 1);
   const format = axisFormat(points.length);
   return {
     points,
     max,
     plotHeight,
     baseline,
-    slot: plotWidth / Math.max(points.length, 1),
+    slot,
+    barWidth: Math.max(2, Math.min(28, slot * 0.72)),
+    x: (index: number) => DAILY.left + slot * (index + 0.5),
     grid: axis.ticks.map((value) => ({
       y: baseline - plotHeight * (value / max),
       label: compactNumber(value),
     })),
-    ticks: dayTicks(points.length).map((index) => ({
+    ticks: dayTicks(points.length, slot).map((index) => ({
       index,
       date: points[index].date,
       label: dateLabel(points[index].date, format),
@@ -672,52 +900,85 @@ function dailyLayout(rows: DailyUsage[], days: number, todayMs: number) {
 
 export function DailyUsageChart({ rows, days }: { rows: DailyUsage[]; days: number }) {
   const [hover, setHover] = useState<number | null>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [width, measure] = useMeasuredWidth(DAILY.width);
   const todayMs = todayNoon();
-  const layout = useMemo(() => dailyLayout(rows, days, todayMs), [rows, days, todayMs]);
+  const layout = useMemo(() => dailyLayout(rows, days, todayMs, width), [rows, days, todayMs, width]);
   if (!layout)
     return <div className="empty-chart">Daily account usage will appear when the local Codex service supplies it.</div>;
-  const { points, max, plotHeight, baseline, slot, grid, ticks } = layout;
+  const { points, max, plotHeight, baseline, slot, barWidth, x, grid, ticks } = layout;
   const hovered = hover == null ? null : points[hover];
+  const barTop = (tokens: number) => baseline - (tokens / max) * plotHeight;
+
+  const moveHover = (event: React.MouseEvent<SVGSVGElement>) => {
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect || rect.width < 1) return;
+    const at = ((event.clientX - rect.left) / rect.width) * width;
+    const index = Math.floor((at - DAILY.left) / slot);
+    setHover(index < 0 || index >= points.length ? null : index);
+  };
+
   return (
     <div className="cost-chart-wrap">
-      <svg
-        className="daily-usage-chart"
-        viewBox={`0 0 ${DAILY.width} ${DAILY.height}`}
-        role="img"
-        aria-label="Official daily Codex token usage"
-        onMouseLeave={() => setHover(null)}
-      >
-        {grid.map((line, index) => (
-          <g key={index}>
-            <line x1={DAILY.left} x2={DAILY.width - DAILY.right} y1={line.y} y2={line.y} className="grid-line" />
-            <text x="4" y={line.y + 4}>
-              {line.label}
-            </text>
-          </g>
-        ))}
-        {points.map((point, index) => {
-          const height = (point.tokens / max) * plotHeight;
-          return (
+      <div className="chart-canvas" ref={measure}>
+        <svg
+          ref={svgRef}
+          className="daily-usage-chart"
+          viewBox={`0 0 ${width} ${DAILY.height}`}
+          role="img"
+          aria-label="Official daily Codex token usage"
+          onMouseMove={moveHover}
+          onMouseLeave={() => setHover(null)}
+        >
+          {grid.map((line, index) => (
+            <g key={index}>
+              <line x1={DAILY.left} x2={width - DAILY.right} y1={line.y} y2={line.y} className="chart-grid" />
+              <text className="chart-axis" x={DAILY.left - 8} y={line.y + 3.5} textAnchor="end">
+                {line.label}
+              </text>
+            </g>
+          ))}
+          {hover != null && (
+            <rect className="chart-hover-band" x={x(hover) - slot / 2} y={DAILY.top} width={slot} height={plotHeight} />
+          )}
+          {points.map((point, index) => (
             <rect
               key={point.date}
-              x={DAILY.left + index * slot + slot * 0.14}
-              y={baseline - height}
-              width={Math.max(2, slot * 0.72)}
-              height={height}
-              rx="2"
+              x={x(index) - barWidth / 2}
+              y={barTop(point.tokens)}
+              width={barWidth}
+              height={baseline - barTop(point.tokens)}
               className={`daily-usage-bar${hover === index ? ' hovered' : ''}`}
-              onMouseEnter={() => setHover(index)}
             />
-          );
-        })}
-        {ticks.map((tick) => (
-          <text key={tick.date} x={DAILY.left + tick.index * slot + slot / 2} y={DAILY.height - 10} textAnchor="middle">
-            {tick.label}
-          </text>
-        ))}
-      </svg>
+          ))}
+          {ticks.map((tick) => (
+            <text
+              key={tick.date}
+              className="chart-axis"
+              x={x(tick.index)}
+              y={DAILY.height - 10}
+              textAnchor={dayAnchor(x(tick.index), width)}
+            >
+              {tick.label}
+            </text>
+          ))}
+          {hovered && hover != null && (
+            <line className="chart-leader" x1={x(hover)} x2={x(hover)} y1={12} y2={barTop(hovered.tokens) - 2} />
+          )}
+        </svg>
+        {hovered && hover != null && (
+          <div className="chart-tip" style={tipStyle(x(hover), width, 4, -10)}>
+            <strong>
+              {dateLabel(hovered.date, WEEKDAY_DAY_MONTH)} · {formatInt(hovered.tokens)} tokens
+            </strong>
+          </div>
+        )}
+      </div>
       <details className="chart-data">
-        <summary>View daily token data</summary>
+        <summary>
+          <ChevronRight aria-hidden="true" />
+          View daily token data <span className="chart-data-count">· {points.length} rows</span>
+        </summary>
         <div className="table-scroll">
           <table>
             <caption>Official daily Codex token usage</caption>
@@ -738,14 +999,6 @@ export function DailyUsageChart({ rows, days }: { rows: DailyUsage[]; days: numb
           </table>
         </div>
       </details>
-      {hovered && hover != null && (
-        <div
-          className="forecast-tip"
-          style={{ left: `${Math.min(84, Math.max(2, ((DAILY.left + hover * slot) / DAILY.width) * 100))}%` }}
-        >
-          {dateLabel(hovered.date, WEEKDAY_DAY_MONTH)} · {formatInt(hovered.tokens)} tokens
-        </div>
-      )}
     </div>
   );
 }

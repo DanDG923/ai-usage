@@ -1,3 +1,4 @@
+import { AlertTriangle, CheckCircle2, CircleDashed } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import {
   ADVANCED_GROUP_LABEL,
@@ -6,6 +7,9 @@ import {
   type SettingsSectionMeta,
   type SourcesBadge,
 } from './settings-sections';
+
+// The Sources badge is a status: its icon travels with the words.
+const SOURCES_ICON = { ok: CheckCircle2, warn: AlertTriangle, neutral: CircleDashed } as const;
 
 export function SettingsNav({
   active,
@@ -38,8 +42,10 @@ export function SettingsNav({
 
   const badge = (id: SettingsSectionId) => {
     if (id === 'sources') {
+      const Icon = SOURCES_ICON[sources.tone];
       return (
         <span className={`settings-nav-status ${sources.tone}`}>
+          <Icon aria-hidden="true" />
           <span className="sr-only">, </span>
           {sources.label}
         </span>

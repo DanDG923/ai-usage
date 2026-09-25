@@ -1,7 +1,7 @@
 import { formatInt, shortDate } from '../../lib';
 import type { Snapshot, Source } from '../../types';
 import { SettingBlock, SettingNote, SettingsSection } from './fields';
-import { sourceMark } from './SourcesSection';
+import { SourceStatus } from './SourcesSection';
 
 type Fact = { label: string; value: string };
 
@@ -123,16 +123,14 @@ export function DiagnosticsSection({ snapshot }: { snapshot: Snapshot }) {
         {snapshot.sources.map((source) => (
           <article key={source.id} className="diagnostics-card">
             <header>
-              <span className={`source-mark ${source.id}`} aria-hidden="true">
-                {sourceMark(source.id)}
-              </span>
+              <span className={`swatch lg ${source.id}`} aria-hidden="true" />
               <strong>{source.name}</strong>
             </header>
-            <dl>
+            <dl className="fact-list">
               {sourceFacts(source).map((fact) => (
                 <div key={fact.label}>
                   <dt>{fact.label}</dt>
-                  <dd>{fact.value}</dd>
+                  <dd>{fact.label === 'Status' ? <SourceStatus status={source.status} /> : fact.value}</dd>
                 </div>
               ))}
             </dl>

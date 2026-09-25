@@ -1,4 +1,4 @@
-import { ChevronRight, Hourglass } from 'lucide-react';
+import { AlertOctagon, AlertTriangle, ChevronRight, CircleDashed, Hourglass, Info, RefreshCw } from 'lucide-react';
 import { useMemo } from 'react';
 import type { BankedResets } from '../banked-resets';
 import { dailyBudget, scheduleOf } from '../budget';
@@ -37,9 +37,14 @@ function ForecastAdjustmentNotes({ view }: { view: ProviderView }) {
     if (window.forecast.expired || !adjustment?.dates.length || adjustment.weight >= 1) return null;
     return (
       <p className="provider-adjustment-note" key={window.bucketId}>
-        <strong>{window.bucketName}:</strong> Heavy usage before an early reset has less influence on the expected
-        forecast.
-        <small>Recorded usage is kept; the heavier case still includes it.</small>
+        <Info aria-hidden="true" />
+        <span>
+          <span>
+            <strong>{window.bucketName}:</strong> Heavy usage before an early reset has less influence on the expected
+            forecast.
+          </span>
+          <small>Recorded usage is kept; the heavier case still includes it.</small>
+        </span>
       </p>
     );
   });
@@ -65,13 +70,10 @@ export function SessionWindows({ view, nowMs }: { view: ProviderView; nowMs: num
     return (
       <p className="provider-session" key={window.bucketId}>
         <StatePill state={window.forecast.state} />
-        <strong>
-          {isEstimated(window) ? '~' : ''}
-          {Math.round(remaining)}%
-        </strong>
+        <strong>{`${isEstimated(window) ? '~' : ''}${Math.round(remaining)}%`}</strong>
         <span>{allowanceWindowLabel(window)}</span>
         <small title={dateTimeLabel(window.resetsAt)}>
-          {outlook} · resets in {resetDistance(window.resetsAt)}
+          {`${outlook} · resets in ${resetDistance(window.resetsAt)}`}
         </small>
       </p>
     );
@@ -85,7 +87,10 @@ export function SessionWindows({ view, nowMs }: { view: ProviderView; nowMs: num
           className="provider-model-allowances"
           open={modelWindows.some((window) => ['critical', 'risk', 'watch'].includes(window.forecast.state))}
         >
-          <summary>Separate model allowances</summary>
+          <summary>
+            <ChevronRight aria-hidden="true" />
+            Separate model allowances
+          </summary>
           <p>These apply only to the named model and are separate from your main Codex allowance.</p>
           {modelWindows.map(renderWindow)}
         </details>
@@ -111,29 +116,54 @@ export function BankedResetsRow({ banked }: { banked: BankedResets }) {
 export function ProviderOutcomes({ view, nowMs }: { view: ProviderView; nowMs: number }) {
   const forecast = view.current?.forecast;
   if (!forecast || view.expectedRemaining == null) {
-    return <p className="provider-learning">Learning from recent usage before it forecasts the reset.</p>;
+    return (
+      <p className="provider-learning">
+        <CircleDashed aria-hidden="true" />
+        <span>Learning from recent usage before it forecasts the reset.</span>
+      </p>
+    );
   }
   return (
     <dl className="provider-outcomes">
       <div>
         <dt>Expected at reset</dt>
         <dd className={forecast.exhaustsAt ? 'critical' : undefined}>
-          {forecast.exhaustsAt
-            ? `Runs out ${whenLabel(forecast.exhaustsAt, nowMs)}`
-            : `${percent(view.expectedRemaining)} left`}
+          {forecast.exhaustsAt && <AlertOctagon aria-hidden="true" />}
+          <span>
+            {forecast.exhaustsAt
+              ? `Runs out ${whenLabel(forecast.exhaustsAt, nowMs)}`
+              : `${percent(view.expectedRemaining)} left`}
+          </span>
         </dd>
       </div>
       {view.heavyRemaining != null && (
         <div>
           <dt>Heavier week</dt>
           <dd className={forecast.heavyExhaustsAt ? 'risk' : undefined}>
-            {forecast.heavyExhaustsAt
-              ? `Runs out ${whenLabel(forecast.heavyExhaustsAt, nowMs)}`
-              : `Leaves ${percent(view.heavyRemaining)}`}
+            {forecast.heavyExhaustsAt && <AlertTriangle aria-hidden="true" />}
+            <span>
+              {forecast.heavyExhaustsAt
+                ? `Runs out ${whenLabel(forecast.heavyExhaustsAt, nowMs)}`
+                : `Leaves ${percent(view.heavyRemaining)}`}
+            </span>
           </dd>
         </div>
       )}
     </dl>
+  );
+}
+
+/** The card's heading: the provider's swatch, name and plan, and its state as an icon and a word. */
+function CardHead({ view, pill }: { view: ProviderView; pill: React.ReactNode }) {
+  return (
+    <header className="provider-card-head">
+      <span className={`swatch lg ${view.id}`} aria-hidden="true" />
+      <div>
+        <h2>{view.name}</h2>
+        <span title={view.subtitle}>{view.subtitle}</span>
+      </div>
+      {pill}
+    </header>
   );
 }
 
@@ -158,26 +188,41 @@ export function ProviderSummary({
   );
 
   if (!view.current || view.remaining == null) {
+    const last = view.expired && view.current ? Math.max(0, Math.min(100, view.current.remainingPercent)) : null;
     return (
-      <article className={`provider-card ${view.id} unknown`} aria-label={`${view.name} allowance`}>
-        <header className="provider-card-head">
-          <span className={`swatch ${view.id}`} aria-hidden="true" />
-          <div>
-            <h2>{view.name}</h2>
-            <span>{view.subtitle}</span>
-          </div>
-          <StatePill state="unknown" label={view.expired ? 'Needs reading' : 'Learning'} />
-        </header>
+      <article className={`provider-card pnl ${view.id} unknown`} aria-label={`${view.name} allowance`}>
+        <CardHead
+          view={view}
+          pill={<StatePill state="unknown" label={view.expired ? 'Needs reading' : 'Learning'} />}
+        />
         <p className="provider-empty">
           {view.expired
             ? 'The last allowance window ended. Waiting for a new provider reading.'
             : 'Waiting for the provider’s first allowance observation.'}
         </p>
-        {view.expired && view.current && (
-          <div className="provider-meta">
-            <span>Last observed {percent(view.current.remainingPercent)} before reset</span>
-            <span>Window ended {dateTimeLabel(view.current.resetsAt)}</span>
-          </div>
+        {view.current && last != null && (
+          <>
+            <dl className="provider-meta">
+              <div className="cr">
+                <dt>Last observed</dt>
+                <span className="lead" aria-hidden="true" />
+                <dd>{`${percent(view.current.remainingPercent)} before reset`}</dd>
+              </div>
+              <div className="cr">
+                <dt>Window ended</dt>
+                <span className="lead" aria-hidden="true" />
+                <dd>{dateTimeLabel(view.current.resetsAt)}</dd>
+              </div>
+            </dl>
+            {/* History only: a grey bar in a dashed well, never a current balance. */}
+            <div
+              className="provider-history"
+              role="img"
+              aria-label={`History only: last observed ${percent(view.current.remainingPercent)} remaining before the window ended ${dateTimeLabel(view.current.resetsAt)}. Not a live balance.`}
+            >
+              <i style={{ width: `${last.toFixed(2)}%` }} />
+            </div>
+          </>
         )}
         {banked && <BankedResetsRow banked={banked} />}
         {/* Past windows, token capacity and evidence live on the provider page. */}
@@ -192,35 +237,34 @@ export function ProviderSummary({
   }
 
   const budget = dailyBudget(view.current, settings, nowMs);
+  // The reserve the forecasts keep, drawn as the bingo line across runway and tape.
+  const reserve = Math.max(0, Math.min(90, view.current.forecast.reservePercent ?? settings.reservePercent ?? 0));
   return (
-    <article className={`provider-card ${view.id} ${view.state}`} aria-label={`${view.name} allowance`}>
-      <header className="provider-card-head">
-        <span className={`swatch ${view.id}`} aria-hidden="true" />
-        <div>
-          <h2>{view.name}</h2>
-          <span title={view.subtitle}>{view.subtitle}</span>
-        </div>
-        <StatePill state={view.state} />
-      </header>
+    <article className={`provider-card pnl ${view.id} ${view.state}`} aria-label={`${view.name} allowance`}>
+      <CardHead view={view} pill={<StatePill state={view.state} />} />
       <div className="provider-card-figures">
-        <p className="provider-left">
-          <strong>
-            {view.estimated ? '~' : ''}
-            {Math.round(view.remaining)}%
-          </strong>
-          <span>{view.estimated ? 'left · estimated' : 'left'}</span>
-        </p>
-        <p className="provider-reset" title={dateTimeLabel(view.resetAt)}>
-          Resets <strong>{whenLabel(view.resetAt, nowMs)}</strong>
-          <span>in {resetDistance(view.resetAt)}</span>
-        </p>
+        <div className="provider-left">
+          <span className="lbl">Left now</span>
+          <p>
+            <strong>{`${view.estimated ? '~' : ''}${Math.round(view.remaining)}%`}</strong>
+            <span>{view.estimated ? 'left · estimated' : 'left'}</span>
+          </p>
+        </div>
+        <div className="provider-reset">
+          <span className="lbl">Resets</span>
+          <strong title={dateTimeLabel(view.resetAt)}>{whenLabel(view.resetAt, nowMs)}</strong>
+          <span>{`in ${resetDistance(view.resetAt)}`}</span>
+        </div>
       </div>
-      <RunwayChart view={view} schedule={schedule} size="compact" />
+      <RunwayChart view={view} schedule={schedule} size="compact" reserve={reserve} />
       <ProviderOutcomes view={view} nowMs={nowMs} />
       {budget && <DailyBudgetStrip budget={budget} provider={view.id} />}
       {banked && <BankedResetsRow banked={banked} />}
       {view.stale && (
-        <p className="provider-stale">Projected from the last successful reading. A fresh reading is due.</p>
+        <p className="provider-stale">
+          <RefreshCw aria-hidden="true" />
+          <span>Projected from the last successful reading. A fresh reading is due.</span>
+        </p>
       )}
       <SessionWindows view={view} nowMs={nowMs} />
       <ForecastAdjustmentNotes view={view} />

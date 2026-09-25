@@ -1,3 +1,4 @@
+import { AlertOctagon } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useId, useRef, useState } from 'react';
 
@@ -10,9 +11,11 @@ function ids(...values: (string | false | null | undefined)[]) {
 }
 
 /**
- * A Settings section: an h2 heading and muted description above one panel of
- * rows. The heading takes focus when the section is reached from the
- * navigation. `id` is the link target other pages and the navigation use.
+ * A Settings section: one config page. The h2 heading and a muted description
+ * sit above the section's rows, inside one panel; the page's keycap number is
+ * drawn by CSS, so it never joins the heading's accessible name. The heading
+ * takes focus when the section is reached from the navigation. `id` is the
+ * link target other pages and the navigation use.
  */
 export function SettingsSection({
   id,
@@ -42,7 +45,10 @@ export function SettingsSection({
 }
 
 /**
- * One setting: label and description on the left, its control on the right.
+ * One setting as a challenge-response row: LABEL ······ CONTROL, with the
+ * description as a hint underneath. The DOM keeps label, then description,
+ * then control (the order a screen reader reads); the grid places them, and
+ * the dotted leader is an empty element, never text.
  * Pass `htmlFor` when the control is a single form element; otherwise the
  * label gets `labelId` so a group of controls can reference it.
  */
@@ -83,7 +89,12 @@ export function SettingRow({
           </div>
         )}
       </div>
-      {children != null && <div className="setting-control">{children}</div>}
+      {children != null && (
+        <>
+          <span className="lead" aria-hidden="true" />
+          <div className="setting-control">{children}</div>
+        </>
+      )}
     </div>
   );
 }
@@ -169,6 +180,7 @@ export function NumericSetting({
       max={max}
       step={step}
       value={draft}
+      className="fld num"
       onChange={(event) => {
         const next = event.target.value;
         setDraft(next);
@@ -203,8 +215,18 @@ export function NumericSetting({
       ) : (
         input
       )}
-      {error && <small role="alert">{error}</small>}
+      {error && <SettingError>{error}</SettingError>}
     </SettingRow>
+  );
+}
+
+/** A save that failed: the warning icon and the words, under the control. */
+export function SettingError({ children }: { children: ReactNode }) {
+  return (
+    <small className="setting-error" role="alert">
+      <AlertOctagon aria-hidden="true" />
+      {children}
+    </small>
   );
 }
 
@@ -234,6 +256,7 @@ export function SelectSetting({
         disabled={disabled}
         aria-describedby={descriptionId}
         onChange={(event) => onChange(event.target.value)}
+        className="fld"
       >
         {children}
       </select>
@@ -241,7 +264,12 @@ export function SelectSetting({
   );
 }
 
-/** A switch row. The whole row toggles; the state is also written as On or Off, never shown by colour alone. */
+/**
+ * A switch row. The whole row toggles; the switch is a lamp and the state
+ * written as On or Off, never colour alone. The control cell is the key face
+ * itself; the native checkbox inside it keeps the switch role and takes
+ * focus, and the face shows the ring.
+ */
 export function ToggleRow({
   title,
   description,
@@ -265,10 +293,8 @@ export function ToggleRow({
           {description}
         </span>
       </span>
-      <span className="setting-control toggle-control">
-        <span className="toggle-state" aria-hidden="true">
-          {checked ? 'On' : 'Off'}
-        </span>
+      <span className="lead" aria-hidden="true" />
+      <span className="setting-control toggle-control sw">
         <input
           type="checkbox"
           role="switch"
@@ -279,10 +305,21 @@ export function ToggleRow({
           disabled={disabled}
           onChange={(event) => onChange(event.target.checked)}
         />
-        <i aria-hidden="true" />
+        <span className="sw-lamp" aria-hidden="true" />
+        <span className="toggle-state" aria-hidden="true">
+          {checked ? 'On' : 'Off'}
+        </span>
       </span>
     </label>
   );
+}
+
+/**
+ * The two columns of rows a wide section is laid out in (one column when the
+ * section is narrow). Plain elements, so the rows stay direct JSX children.
+ */
+export function SettingColumns({ children }: { children: ReactNode }) {
+  return <div className="setting-cols">{children}</div>;
 }
 
 /** Full-width content inside a section panel, such as a list or a table. */

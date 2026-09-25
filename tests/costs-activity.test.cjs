@@ -69,8 +69,9 @@ const costsPage = (snapshot) =>
     onSnapshot() {},
   });
 const section = (html, className) => html.match(new RegExp(`<section class="${className}"[\\s\\S]*?</section>`))?.[0];
+// Costs disclosures are the Deck .disclosure primitive now (was caveat-disclosure).
 const disclosure = (html, className) =>
-  html.match(new RegExp(`<details class="caveat-disclosure ${className}">[\\s\\S]*?</details>`))?.[0];
+  html.match(new RegExp(`<details class="disclosure ${className}">[\\s\\S]*?</details>`))?.[0];
 const minutesBefore = (iso, minutes) => new Date(Date.parse(iso) - minutes * 60_000).toISOString();
 
 function headings(html) {
@@ -78,6 +79,20 @@ function headings(html) {
   const lead = html.match(/<\/h1><p>([\s\S]*?)<\/p>/)?.[1];
   return { h1, lead: lead && text(lead) };
 }
+
+test('every cost-by-model category cell names its unit, and output adds its reasoning share', () => {
+  const html = costsPage(structuredClone(demoSnapshot));
+  const table = html.match(/<table class="costs-table model-table">[\s\S]*?<\/table>/)?.[0];
+  assert.ok(table, 'the cost-by-model table renders');
+  const rows = table.match(/<tbody>[\s\S]*<\/tbody>/)[0].match(/<tr[\s\S]*?<\/tr>/g) ?? [];
+  assert.ok(rows.length, 'the demo has model rows');
+  for (const row of rows) {
+    const cells = (row.match(/<td class="num">[\s\S]*?<\/td>/g) ?? []).slice(0, 5).map((cell) => cell.match(/<small>([\s\S]*?)<\/small>/)?.[1]);
+    assert.equal(cells.length, 5);
+    for (const note of cells.slice(0, 4)) assert.match(note, /^\S+ tokens$/);
+    assert.match(cells[4], /^\S+ tokens · \S+ reasoning$/);
+  }
+});
 
 test('Costs leads with one sentence and keeps the full scope text in a closed disclosure', () => {
   const html = costsPage(structuredClone(demoSnapshot));
@@ -103,7 +118,8 @@ test('Costs leads with one sentence and keeps the full scope text in a closed di
 
   // Controls the Electron DOM test drives are unchanged.
   assert.equal(
-    (html.match(/<div class="period-switch"[\s\S]*?<\/div>/)?.[0].match(/aria-pressed="true"/g) || []).length,
+    // The period keys are also the Deck segmented keys (.seg).
+    (html.match(/<div class="seg period-switch"[\s\S]*?<\/div>/)?.[0].match(/aria-pressed="true"/g) || []).length,
     1,
   );
   assert.match(html, /<label class="table-search">[\s\S]*?<input type="search"/);
@@ -160,7 +176,8 @@ test('task grouping and chat-import caveats move behind disclosures without losi
     /Import conversations\.json from a Claude data export\. Processing stays on this PC; conversation text and titles are never saved by AI Usage\. How to export/,
     'the privacy promise stays visible beside the import button',
   );
-  const details = [...chats.matchAll(/<details class="caveat-disclosure">[\s\S]*?<\/details>/g)].map((match) =>
+  // The plain Deck disclosure (was caveat-disclosure): still exactly two, with no modifier class.
+  const details = [...chats.matchAll(/<details class="disclosure">[\s\S]*?<\/details>/g)].map((match) =>
     text(match[0]),
   );
   assert.equal(details.length, 2);
@@ -302,13 +319,17 @@ test('reset-cycle bars carry the provider colour, mark the open window and descr
 
   const css = fs.readFileSync(path.resolve(__dirname, '../src/pages.css'), 'utf8');
   for (const provider of ['codex', 'claude', 'fable'])
-    assert.match(css, new RegExp(`\\.cycle-bars\\.${provider} \\{\\s*--cycle-colour: var\\(--${provider}\\);`));
+    assert.match(css, new RegExp(`\\.cycle-bars\\.${provider} \\{\\s*--series: var\\(--${provider}\\);`));
   const cycleRules = css.slice(css.indexOf('/* Reset cycles'));
-  assert.doesNotMatch(
-    cycleRules.slice(0, cycleRules.indexOf('@media')),
-    /var\(--accent/,
-    'chrome accent is not used for provider data',
-  );
+  const barRules = cycleRules.slice(0, cycleRules.indexOf('@media')).match(/\.cycle-bar[^{]*\{[^}]*\}/g) ?? [];
+  assert.ok(barRules.length >= 2, 'pages.css paints the past and the open bars');
+  for (const rule of barRules)
+    for (const fill of rule.match(/background[^;]*;/g) ?? [])
+      assert.match(fill, /var\(--series\)/, 'bars take the provider colour, never chrome or status');
+  // The flight-log layout loads after pages.css, so it must not repaint the bars (forced-colors excepted).
+  const layout = fs.readFileSync(path.resolve(__dirname, '../src/styles/activity.css'), 'utf8');
+  for (const rule of layout.slice(0, layout.indexOf('@media (forced-colors')).match(/\.cycle-bar[^{]*\{[^}]*\}/g) ?? [])
+    assert.doesNotMatch(rule, /background/, 'the cycle layout does not override the provider fill');
 });
 
 function literal(value) {

@@ -1,4 +1,4 @@
-import { ChevronDown, Search, ShieldCheck, Wrench, X } from 'lucide-react';
+import { ChevronRight, Database, Search, SearchX, X } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
@@ -191,7 +191,12 @@ export function Settings({
       : `${matchCount} ${matchCount === 1 ? 'section matches' : 'sections match'} “${search}”`;
   const hiddenBySearch = (id: SettingsSectionId) => (matches ? !matches.has(id) : undefined);
   const slot = (id: SettingsSectionId, content: ReactNode) => (
-    <div className="settings-slot" data-settings-section={id} hidden={hiddenBySearch(id)}>
+    <div
+      className="settings-slot"
+      data-settings-section={id}
+      data-current={active === id ? '' : undefined}
+      hidden={hiddenBySearch(id)}
+    >
       {content}
     </div>
   );
@@ -205,6 +210,18 @@ export function Settings({
       tabIndex={-1}
     >
       <h1 className="sr-only">Settings</h1>
+      <header className="settings-lead">
+        <p>Preferences for collection, forecasts, alerts, pricing, and your local data.</p>
+        <div className="settings-lead-facts">
+          <span className="settings-saving" role="status">
+            {saving ? 'Saving locally…' : ''}
+          </span>
+          <span className="badge settings-local">
+            <Database aria-hidden="true" />
+            Everything stays on this PC
+          </span>
+        </div>
+      </header>
       <div className="settings-layout">
         <div className="settings-sidebar">
           <div className="settings-search" role="search">
@@ -225,6 +242,7 @@ export function Settings({
                 event.preventDefault();
                 runSearch('');
               }}
+              className="fld"
             />
             {query && (
               <button type="button" className="settings-search-clear" aria-label="Clear search" onClick={clearSearch}>
@@ -242,20 +260,16 @@ export function Settings({
         </div>
 
         <div className="settings-main">
-          <header className="settings-lead">
-            <p>Preferences for collection, forecasts, alerts, pricing, and your local data.</p>
-            <div className="page-fact safe">
-              <ShieldCheck aria-hidden="true" />
-              <span>Everything stays on this PC</span>
-            </div>
-          </header>
           <p id="settings-search-status" className="sr-only" role="status">
             {searchStatus}
           </p>
           {noMatches && (
             <div className="settings-empty">
-              <p>No settings match “{search}”</p>
-              <button type="button" className="secondary-button" onClick={clearSearch}>
+              <p>
+                <SearchX aria-hidden="true" />
+                No settings match “{search}”
+              </p>
+              <button type="button" className="btn" onClick={clearSearch}>
                 Clear search
               </button>
             </div>
@@ -299,14 +313,9 @@ export function Settings({
               hidden={matches ? !ADVANCED_IDS.some((id) => matches.has(id)) : undefined}
             >
               <summary>
-                <span>
-                  <Wrench aria-hidden="true" />
-                  <span>
-                    <strong>{ADVANCED_GROUP_LABEL}</strong>
-                    <small>Manual observations and diagnostics</small>
-                  </span>
-                </span>
-                <ChevronDown aria-hidden="true" />
+                <ChevronRight aria-hidden="true" />
+                <strong>{ADVANCED_GROUP_LABEL}</strong>
+                <span>— Manual observations and diagnostics</span>
               </summary>
               <div className="settings-disclosure-body">
                 {slot('manual', <ManualSection onManual={actions.onManual} />)}
@@ -315,12 +324,6 @@ export function Settings({
             </details>
           </div>
           <div className="settings-end" ref={endRef} aria-hidden="true" />
-
-          {saving && (
-            <span className="saving-toast" role="status">
-              Saving locally…
-            </span>
-          )}
         </div>
       </div>
     </main>

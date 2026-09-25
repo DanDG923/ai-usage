@@ -1,0 +1,35 @@
+/*
+ * B612 and B612 Mono (SIL OFL 1.1, licences in public/licenses/), vendored so
+ * they load offline under the CSP's font-src 'self'. Vite emits each file into
+ * dist/assets; vite.config.ts stops it from ever inlining one as data:.
+ * Only 400 and 700 exist: ask for nothing in between, since synthesis is off.
+ * The files are local, so blocking briefly for them never shows a fallback.
+ */
+@font-face {
+  font-family: 'B612';
+  src: url('../assets/fonts/b612-latin-400-normal.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: 'B612';
+  src: url('../assets/fonts/b612-latin-700-normal.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: 'B612 Mono';
+  src: url('../assets/fonts/b612-mono-latin-400-normal.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: 'B612 Mono';
+  src: url('../assets/fonts/b612-mono-latin-700-normal.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: block;
+}

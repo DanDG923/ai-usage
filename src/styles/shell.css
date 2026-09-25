@@ -1,0 +1,381 @@
+/*
+ * The shell: the glareshield bar across the top, the ECAM page title row, the
+ * page column, the footer strip and the whole-window states (first load, load
+ * failure). The native Windows caption buttons are drawn over the bar's right
+ * end by the Window Controls Overlay (titleBarOverlay in electron/main.cjs,
+ * 52px = --bar-height); the bar reserves that area so no key sits under them.
+ */
+.app-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------- Glareshield bar ---------- */
+
+.glareshield {
+  position: sticky;
+  top: 0;
+  z-index: 25;
+  flex: none;
+  height: var(--bar-height);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: stretch;
+  column-gap: 20px;
+  padding: 0 max(var(--page-gutter), calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 16px)) 0
+    max(var(--page-gutter), calc(env(titlebar-area-x, 0px) + 12px));
+  background: var(--ground);
+  border-bottom: 1px solid var(--rule);
+  user-select: none;
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+/* The bar is the window's drag handle; everything you can use opts out. */
+.glareshield button,
+.glareshield .gs-status > * {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.gs-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  cursor: pointer;
+}
+div.gs-brand {
+  cursor: default;
+}
+.brand-mark {
+  display: block;
+  flex: none;
+  width: 20px;
+  height: 20px;
+}
+
+/* Page keys: one tablist. Keys 1-3 sit left; 4 Settings is set apart at the
+   right end behind a divider. The status cluster is laid over the gap between
+   them (same grid cell, pinned left of the Settings key), so the tablist holds
+   only tabs. */
+.gs-keys {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  min-width: 0;
+}
+.gs-key {
+  display: flex;
+  align-items: stretch;
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.gs-key-face {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  font-size: var(--fs-12);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.gs-key:hover .gs-key-face {
+  color: var(--text);
+  background: var(--panel-2);
+}
+/* The lit bar under the active key. */
+.gs-key[aria-selected='true'] .gs-key-face {
+  color: var(--text);
+  border-bottom-color: var(--text);
+}
+.gs-keys .gs-key:focus-visible {
+  outline: none;
+}
+.gs-key:focus-visible .gs-key-face {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+.gs-key-settings {
+  position: relative;
+  width: var(--settings-key-width);
+  margin-left: auto;
+  justify-content: flex-end;
+}
+.gs-key-settings::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 12px;
+  bottom: 12px;
+  width: 1px;
+  background: var(--rule);
+}
+
+.gs-status {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+  align-self: center;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+  /* Never wider than the gap between key 3 and the Settings key: freshness
+     gives way (ellipsis) before the cluster could slide over the keys. */
+  max-width: calc(100% - var(--settings-key-width) - 20px - 340px);
+  margin-right: calc(var(--settings-key-width) + 20px);
+  white-space: nowrap;
+}
+.gs-status > * {
+  flex: none;
+}
+.gs-health {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: var(--fs-12);
+}
+.gs-health svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--text-2);
+}
+.gs-health.safe svg {
+  color: var(--ok);
+}
+.gs-health.watch svg {
+  color: var(--caution);
+}
+.gs-health.critical svg {
+  color: var(--warning);
+}
+.gs-status > .gs-fresh {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gs-fresh {
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A crowded bar keeps the keys: routine detail gives way first, problems stay. */
+@media (max-width: 1320px) {
+  .gs-cadence {
+    display: none;
+  }
+}
+@media (max-width: 1140px) {
+  .gs-fresh,
+  .gs-health.safe {
+    display: none;
+  }
+}
+@media (max-width: 1000px) {
+  .gs-status .gs-preview,
+  .gs-brand span {
+    display: none;
+  }
+}
+@media (max-width: 900px) {
+  .glareshield {
+    column-gap: 12px;
+  }
+  .gs-key .kc {
+    display: none;
+  }
+  .gs-key-face {
+    padding: 0 8px;
+  }
+  .gs-status {
+    gap: 10px;
+    max-width: calc(100% - var(--settings-key-width) - 12px - 250px);
+    margin-right: calc(var(--settings-key-width) + 12px);
+  }
+  .gs-key-settings::before {
+    top: 14px;
+    bottom: 14px;
+  }
+}
+@media (max-width: 800px) {
+  .gs-health {
+    display: none;
+  }
+}
+
+/* ---------- ECAM page titles ---------- */
+
+.page-title,
+.page {
+  width: min(var(--content-max), calc(100% - var(--page-gutter) * 2));
+  margin-inline: auto;
+}
+.page-title {
+  flex: none;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  margin-top: 20px;
+}
+.page-title.has-breadcrumb {
+  align-items: center;
+  margin-top: 16px;
+}
+/* Underlined caps, top-left of every page. Costs and Activity own their h1
+   (the tests pin a bare <h1> followed by its lead <p>), styled here. */
+.ecam-title,
+.page-lead h1 {
+  width: fit-content;
+  margin: 0;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--text);
+  color: var(--text);
+  font-size: var(--fs-15);
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  line-height: 1.45;
+  text-transform: uppercase;
+}
+.page-lead h1 {
+  margin-bottom: 10px;
+}
+.page-lead p {
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+.page-title .breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  font-size: var(--fs-15);
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.page-title .breadcrumb > span {
+  padding: 0;
+  color: var(--text-3);
+}
+/* The way back is a key at the breadcrumb's caps size, not the key face's own. */
+.page-title .breadcrumb .btn {
+  height: auto;
+  min-height: 32px;
+  margin: 0;
+  padding: 0 14px;
+  border: 1px solid var(--control);
+  border-radius: var(--radius);
+  background: var(--control-face);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-12);
+  letter-spacing: 0.08em;
+}
+.page-title .breadcrumb .btn:hover {
+  border-color: var(--control-hover);
+  background: var(--current);
+  color: var(--text);
+}
+.page-title .breadcrumb [aria-current='page'] {
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--text);
+  font-weight: 700;
+}
+.page-title-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-3);
+  font-size: var(--fs-12);
+  white-space: nowrap;
+}
+
+/* ---------- Page column ---------- */
+
+.page {
+  position: relative;
+  margin-top: 20px;
+  margin-bottom: var(--sp-5);
+  outline: none;
+}
+.page-title + .page {
+  margin-top: 16px;
+}
+
+/* ---------- Footer strip ---------- */
+
+.app-footer {
+  flex: none;
+  margin-top: auto;
+  height: var(--footer-height);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 0 var(--page-gutter);
+  border-top: 1px solid var(--rule);
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.app-footer > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (max-width: 900px) {
+  .app-footer-keys {
+    display: none;
+  }
+}
+
+/* ---------- Whole-window states ---------- */
+
+/* Before the first snapshot the bar carries only the mark. */
+.glareshield-bare {
+  display: flex;
+  align-items: center;
+}
+.state-stage {
+  flex: 1;
+  min-height: 60vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-5) var(--page-gutter);
+}
+
+@media (forced-colors: active) {
+  .glareshield,
+  .app-footer {
+    border-color: CanvasText;
+  }
+  .gs-key[aria-selected='true'] .gs-key-face {
+    border-bottom-color: Highlight;
+  }
+}

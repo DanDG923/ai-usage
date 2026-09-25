@@ -27,7 +27,7 @@ test('release audit rejects missing runtime code, private data, source maps and 
   const entries = ['dist/index.html', 'dist/flyout.html', 'electron/main.cjs', 'electron/preload.cjs', 'electron/flyout-preload.cjs', 'electron/maintenance-host.cjs', 'electron/maintenance-service.cjs', 'electron/desktop-estimates.cjs', 'node_modules/@anthropic-ai/claude-agent-sdk/package.json'];
   assert.doesNotThrow(() => assertArchive(entries));
   assert.throws(() => assertArchive(entries.slice(1)), /required application file/);
-  for (const name of ['dist/app.js.map', '.codex/auth.json', 'private/ledger.sqlite', 'node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/claude.exe']) {
+  for (const name of ['dist/app.js.map', '.codex/auth.json', 'private/ledger.sqlite', 'node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/claude.exe', 'dist/assets/demo-grDXqB6S.js', 'dist/assets/flyout-preview-CuXK6gLk.js']) {
     assert.throws(() => assertArchive([...entries, name]), /Release audit failed/);
   }
 });

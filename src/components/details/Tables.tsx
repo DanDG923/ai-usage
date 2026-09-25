@@ -7,27 +7,33 @@ function ModelCategory({
   category,
   tokens,
   currency,
+  note,
 }: {
   row: ModelCost;
   category: keyof NonNullable<ModelCost['costBreakdown']>;
   tokens: number;
   currency: string;
+  note?: string;
 }) {
   const value = row.costBreakdown?.[category];
   return (
     <>
-      <strong>
+      <span className={row.coverage <= 0 ? 'costs-figure unpriced' : 'costs-figure'}>
         {row.coverage <= 0
           ? 'Unpriced'
           : value == null
             ? '—'
             : `${row.coverage < 1 ? '≥ ' : ''}${value > 0 && value < 0.01 ? '< ' + money(0.01, currency) : money(value, currency)}`}
-      </strong>
-      <small>{compactNumber(tokens)} tokens</small>
+      </span>
+      <small>{note ? `${compactNumber(tokens)} tokens · ${note}` : `${compactNumber(tokens)} tokens`}</small>
     </>
   );
 }
 
+/**
+ * An API-equivalent sum. Unpriced shows the word, never a guess; a partly
+ * priced sum is a floor ("≥ ") and says so beneath.
+ */
 export function EquivalentValue({ cost, coverage, currency }: { cost: number; coverage: number; currency: string }) {
   if (coverage <= 0)
     return (
@@ -38,12 +44,22 @@ export function EquivalentValue({ cost, coverage, currency }: { cost: number; co
     );
   if (coverage < 1)
     return (
-      <span className="unpriced-cost">
-        <strong>≥ {money(cost, currency)}</strong>
+      <span className="partly-priced">
+        <strong>{`≥ ${money(cost, currency)}`}</strong>
         <small>Partly unpriced</small>
       </span>
     );
   return <strong>{money(cost, currency)}</strong>;
+}
+
+/** A provider's swatch and name: the colour marks identity, the word carries it. */
+export function SourceMark({ sourceId }: { sourceId: string }) {
+  return (
+    <span className="costs-source">
+      <span className={`swatch ${sourceId}`} aria-hidden="true" />
+      {sourceLabel(sourceId)}
+    </span>
+  );
 }
 
 export function matchesQuery(query: string | undefined, values: unknown[]) {
@@ -59,15 +75,17 @@ export function matchesQuery(query: string | undefined, values: unknown[]) {
 export const ProjectTable = memo(function ProjectTable({ costs, query }: { costs: CostAnalytics; query?: string }) {
   const rows = costs.byProject.filter((row) => matchesQuery(query, [row.project, ...row.sources]));
   return (
-    <section className="panel table-panel">
-      <div className="panel-heading">
+    <section className="panel costs-panel project-panel" aria-labelledby="projects-heading">
+      <div className="costs-head">
         <div>
-          <h2>By project</h2>
+          <h3 id="projects-heading" className="pnl-title">
+            By project
+          </h3>
           <p>Grouped by the working directory each session ran in. Only the folder path is recorded, never prompts.</p>
         </div>
       </div>
       <div className="table-scroll">
-        <table>
+        <table className="costs-table project-table">
           <thead>
             <tr>
               <th>Project</th>
@@ -83,7 +101,7 @@ export const ProjectTable = memo(function ProjectTable({ costs, query }: { costs
             {rows.length ? (
               rows.map((row) => (
                 <tr key={row.project ?? 'none'}>
-                  <td>
+                  <td className="costs-name">
                     <strong>{projectName(row.project)}</strong>
                     {row.project && (
                       <small className="path" title={row.project}>
@@ -120,16 +138,18 @@ export const ProjectTable = memo(function ProjectTable({ costs, query }: { costs
 export const ModelTable = memo(function ModelTable({ costs, query }: { costs: CostAnalytics; query?: string }) {
   const rows = costs.byModel.filter((row) => matchesQuery(query, [row.sourceId, row.model]));
   return (
-    <section className="panel table-panel">
-      <div className="panel-heading">
+    <section className="panel costs-panel model-panel" aria-labelledby="models-heading">
+      <div className="costs-head">
         <div>
-          <h2>Cost by model</h2>
+          <h3 id="models-heading" className="pnl-title">
+            Cost by model
+          </h3>
           <p>Last {costs.periodDays} days · cost and token count for each category. Reasoning is included in output.</p>
         </div>
-        <span className="table-note">Prices are editable under Settings</span>
+        <span className="costs-note">Prices are editable under Settings</span>
       </div>
       <div className="table-scroll">
-        <table>
+        <table className="costs-table model-table">
           <thead>
             <tr>
               <th>Model</th>
@@ -139,17 +159,17 @@ export const ModelTable = memo(function ModelTable({ costs, query }: { costs: Co
               <th className="num">Write 1h</th>
               <th className="num">Output</th>
               <th className="num">Coverage</th>
-              <th className="num">Share of priced cost</th>
+              <th>Share of priced cost</th>
               <th className="num">API-equivalent</th>
             </tr>
           </thead>
           <tbody>
             {rows.length ? (
               rows.map((row) => (
-                <tr key={`${row.sourceId}-${row.model}`}>
-                  <td>
-                    <span className={`table-provider ${row.sourceId}`}>{sourceLabel(row.sourceId)}</span>
-                    <strong>{row.model}</strong>
+                <tr key={`${row.sourceId}-${row.model}`} className={row.coverage <= 0 ? 'unpriced-row' : undefined}>
+                  <td className="costs-name">
+                    <SourceMark sourceId={row.sourceId} />
+                    <span className="costs-model">{row.model}</span>
                   </td>
                   <td className="num">
                     <ModelCategory
@@ -188,11 +208,29 @@ export const ModelTable = memo(function ModelTable({ costs, query }: { costs: Co
                     />
                   </td>
                   <td className="num">
-                    <ModelCategory row={row} category="output" tokens={row.outputTokens} currency={costs.currency} />
-                    <small>{compactNumber(row.reasoningOutputTokens)} reasoning</small>
+                    <ModelCategory
+                      row={row}
+                      category="output"
+                      tokens={row.outputTokens}
+                      currency={costs.currency}
+                      note={`${compactNumber(row.reasoningOutputTokens)} reasoning`}
+                    />
                   </td>
                   <td className="num">{priceCoverage(row.coverage)}</td>
-                  <td className="num">{row.costShare == null ? '—' : percent(row.costShare * 100)}</td>
+                  <td>
+                    <span className="share">
+                      <span className="share-bar" aria-hidden="true">
+                        <i
+                          style={
+                            {
+                              '--fill': `${row.costShare == null ? 0 : Math.min(100, row.costShare * 100)}%`,
+                            } as React.CSSProperties
+                          }
+                        />
+                      </span>
+                      {row.costShare == null ? '—' : percent(row.costShare * 100)}
+                    </span>
+                  </td>
                   <td className="num">
                     <EquivalentValue cost={row.cost} coverage={row.coverage} currency={costs.currency} />
                   </td>

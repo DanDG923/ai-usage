@@ -1,3 +1,4 @@
+import { CircleCheck, Eye, Hourglass, OctagonAlert, X } from 'lucide-react';
 import { useEffect, useSyncExternalStore } from 'react';
 
 const NOTICE_LIFETIME_MS = 12_000;
@@ -5,6 +6,19 @@ const NOTICE_LIFETIME_MS = 12_000;
 /** Failures stay on screen until dismissed; confirmations clear themselves. */
 function noticeIsSticky(notice: string) {
   return notice.startsWith('Refresh completed with') || /failed|could not/i.test(notice);
+}
+
+/**
+ * How a notice is drawn. The words carry the meaning; the edge colour and the
+ * icon repeat it: a failure is the warning red and stays, a refresh that fell
+ * back to cached data is caution amber, the update-busy notice is neutral, and
+ * every other confirmation is an ok check.
+ */
+function noticeLook(notice: string, failure: boolean) {
+  if (failure) return { tone: 'warning', Icon: OctagonAlert };
+  if (/fallback data/i.test(notice)) return { tone: 'caution', Icon: Eye };
+  if (/finishing an update/i.test(notice)) return { tone: 'busy', Icon: Hourglass };
+  return { tone: 'ok', Icon: CircleCheck };
 }
 
 /**
@@ -69,14 +83,23 @@ export function NoticeToast({ channel }: { channel: NoticeChannel }) {
       <div className="sr-only" role="alert" aria-atomic="true">
         {failure ? notice : ''}
       </div>
-      {notice && (
-        <div className="toast">
-          <span>{notice}</span>
-          <button aria-label="Dismiss message" onClick={() => channel.show('')}>
-            &times;
-          </button>
-        </div>
-      )}
+      {notice && <Toast notice={notice} failure={failure} onDismiss={() => channel.show('')} />}
     </>
+  );
+}
+
+/** The visible toast; the live regions above announce it, so it has no role of its own. */
+function Toast({ notice, failure, onDismiss }: { notice: string; failure: boolean; onDismiss: () => void }) {
+  const { tone, Icon } = noticeLook(notice, failure);
+  return (
+    <div className={`toast ${tone}`}>
+      <span className="toast-icon">
+        <Icon aria-hidden="true" />
+      </span>
+      <span className="toast-text">{notice}</span>
+      <button type="button" className="ibtn" aria-label="Dismiss message" title="Dismiss (Esc)" onClick={onDismiss}>
+        <X aria-hidden="true" />
+      </button>
+    </div>
   );
 }

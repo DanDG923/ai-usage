@@ -1,18 +1,16 @@
-/* Tray flyout. Colours come from the tokens in professional.css; every rule
-   here is scoped to the flyout page. The panel colour matches the native
-   window background set in electron/flyout.cjs (FLYOUT_BACKGROUND). */
+/*
+ * Tray flyout (Deck-Tray): the compact Master Caution annunciator, three
+ * allowance cells with a mini fuel tape each, the tape legend and the action
+ * keys. Keys, the annunciator and its tones (including the failure frame),
+ * swatches and the progress track come from styles/components.css; this file
+ * only sizes them for a 380px window. Every rule is scoped to the flyout page.
+ * Each cell's provider hue is the one --series variable, as in charts.css.
+ *
+ * The panel colour matches the native window background set in
+ * electron/flyout.cjs (FLYOUT_BACKGROUND: the night and Daylight --panel).
+ */
 :root {
-  --flyout-bg: var(--surface-2);
-}
-
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme='dark']) {
-    --flyout-bg: var(--surface);
-  }
-}
-
-:root[data-theme='light'] {
-  --flyout-bg: var(--surface);
+  --flyout-bg: var(--panel);
 }
 
 html:has(.flyout-body),
@@ -20,8 +18,14 @@ body.flyout-body {
   background: var(--flyout-bg);
 }
 
-/* The window takes its height from the page, so nothing may be sized by the
-   viewport: professional.css gives body a 100vh minimum. */
+/* Past the 540px cap (a long error line) the page scrolls: a thin, quiet bar. */
+html:has(.flyout-body) {
+  scrollbar-width: thin;
+  scrollbar-color: var(--rule-strong) transparent;
+}
+
+/* The window takes its height from the page (200 to 540px), so nothing may be
+   sized by the viewport: base.css gives body a 100vh minimum. */
 body.flyout-body {
   min-height: 0;
   overflow-x: hidden;
@@ -29,370 +33,331 @@ body.flyout-body {
 }
 
 .flyout {
-  font-family: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
-  font-size: 13px;
-  line-height: 1.4;
-  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--rule-strong);
+  border-radius: 4px;
   background: var(--flyout-bg);
-  border: 1px solid var(--line-strong);
-  border-radius: 8px;
+  color: var(--text);
+  font-size: var(--fs-13);
+  line-height: 1.45;
   overflow: hidden;
 }
 
-.flyout button {
-  font: inherit;
-}
+/* ---------- Header: mark, freshness, refresh ---------- */
 
-.flyout button:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
-}
-
-.flyout-visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-}
-
-/* Header */
 .flyout-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 14px 16px 12px;
+  gap: 10px;
+  padding: 10px 10px 10px 14px;
+  border-bottom: 1px solid var(--rule);
 }
 
 .flyout-brand-mark {
-  width: 16px;
-  height: 16px;
   flex: none;
+  width: 18px;
+  height: 18px;
   color: var(--text);
+}
+
+.flyout-heading {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
 }
 
 .flyout-title {
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .flyout-updated {
-  margin-left: auto;
-  color: var(--text-muted);
-  font-size: 12px;
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: var(--fs-11);
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.flyout-icon-button {
-  display: inline-grid;
-  place-items: center;
-  flex: none;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-2);
-  cursor: pointer;
+.flyout .ibtn {
+  width: 40px;
+  height: 40px;
 }
 
-.flyout-icon-button svg {
-  width: 16px;
-  height: 16px;
+.flyout .ibtn svg {
+  width: 18px;
+  height: 18px;
 }
 
-.flyout-icon-button:hover {
-  background: var(--surface-3);
-  color: var(--text);
-}
-
-.flyout-refresh {
-  margin-right: -6px;
-}
-
+/* Refreshing, or nothing to refresh: the key stays focusable but inert. */
 .flyout-refresh[aria-disabled='true'] {
   cursor: default;
 }
 
 .flyout-refresh[aria-disabled='true']:hover {
-  background: transparent;
+  border-color: var(--control);
+  background: var(--control-face);
+}
+
+/* ---------- Verdict: the compact annunciator ---------- */
+
+.flyout-verdict.annunciator {
+  grid-template-columns: 44px minmax(0, 1fr);
+  min-height: 0;
+  margin: 12px 12px 0;
+}
+
+.flyout-verdict .annunciator-lozenge {
+  padding: 0;
+}
+
+.flyout-verdict .annunciator-lozenge svg {
+  width: 20px;
+  height: 20px;
+}
+
+.flyout-verdict .annunciator-body {
+  gap: 3px;
+  padding: 10px 12px;
+}
+
+.flyout-verdict .annunciator-body h2 {
+  font-size: var(--fs-13);
+  line-height: 1.3;
+  letter-spacing: 0;
+}
+
+.flyout-verdict .annunciator-body p {
   color: var(--text-2);
+  font-size: var(--fs-12);
+  line-height: 1.45;
 }
 
-.flyout-spin {
-  animation: flyout-spin 0.9s linear infinite;
-}
-
-@keyframes flyout-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/* Verdict */
-.flyout-verdict {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  margin: 0 12px;
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--surface-3);
-}
-
-.flyout-verdict-icon {
-  flex: none;
-  width: 18px;
-  height: 18px;
-  margin-top: 1px;
-  color: var(--text-muted);
-}
-
-.flyout-verdict strong {
-  display: block;
-  font-weight: 600;
-  line-height: 1.35;
-}
-
-.flyout-verdict p {
-  margin: 2px 0 0;
-  color: var(--text-2);
-  font-size: 12px;
-}
-
-.flyout-verdict.safe .flyout-verdict-icon {
-  color: var(--ok-text);
-}
-
-.flyout-verdict.warn {
-  background: color-mix(in srgb, var(--warn) 10%, transparent);
-  border-color: color-mix(in srgb, var(--warn) 30%, transparent);
-}
-
-.flyout-verdict.warn .flyout-verdict-icon {
-  color: var(--warn-text);
-}
-
-.flyout-verdict.bad {
-  background: color-mix(in srgb, var(--bad) 10%, transparent);
-  border-color: color-mix(in srgb, var(--bad) 30%, transparent);
-}
-
-.flyout-verdict.bad .flyout-verdict-icon {
-  color: var(--bad-text);
-}
+/* ---------- Error line: only when an action fails ---------- */
 
 .flyout-error {
-  margin: 8px 12px 0;
-  color: var(--bad-text);
-  font-size: 12px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 12px 12px 0;
+  color: var(--text);
+  font-size: var(--fs-12);
+  overflow-wrap: anywhere;
 }
 
-/* Provider rows */
+.flyout-error svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  color: var(--warning);
+}
+
+/* ---------- Allowance cells ---------- */
+
 .flyout-list {
-  margin: 8px 0 0;
-  padding: 0;
+  display: grid;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  gap: 6px;
+  margin: 12px 0 0;
+  padding: 0 12px;
   list-style: none;
 }
 
-.flyout-list li + li .flyout-row {
-  border-top: 1px solid var(--line);
+.flyout-list > li {
+  display: flex;
+  min-width: 0;
 }
 
 .flyout-row {
-  --provider: var(--text-muted);
-  display: block;
-  width: 100%;
-  padding: 12px 16px;
-  border: 0;
+  --series: var(--text-3);
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 8px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
   background: transparent;
   color: var(--text);
   text-align: left;
   cursor: pointer;
 }
 
+.flyout-row:hover {
+  border-color: var(--control-hover);
+  background: var(--panel-2);
+}
+
 .flyout-row[data-provider='codex'] {
-  --provider: var(--codex);
+  --series: var(--codex);
 }
 
 .flyout-row[data-provider='claude'] {
-  --provider: var(--claude);
+  --series: var(--claude);
 }
 
 .flyout-row[data-provider='fable'] {
-  --provider: var(--fable);
-}
-
-.flyout-row:hover {
-  background: color-mix(in srgb, var(--text) 4%, transparent);
-}
-
-.flyout .flyout-row:focus-visible {
-  outline-offset: -2px;
-}
-
-.flyout-row-top {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.flyout-swatch {
-  flex: none;
-  width: 9px;
-  height: 9px;
-  border-radius: 2px;
-  background: var(--provider);
+  --series: var(--fable);
 }
 
 .flyout-row-name {
   display: flex;
-  flex: 1;
-  align-items: baseline;
+  align-items: center;
   gap: 6px;
   min-width: 0;
 }
 
 .flyout-row-name strong {
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.flyout-row-name span {
-  min-width: 0;
   overflow: hidden;
-  color: var(--text-muted);
-  font-size: 12px;
-  white-space: nowrap;
+  font-size: var(--fs-12);
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.flyout-left {
-  display: inline-flex;
-  flex: none;
-  align-items: baseline;
-  gap: 4px;
+/* The plan and window, two lines at most so the tapes stay level. */
+.flyout-row-plan {
+  display: -webkit-box;
+  min-height: 26px;
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: 10px;
+  line-height: 1.3;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
-.flyout-left strong {
-  font-size: 22px;
-  font-weight: 600;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
+.flyout-row-gauge {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: end;
+  gap: 8px;
 }
 
-.flyout-left small {
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.flyout-left-none {
-  color: var(--text-faint);
-  font-size: 22px;
-  font-weight: 600;
-  line-height: 1;
-}
-
-.flyout-track {
+/* The mini fuel tape: a recessed well filled from the bottom. */
+.flyout-tape {
   position: relative;
   display: block;
-  height: 8px;
-  margin: 10px 0 8px;
-  overflow: hidden;
-  border-radius: 4px;
-  background: var(--surface-3);
+  height: 84px;
+  border: 1px solid var(--rule-strong);
+  background: var(--panel-2);
 }
 
 .flyout-fill {
   position: absolute;
-  top: 0;
+  right: 0;
   bottom: 0;
   left: 0;
-  border-radius: 4px;
 }
 
 .flyout-fill-used {
-  background: color-mix(in srgb, var(--provider) 40%, transparent);
+  background: color-mix(in srgb, var(--series) 35%, transparent);
 }
 
 .flyout-fill-reset {
-  background: var(--provider);
+  background: var(--series);
 }
 
 /* A balance with no forecast yet: outlined, so it matches neither legend entry. */
 .flyout-fill-now {
-  border: 1.5px solid var(--provider);
+  border: 1.5px solid var(--series);
   background: transparent;
 }
 
-.flyout-row-bottom {
+.flyout-left {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  font-size: 12px;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.flyout-left strong {
+  font-family: var(--font-mono);
+  font-size: var(--fs-22);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.flyout-left small {
+  color: var(--text-2);
+  font-size: var(--fs-11);
+}
+
+.flyout-left-none strong {
+  color: var(--text-3);
 }
 
 .flyout-status {
   display: inline-flex;
-  flex: none;
   align-items: center;
-  gap: 5px;
-  font-weight: 600;
+  gap: 4px;
+  color: var(--text-2);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  line-height: 14px;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .flyout-status svg {
-  width: 14px;
-  height: 14px;
+  flex: none;
+  width: 12px;
+  height: 12px;
 }
 
-.flyout-status.ok {
-  color: var(--ok-text);
+.flyout-status[data-state='safe'] {
+  color: var(--ok);
 }
 
-.flyout-status.warn {
-  color: var(--warn-text);
+.flyout-status[data-state='watch'],
+.flyout-status[data-state='risk'] {
+  color: var(--caution);
 }
 
-.flyout-status.bad {
-  color: var(--bad-text);
+.flyout-status[data-state='critical'] {
+  color: var(--warning);
 }
 
-.flyout-status.muted {
-  color: var(--text-muted);
-}
-
+/* Balanced lines; a forecast's two halves (TrayFlyout's detail) wrap whole. */
 .flyout-row-detail {
-  min-width: 0;
-  color: var(--text-muted);
+  color: var(--text-2);
+  font-size: var(--fs-11);
   font-variant-numeric: tabular-nums;
-  text-align: right;
+  line-height: 1.3;
+  text-wrap: balance;
 }
 
-/* Legend */
+.flyout-row-detail > span {
+  display: inline-block;
+}
+
+/* ---------- Tape legend ---------- */
+
 .flyout-legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px 14px;
-  margin: 0;
-  padding: 4px 16px 12px;
-  color: var(--text-faint);
-  font-size: 12px;
+  gap: 4px 14px;
+  padding: 8px 12px 0;
+  color: var(--text-2);
+  font-size: var(--fs-11);
 }
 
 .flyout-legend span {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
 }
 
 .flyout-chip {
-  display: inline-block;
-  width: 12px;
-  height: 6px;
-  border-radius: 2px;
+  flex: none;
+  width: 10px;
+  height: 10px;
 }
 
 .flyout-chip-reset {
@@ -400,71 +365,43 @@ body.flyout-body {
 }
 
 .flyout-chip-used {
-  background: color-mix(in srgb, var(--text-2) 40%, transparent);
+  background: color-mix(in srgb, var(--text-2) 35%, transparent);
 }
 
-/* Footer */
+/* ---------- Action keys ---------- */
+
 .flyout-footer {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 16px;
-  border-top: 1px solid var(--line);
-  background: var(--surface);
-}
-
-.flyout-primary {
-  flex: 1;
-  height: 36px;
-  border: 0;
-  border-radius: 6px;
-  background: var(--accent);
-  color: var(--accent-contrast);
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.flyout-primary:hover {
-  background: color-mix(in srgb, var(--accent) 88%, var(--flyout-bg));
-}
-
-.flyout-secondary {
-  display: inline-flex;
-  align-items: center;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 40px;
   gap: 6px;
-  height: 36px;
-  padding: 0 12px;
-  border: 1px solid var(--line-strong);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text);
-  white-space: nowrap;
-  cursor: pointer;
+  margin-top: 12px;
+  padding: 12px;
+  border-top: 1px solid var(--rule);
 }
 
-.flyout-secondary svg {
-  width: 16px;
-  height: 16px;
+.flyout-footer-single {
+  grid-template-columns: minmax(0, 1fr);
 }
 
-.flyout-secondary:hover:not(:disabled) {
-  background: var(--surface-3);
+/* The flyout's keys are sentence case at 13px, as the artboard sets them. */
+.flyout-footer .btn {
+  min-height: 40px;
+  padding: 0 8px;
+  font-size: var(--fs-13);
+  letter-spacing: 0;
+  text-transform: none;
 }
 
-.flyout-secondary:disabled {
-  opacity: 0.55;
-  cursor: default;
-}
+@media (forced-colors: active) {
+  .flyout,
+  .flyout-row,
+  .flyout-tape {
+    border: 1px solid CanvasText;
+  }
 
-.flyout-settings {
-  width: 36px;
-  height: 36px;
-  border: 1px solid var(--line-strong);
-  color: var(--text);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .flyout-spin {
-    animation: none;
+  .flyout-fill,
+  .flyout-chip,
+  .flyout-row .swatch {
+    forced-color-adjust: none;
   }
 }

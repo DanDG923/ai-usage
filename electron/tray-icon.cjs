@@ -3,12 +3,15 @@
 // The tray icon is the app icon with a state dot painted into its corner. The
 // main process has no canvas, but nativeImage can hand over its BGRA bitmap
 // and take one back, so the dot is drawn directly into the pixel buffer.
+// Flight Deck status colours (src/styles/tokens.css, night set): ok #3ecf7a,
+// caution #f2a93b for watch and at risk, warning #ff5f52 for critical, and
+// text-3 #7d848e while the state is unknown.
 const STATE_COLORS = {
-  safe: [0x0f, 0xa3, 0x82],
-  watch: [0xbd, 0x81, 0x21],
-  risk: [0xe0, 0x6a, 0x4c],
-  critical: [0xe0, 0x6a, 0x4c],
-  unknown: [0x89, 0x97, 0xb1],
+  safe: [0x3e, 0xcf, 0x7a],
+  watch: [0xf2, 0xa9, 0x3b],
+  risk: [0xf2, 0xa9, 0x3b],
+  critical: [0xff, 0x5f, 0x52],
+  unknown: [0x7d, 0x84, 0x8e],
 };
 
 function blend(buffer, offset, rgb, alpha) {

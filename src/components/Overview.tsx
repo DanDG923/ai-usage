@@ -1,11 +1,11 @@
 import {
   AlertOctagon,
   AlertTriangle,
+  AppWindow,
   CheckCircle2,
   ChevronRight,
   CircleDashed,
-  Gauge,
-  ShieldCheck,
+  RefreshCw,
 } from 'lucide-react';
 import { subscriptionVisible } from '../../electron/dashboard-decision.mjs';
 import { bankedResetsFor } from '../banked-resets';
@@ -18,14 +18,14 @@ import {
   percent,
   priceCoverage,
   quotaWindows,
-  shortDate,
   verdictSentence,
   whenLabel,
 } from '../lib';
 import { providerViews, type ProviderId, type ProviderView } from '../provider-view';
-import type { QuotaWindow, Snapshot } from '../types';
+import type { ForecastState, QuotaWindow, Snapshot } from '../types';
 import { API_EQUIVALENT_EXPLAINER, InfoTip } from './InfoTip';
 import { ProviderSummary } from './ProviderSummary';
+import { STATE_WORD } from './StatePill';
 import '../overview.css';
 
 type Insight = {
@@ -154,12 +154,26 @@ function verdictFocus(views: ProviderView[], snapshot: Snapshot, nowMs: number) 
   return null;
 }
 
+/*
+ * The Master Caution lozenge. Act-now states (at risk, critical) fill it;
+ * advisory ones (watch, on track) outline it in their colour; anything short
+ * of a full assessment (waiting, learning, stale evidence, a partial
+ * all-clear) keeps it neutral and dashed, never green.
+ */
 const STATUS_ICON = {
   safe: CheckCircle2,
   watch: AlertTriangle,
   risk: AlertTriangle,
   critical: AlertOctagon,
   unknown: CircleDashed,
+} as const;
+
+/** The status icon for a row in "Also worth knowing": the same icon and colour as its state. */
+const INSIGHT_ICON = {
+  hot: AlertOctagon,
+  warm: AlertTriangle,
+  neutral: CircleDashed,
+  good: CheckCircle2,
 } as const;
 
 /**
@@ -232,34 +246,48 @@ export function Overview({
         aria-labelledby="tab-overview"
         tabIndex={-1}
       >
-        <section className="panel status-panel">
-          <h1>No subscriptions shown</h1>
-          <p>
-            Choose a subscription in Settings to show its allowances and forecasts. Your saved usage and cost history is
-            still available.
-          </p>
-          <button className="secondary-button" onClick={onSources}>
-            Choose subscriptions
-          </button>
+        <section className="pnl overview-empty">
+          <span className="overview-empty-icon" aria-hidden="true">
+            <AppWindow />
+          </span>
+          <div>
+            <h1>No subscriptions shown</h1>
+            <p>
+              Choose a subscription in Settings to show its allowances and forecasts. Your saved usage and cost history
+              is still available.
+            </p>
+            <button type="button" className="btn" onClick={onSources}>
+              Choose subscriptions
+            </button>
+          </div>
         </section>
       </main>
     );
   }
+  // Every assessed allowance is on track, but some have no forecast yet: a
+  // partial all-clear, which stays neutral rather than green.
+  const partial = !waiting && snapshot.dashboardVerdict.state === 'safe' && unknown.length > 0;
   const headline = waiting
     ? 'Waiting for allowance readings'
-    : snapshot.dashboardVerdict.state === 'safe' && unknown.length
+    : partial
       ? 'Available allowances on track'
       : verdict.headline;
   const focus = waiting ? null : verdictFocus(views, snapshot, nowMs);
-  const guidance =
-    focus?.budget && focus.window.resetsAt
-      ? `Keep ${focus.label} under ${paceLabel(focus.budget.budget)} of its allowance per active day to reach its ${whenLabel(focus.window.resetsAt, nowMs)} reset. At your expected pace it uses ${paceLabel(focus.budget.expected)}.`
-      : '';
-  const secondary = unknown.length
+  const guidance = focus?.budget && focus.window.resetsAt ? { ...focus, budget: focus.budget } : null;
+  const needsEvidence = unknown.length > 0;
+  const secondary = needsEvidence
     ? `${names(unknown)} ${unknown.length === 1 ? 'needs' : 'need'} more evidence before all allowances can be assessed.`
     : verdict.secondary;
-  const statusTone = waiting ? 'unknown' : snapshot.dashboardVerdict.state;
+  const statusTone: ForecastState = waiting || partial ? 'unknown' : snapshot.dashboardVerdict.state;
   const StatusIcon = STATUS_ICON[statusTone] ?? CircleDashed;
+  const SecondaryIcon = needsEvidence ? CircleDashed : CheckCircle2;
+  const statusWord = waiting
+    ? 'Awaiting data'
+    : statusTone === 'unknown'
+      ? !partial && snapshot.dashboardVerdict.label.startsWith('Allowance check needs current data')
+        ? 'Needs reading'
+        : 'Learning'
+      : STATE_WORD[statusTone];
   // The status line already states its window; list everything else once.
   const attention = allInsights.filter(
     (row) =>
@@ -272,6 +300,7 @@ export function Overview({
       ),
   );
   const unpriced = snapshot.costs.unpricedModels.map((entry) => entry.model).join(', ');
+  const unpricedCount = snapshot.costs.unpricedModels.length;
   const value = subscriptionValue(snapshot);
   const openSettings = (section: string) => (onOpenSettings ? onOpenSettings(section) : onSources());
 
@@ -283,46 +312,86 @@ export function Overview({
       aria-labelledby="tab-overview"
       tabIndex={-1}
     >
-      <section className={`overview-status ${statusTone}`} role="status" aria-live="polite">
-        <span className="status-icon" aria-hidden="true">
-          <StatusIcon />
-        </span>
-        <div>
+      <section className="overview-status annunciator" data-tone={statusTone} role="status" aria-live="polite">
+        <div className="annunciator-lozenge">
+          <StatusIcon aria-hidden="true" />
+          <span>{statusWord}</span>
+        </div>
+        <div className="annunciator-body">
           <h1>{headline}</h1>
-          <p>
-            {[guidance, secondary].filter(Boolean).join(' ') ||
-              'Forecasts compare expected and heavier usage through each provider’s next reset.'}
-          </p>
+          {guidance ? (
+            <p className="status-guidance">
+              Keep {guidance.label} under <b>{paceLabel(guidance.budget.budget)}</b> of its allowance per active day to
+              reach its <b>{whenLabel(guidance.window.resetsAt, nowMs)}</b> reset. At your expected pace it uses{' '}
+              <b>{paceLabel(guidance.budget.expected)}</b>.
+            </p>
+          ) : (
+            !secondary && (
+              <p className="status-note">
+                Forecasts compare expected and heavier usage through each provider’s next reset.
+              </p>
+            )
+          )}
+          {secondary && (
+            <p className={`status-secondary${needsEvidence ? ' unknown' : ' safe'}`}>
+              <SecondaryIcon aria-hidden="true" />
+              <span>{secondary}</span>
+            </p>
+          )}
         </div>
         {focus && onOpenProvider && (
-          <button type="button" className="primary-button status-action" onClick={() => onOpenProvider(focus.view.id)}>
-            Plan {focus.view.name} usage
-            <ChevronRight aria-hidden="true" />
-          </button>
+          <div className="annunciator-action">
+            <button
+              type="button"
+              className="btn btn-p btn-lg status-action"
+              onClick={() => onOpenProvider(focus.view.id)}
+            >
+              Plan {focus.view.name} usage
+              <ChevronRight aria-hidden="true" />
+            </button>
+          </div>
         )}
       </section>
 
       <section className="allowance-section" aria-labelledby="allowances-heading">
         <div className="allowance-section-head">
-          <h2 id="allowances-heading">Allowances</h2>
-          <div className="runway-key" role="group" aria-label="Chart key">
-            <span>
+          <h2 id="allowances-heading" className="pnl-title">
+            Allowances
+          </h2>
+          <ul className="runway-key" aria-label="Chart key">
+            <li>
               <i className="key-observed" aria-hidden="true" />
               Observed
-            </span>
-            <span>
+            </li>
+            <li>
               <i className="key-expected" aria-hidden="true" />
               Expected
-            </span>
-            <span>
+            </li>
+            <li>
               <i className="key-band" aria-hidden="true" />
               Heavier-week range
-            </span>
-            <span>
+            </li>
+            <li>
               <i className="key-inactive" aria-hidden="true" />
               Outside active hours
-            </span>
-          </div>
+            </li>
+            <li className="key-tape-first">
+              <i className="key-tape-reset" aria-hidden="true" />
+              Left at reset
+            </li>
+            <li>
+              <i className="key-tape-used" aria-hidden="true" />
+              Likely used before reset
+            </li>
+            <li>
+              <i className="key-expected-dot" aria-hidden="true" />
+              Expected at reset
+            </li>
+            <li>
+              <i className="key-heavier" aria-hidden="true" />
+              Heavier week
+            </li>
+          </ul>
         </div>
         <div className="provider-card-grid">
           {views.map((view) => (
@@ -339,14 +408,14 @@ export function Overview({
       </section>
 
       <div className="overview-lower">
-        <section className="panel attention-panel" aria-labelledby="attention-heading">
-          <div className="panel-heading compact-heading">
-            <h2 id="attention-heading">Also worth knowing</h2>
-          </div>
+        <section className="pnl attention-panel" aria-labelledby="attention-heading">
+          <h2 id="attention-heading" className="pnl-title">
+            Also worth knowing
+          </h2>
           {attention.length ? (
             <div className="insight-list">
               {attention.map((row) => {
-                const Icon = row.tone === 'hot' || row.tone === 'warm' ? AlertTriangle : Gauge;
+                const Icon = INSIGHT_ICON[row.tone];
                 return (
                   <article key={`${row.title}-${row.detail}`} className={`insight ${row.tone}`}>
                     <Icon aria-hidden="true" />
@@ -370,15 +439,16 @@ export function Overview({
             </div>
           )}
           {needsReadings && (
-            <div className="action-row compact insight-actions">
-              <button className="secondary-button" disabled={refreshing} onClick={() => void onRefresh()}>
+            <div className="insight-actions">
+              <button type="button" className="btn" disabled={refreshing} onClick={() => void onRefresh()}>
+                <RefreshCw aria-hidden="true" className={refreshing ? 'spin' : undefined} />
                 {refreshing ? 'Refreshing…' : 'Refresh allowances'}
               </button>
-              <button className="secondary-button" onClick={() => openSettings('sources')}>
+              <button type="button" className="btn" onClick={() => openSettings('sources')}>
                 View sources
               </button>
               {snapshot.settings.showClaudeSubscription !== false && !snapshot.quotas.claude && !snapshot.isPreview && (
-                <button className="secondary-button" onClick={onSetupClaude}>
+                <button type="button" className="btn" onClick={onSetupClaude}>
                   Set up Claude
                 </button>
               )}
@@ -386,67 +456,64 @@ export function Overview({
           )}
         </section>
 
-        <section className="panel billing-summary" aria-labelledby="value-heading">
-          <div className="panel-heading compact-heading">
-            <h2 id="value-heading">Last {snapshot.costs.periodDays} days at API prices</h2>
+        <section className="pnl billing-summary" aria-labelledby="value-heading">
+          <div className="ledger-head">
+            <h2 id="value-heading" className="pnl-title">
+              Last {snapshot.costs.periodDays} days at API prices
+            </h2>
+            <span>Calculated locally from your own usage records.</span>
           </div>
-          <dl>
-            <div className="billing-primary">
+          <div className={`ledger${value ? '' : ' no-fees'}`}>
+            <dl className="ledger-cell">
               <dt>
-                API-equivalent value{' '}
+                <span>API-equivalent value</span>
                 <InfoTip label="What API-equivalent cost means">{API_EQUIVALENT_EXPLAINER}</InfoTip>
               </dt>
-              <dd>
-                {snapshot.costs.isLowerBound ? '≥ ' : ''}
-                {money(snapshot.costs.actual, snapshot.costs.currency)}
+              <dd className="ledger-value">
+                {`${snapshot.costs.isLowerBound ? '≥ ' : ''}${money(snapshot.costs.actual, snapshot.costs.currency)}`}
               </dd>
-              <small title={unpriced ? `Unpriced: ${unpriced}` : undefined}>
+              <dd className="ledger-note" title={unpriced ? `Unpriced: ${unpriced}` : undefined}>
                 {snapshot.costs.isLowerBound
-                  ? `Lower bound · ${compactNumber(snapshot.costs.unpricedModels.length)} model${snapshot.costs.unpricedModels.length === 1 ? '' : 's'} unpriced`
+                  ? `Lower bound · ${compactNumber(unpricedCount)} model${unpricedCount === 1 ? '' : 's'} unpriced`
                   : `${snapshot.costs.periodDays}-day total`}
-              </small>
-            </div>
-            <div>
-              <dt>Saved by caching</dt>
-              <dd>{money(snapshot.costs.cacheSavings, snapshot.costs.currency)}</dd>
-              <small>{percent(snapshot.costs.cacheSavingsPercent * 100)} below uncached value</small>
-            </div>
-            <div>
-              <dt>Price coverage</dt>
-              <dd>{priceCoverage(snapshot.costs.coverage)}</dd>
-              <small>{unpriced ? 'of recorded tokens' : 'All tracked categories priced'}</small>
-            </div>
+              </dd>
+            </dl>
+            <dl className="ledger-cell">
+              <dt>
+                <span>Saved by caching</span>
+              </dt>
+              <dd className="ledger-value">{money(snapshot.costs.cacheSavings, snapshot.costs.currency)}</dd>
+              <dd className="ledger-note">{`${percent(snapshot.costs.cacheSavingsPercent * 100)} below uncached value`}</dd>
+            </dl>
+            <dl className="ledger-cell">
+              <dt>
+                <span>Price coverage</span>
+              </dt>
+              <dd className="ledger-value">{priceCoverage(snapshot.costs.coverage)}</dd>
+              <dd className="ledger-note">{unpriced ? 'of recorded tokens' : 'All tracked categories priced'}</dd>
+            </dl>
             {value && (
-              <div>
-                <dt>Subscription value</dt>
-                <dd>
-                  {value.lowerBound ? '≥ ' : ''}
-                  {value.multiple.toFixed(1)}×
+              <dl className="ledger-cell">
+                <dt>
+                  <span>Subscription value</span>
+                </dt>
+                <dd className="ledger-value">{`${value.lowerBound ? '≥ ' : ''}${value.multiple.toFixed(1)}×`}</dd>
+                <dd className="ledger-note">
+                  {`${value.only ? `${value.only} usage ` : ''}vs ${money(value.fees, snapshot.costs.currency)} of plan fees`}
                 </dd>
-                <small>
-                  {value.only ? `${value.only} usage ` : ''}vs {money(value.fees, snapshot.costs.currency)} of plan fees
-                </small>
-              </div>
+              </dl>
             )}
-          </dl>
+          </div>
           {!value && (
             <div className="value-prompt">
               <span>Add your monthly plan fees to see how many times over each subscription pays for itself.</span>
-              <button type="button" className="text-button" onClick={() => openSettings('subscription-fees')}>
+              <button type="button" className="btn" onClick={() => openSettings('subscription-fees')}>
                 Add fees
               </button>
             </div>
           )}
-          <div className="local-assurance">
-            <ShieldCheck aria-hidden="true" />
-            <span>Calculated locally from your own usage records.</span>
-          </div>
         </section>
       </div>
-
-      <p className="overview-freshness">
-        Snapshot {shortDate(snapshot.generatedAt)} · {snapshot.timezone} · Local data only
-      </p>
     </main>
   );
 }

@@ -110,7 +110,9 @@ test('after a stale reading the Now dot shows the estimated balance, where the e
   const html = render(RunwayChart, { view, schedule: { activeDays: [0, 1, 2, 3, 4, 5, 6], startHour: 8, endHour: 22 } });
   const dotY = Number(html.match(/<circle class="runway-now"[^>]*cy="([\d.]+)"/)[1]);
   const pathStartY = Number(html.match(/<path d="M[\d.]+,([\d.]+)[^"]*" class="runway-expected"/)[1]);
-  const y = (remaining) => 10 + (1 - remaining / 100) * (150 - 10 - 22);
+  // Compact Flight Deck runway at the SSR width (360): 180 high, 22 on top for
+  // the NOW / RESET captions and 26 below for the day labels.
+  const y = (remaining) => 22 + (1 - remaining / 100) * (180 - 22 - 26);
   assert.ok(Math.abs(dotY - pathStartY) < 0.1, `dot ${dotY} vs expected path ${pathStartY}`);
   assert.ok(Math.abs(dotY - y(52)) < 0.1, `dot ${dotY} is at 52%, not the stale 60% (${y(60)})`);
 });
@@ -255,6 +257,33 @@ test('a status line about a five-hour session gives no per-day budget', async ()
   const status = text(html.slice(html.indexOf('class="overview-status'), html.indexOf('class="allowance-section"')));
   assert.match(status, /Claude 5-hour session could run out/);
   assert.doesNotMatch(status, /per active day|d{3}%/);
+});
+
+test('the Overview annunciator keeps a partial all-clear neutral: grey, dashed, no check', async () => {
+  const { Overview } = await server.ssrLoadModule('/src/components/Overview.tsx');
+  const statusOf = (snapshot) => {
+    const html = render(Overview, { snapshot, refreshing: false, onRefresh: async () => {}, onSetupClaude() {}, onSources() {} });
+    return html.slice(html.indexOf('class="overview-status'), html.indexOf('class="allowance-section"'));
+  };
+  const lozenge = (status) => status.slice(status.indexOf('annunciator-lozenge'), status.indexOf('annunciator-body'));
+  const safe = structuredClone(demoSnapshot);
+  safe.dashboardVerdict = { state: 'safe', reason: null, label: 'All allowances on track', windowsChecked: 3, affected: [], details: [] };
+  // Control: every allowance assessed, so the all-clear is green with its check.
+  const full = statusOf(safe);
+  assert.match(full, /data-tone="safe"/);
+  assert.match(lozenge(full), /circle-check/);
+  assert.match(text(lozenge(full)), /On track/);
+  // Partial: Fable has no forecast yet, so the same safe verdict stays neutral.
+  const partial = structuredClone(safe);
+  for (const q of [partial.quotas.fable, ...(partial.quotas.fable.windows ?? [])]) {
+    q.forecast = { ...q.forecast, state: 'unknown', expectedRemaining: null, heavyRemaining: null };
+  }
+  const status = statusOf(partial);
+  assert.match(status, /data-tone="unknown"/);
+  assert.match(text(status), /Available allowances on track/);
+  assert.match(lozenge(status), /circle-dashed/);
+  assert.doesNotMatch(status, /circle-check/, 'green and its check belong to a verdict that assessed every allowance');
+  assert.match(text(lozenge(status)), /Learning/);
 });
 
 test('banked resets: Codex reports its own, Claude free resets are recorded by hand and hide after expiry', async () => {

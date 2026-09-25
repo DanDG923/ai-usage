@@ -1,4 +1,3 @@
-import { Save } from 'lucide-react';
 import { FormEvent, useId, useState } from 'react';
 import type { ManualObservation } from '../../types';
 import { SettingRow, SettingsSection } from './fields';
@@ -37,6 +36,7 @@ export function ManualSection({ onManual }: { onManual: (observation: ManualObse
             disabled={saving}
             value={sourceId}
             onChange={(event) => setSourceId(event.target.value as ManualObservation['sourceId'])}
+            className="fld"
           >
             <option value="claude-fable">Fable 5 weekly</option>
             <option value="claude">Claude overall weekly</option>
@@ -55,6 +55,7 @@ export function ManualSection({ onManual }: { onManual: (observation: ManualObse
               step="0.1"
               value={used}
               onChange={(event) => setUsed(event.target.value)}
+              className="fld num"
             />
             <span>%</span>
           </div>
@@ -71,15 +72,13 @@ export function ManualSection({ onManual }: { onManual: (observation: ManualObse
             type="datetime-local"
             value={reset}
             onChange={(event) => setReset(event.target.value)}
+            className="fld"
           />
         </SettingRow>
-        <div className="setting-row manual-submit">
-          <div className="setting-control">
-            <button disabled={saving} className="primary-button" type="submit">
-              <Save aria-hidden="true" />
-              {saving ? 'Saving observation…' : 'Record observation'}
-            </button>
-          </div>
+        <div className="manual-submit">
+          <button disabled={saving} aria-busy={saving || undefined} className="btn btn-p" type="submit">
+            {saving ? 'Saving observation…' : 'Record observation'}
+          </button>
         </div>
       </form>
     </SettingsSection>

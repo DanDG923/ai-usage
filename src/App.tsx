@@ -1,9 +1,10 @@
 import { buildDashboardVerdict } from '../electron/dashboard-decision.mjs';
+import { CircleDashed, OctagonAlert, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Activity } from './components/Activity';
 import { ClaudeSetup } from './components/ClaudeSetup';
 import { Costs } from './components/Costs';
-import { BrandMark, Header, TABS, type Tab } from './components/Header';
+import { BareGlareshield, FooterStrip, Header, PageTitle, TABS, type Tab } from './components/Header';
 import { NoticeToast, createNoticeChannel } from './components/NoticeToast';
 import { Overview } from './components/Overview';
 import { ProviderDetail } from './components/ProviderDetail';
@@ -12,18 +13,13 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { snapshotAtTime } from './snapshot-time';
 import { readDashboardView, saveDashboardView } from './dashboard-view';
 import { formatInt } from './lib';
+import { applyThemeAttribute } from './theme';
 import type { ProviderId } from './provider-view';
-import type { ManualObservation, PriceRow, Settings as SettingsType, Snapshot, Theme } from './types';
+import type { ManualObservation, PriceRow, Settings as SettingsType, Snapshot } from './types';
 
 const DETAIL_NAMES: Record<ProviderId, string> = { codex: 'Codex', claude: 'Claude', fable: 'Fable 5' };
 
 const BUSY_NOTICE = 'AI Usage is finishing an update; the dashboard will refresh shortly.';
-
-function applyThemeAttribute(theme: Theme | undefined) {
-  const root = document.documentElement;
-  if (theme === 'dark' || theme === 'light') root.dataset.theme = theme;
-  else delete root.dataset.theme;
-}
 
 export default function App() {
   const [initialView] = useState(readDashboardView);
@@ -123,7 +119,8 @@ export default function App() {
       pendingPeriod.current = period;
       const request = ++loadRequest.current;
       setRefreshing(true);
-      setLoadError('');
+      // A failed first read stays on screen while it is retried ("Trying
+      // again…"); the error clears when a snapshot arrives.
       try {
         const next = await window.aiUsage.getSnapshot(period);
         if (request !== loadRequest.current) return;
@@ -137,6 +134,7 @@ export default function App() {
         // The selected period is committed with the data, never before it. A
         // rejected 90-day read therefore cannot relabel an existing 30-day view.
         commitSnapshot(next);
+        setLoadError('');
       } catch (error) {
         if (request !== loadRequest.current) return;
         const message = error instanceof Error ? error.message : 'Could not load the local dashboard.';
@@ -499,30 +497,40 @@ export default function App() {
     onCheckUpdates: checkUpdates,
   };
 
+  // Before the first snapshot the glareshield carries only the mark: there
+  // are no sections to switch to and nothing to refresh yet.
   if (!snapshot) {
     return (
       <div className="app-shell">
-        <header className="app-header app-header-status">
-          <div className="brand status-brand" aria-label="AI Usage">
-            <BrandMark />
-            <span>AI Usage</span>
-          </div>
-        </header>
-        <main className="page">
-          <section className="panel status-panel" role={loadError ? 'alert' : 'status'} aria-live="polite">
-            <h1>{loadError ? 'Your local usage could not be loaded' : 'Loading your local usage…'}</h1>
-            <p>{loadError || 'Reading the on-device usage database and allowance history.'}</p>
-            {loadError && (
-              <button
-                className="refresh-button"
-                disabled={refreshing}
-                onClick={() => {
-                  void load(days);
-                }}
-              >
-                {refreshing ? 'Trying again…' : 'Try again'}
-              </button>
-            )}
+        <BareGlareshield />
+        <main className="state-stage">
+          <section
+            className={`state-panel${loadError ? ' is-error' : ''}`}
+            role={loadError ? 'alert' : 'status'}
+            aria-live="polite"
+          >
+            <span className="state-panel-icon">
+              {loadError ? <OctagonAlert aria-hidden="true" /> : <CircleDashed aria-hidden="true" />}
+            </span>
+            <div className="state-panel-body">
+              <h1>{loadError ? 'Your local usage could not be loaded' : 'Loading your local usage…'}</h1>
+              <p>{loadError || 'Reading the on-device usage database and allowance history.'}</p>
+              {!loadError && <span className="state-progress" aria-hidden="true" />}
+              {loadError && (
+                <button
+                  type="button"
+                  className={`btn${refreshing ? '' : ' btn-p'}`}
+                  disabled={refreshing}
+                  aria-busy={refreshing || undefined}
+                  onClick={() => {
+                    void load(days);
+                  }}
+                >
+                  <RefreshCw className={refreshing ? 'spin' : ''} aria-hidden="true" />
+                  {refreshing ? 'Trying again…' : 'Try again'}
+                </button>
+              )}
+            </div>
           </section>
         </main>
       </div>
@@ -531,18 +539,11 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <Header
-        snapshot={snapshot}
-        tab={tab}
-        onTab={setTab}
-        refreshing={refreshing}
-        onRefresh={refresh}
-        detail={tab === 'overview' && detail ? DETAIL_NAMES[detail] : null}
-        onBack={closeDetail}
-      />
+      <Header snapshot={snapshot} tab={tab} onTab={setTab} refreshing={refreshing} onRefresh={refresh} />
       {(snapshot.settings.showClaudeSubscription !== false || setupRequested) && (
         <ClaudeSetup requested={setupRequested} onClose={() => setSetupRequested(false)} onRefresh={refresh} />
       )}
+      <PageTitle tab={tab} detail={tab === 'overview' && detail ? DETAIL_NAMES[detail] : null} onBack={closeDetail} />
       <ErrorBoundary key={`${tab}:${detail ?? ''}`}>
         {tab === 'overview' && detail && (
           <ProviderDetail
@@ -581,6 +582,7 @@ export default function App() {
         )}
         {tab === 'settings' && <Settings snapshot={snapshot} actions={actions} initialSection={settingsSection} />}
       </ErrorBoundary>
+      <FooterStrip snapshot={snapshot} />
       <NoticeToast channel={notices} />
     </div>
   );

@@ -21,6 +21,9 @@ export default defineConfig({
   build: {
     target: 'es2022',
     sourcemap: 'hidden',
+    // The CSP's font-src is 'self' with no data:, so a font must always ship
+    // as its own file. Other assets keep Vite's default inlining.
+    assetsInlineLimit: (file: string) => (/\.(woff2?|ttf|otf)$/i.test(file) ? false : undefined),
     // Two pages: the dashboard and the tray flyout. The CSP plugin above
     // rewrites every served page, so both get the dev loopback.
     rolldownOptions: {

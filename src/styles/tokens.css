@@ -1,0 +1,215 @@
+/*
+ * Flight Deck design tokens: the only place custom properties are defined,
+ * apart from --series (the one provider-series variable, which a chart,
+ * a key glyph or a flyout cell sets from --codex, --claude or --fable), a few
+ * page-local values (--settings-*, --section-no, --flyout-bg) and --fill,
+ * which bars take inline from script.
+ *
+ * Night (a glass cockpit on true black) is the default on :root. Daylight,
+ * the electronic flight bag's day mode, applies when Settings picks Light
+ * (data-theme="light") and when Settings follows Windows and Windows is light
+ * (no data-theme, or anything but "dark"). The main process sets
+ * nativeTheme.themeSource from the same setting, so prefers-color-scheme is
+ * already right at first paint, before React sets data-theme.
+ *
+ * Colour means a provider or a status, never both. Status is always an icon
+ * and a word; text never wears a provider colour; controls are monochrome.
+ * Source of the values: Deck-system.md (night, and the Daylight table).
+ * electron/main.cjs (CHROME) and electron/flyout.cjs (FLYOUT_BACKGROUND)
+ * mirror --ground, --text-2 and --panel by hand; change them together.
+ */
+:root {
+  color-scheme: dark;
+
+  /* Surfaces */
+  --ground: #000000;
+  --panel: #08090b;
+  --panel-2: #0e1013;
+  --current: #15181c;
+  --control-face: #000000;
+
+  /* Rules and control borders */
+  --rule: #22262c;
+  --rule-soft: #15181c;
+  --rule-strong: #343a42;
+  --control: #5f666f; /* 3:1 or better on every night surface (WCAG 1.4.11) */
+  --control-hover: #8a919b;
+
+  /* Chart furniture */
+  --grid: #1a1d22;
+  --grid-mid: #262a31;
+  --grid-day: #20242a;
+  --night: #16191e;
+  --night-key: #2a2e35;
+  --zone: #2c323a;
+  --lead: #3d434c;
+  --link: #4a515a;
+  --bar-mid: #5a616b;
+
+  /* Ink */
+  --text: #e8eaed;
+  --text-2: #a3a9b2;
+  --text-3: #7d848e;
+  --ink-strong: #ffffff;
+  --on-ink: #000000;
+  --primary-hover: #ffffff;
+  --focus: #e8eaed;
+
+  /* Status: ok = on track, caution = watch / at risk, warning = critical */
+  --ok: #3ecf7a;
+  --caution: #f2a93b;
+  --warning: #ff5f52;
+  /* The Master Caution lozenge fill and the ink it carries */
+  --amber: #f2a93b;
+  --on-amber: #000000;
+
+  /* Provider identity: marks and swatches only */
+  --codex: #087aaf;
+  --claude: #9d6fe3;
+  --fable: #d2119a;
+
+  /* Magnitude ramps: heat 0 is the empty hour, 1 to 5 run low to high */
+  --heat-0: #121418;
+  --heat-1: #2a2f36;
+  --heat-2: #4b525b;
+  --heat-3: #7a828c;
+  --heat-4: #aeb4bb;
+  --heat-5: #eceef0;
+  /* Token-mix categories after ink */
+  --mix-2: #b4bac2;
+  --mix-3: #6b727c;
+  --mix-4: #454b54;
+
+  /* Type. B612 ships 400 and 700 only, and synthesis is off. */
+  --font-sans: 'B612', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'B612 Mono', 'Cascadia Mono', Consolas, monospace;
+  --fs-11: 11px;
+  --fs-12: 12px;
+  --fs-13: 13px;
+  --fs-15: 15px;
+  --fs-18: 18px;
+  --fs-22: 22px;
+  --fs-30: 30px;
+  --fs-44: 44px;
+
+  /* Space and shape */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+  --radius: 2px;
+
+  /* Layout. --bar-height equals titleBarOverlay.height in electron/main.cjs. */
+  --bar-height: 52px;
+  --footer-height: 36px;
+  --page-gutter: 24px;
+  --content-max: 1760px;
+  /* The set-apart Settings key: its divider, gap and key, at a fixed width so
+     the status cluster can sit just left of it (see shell.css). */
+  --settings-key-width: 134px;
+}
+/* A narrow window drops the keycaps, so the Settings key gets shorter. */
+@media (max-width: 900px) {
+  :root {
+    --settings-key-width: 92px;
+  }
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --ground: #eceae4;
+  --panel: #ffffff;
+  --panel-2: #f5f3ef;
+  --current: #ebe8e1;
+  --control-face: #ffffff;
+  --rule: #dcd9d2;
+  --rule-soft: #ebe8e2;
+  --rule-strong: #bfbbb3;
+  --control: #7e828a;
+  --control-hover: #4f545c;
+  --grid: #ebe8e2;
+  --grid-mid: #e0ddd6;
+  --grid-day: #e6e3dc;
+  --night: #f0ede6;
+  --night-key: #dcd8cf;
+  --zone: #d9d6ce;
+  --lead: #b3afa8;
+  --link: #8f949b;
+  --bar-mid: #8e9299;
+  --text: #16181b;
+  --text-2: #4b5059;
+  --text-3: #60666e;
+  --ink-strong: #000000;
+  --on-ink: #ffffff;
+  --primary-hover: #3a3f46;
+  --focus: #16181b;
+  --ok: #15763f;
+  --caution: #925600;
+  --warning: #bd2a20;
+  --amber: #f2a93b;
+  --on-amber: #16181b;
+  --codex: #087aaf;
+  --claude: #9d6fe3;
+  --fable: #d2119a;
+  --heat-0: #f3f1ec;
+  --heat-1: #b7b7b7;
+  --heat-2: #929292;
+  --heat-3: #6c6c6c;
+  --heat-4: #484848;
+  --heat-5: #222222;
+  --mix-2: #5d626a;
+  --mix-3: #9ea2a9;
+  --mix-4: #cdc9c2;
+}
+
+/* The same Daylight set when Settings follows Windows and Windows is light. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    color-scheme: light;
+    --ground: #eceae4;
+    --panel: #ffffff;
+    --panel-2: #f5f3ef;
+    --current: #ebe8e1;
+    --control-face: #ffffff;
+    --rule: #dcd9d2;
+    --rule-soft: #ebe8e2;
+    --rule-strong: #bfbbb3;
+    --control: #7e828a;
+    --control-hover: #4f545c;
+    --grid: #ebe8e2;
+    --grid-mid: #e0ddd6;
+    --grid-day: #e6e3dc;
+    --night: #f0ede6;
+    --night-key: #dcd8cf;
+    --zone: #d9d6ce;
+    --lead: #b3afa8;
+    --link: #8f949b;
+    --bar-mid: #8e9299;
+    --text: #16181b;
+    --text-2: #4b5059;
+    --text-3: #60666e;
+    --ink-strong: #000000;
+    --on-ink: #ffffff;
+    --primary-hover: #3a3f46;
+    --focus: #16181b;
+    --ok: #15763f;
+    --caution: #925600;
+    --warning: #bd2a20;
+    --amber: #f2a93b;
+    --on-amber: #16181b;
+    --codex: #087aaf;
+    --claude: #9d6fe3;
+    --fable: #d2119a;
+    --heat-0: #f3f1ec;
+    --heat-1: #b7b7b7;
+    --heat-2: #929292;
+    --heat-3: #6c6c6c;
+    --heat-4: #484848;
+    --heat-5: #222222;
+    --mix-2: #5d626a;
+    --mix-3: #9ea2a9;
+    --mix-4: #cdc9c2;
+  }
+}

@@ -18,9 +18,9 @@ const FLYOUT_BLUR_GRACE_MS = 400;
 // Windows raises 'click' before 'double-click'; clicks just after a double
 // click belong to it and must not reopen the flyout over the dashboard.
 const FLYOUT_DOUBLE_CLICK_HOLD_MS = 600;
-// Follows --surface-2 (dark) and --surface (light) in src/professional.css,
-// the colours the flyout paints, so it never flashes the other palette.
-const FLYOUT_BACKGROUND = Object.freeze({ dark: '#1d1e22', light: '#ffffff' });
+// Follows --panel (night #08090b, Daylight #ffffff) in src/styles/tokens.css,
+// the colour the flyout paints, so it never flashes the other palette.
+const FLYOUT_BACKGROUND = Object.freeze({ dark: '#08090b', light: '#ffffff' });
 
 const DASHBOARD_TABS = Object.freeze(['overview', 'activity', 'costs', 'settings']);
 const DASHBOARD_PROVIDERS = Object.freeze(['codex', 'claude', 'fable']);

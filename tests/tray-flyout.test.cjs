@@ -640,6 +640,8 @@ test('the flyout page shares the dashboard CSP, is built as its own entry and is
   assert.match(devCsp.transformIndexHtml(flyoutHtml), /connect-src 'self' http:\/\/127\.0\.0\.1:\* ws:\/\/127\.0\.0\.1:\*/);
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
   assert.ok(pkg.build.files.includes('dist/**/*') && pkg.build.files.includes('electron/**/*'));
+  for (const previewOnly of ['!dist/assets/demo-*.js', '!dist/assets/flyout-preview-*.js'])
+    assert.ok(pkg.build.files.includes(previewOnly), `the release leaves out ${previewOnly.slice(1)}`);
   const entries = ['dist/index.html', 'dist/flyout.html', 'electron/main.cjs', 'electron/preload.cjs', 'electron/flyout-preload.cjs',
     'electron/maintenance-host.cjs', 'electron/maintenance-service.cjs', 'electron/desktop-estimates.cjs', 'node_modules/@anthropic-ai/claude-agent-sdk/package.json'];
   assert.doesNotThrow(() => assertArchive(entries));
@@ -697,7 +699,8 @@ test('the demo snapshot renders the verdict, three allowance rows and their fore
   const affected = views.find((view) => view.id === demoSnapshot.dashboardVerdict.details[0].sourceId);
   const pace = budget.dailyBudget(affected.current, demoSnapshot.settings, Date.parse(demoSnapshot.generatedAt));
   assert.ok(all.includes(`Stay under ${budget.paceLabel(pace.budget)} a day to reach the reset.`));
-  assert.match(html, /class="flyout-verdict warn"/);
+  // The compact Deck annunciator takes the verdict's forecast state as its tone.
+  assert.match(html, /class="annunciator flyout-verdict" data-tone="risk"/);
   const rendered = rows(html);
   assert.equal(rendered.length, 3);
   const statusWords = { safe: 'On track', watch: 'Watch', risk: 'At risk', critical: 'Critical', unknown: 'Learning' };
@@ -709,8 +712,9 @@ test('the demo snapshot renders the verdict, three allowance rows and their fore
     assert.ok(row.includes(`${view.expectedRemaining.toFixed(0)}% at reset`), row);
     assert.ok(row.includes(statusWords[view.state]), row);
     assert.match(rendered[index], /role="img" aria-label="[^"]*left now; about \d+% expected to be left at reset"/);
-    assert.match(rendered[index], /flyout-fill-used" style="width:[\d.]+%"/);
-    assert.match(rendered[index], /flyout-fill-reset" style="width:[\d.]+%"/);
+    // The Deck mini fuel tape is vertical, so the fills are sized by height.
+    assert.match(rendered[index], /flyout-fill-used" style="height:[\d.]+%"/);
+    assert.match(rendered[index], /flyout-fill-reset" style="height:[\d.]+%"/);
   });
   assert.deepEqual(views.map((view) => statusWords[view.state]), ['On track', 'On track', 'At risk']);
   assert.match(all, /Left at reset Likely used before reset/);
@@ -743,7 +747,7 @@ test('safe, snoozed, hidden, loading, unavailable and malformed snapshots all re
   safe.dashboardVerdict = { state: 'safe', reason: null, label: 'All allowances on track', windowsChecked: 3, affected: [], details: [] };
   const safeHtml = renderFlyout(safe);
   assert.match(text(safeHtml), /All allowances on track/);
-  assert.match(safeHtml, /class="flyout-verdict safe"/);
+  assert.match(safeHtml, /class="annunciator flyout-verdict" data-tone="safe"/);
 
   const snoozed = structuredClone(demoSnapshot);
   snoozed.settings.alertsSnoozedUntil = new Date(Date.parse(snoozed.generatedAt) + 3_600_000).toISOString();
@@ -814,4 +818,63 @@ test('a provider that is still learning draws its balance outlined, not as a for
   const codexRow = rows(renderFlyout(snapshot))[0];
   assert.match(codexRow, /flyout-fill flyout-fill-now/);
   assert.doesNotMatch(codexRow, /flyout-fill-used|flyout-fill-reset/);
+});
+
+test('the verdict annunciator keeps a partial all-clear neutral and marks a failed read as a failure', () => {
+  const { buildDashboardVerdict } = require('../electron/dashboard-decision.cjs');
+  const verdictOf = (html) => html.match(/<section class="annunciator flyout-verdict"[\s\S]*?<\/section>/)[0];
+  // A real partial: Fable is still learning, so the backend verdict is unknown and names it.
+  const partial = structuredClone(demoSnapshot);
+  for (const entry of [partial.quotas.fable, ...(partial.quotas.fable.windows ?? [])]) {
+    entry.forecast = { ...entry.forecast, state: 'unknown', expectedRemaining: null, heavyRemaining: null };
+  }
+  partial.dashboardVerdict = buildDashboardVerdict(partial);
+  const partialVerdict = verdictOf(renderFlyout(partial));
+  assert.match(partialVerdict, /data-tone="unknown"/);
+  assert.match(text(partialVerdict), /^Usage status needs data: Fable 5/);
+  assert.match(text(partialVerdict), /Codex and Claude are on track\./);
+  assert.doesNotMatch(partialVerdict, /circle-check/, 'green and its check belong to a verdict that assessed every allowance');
+  // Positive control for the icon names; Watch keeps the warning triangle.
+  const icons = {
+    safe: /lucide-circle-check/,
+    watch: /lucide-triangle-alert/,
+    risk: /lucide-triangle-alert/,
+    critical: /lucide-octagon-alert/,
+    unknown: /lucide-circle-dashed/,
+  };
+  for (const [state, icon] of Object.entries(icons)) {
+    const snapshot = structuredClone(demoSnapshot);
+    snapshot.dashboardVerdict = { ...snapshot.dashboardVerdict, state };
+    assert.match(verdictOf(renderFlyout(snapshot)), icon, `${state} verdict lozenge`);
+  }
+  assert.match(renderFlyout(null), /data-tone="unknown"/, 'a store that is only closing is a neutral wait');
+  const failed = renderFlyout(null, { error: 'The local usage store could not be opened.' });
+  assert.match(failed, /data-tone="failure"/);
+  assert.match(failed, /role="alert"[^>]*>[\s\S]*The local usage store could not be opened\./);
+});
+
+test('an allowance on watch keeps the warning triangle and the word in its row', () => {
+  const snapshot = structuredClone(demoSnapshot);
+  for (const entry of [snapshot.quotas.codex, ...(snapshot.quotas.codex.windows ?? [])]) {
+    entry.forecast = { ...entry.forecast, state: 'watch' };
+  }
+  const codex = rows(renderFlyout(snapshot)).find((row) => row.includes('data-provider="codex"'));
+  assert.match(text(codex), /Watch/);
+  assert.match(codex, /lucide-triangle-alert/);
+  assert.doesNotMatch(codex, /lucide-eye/);
+});
+
+test('demo data reaches only the browser preview of the flyout; Electron renders from the preload bridge', () => {
+  const entry = fs.readFileSync(path.join(root, 'src', 'flyout.tsx'), 'utf8');
+  assert.match(entry, /const isBrowserPreview = !window\.aiUsageFlyout && window\.location\.protocol !== 'file:';/);
+  assert.match(entry, /if \(isBrowserPreview\) \{\s*void import\('\.\/flyout-preview'\)/);
+  assert.match(entry, /\} else \{\s*render\(\);\s*\}/, 'Electron passes no bridge prop');
+  const walk = (dir) =>
+    fs.readdirSync(dir, { withFileTypes: true }).flatMap((d) => (d.isDirectory() ? walk(path.join(dir, d.name)) : [path.join(dir, d.name)]));
+  for (const file of walk(path.join(root, 'src')).filter((f) => /\.(ts|tsx)$/.test(f))) {
+    const source = fs.readFileSync(file, 'utf8');
+    assert.doesNotMatch(source, /(from|import)\s+['"][./]*flyout-preview['"]/, `${file} must not import the preview adapter statically`);
+  }
+  const flyout = fs.readFileSync(path.join(root, 'src', 'components', 'TrayFlyout.tsx'), 'utf8');
+  assert.match(flyout, /previewBridge \?\? \(typeof window === 'undefined' \? undefined : window\.aiUsageFlyout\)/);
 });

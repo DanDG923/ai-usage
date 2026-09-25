@@ -1,5 +1,5 @@
-import { AlertTriangle, CheckCircle2, ChevronRight, ShieldCheck } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { AlertOctagon, AlertTriangle, CheckCircle2, ChevronRight, EyeOff, Plug } from 'lucide-react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { bankedResetsFor } from '../banked-resets';
 import { dailyBudget, paceLabel, scheduleOf } from '../budget';
 import { currentCycleFor } from '../cycle-match';
@@ -8,10 +8,10 @@ import { providerViews, type ProviderId, type ProviderView } from '../provider-v
 import type { CycleRow, Settings, Snapshot } from '../types';
 import { RunwayChart } from './Charts';
 import { DailyBudgetStrip } from './DailyBudgetStrip';
-import { ProviderOutcomes, SessionWindows } from './ProviderSummary';
+import { SessionWindows } from './ProviderSummary';
 import { StatePill } from './StatePill';
 import { TokenCapacity } from './TokenCapacity';
-import '../overview.css';
+import '../styles/provider.css';
 
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -54,6 +54,61 @@ function windowNoun(view: ProviderView) {
   return 'window';
 }
 
+/** Whether the runway draws an expected path, a heavier range and the fuel tape. */
+function hasProjection(view: ProviderView) {
+  return view.state !== 'unknown' && view.expectedRemaining != null && view.heavyRemaining != null;
+}
+
+/** A status value: the tone's icon, then the words, in the tone's colour. */
+function Tone({ tone, children }: { tone: 'risk' | 'critical'; children: string }) {
+  const Icon = tone === 'critical' ? AlertOctagon : AlertTriangle;
+  return (
+    <span className={`pd-tone ${tone}`}>
+      <Icon aria-hidden="true" />
+      {children}
+    </span>
+  );
+}
+
+/** Challenge-response row: LABEL ······ VALUE, the leader drawn by CSS. */
+function Row({ label, children, className }: { label: string; children: ReactNode; className?: string }) {
+  return (
+    <div className={className ? `cr ${className}` : 'cr'}>
+      <dt className="lbl">{label}</dt>
+      <span className="lead" aria-hidden="true" />
+      <dd>{children}</dd>
+    </div>
+  );
+}
+
+/** Expected and heavier-week outcomes at the reset, as challenge-response rows under the runway. */
+function RunwayOutcomes({ view, nowMs }: { view: ProviderView; nowMs: number }) {
+  const forecast = view.current?.forecast;
+  if (!forecast || view.expectedRemaining == null) {
+    return <p className="pd-learning">Learning from recent usage before it forecasts the reset.</p>;
+  }
+  return (
+    <dl className="pd-outcomes">
+      <Row label="Expected at reset">
+        {forecast.exhaustsAt ? (
+          <Tone tone="critical">{`Runs out ${whenLabel(forecast.exhaustsAt, nowMs)}`}</Tone>
+        ) : (
+          `${percent(view.expectedRemaining)} left`
+        )}
+      </Row>
+      {view.heavyRemaining != null && (
+        <Row label="Heavier week">
+          {forecast.heavyExhaustsAt ? (
+            <Tone tone="risk">{`Runs out ${whenLabel(forecast.heavyExhaustsAt, nowMs)}`}</Tone>
+          ) : (
+            `Leaves ${percent(view.heavyRemaining)}`
+          )}
+        </Row>
+      )}
+    </dl>
+  );
+}
+
 /** The window in progress, then past windows newest first, each with its peak and value. */
 function CycleTable({ view, snapshot }: { view: ProviderView; snapshot: Snapshot }) {
   const quota = view.quota && !view.quota.forecast.expired ? view.quota : null;
@@ -72,63 +127,87 @@ function CycleTable({ view, snapshot }: { view: ProviderView; snapshot: Snapshot
           {endedEarly && <small>Reset early</small>}
         </td>
         <td>
-          <span className="cycle-meter" role="img" aria-label={`${percent(row.peakUsedPercent)} of the allowance used`}>
+          <span className="pd-meter" role="img" aria-label={`${percent(row.peakUsedPercent)} of the allowance used`}>
             <i className="used" style={{ width: bar(row.peakUsedPercent) }} />
           </span>
         </td>
-        <td className="num">{percent(row.peakUsedPercent)}</td>
+        <td className="num peak">{percent(row.peakUsedPercent)}</td>
         <td className="num">{money(row.cost, snapshot.costs.currency)}</td>
         <td className="forecast-outcome ended">Ended</td>
       </tr>
     );
   };
   return (
-    <div className="table-scroll compact-table-scroll">
-      <table className="cycle-detail-table">
-        <thead>
-          <tr>
-            <th>Window ends</th>
-            <th>Allowance used</th>
-            <th className="num">Peak used</th>
-            <th className="num">API-equivalent</th>
-            <th>Outcome</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr className="current">
-            <td>
-              <strong>{quota ? dateTimeLabel(quota.resetsAt) : view.name}</strong>
-              <small>{quota ? `${quota.bucketName} · in progress` : 'Current window'}</small>
-            </td>
-            <td>
-              {quota && current ? (
-                <span
-                  className="cycle-meter"
-                  role="img"
-                  aria-label={`${percent(current.peakUsedPercent)} used so far${expectedUsed == null ? '' : `; ${percent(expectedUsed)} expected by reset`}`}
-                >
-                  {heavyUsed != null && <i className="heavier" style={{ width: bar(heavyUsed) }} />}
-                  {expectedUsed != null && <i className="expected" style={{ width: bar(expectedUsed) }} />}
-                  <i className="used" style={{ width: bar(current.peakUsedPercent) }} />
-                </span>
-              ) : (
-                <span className="cycle-meter empty" aria-hidden="true" />
-              )}
-            </td>
-            <td className="num">{quota && current ? percent(current.peakUsedPercent) : '—'}</td>
-            <td className="num">{quota && current ? money(current.cost, snapshot.costs.currency) : '—'}</td>
-            <td className={`forecast-outcome ${forecast?.state ?? 'unknown'}`}>
-              {!quota
-                ? 'Awaiting current reading'
-                : forecast?.expectedRemaining == null
-                  ? 'Learning'
-                  : `${percent(forecast.expectedRemaining)} expected at reset`}
-            </td>
-          </tr>
-          {past.map(pastRow)}
-        </tbody>
-      </table>
-    </div>
+    <>
+      <div className="pd-table-scroll">
+        <table className="cycle-detail-table">
+          <thead>
+            <tr>
+              <th>Window ends</th>
+              <th>Allowance used</th>
+              <th className="num">Peak used</th>
+              <th className="num">API-equivalent</th>
+              <th>Outcome</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr className="current">
+              <td>
+                <strong>{quota ? dateTimeLabel(quota.resetsAt) : view.name}</strong>
+                <small>{quota ? `${quota.bucketName} · in progress` : 'Current window'}</small>
+              </td>
+              <td>
+                {quota && current ? (
+                  <span
+                    className="pd-meter"
+                    role="img"
+                    aria-label={`${percent(current.peakUsedPercent)} used so far${expectedUsed == null ? '' : `; ${percent(expectedUsed)} expected by reset`}`}
+                  >
+                    {heavyUsed != null && <i className="heavier" style={{ width: bar(heavyUsed) }} />}
+                    {expectedUsed != null && <i className="expected" style={{ width: bar(expectedUsed) }} />}
+                    <i className="used" style={{ width: bar(current.peakUsedPercent) }} />
+                  </span>
+                ) : (
+                  <span className="pd-meter empty" aria-hidden="true" />
+                )}
+              </td>
+              <td className="num peak">{quota && current ? percent(current.peakUsedPercent) : '—'}</td>
+              <td className="num">{quota && current ? money(current.cost, snapshot.costs.currency) : '—'}</td>
+              <td className={`forecast-outcome ${forecast?.state ?? 'unknown'}`}>
+                {!quota
+                  ? 'Awaiting current reading'
+                  : forecast?.expectedRemaining == null
+                    ? 'Learning'
+                    : `${percent(forecast.expectedRemaining)} expected at reset`}
+              </td>
+            </tr>
+            {past.map(pastRow)}
+          </tbody>
+        </table>
+      </div>
+      <ul className="pd-bar-key" aria-label="Bar key">
+        <li>
+          <i className="used" aria-hidden="true" />
+          Used
+        </li>
+        {expectedUsed != null && (
+          <li>
+            <i className="expected" aria-hidden="true" />
+            Expected by reset
+          </li>
+        )}
+        {heavyUsed != null && (
+          <li>
+            <i className="heavier" aria-hidden="true" />
+            Heavier week
+          </li>
+        )}
+        <li>
+          <i className="limit" aria-hidden="true" />
+          100% of the allowance
+        </li>
+      </ul>
+    </>
   );
 }
 
@@ -156,18 +235,21 @@ function Planner({
   const reset = view.resetAt ? whenLabel(view.resetAt, nowMs) : 'the';
   if (!budget) {
     return (
-      <section className="panel planner-panel" aria-labelledby="planner-heading">
-        <h2 id="planner-heading">Daily budget</h2>
-        <p className="panel-note">
-          A daily budget needs a forecast with enough history and at least one full active day before the reset. The
-          runway still shows what is expected to remain.
-        </p>
+      <section className="pnl pd-panel pd-planner" aria-labelledby="planner-heading">
+        <div className="pd-panel-head">
+          <h2 id="planner-heading">Daily budget</h2>
+          <p>
+            A daily budget needs a forecast with enough history and at least one full active day before the reset. The
+            runway still shows what is expected to remain.
+          </p>
+        </div>
       </section>
     );
   }
   const fits = budget.expectedFits && (budget.heavier == null || budget.heavierFits);
   const expectedOver = !budget.expectedFits;
   const tone = fits ? 'safe' : expectedOver ? 'critical' : 'risk';
+  const VerdictIcon = fits ? CheckCircle2 : expectedOver ? AlertOctagon : AlertTriangle;
   const heavyEnds = view.current?.forecast.heavyExhaustsAt;
   const verdictTitle = fits
     ? 'Fits, even in a heavier week'
@@ -188,19 +270,28 @@ function Planner({
           ? `At the heavier pace ${view.name} runs out ${whenLabel(heavyEnds, nowMs)}, ${gapBeforeReset(heavyEnds, view.resetAt)}.`
           : 'At the heavier pace the allowance would be used up before the reset.';
   return (
-    <section className="panel planner-panel" aria-labelledby="planner-heading">
-      <h2 id="planner-heading">Daily budget</h2>
-      <p className="panel-note">
-        How much {view.name} you can use per active day and still reach the {reset} reset.
-      </p>
-      <p className="planner-figure">
+    <section className="pnl pd-panel pd-planner" aria-labelledby="planner-heading">
+      <div className="pd-panel-head">
+        <h2 id="planner-heading">Daily budget</h2>
+        <p>
+          How much {view.name} you can use per active day and still reach the {reset} reset.
+        </p>
+      </div>
+      <p className="pd-figure">
         <strong>{paceLabel(budget.budget)}</strong> <span>per active day</span>
       </p>
-      <DailyBudgetStrip budget={budget} provider={view.id} />
-      <div className="planner-reserve">
-        <div>
+      <div className="pd-gauge">
+        {budget.reserve > 0 && (
+          <p className="pd-gauge-label">{`Daily budget, keeping ${Math.round(budget.reserve)}% in reserve`}</p>
+        )}
+        <DailyBudgetStrip budget={budget} provider={view.id} heading={false} />
+      </div>
+      <div className="pd-reserve">
+        <div className="pd-reserve-head">
           <label htmlFor="planner-reserve">Keep in reserve</label>
-          <output htmlFor="planner-reserve">{reserve}% of the allowance</output>
+          <output htmlFor="planner-reserve">
+            <strong>{`${reserve}%`}</strong> of the allowance
+          </output>
         </div>
         <input
           id="planner-reserve"
@@ -212,45 +303,45 @@ function Planner({
           value={reserve}
           onChange={(event) => setDraft(Number(event.target.value))}
         />
-        <div className="planner-scale" aria-hidden="true">
+        <div className="pd-scale" aria-hidden="true">
           <span>0%</span>
           <span>25%</span>
           <span>50%</span>
         </div>
       </div>
-      <div className={`planner-verdict ${tone}`}>
-        {fits ? <CheckCircle2 aria-hidden="true" /> : <AlertTriangle aria-hidden="true" />}
+      <div className={`pd-verdict ${tone}`} role="status">
+        <VerdictIcon aria-hidden="true" />
         <div>
           <strong>{verdictTitle}</strong>
           <span>{verdictText}</span>
         </div>
       </div>
       {draft != null && draft !== saved && (
-        <div className="planner-save">
-          <span>
-            Trying {draft}%. Forecasts still use {saved}%.
-          </span>
-          {onSaveReserve && (
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={async () => {
-                if ((await onSaveReserve(draft)) !== false) setDraft(null);
-              }}
-            >
-              Use {draft}% for all forecasts
+        <div className="pd-save">
+          <span>{`Trying ${draft}%. Forecasts still use ${saved}%.`}</span>
+          <div className="pd-save-keys">
+            {onSaveReserve && (
+              <button
+                type="button"
+                className="btn btn-p"
+                onClick={async () => {
+                  if ((await onSaveReserve(draft)) !== false) setDraft(null);
+                }}
+              >
+                {`Use ${draft}% for all forecasts`}
+              </button>
+            )}
+            <button type="button" className="btn" onClick={() => setDraft(null)}>
+              Reset
             </button>
-          )}
-          <button type="button" className="text-button" onClick={() => setDraft(null)}>
-            Reset
-          </button>
+          </div>
         </div>
       )}
-      <p className="panel-note">
+      <p className="pd-note">
         {Math.round(budget.activeHoursLeft)} active hours left · {scheduleSummary(snapshot.settings)}. Use outside
         active hours counts too.{' '}
         {onOpenSettings && (
-          <button type="button" className="text-button" onClick={() => onOpenSettings('forecast')}>
+          <button type="button" className="lnk" onClick={() => onOpenSettings('forecast')}>
             Edit schedule
           </button>
         )}
@@ -289,24 +380,30 @@ export function ProviderDetail({
   if (!view) {
     return (
       <main
-        className="page detail-page"
+        className="page detail-page pd-hidden"
         id="panel-overview"
         role="tabpanel"
         aria-labelledby="tab-overview"
         tabIndex={-1}
       >
-        <section className="panel status-panel">
-          <h1>This subscription is hidden</h1>
-          <p>Show it again under Settings → Subscriptions. Its saved history is kept.</p>
-          <button type="button" className="secondary-button" onClick={onBack}>
-            Back to Overview
-          </button>
+        <section className="state-panel">
+          <span className="state-panel-icon">
+            <EyeOff aria-hidden="true" />
+          </span>
+          <div className="state-panel-body">
+            <h1>This subscription is hidden</h1>
+            <p>Show it again under Settings → Subscriptions. Its saved history is kept.</p>
+            <button type="button" className="btn" onClick={onBack}>
+              Back to Overview
+            </button>
+          </div>
         </section>
       </main>
     );
   }
 
   const forecast = view.current && !view.expired ? view.current.forecast : null;
+  const projection = Boolean(forecast) && hasProjection(view);
   const related =
     view.id === 'fable'
       ? views.find((entry) => entry.id === 'claude')
@@ -317,65 +414,84 @@ export function ProviderDetail({
   const banked = bankedResetsFor(view.id, snapshot, nowMs);
 
   return (
-    <main className="page detail-page" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview" tabIndex={-1}>
-      <header className={`detail-head ${view.id}`}>
-        <div className="detail-title">
+    <main
+      className="page detail-page"
+      data-provider={view.id}
+      id="panel-overview"
+      role="tabpanel"
+      aria-labelledby="tab-overview"
+      tabIndex={-1}
+    >
+      <header className={`pnl pd-head ${view.id}`}>
+        <div className="pd-title">
           <span className={`swatch ${view.id}`} aria-hidden="true" />
-          <h1>{view.name}</h1>
-          <StatePill
-            state={view.state}
-            label={view.expired ? 'Needs reading' : view.current ? undefined : 'Learning'}
-          />
-          <p>{view.subtitle}</p>
+          <div>
+            <div className="pd-name">
+              <h1>{view.name}</h1>
+              <StatePill
+                state={view.state}
+                label={view.expired ? 'Needs reading' : view.current ? undefined : 'Learning'}
+              />
+            </div>
+            <p>{view.subtitle}</p>
+          </div>
         </div>
         {view.current && !view.expired && view.remaining != null ? (
-          <dl className="detail-figures">
+          <dl className="pd-figures">
             <div>
-              <dt>Left now</dt>
-              <dd className="big">
-                {view.estimated ? '~' : ''}
-                {Math.round(view.remaining)}%
-              </dd>
+              <dt className="lbl">Left now</dt>
+              <dd className="pd-big">{`${view.estimated ? '~' : ''}${Math.round(view.remaining)}%`}</dd>
             </div>
             <div>
-              <dt>Expected at reset</dt>
-              <dd className="big">
-                {forecast?.exhaustsAt
-                  ? 'Runs out'
-                  : view.expectedRemaining == null
-                    ? '—'
-                    : percent(view.expectedRemaining)}
-              </dd>
+              <dt className="lbl">Expected at reset</dt>
+              {forecast?.exhaustsAt ? (
+                <dd className="critical">
+                  <Tone tone="critical">{`Runs out ${whenLabel(forecast.exhaustsAt, nowMs)}`}</Tone>
+                </dd>
+              ) : (
+                <dd className="pd-big">{view.expectedRemaining == null ? '—' : percent(view.expectedRemaining)}</dd>
+              )}
             </div>
             <div>
-              <dt>Heavier week</dt>
+              <dt className="lbl">Heavier week</dt>
               <dd className={forecast?.heavyExhaustsAt ? 'risk' : undefined}>
-                {forecast?.heavyExhaustsAt
-                  ? `Runs out ${whenLabel(forecast.heavyExhaustsAt, nowMs)}`
-                  : view.heavyRemaining == null
-                    ? 'Learning'
-                    : `Leaves ${percent(view.heavyRemaining)}`}
+                {forecast?.heavyExhaustsAt ? (
+                  <Tone tone="risk">{`Runs out ${whenLabel(forecast.heavyExhaustsAt, nowMs)}`}</Tone>
+                ) : view.heavyRemaining == null ? (
+                  'Learning'
+                ) : (
+                  `Leaves ${percent(view.heavyRemaining)}`
+                )}
               </dd>
             </div>
             <div>
-              <dt>Resets</dt>
+              <dt className="lbl">Resets</dt>
               <dd title={`in ${resetDistance(view.resetAt)}`}>{dateTimeLabel(view.resetAt)}</dd>
+              <dd className="pd-sub">{`in ${resetDistance(view.resetAt)}`}</dd>
             </div>
           </dl>
         ) : (
-          <p className="detail-waiting">
-            {view.expired
-              ? 'The last allowance window ended. Waiting for a new provider reading.'
-              : 'Waiting for the provider’s first allowance observation.'}
-          </p>
+          <div className="pd-waiting">
+            <p>
+              {view.expired
+                ? 'The last allowance window ended. Waiting for a new provider reading.'
+                : 'Waiting for the provider’s first allowance observation.'}
+            </p>
+            {view.expired && view.current && (
+              <dl>
+                <Row label="Last observed">{`${percent(view.current.remainingPercent)} before reset`}</Row>
+                <Row label="Window ended">{dateTimeLabel(view.current.resetsAt)}</Row>
+              </dl>
+            )}
+          </div>
         )}
       </header>
 
-      <div className="detail-grid">
-        <div className="detail-main">
+      <div className="pd-grid">
+        <div className="pd-main">
           {view.current && !view.expired && (
-            <section className="panel runway-panel" aria-labelledby="runway-heading">
-              <div className="panel-heading">
+            <section className="pnl pd-panel pd-runway" aria-labelledby="runway-heading">
+              <div className="pd-panel-head has-aside">
                 <div>
                   <h2 id="runway-heading">This {windowNoun(view)}’s runway</h2>
                   <p>
@@ -385,7 +501,7 @@ export function ProviderDetail({
                 {forecast && view.heavyRemaining != null && (
                   <button
                     type="button"
-                    className="toggle-chip"
+                    className={`btn pd-toggle${showHeavy ? ' btn-on' : ''}`}
                     aria-pressed={showHeavy}
                     onClick={() => setShowHeavy((value) => !value)}
                   >
@@ -393,26 +509,40 @@ export function ProviderDetail({
                   </button>
                 )}
               </div>
-              <div className="runway-key" role="group" aria-label="Chart key">
-                <span>
+              <ul className="runway-key" aria-label="Chart key">
+                <li>
                   <i className={`key-observed ${view.id}`} aria-hidden="true" />
                   Observed
-                </span>
-                <span>
-                  <i className={`key-expected ${view.id}`} aria-hidden="true" />
-                  Expected
-                </span>
-                {showHeavy && (
-                  <span>
+                </li>
+                {projection && (
+                  <li>
+                    <i className={`key-expected ${view.id}`} aria-hidden="true" />
+                    Expected
+                  </li>
+                )}
+                {projection && showHeavy && (
+                  <li>
                     <i className={`key-band ${view.id}`} aria-hidden="true" />
                     Heavier-week range
-                  </span>
+                  </li>
                 )}
-                <span>
+                <li>
                   <i className="key-inactive" aria-hidden="true" />
                   Outside active hours
-                </span>
-              </div>
+                </li>
+                {projection && (
+                  <>
+                    <li>
+                      <i className={`key-tape-reset ${view.id}`} aria-hidden="true" />
+                      Left at reset
+                    </li>
+                    <li>
+                      <i className={`key-tape-used ${view.id}`} aria-hidden="true" />
+                      Likely used before reset
+                    </li>
+                  </>
+                )}
+              </ul>
               <RunwayChart
                 view={view}
                 schedule={schedule}
@@ -420,35 +550,29 @@ export function ProviderDetail({
                 showHeavy={showHeavy}
                 reserve={reserveDraft ?? savedReserve}
               />
-              <ProviderOutcomes view={view} nowMs={nowMs} />
+              <RunwayOutcomes view={view} nowMs={nowMs} />
             </section>
           )}
 
           {view.secondaryWindows.length > 0 && (
-            <section className="panel" aria-labelledby="windows-heading">
-              <div className="panel-heading compact-heading">
+            <section className="pnl pd-panel pd-windows" aria-labelledby="windows-heading">
+              <div className="pd-panel-head">
                 <h2 id="windows-heading">Other windows</h2>
               </div>
               <SessionWindows view={view} nowMs={nowMs} />
             </section>
           )}
 
-          <section className="panel recent-cycles-panel" aria-labelledby="cycles-heading">
-            <div className="panel-heading compact-heading">
-              <div>
-                <h2 id="cycles-heading">Past {windowNoun(view)}s</h2>
-                <p>
-                  Peak share of the allowance used in each window, and what those tokens are worth at today’s prices.
-                </p>
-              </div>
+          <section className="pnl pd-panel pd-cycles" aria-labelledby="cycles-heading">
+            <div className="pd-panel-head">
+              <h2 id="cycles-heading">Past {windowNoun(view)}s</h2>
+              <p>Peak share of the allowance used in each window, and what those tokens are worth at today’s prices.</p>
             </div>
             <CycleTable view={view} snapshot={snapshot} />
           </section>
-
-          <TokenCapacity snapshot={snapshot} provider={view.id} />
         </div>
 
-        <aside className="detail-aside" aria-label={`${view.name} planning and evidence`}>
+        <aside className="pd-aside" aria-label={`${view.name} planning and evidence`}>
           {view.current && !view.expired && (
             <Planner
               view={view}
@@ -461,23 +585,29 @@ export function ProviderDetail({
           )}
 
           {related && (
-            <section className="panel related-panel" aria-labelledby="related-heading">
-              <h2 id="related-heading">Related allowance</h2>
-              <p className="panel-note">
-                {view.id === 'fable'
-                  ? 'Fable 5 has its own weekly limit within your Claude plan.'
-                  : 'Fable 5 has a separate weekly limit inside this plan.'}
-              </p>
+            <section className="pnl pd-panel pd-related" aria-labelledby="related-heading">
+              <div className="pd-panel-head">
+                <h2 id="related-heading">Related allowance</h2>
+                <p>
+                  {view.id === 'fable'
+                    ? 'Fable 5 has its own weekly limit within your Claude plan.'
+                    : 'Fable 5 has a separate weekly limit inside this plan.'}
+                </p>
+              </div>
               <button
                 type="button"
-                className="related-row"
+                className="pd-related-row"
                 onClick={() => onOpenProvider?.(related.id)}
                 disabled={!onOpenProvider}
               >
-                <span className={`swatch ${related.id}`} aria-hidden="true" />
-                <span className="related-name">
-                  <strong>{related.name}</strong>
-                  {related.remaining != null && <span> · {Math.round(related.remaining)}% left</span>}
+                <span className="pd-related-name">
+                  <span className={`swatch ${related.id}`} aria-hidden="true" />
+                  <span>
+                    <strong>{related.name}</strong>
+                    {related.remaining != null && (
+                      <span className="pd-related-left">{` · ${Math.round(related.remaining)}% left`}</span>
+                    )}
+                  </span>
                 </span>
                 <StatePill state={related.state} />
                 <ChevronRight aria-hidden="true" />
@@ -485,13 +615,14 @@ export function ProviderDetail({
             </section>
           )}
 
-          <section className="panel evidence-panel" aria-labelledby="evidence-heading">
-            <h2 id="evidence-heading">Evidence</h2>
-            <dl>
-              <dt>Reading</dt>
-              <dd>{provenanceLabel(view.provenance)}</dd>
-              <dt>Last reading</dt>
-              <dd>
+          <section className="pnl pd-panel pd-evidence" aria-labelledby="evidence-heading">
+            <div className="pd-evidence-head">
+              <h2 id="evidence-heading">Evidence</h2>
+              <Plug aria-hidden="true" />
+            </div>
+            <dl className="pd-rows">
+              <Row label="Reading">{provenanceLabel(view.provenance)}</Row>
+              <Row label="Last reading">
                 {view.current ? (
                   <time dateTime={view.current.observedAt} title={shortDate(view.current.observedAt)}>
                     {relativeTime(view.current.observedAt, nowMs)}
@@ -499,11 +630,10 @@ export function ProviderDetail({
                 ) : (
                   'None yet'
                 )}
-              </dd>
+              </Row>
               {source && (
                 <>
-                  <dt>Last scan</dt>
-                  <dd>
+                  <Row label="Last scan">
                     {source.last_attempt_at ? (
                       <time dateTime={source.last_attempt_at} title={shortDate(source.last_attempt_at)}>
                         {relativeTime(source.last_attempt_at, nowMs)}
@@ -511,47 +641,37 @@ export function ProviderDetail({
                     ) : (
                       'Not yet'
                     )}
-                    {' · '}
-                    {source.status}
-                  </dd>
-                  <dt>Last good</dt>
-                  <dd>{source.last_success_at ? shortDate(source.last_success_at) : 'Not yet'}</dd>
+                    {` · ${source.status}`}
+                  </Row>
+                  <Row label="Last good">{source.last_success_at ? shortDate(source.last_success_at) : 'Not yet'}</Row>
                 </>
               )}
               {banked && (
-                <>
-                  <dt>Banked resets</dt>
-                  <dd>
-                    {banked.label}
-                    <small>{banked.note}</small>
-                  </dd>
-                </>
+                <Row label="Banked resets" className="pd-banked">
+                  {banked.label}
+                  <small>{banked.note}</small>
+                </Row>
               )}
               {forecast && forecast.learnedDays > 0 && (
-                <>
-                  <dt>Learned from</dt>
-                  <dd>
-                    {forecast.learnedDays} day{forecast.learnedDays === 1 ? '' : 's'} ·{' '}
-                    {percent(forecast.confidence * 100)} confidence
-                  </dd>
-                </>
+                <Row label="Learned from">
+                  {`${forecast.learnedDays} day${forecast.learnedDays === 1 ? '' : 's'} · ${percent(forecast.confidence * 100)} confidence`}
+                </Row>
               )}
             </dl>
             {view.notes.length > 0 && (
-              <ul className="evidence-notes">
+              <ul className="pd-notes">
                 {view.notes.map((note) => (
                   <li key={note}>{note}</li>
                 ))}
               </ul>
             )}
-            {source?.status_detail && <p className="panel-note">{source.status_detail}</p>}
-            <div className="local-assurance">
-              <ShieldCheck aria-hidden="true" />
-              <span>Calculated on this PC from your own records.</span>
-            </div>
+            {source?.status_detail && <p className="pd-detail">{source.status_detail}</p>}
+            <p className="pd-assurance">Calculated on this PC from your own records.</p>
           </section>
         </aside>
       </div>
+
+      <TokenCapacity snapshot={snapshot} provider={view.id} />
     </main>
   );
 }

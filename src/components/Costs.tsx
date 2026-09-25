@@ -11,7 +11,13 @@ import { TaskTable } from './details/TaskTable';
 import { SessionTable } from './details/SessionTable';
 import { DesktopEstimates } from './DesktopEstimates';
 import '../pages.css';
+import '../styles/costs.css';
 
+/**
+ * The fuel ledger: what the tracked tokens would have cost at API rates. The
+ * readouts row and the daily cost instrument sit above the evidence tables;
+ * every priced sum carries "≥ " while any recorded model is unpriced.
+ */
 export function Costs({
   snapshot,
   days,
@@ -37,51 +43,53 @@ export function Costs({
     .join(', ');
   const withoutCache = Math.max(costs.withoutCache, costs.actual, 1);
   // Unpriced tokens are left out of every priced sum, so each one is a floor.
+  // The floor and its figure stay one text node.
   const floor = costs.isLowerBound ? '≥ ' : '';
+  const priced = (value: number) => `${floor}${money(value, costs.currency)}`;
 
   return (
     <main className="page costs-page" id="panel-costs" role="tabpanel" aria-labelledby="tab-costs" tabIndex={-1}>
-      <section className="page-lead product-lead">
-        <div>
+      <section className="page-lead costs-lead">
+        <div className="costs-title">
           <h1>API-equivalent costs</h1>
           <p>Tracked Codex and Claude Code tokens, repriced at current API rates. Not an invoice.</p>
-          <Disclosure summary="What’s included and what isn’t" className="lead-disclosure">
-            <p>
-              Costs include models found in local Codex and Claude Code token records, including Opus, Sonnet, and
-              Haiku. Regular Claude desktop and web chats can be imported as{' '}
-              <a href="#desktop-estimates">separate text estimates below</a>. Their usage can also count toward the
-              account allowance shown on Overview.
-            </p>
-            <p>
-              Price coverage measures the recorded tokens we can price. Even 100% does not mean every chat on your
-              account was captured. Adding a model price does not import missing activity.
-            </p>
-            <p>{API_EQUIVALENT_EXPLAINER}</p>
-          </Disclosure>
         </div>
-        <div className="period-switch" role="group" aria-label="Analysis period">
-          {[7, 30, 90].map((period) => (
-            <button
-              key={period}
-              className={days === period ? 'active' : ''}
-              aria-pressed={days === period}
-              disabled={snapshot.isPreview}
-              title={snapshot.isPreview ? 'The browser preview uses a fixed 30-day example.' : undefined}
-              onClick={() => onDays(period)}
-            >
-              {period}d
-            </button>
-          ))}
+        <div className="costs-period">
+          <div className="seg period-switch" role="group" aria-label="Analysis period">
+            {[7, 30, 90].map((period) => (
+              <button
+                key={period}
+                type="button"
+                className="btn"
+                aria-pressed={days === period}
+                disabled={snapshot.isPreview}
+                onClick={() => onDays(period)}
+              >
+                {period}d
+              </button>
+            ))}
+          </div>
+          {snapshot.isPreview && <span>The browser preview uses a fixed 30-day example.</span>}
         </div>
       </section>
+      <Disclosure summary="What’s included and what isn’t" className="lead-disclosure">
+        <p>
+          Costs include models found in local Codex and Claude Code token records, including Opus, Sonnet, and Haiku.
+          Regular Claude desktop and web chats can be imported as{' '}
+          <a href="#desktop-estimates">separate text estimates below</a>. Their usage can also count toward the account
+          allowance shown on Overview.
+        </p>
+        <p>
+          Price coverage measures the recorded tokens we can price. Even 100% does not mean every chat on your account
+          was captured. Adding a model price does not import missing activity.
+        </p>
+        <p>{API_EQUIVALENT_EXPLAINER}</p>
+      </Disclosure>
 
       <section className="cost-summary" aria-label="Cost summary">
         <div className="cost-primary">
           <span>Last {costs.periodDays} days</span>
-          <strong>
-            {floor}
-            {money(costs.actual, costs.currency)}
-          </strong>
+          <strong>{priced(costs.actual)}</strong>
           <small>
             {costs.isLowerBound
               ? `Lower bound; excludes ${unpriced || 'unpriced models'}`
@@ -91,10 +99,7 @@ export function Costs({
         <dl>
           <div>
             <dt>Last 7 days</dt>
-            <dd>
-              {floor}
-              {money(recent.week, costs.currency)}
-            </dd>
+            <dd>{priced(recent.week)}</dd>
             <small>
               {weekChange == null
                 ? 'Previous week unavailable'
@@ -103,10 +108,7 @@ export function Costs({
           </div>
           <div>
             <dt>Cache discount</dt>
-            <dd>
-              {floor}
-              {money(costs.cacheSavings, costs.currency)}
-            </dd>
+            <dd>{priced(costs.cacheSavings)}</dd>
             <small>{percent(costs.cacheSavingsPercent * 100)} below uncached value</small>
           </div>
           <div>
@@ -123,19 +125,21 @@ export function Costs({
       </section>
 
       <section className="cost-workspace">
-        <article className="panel cost-panel">
-          <div className="panel-heading">
+        <article className="panel cost-panel" aria-labelledby="daily-cost-heading">
+          <div className="costs-head">
             <div>
-              <h2>Daily cost</h2>
+              <h2 id="daily-cost-heading" className="pnl-title">
+                Daily cost
+              </h2>
               <p>API-equivalent value of each day’s locally tracked tokens.</p>
             </div>
           </div>
           <CostChart costs={costs} />
         </article>
-        <article className="panel savings-panel">
-          <div className="panel-heading compact-heading">
-            <h2>Cache savings</h2>
-          </div>
+        <article className="panel savings-panel" aria-labelledby="cache-savings-heading">
+          <h2 id="cache-savings-heading" className="pnl-title">
+            Cache savings
+          </h2>
           <div className="savings-figure">
             <strong>{percent(costs.cacheSavingsPercent * 100)}</strong>
             <span>of uncached value avoided</span>
@@ -144,49 +148,52 @@ export function Costs({
           <div className="saving-bars">
             <div className="with-cache">
               <span>
-                With cache{' '}
-                <b>
-                  {floor}
-                  {money(costs.actual, costs.currency)}
-                </b>
+                <span className="lbl">With cache</span>
+                <span className="lead" aria-hidden="true" />
+                <b>{priced(costs.actual)}</b>
               </span>
-              <i style={{ '--fill': `${Math.max(2, (costs.actual / withoutCache) * 100)}%` } as React.CSSProperties} />
+              <i
+                aria-hidden="true"
+                style={{ '--fill': `${Math.max(2, (costs.actual / withoutCache) * 100)}%` } as React.CSSProperties}
+              />
             </div>
-            <div>
+            <div className="without-cache">
               <span>
-                Without cache{' '}
-                <b>
-                  {floor}
-                  {money(costs.withoutCache, costs.currency)}
-                </b>
+                <span className="lbl">Without cache</span>
+                <span className="lead" aria-hidden="true" />
+                <b>{priced(costs.withoutCache)}</b>
               </span>
-              <i style={{ '--fill': '100%' } as React.CSSProperties} />
+              <i aria-hidden="true" style={{ '--fill': '100%' } as React.CSSProperties} />
             </div>
           </div>
         </article>
       </section>
 
-      <div className="table-tools">
-        <div>
-          <h2>Cost evidence</h2>
-          <p>Search tasks, agents, projects, models, and sessions below.</p>
+      <section className="costs-evidence" aria-labelledby="cost-evidence-heading">
+        <div className="table-tools">
+          <div>
+            <h2 id="cost-evidence-heading">Cost evidence</h2>
+            <p>Search tasks, agents, projects, models, and sessions below.</p>
+          </div>
+          <label className="table-search">
+            <Search aria-hidden="true" />
+            <span className="sr-only">Filter cost tables</span>
+            <input
+              type="search"
+              value={query}
+              onChange={(event) => onQuery(event.target.value)}
+              placeholder="Filter tables"
+            />
+          </label>
         </div>
-        <label className="table-search">
-          <Search aria-hidden="true" />
-          <span className="sr-only">Filter cost tables</span>
-          <input
-            type="search"
-            value={query}
-            onChange={(event) => onQuery(event.target.value)}
-            placeholder="Filter tables"
-          />
-        </label>
-      </div>
-      <TaskTable snapshot={snapshot} query={query} />
-      <ModelTable costs={costs} query={tableQuery} />
-      <ProjectTable costs={costs} query={tableQuery} />
-      <SessionTable snapshot={snapshot} query={query} />
-      <DesktopEstimates snapshot={snapshot} onSnapshot={onSnapshot} />
+        <TaskTable snapshot={snapshot} query={query} />
+        <ModelTable costs={costs} query={tableQuery} />
+        <ProjectTable costs={costs} query={tableQuery} />
+        <div className="costs-pair">
+          <SessionTable snapshot={snapshot} query={query} />
+          <DesktopEstimates snapshot={snapshot} onSnapshot={onSnapshot} />
+        </div>
+      </section>
     </main>
   );
 }

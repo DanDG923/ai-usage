@@ -1,0 +1,182 @@
+/*
+ * Element defaults for both windows (the dashboard and the tray flyout):
+ * reset, type, links, the focus ring, the one visually-hidden utility,
+ * tables, and the forced-colours and reduced-motion adjustments.
+ */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+:root {
+  font-family: var(--font-sans);
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-width: 0;
+  min-height: 100vh;
+  background: var(--ground);
+  color: var(--text);
+  font-size: var(--fs-13);
+  line-height: 1.45;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+code,
+kbd,
+samp {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  font-family: inherit;
+  font-weight: 700;
+}
+
+p {
+  margin: 0;
+}
+
+a {
+  color: var(--text);
+  text-decoration: underline;
+  text-decoration-color: var(--link);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+a:hover {
+  text-decoration-color: var(--text);
+}
+
+/* Deck icons are 24-grid line icons at a 1.75 stroke. */
+svg.lucide {
+  stroke-width: 1.75;
+}
+
+/* One focus ring everywhere: 2px of ink, clear of the control. */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible,
+[tabindex]:not([tabindex='-1']):focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+/* Pages and headings take focus from script (tabindex -1) without a ring. */
+[tabindex='-1']:focus {
+  outline: none;
+}
+
+/* The single visually-hidden utility: kept for assistive technology. */
+.sr-only {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+/* Tables: caps labels over hairline rows; figures right-aligned and tabular. */
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+th {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--rule);
+  color: var(--text-2);
+  font-size: var(--fs-11);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 14px;
+  text-align: left;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+td {
+  padding: 10px;
+  border-top: 1px solid var(--rule-soft);
+  color: var(--text);
+  font-size: var(--fs-13);
+  vertical-align: top;
+}
+tbody tr:first-child td {
+  border-top: 0;
+}
+tbody tr:hover td {
+  background: var(--panel-2);
+}
+th.num,
+td.num {
+  text-align: right;
+}
+.num,
+td.num,
+th.num {
+  font-variant-numeric: tabular-nums;
+}
+
+.spin {
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  .spin {
+    animation: none;
+  }
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0s !important;
+  }
+}
+
+/* Windows high-contrast themes: frames stay visible, identity swatches keep
+   their colour, and the focus ring uses the system highlight. */
+@media (forced-colors: active) {
+  a:focus-visible,
+  button:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible,
+  summary:focus-visible {
+    outline-color: Highlight;
+  }
+  .swatch {
+    forced-color-adjust: none;
+  }
+}

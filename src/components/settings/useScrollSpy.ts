@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import type { SettingsSectionId } from './settings-sections';
 
-// Below this width the section list is a sticky strip under the command bar.
+// Below this width the section list is a sticky strip under the glareshield bar.
 export const NARROW_SETTINGS = '(max-width: 900px)';
 // A section chosen from the list stays highlighted while the page scrolls to
 // it, and after it arrives, until the reader scrolls again. This bounds the
@@ -13,10 +13,9 @@ type Hold = 'none' | 'moving' | 'arrived';
 const SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' ']);
 
 function bandTop() {
-  const command =
-    Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--command-height')) || 56;
+  const bar = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--bar-height')) || 52;
   const narrow = typeof window.matchMedia === 'function' && window.matchMedia(NARROW_SETTINGS).matches;
-  return Math.round(command + (narrow ? 72 : 28));
+  return Math.round(bar + (narrow ? 72 : 28));
 }
 
 // Closed disclosures hide their content without removing its boxes, so a
@@ -28,7 +27,7 @@ function isRendered(element: HTMLElement) {
 
 /**
  * Scroll-spy for the Settings sections. A section is "in view" while it
- * crosses the band between the command bar and the middle of the window; the
+ * crosses the band between the glareshield bar and the middle of the window; the
  * first such section in page order is active. Once the end of the page is
  * visible the last rendered section is active, so short closing sections can
  * still be highlighted. `select` marks a section chosen from the navigation.

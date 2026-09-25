@@ -1,0 +1,803 @@
+/*
+ * Flight Deck instruments: the runway with its fuel tape, the fuel-flow gauge
+ * (daily budget), the daily cost and daily usage charts, their hover readouts
+ * and data-table disclosures, and the runway chart key (on the Overview and
+ * the provider page) with the glyphs it borrows from them.
+ *
+ * Colour rules: a provider hue marks data only (lines, bars, tape, bugs) and
+ * comes from one variable, --series, set per provider; status tones mark
+ * run-outs and over-budget paces and always travel with an icon and a word;
+ * text and furniture stay grey and white. Every value is a token, so Night and
+ * Daylight both follow tokens.css.
+ */
+
+/* ---------- Provider series ---------- */
+
+.runway-chart,
+.budget-strip,
+.chart-tip {
+  --series: var(--text-2);
+}
+.runway-chart.codex,
+.budget-strip.codex,
+.chart-tip.codex {
+  --series: var(--codex);
+}
+.runway-chart.claude,
+.budget-strip.claude,
+.chart-tip.claude {
+  --series: var(--claude);
+}
+.runway-chart.fable,
+.budget-strip.fable,
+.chart-tip.fable {
+  --series: var(--fable);
+}
+
+/* ---------- Runway + fuel tape ---------- */
+
+.runway-figure.compact,
+.runway-figure.full {
+  margin: 0;
+}
+.runway-figure .runway-canvas {
+  position: relative;
+}
+svg.runway-chart {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+svg.runway-chart text {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+svg.runway-chart text.runway-axis {
+  font-size: 10px;
+  fill: var(--text-3);
+}
+svg.runway-chart text.runway-cap {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  fill: var(--text-2);
+}
+svg.runway-chart text.runway-end {
+  font-size: 12px;
+  font-weight: 400;
+  fill: var(--text);
+}
+
+/* Furniture: nights, midnights, value grid */
+.runway-chart .runway-inactive {
+  fill: var(--night);
+}
+.runway-chart .runway-midnight {
+  stroke: var(--grid-day);
+  stroke-width: 1;
+}
+.runway-chart .runway-grid {
+  stroke: var(--grid-mid);
+  stroke-width: 1;
+}
+
+/* The flight plan: band, heavier edge, expected (dashed), observed (solid) */
+.runway-chart .runway-band {
+  fill: var(--series);
+  fill-opacity: 0.18;
+  stroke: none;
+}
+.runway-chart .runway-observed,
+.runway-chart .runway-expected,
+.runway-chart .runway-heavy {
+  fill: none;
+  stroke: var(--series);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.runway-chart .runway-observed {
+  stroke-width: 2;
+}
+.runway-chart .runway-expected {
+  stroke-width: 2;
+  stroke-linecap: butt;
+  stroke-dasharray: 6 4;
+}
+.runway-chart .runway-heavy {
+  stroke-width: 1.25;
+  stroke-opacity: 0.9;
+  stroke-dasharray: 1.5 3;
+}
+
+/* Now */
+.runway-chart .now-line {
+  stroke: var(--text);
+  stroke-opacity: 0.6;
+  stroke-width: 1;
+  stroke-dasharray: none;
+}
+.runway-chart .runway-now {
+  fill: var(--text);
+  stroke: var(--panel);
+  stroke-width: 2;
+}
+
+/* Fuel tape at the reset: well, likely used before reset, left at reset */
+.runway-chart .runway-tape-well {
+  fill: var(--panel-2);
+  stroke: var(--rule-strong);
+  stroke-width: 1;
+}
+.runway-chart .runway-tape-used {
+  fill: var(--series);
+  fill-opacity: 0.35;
+}
+.runway-chart .runway-tape-reset {
+  fill: var(--series);
+}
+.runway-chart .runway-tape-balance {
+  fill: none;
+  stroke: var(--series);
+  stroke-width: 1;
+  stroke-dasharray: 3 2;
+}
+.runway-chart .runway-tape-pointer {
+  fill: var(--text);
+}
+
+/* Bugs on the tape: E (expected) dot and H (heavier) diamond */
+.runway-chart .runway-bug.expected {
+  fill: var(--series);
+  stroke: var(--panel);
+  stroke-width: 2;
+}
+.runway-chart .runway-bug.heavy {
+  fill: var(--panel);
+  stroke: var(--series);
+  stroke-width: 2;
+}
+
+/* End labels with leaders */
+.runway-chart .runway-leader {
+  fill: none;
+  stroke: var(--link);
+  stroke-width: 1;
+}
+.runway-chart .runway-glyph {
+  stroke: var(--series);
+  stroke-width: 1.5;
+}
+.runway-chart .runway-glyph.expected {
+  fill: var(--series);
+}
+.runway-chart .runway-glyph.heavy {
+  fill: var(--panel);
+}
+
+/* Run-out rings: amber where a heavier week runs dry, red where the expected path does */
+.runway-chart .runway-exhaust .runway-ring {
+  fill: none;
+  stroke-width: 2;
+}
+.runway-chart .runway-exhaust.heavy .runway-ring {
+  stroke: var(--caution);
+}
+.runway-chart .runway-exhaust.expected .runway-ring {
+  stroke: var(--warning);
+}
+
+/* Run-out notes under the full plot: icon + words in the status tone */
+.runway-chart .runway-note.heavy {
+  color: var(--caution);
+}
+.runway-chart .runway-note.expected {
+  color: var(--warning);
+}
+.runway-chart .runway-note path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+svg.runway-chart .runway-note text {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 700;
+  fill: currentColor;
+}
+
+/* Reserve: the bingo line across the plan, and heavier across the tape */
+.runway-chart .runway-reserve line {
+  stroke: var(--text);
+  stroke-width: 1;
+  stroke-dasharray: none;
+}
+.runway-chart .runway-reserve line.runway-bingo {
+  stroke-width: 3;
+}
+svg.runway-chart .runway-reserve text {
+  font-size: 10px;
+  fill: var(--text);
+  paint-order: stroke;
+  stroke: var(--panel);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+
+/* Hover (full size): guide and markers on each series */
+.runway-chart .chart-hover-line {
+  stroke: var(--text-2);
+  stroke-width: 1;
+}
+.runway-chart .runway-hover-mark {
+  stroke-width: 2;
+}
+.runway-chart .runway-hover-mark.observed,
+.runway-chart .runway-hover-mark.expected {
+  fill: var(--series);
+  stroke: var(--panel);
+}
+.runway-chart .runway-hover-mark.heavy {
+  fill: var(--panel);
+  stroke: var(--series);
+}
+
+div.empty-chart {
+  display: grid;
+  place-items: center;
+  min-height: 160px;
+  padding: var(--sp-4);
+  border: 1px dashed var(--rule-strong);
+  border-radius: var(--radius);
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  text-align: center;
+}
+div.empty-chart.tall {
+  min-height: 290px;
+}
+div.empty-chart.runway-empty {
+  min-height: 180px;
+}
+
+/* ---------- Hover readouts (all charts) ---------- */
+
+.chart-canvas {
+  position: relative;
+}
+.runway-canvas .chart-tip,
+.chart-canvas .chart-tip {
+  position: absolute;
+  z-index: 5;
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--link);
+  border-radius: 0;
+  background: var(--panel-2);
+  box-shadow: none;
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--fs-12);
+  line-height: 1.35;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.chart-tip strong {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.chart-tip span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-variant-numeric: tabular-nums;
+}
+.chart-tip small {
+  color: var(--text-2);
+  font-size: var(--fs-11);
+}
+.chart-tip .tip-glyph,
+.chart-tip .tip-swatch {
+  flex: none;
+  display: inline-block;
+  box-sizing: border-box;
+}
+.chart-tip .tip-glyph.observed {
+  width: 10px;
+  height: 0;
+  border-top: 2px solid var(--series);
+}
+.chart-tip .tip-glyph.expected {
+  width: 7px;
+  height: 7px;
+  margin: 0 1.5px;
+  border-radius: 50%;
+  background: var(--series);
+}
+.chart-tip .tip-glyph.heavy {
+  width: 7px;
+  height: 7px;
+  margin: 0 1.5px;
+  transform: rotate(45deg);
+  border: 1.5px solid var(--series);
+  background: var(--panel-2);
+}
+.chart-tip .tip-swatch {
+  width: 9px;
+  height: 9px;
+}
+.chart-tip .tip-swatch.codex {
+  background: var(--codex);
+}
+.chart-tip .tip-swatch.claude {
+  background: var(--claude);
+}
+
+/* ---------- Data-table disclosures ---------- */
+
+details.chart-data {
+  margin-top: var(--sp-3);
+  padding: var(--sp-1) 0 0;
+  border-top: 1px solid var(--rule);
+  color: var(--text);
+}
+details.chart-data > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: fit-content;
+  min-height: 32px;
+  cursor: pointer;
+  list-style: none;
+  font-size: var(--fs-13);
+}
+details.chart-data > summary::-webkit-details-marker {
+  display: none;
+}
+details.chart-data > summary:hover {
+  color: var(--ink-strong);
+}
+details.chart-data > summary svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  transition: transform 120ms ease;
+}
+details.chart-data[open] > summary svg {
+  transform: rotate(90deg);
+}
+details.chart-data .chart-data-count {
+  color: var(--text-3);
+}
+details.chart-data .table-scroll {
+  max-width: 560px;
+  max-height: 320px;
+  margin-top: var(--sp-2);
+  overflow: auto;
+}
+details.chart-data table {
+  font-size: var(--fs-12);
+}
+details.chart-data td:last-child,
+details.chart-data th:last-child {
+  text-align: right;
+}
+details.chart-data td {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Fuel-flow gauge (daily budget) ---------- */
+
+.budget-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.budget-strip .budget-strip-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  font-size: var(--fs-12);
+}
+.budget-strip .budget-strip-head > span {
+  font-family: var(--font-sans);
+  font-size: var(--fs-11);
+  font-weight: 700;
+  line-height: 14px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+.budget-strip .budget-strip-head > strong {
+  font-weight: 400;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.budget-strip .budget-figure {
+  font-family: var(--font-sans);
+  font-size: var(--fs-22);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.budget-gauge-frame {
+  padding: 0 8px;
+}
+svg.budget-gauge {
+  display: block;
+  overflow: visible;
+}
+.budget-gauge .budget-gauge-track {
+  fill: var(--panel-2);
+  stroke: var(--rule-strong);
+  stroke-width: 1;
+}
+.budget-gauge .budget-gauge-zone {
+  fill: var(--zone);
+}
+.budget-gauge .budget-gauge-tick line {
+  stroke: var(--link);
+  stroke-width: 1;
+}
+.budget-gauge .budget-gauge-tick text {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  fill: var(--text-3);
+}
+.budget-gauge .budget-gauge-index {
+  stroke: var(--text);
+  stroke-width: 2;
+}
+.budget-gauge .budget-gauge-mark {
+  stroke-width: 2;
+}
+.budget-gauge .budget-gauge-mark.expected {
+  fill: var(--series);
+  stroke: var(--panel);
+}
+.budget-gauge .budget-gauge-mark.heavier {
+  fill: var(--panel);
+  stroke: var(--series);
+}
+/* HTML readouts use B612 with tabular figures; B612 Mono is kept for figures drawn in SVG. */
+.budget-strip .budget-legend {
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  font-size: var(--fs-12);
+  color: var(--text-2);
+}
+.budget-legend .budget-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.budget-legend .budget-glyph {
+  flex: none;
+}
+.budget-legend .budget-legend-item.expected .budget-glyph circle {
+  fill: var(--series);
+}
+.budget-legend .budget-legend-item.heavier .budget-glyph path {
+  fill: var(--panel);
+  stroke: var(--series);
+  stroke-width: 1.5;
+}
+.budget-legend .budget-over-icon {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  stroke-width: 1.75;
+}
+/* Over budget is a status: the expected pace in the critical tone, the heavier one in caution. */
+.budget-legend .budget-legend-item.expected.over {
+  color: var(--warning);
+}
+.budget-legend .budget-legend-item.heavier.over {
+  color: var(--caution);
+}
+.budget-legend .budget-scale {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+}
+
+/* ---------- Runway chart key ---------- */
+
+/* <ul class="runway-key">: one line of glyph + word entries, wrapping as a whole entry. */
+.runway-key {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 18px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-2);
+  font-size: var(--fs-12);
+}
+.runway-key > li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.runway-key i.key-observed,
+.runway-key i.key-expected,
+.runway-key i.key-band,
+.runway-key i.key-inactive,
+.runway-key i.key-tape-reset,
+.runway-key i.key-tape-used,
+.runway-key i.key-expected-dot,
+.runway-key i.key-heavier {
+  --series: var(--text-2);
+  flex: none;
+  display: inline-block;
+  box-sizing: border-box;
+  border-radius: 0;
+}
+.runway-key i.codex {
+  --series: var(--codex);
+}
+.runway-key i.claude {
+  --series: var(--claude);
+}
+.runway-key i.fable {
+  --series: var(--fable);
+}
+.runway-key i.key-observed {
+  width: 20px;
+  height: 0;
+  border: 0;
+  border-top: 2px solid var(--series);
+}
+.runway-key i.key-expected {
+  width: 20px;
+  height: 2px;
+  border: 0;
+  background: repeating-linear-gradient(90deg, var(--series) 0 6px, transparent 6px 10px);
+}
+.runway-key i.key-band {
+  width: 20px;
+  height: 8px;
+  border: 0;
+  background: linear-gradient(
+    to top right,
+    transparent calc(50% - 0.6px),
+    var(--series) calc(50% - 0.6px) calc(50% + 0.6px),
+    color-mix(in srgb, var(--series) 25%, transparent) calc(50% + 0.6px)
+  );
+}
+.runway-key i.key-inactive {
+  width: 14px;
+  height: 12px;
+  border: 0;
+  background: var(--night-key);
+}
+.runway-key i.key-tape-reset,
+.runway-key i.key-tape-used {
+  width: 10px;
+  height: 14px;
+  border: 0;
+  background: var(--series);
+}
+.runway-key i.key-tape-used {
+  background: color-mix(in srgb, var(--series) 35%, transparent);
+}
+.runway-key i.key-expected-dot {
+  width: 8px;
+  height: 8px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--series);
+}
+.runway-key i.key-heavier {
+  width: 8px;
+  height: 8px;
+  margin: 0 1px;
+  transform: rotate(45deg);
+  border: 1.5px solid var(--series);
+  background: var(--panel);
+}
+
+/* ---------- Daily cost and daily usage ---------- */
+
+.cost-chart-wrap .chart-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin: 0;
+}
+.chart-toolbar .chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  font-size: var(--fs-12);
+  color: var(--text-2);
+}
+.chart-legend .legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.chart-legend .legend::before {
+  content: '';
+  flex: none;
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin: 0;
+  border-radius: 0;
+  background: var(--text-2);
+}
+.chart-legend .legend.total::before {
+  width: 18px;
+  height: 0;
+  border-top: 1.5px solid var(--text);
+  background: none;
+}
+.chart-legend .legend.codex::before {
+  background: var(--codex);
+}
+.chart-legend .legend.claude::before {
+  background: var(--claude);
+}
+
+/* Style switch: monochrome keys; the pressed one is lit (ink face). */
+.chart-toolbar .chart-mode {
+  display: inline-flex;
+  border: 1px solid var(--control);
+  border-radius: var(--radius);
+  background: var(--control-face);
+}
+.chart-toolbar .chart-mode button {
+  height: 30px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--fs-12);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.chart-toolbar .chart-mode button:hover {
+  background: var(--current);
+}
+.chart-toolbar .chart-mode button[aria-pressed='true'] {
+  background: var(--text);
+  color: var(--on-ink);
+}
+
+.cost-chart-wrap svg.cost-chart,
+.cost-chart-wrap svg.daily-usage-chart {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: none;
+  margin-top: var(--sp-2);
+  overflow: visible;
+}
+.cost-chart-wrap svg text {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  fill: var(--text-3);
+}
+.cost-chart-wrap .chart-grid {
+  stroke: var(--grid-mid);
+  stroke-width: 1;
+}
+.cost-chart-wrap .chart-hover-band {
+  fill: var(--current);
+}
+.cost-chart-wrap .chart-leader {
+  stroke: var(--text-2);
+  stroke-width: 1;
+}
+.cost-chart .cost-codex-bar,
+.cost-chart .cost-claude-bar,
+.daily-usage-chart .daily-usage-bar {
+  opacity: 1;
+  shape-rendering: crispEdges;
+}
+.cost-chart .cost-codex-bar,
+.daily-usage-chart .daily-usage-bar {
+  fill: var(--codex);
+}
+.cost-chart .cost-claude-bar {
+  fill: var(--claude);
+}
+.cost-chart .cost-codex-line,
+.cost-chart .cost-claude-line,
+.cost-chart .cost-total-line {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.cost-chart .cost-codex-line {
+  stroke: var(--codex);
+  stroke-width: 2;
+}
+.cost-chart .cost-claude-line {
+  stroke: var(--claude);
+  stroke-width: 2;
+}
+.cost-chart .cost-total-line {
+  stroke: var(--text);
+  stroke-width: 1.5;
+}
+.cost-chart .total-area {
+  fill: var(--text);
+  fill-opacity: 0.05;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  details.chart-data > summary svg {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .runway-chart .runway-observed,
+  .runway-chart .runway-expected,
+  .runway-chart .runway-heavy,
+  .runway-chart .runway-glyph,
+  .runway-chart .runway-bug,
+  .budget-gauge .budget-gauge-mark {
+    stroke: CanvasText;
+  }
+  .runway-chart .runway-tape-reset,
+  .runway-chart .runway-bug.expected,
+  .budget-gauge .budget-gauge-mark.expected,
+  .daily-usage-chart .daily-usage-bar {
+    fill: CanvasText;
+  }
+  .runway-chart .runway-band,
+  .runway-chart .runway-tape-used {
+    fill: GrayText;
+  }
+  .runway-key i.key-expected {
+    height: 0;
+    background: none;
+    border-top: 2px dashed CanvasText;
+  }
+  .runway-key i.key-band,
+  .runway-key i.key-tape-used {
+    forced-color-adjust: none;
+    background: GrayText;
+  }
+  .runway-key i.key-tape-reset,
+  .runway-key i.key-expected-dot {
+    forced-color-adjust: none;
+    background: CanvasText;
+  }
+  .runway-key i.key-inactive {
+    forced-color-adjust: none;
+    border: 1px solid CanvasText;
+  }
+  .chart-legend .legend.codex::before,
+  .chart-legend .legend.claude::before,
+  .chart-tip .tip-swatch {
+    forced-color-adjust: none;
+  }
+}

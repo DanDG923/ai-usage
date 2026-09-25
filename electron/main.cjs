@@ -105,11 +105,12 @@ const EMPTY_SESSION_PAGE = Object.freeze({ rows: [], total: 0, page: 1, pageSize
 
 // Window chrome follows the theme the renderer paints, so the native caption
 // buttons never sit on a strip of the other palette.
-// Values follow --header-bg and --text-2 in src/professional.css, the
-// stylesheet that wins; a mismatch shows as a strip of the wrong shade.
+// Values follow --ground (the glareshield bar) and --text-2 in
+// src/styles/tokens.css, night and Daylight; a mismatch shows as a strip of
+// the wrong shade.
 const CHROME = {
-  dark: { background: '#0f1012', symbol: '#c8c7c1' },
-  light: { background: '#f5f5f2', symbol: '#3a3a37' },
+  dark: { background: '#000000', symbol: '#a3a9b2' },
+  light: { background: '#eceae4', symbol: '#4b5059' },
 };
 
 const appIconPath = path.join(__dirname, '..', 'build', 'icon.png');
@@ -306,8 +307,8 @@ function createWindow() {
     titleBarOverlay: {
       color: chrome.background,
       symbolColor: chrome.symbol,
-      // Match --command-height in src/professional.css to centre the controls.
-      height: 56,
+      // Match --bar-height in src/styles/tokens.css to centre the controls.
+      height: 52,
     },
     autoHideMenuBar: true,
     webPreferences: {

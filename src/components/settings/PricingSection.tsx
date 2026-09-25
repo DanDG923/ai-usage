@@ -1,9 +1,16 @@
-import { Save } from 'lucide-react';
 import { useId, useState } from 'react';
 import { LOCALE } from '../../lib';
 import type { PriceRow, Settings, Snapshot } from '../../types';
 import { API_EQUIVALENT_EXPLAINER, InfoTip } from '../InfoTip';
-import { NumericSetting, SettingBlock, SettingNote, SettingRow, SettingsSection } from './fields';
+import {
+  NumericSetting,
+  SettingBlock,
+  SettingColumns,
+  SettingError,
+  SettingNote,
+  SettingRow,
+  SettingsSection,
+} from './fields';
 
 const FIELDS = [
   'input_usd_per_million',
@@ -91,11 +98,14 @@ function PriceEditor({
   return (
     <tr className={unpricedSource ? 'unpriced-price-row' : ''}>
       <td>
-        <strong>{row.model}</strong>
+        <span className="price-model">
+          <strong>{row.model}</strong>
+          {unpricedSource && <span className="unpriced-badge">Unpriced</span>}
+        </span>
         <small>{unpricedSource ? `Detected from ${unpricedSource} · enter all prices` : catalogRowNote(row)}</small>
         {unpricedSource && templates.length > 0 && (
           <select
-            className="copy-prices"
+            className="fld copy-prices"
             aria-label={`Copy prices into ${row.model} from`}
             value=""
             onChange={(event) => {
@@ -122,12 +132,19 @@ function PriceEditor({
             step="0.01"
             value={draft[key]}
             onChange={field(key)}
+            className="fld num"
           />
         </td>
       ))}
       <td>
-        <button className="price-save" aria-label={`Save ${row.model} prices`} disabled={!valid} onClick={save}>
-          <Save aria-hidden="true" />
+        <button
+          type="button"
+          className="btn price-save"
+          aria-label={`Save ${row.model} prices`}
+          disabled={!valid}
+          onClick={save}
+        >
+          Save
         </button>
       </td>
     </tr>
@@ -201,43 +218,50 @@ export function PricingSection({
       title="API pricing"
       description="USD per million tokens. Five-minute and one-hour cache writes are priced separately. Detected models without a price appear first so the estimate can be completed here."
     >
-      <SettingRow
-        label="Display currency"
-        htmlFor={`${id}-currency`}
-        description="API-equivalent costs are shown in this currency. Catalogue prices below stay in USD."
-      >
-        <select
-          id={`${id}-currency`}
-          value={settings.currency}
-          disabled={savingCurrency}
-          onChange={(event) => {
-            const currency = event.target.value;
-            if (currency !== 'USD' && !settings.currencyRates?.[currency] && currency !== settings.currency) {
-              setPendingCurrency(currency);
-              setRateDraft('');
-            } else void chooseCurrency(currency);
-          }}
-        >
-          <option value="GBP">GBP · £</option>
-          <option value="USD">USD · $</option>
-          <option value="EUR">EUR · €</option>
-        </select>
-        {currencyError && <small role="alert">{currencyError}</small>}
-      </SettingRow>
-      <NumericSetting
-        label={settings.currency === 'USD' ? 'One USD equals (fixed)' : 'One USD equals (manual display rate)'}
-        description={
-          settings.currency === 'USD'
-            ? 'USD is fixed at 1:1.'
-            : `${settings.currency} uses this manually saved rate; exchange rates are not fetched automatically.`
-        }
-        disabled={settings.currency === 'USD'}
-        value={settings.usdToCurrency}
-        min={0.01}
-        max={10_000}
-        step={0.001}
-        onCommit={(value) => update({ usdToCurrency: value })}
-      />
+      <SettingColumns>
+        <div className="setting-col">
+          <SettingRow
+            label="Display currency"
+            htmlFor={`${id}-currency`}
+            description="API-equivalent costs are shown in this currency. Catalogue prices below stay in USD."
+          >
+            <select
+              id={`${id}-currency`}
+              value={settings.currency}
+              disabled={savingCurrency}
+              onChange={(event) => {
+                const currency = event.target.value;
+                if (currency !== 'USD' && !settings.currencyRates?.[currency] && currency !== settings.currency) {
+                  setPendingCurrency(currency);
+                  setRateDraft('');
+                } else void chooseCurrency(currency);
+              }}
+              className="fld"
+            >
+              <option value="GBP">GBP · £</option>
+              <option value="USD">USD · $</option>
+              <option value="EUR">EUR · €</option>
+            </select>
+            {currencyError && <SettingError>{currencyError}</SettingError>}
+          </SettingRow>
+        </div>
+        <div className="setting-col">
+          <NumericSetting
+            label={settings.currency === 'USD' ? 'One USD equals (fixed)' : 'One USD equals (manual display rate)'}
+            description={
+              settings.currency === 'USD'
+                ? 'USD is fixed at 1:1.'
+                : `${settings.currency} uses this manually saved rate; exchange rates are not fetched automatically.`
+            }
+            disabled={settings.currency === 'USD'}
+            value={settings.usdToCurrency}
+            min={0.01}
+            max={10_000}
+            step={0.001}
+            onCommit={(value) => update({ usdToCurrency: value })}
+          />
+        </div>
+      </SettingColumns>
       {pendingCurrency && (
         <div className="setting-row pending-currency" role="group" aria-label={`Set ${pendingCurrency} display rate`}>
           <div className="setting-text">
@@ -248,6 +272,7 @@ export function PricingSection({
               {pendingCurrency} has no saved rate yet. Enter one to switch; the current currency stays until then.
             </div>
           </div>
+          <span className="lead" aria-hidden="true" />
           <div className="setting-control">
             <input
               id={`${id}-pending-rate`}
@@ -257,16 +282,18 @@ export function PricingSection({
               step="0.001"
               value={rateDraft}
               onChange={(event) => setRateDraft(event.target.value)}
+              className="fld num"
             />
             <div className="action-row compact">
               <button
-                className="secondary-button"
+                type="button"
+                className="btn btn-p"
                 disabled={savingCurrency || !rateValid}
                 onClick={() => void chooseCurrency(pendingCurrency, Number(rateDraft))}
               >
                 Save rate and switch
               </button>
-              <button className="secondary-button" disabled={savingCurrency} onClick={() => setPendingCurrency(null)}>
+              <button type="button" className="btn" disabled={savingCurrency} onClick={() => setPendingCurrency(null)}>
                 Cancel
               </button>
             </div>
@@ -288,11 +315,11 @@ export function PricingSection({
           <thead>
             <tr>
               <th>Model / provenance</th>
-              <th>Input</th>
-              <th>Write 5m</th>
-              <th>Write 1h</th>
-              <th>Cache read</th>
-              <th>Output</th>
+              <th className="num">Input</th>
+              <th className="num">Write 5m</th>
+              <th className="num">Write 1h</th>
+              <th className="num">Cache read</th>
+              <th className="num">Output</th>
               <th>
                 <span className="sr-only">Save price</span>
               </th>

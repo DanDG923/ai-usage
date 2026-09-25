@@ -1,4 +1,15 @@
-import { ArrowLeft, CircleDollarSign, History, Home, RefreshCw, Settings as SettingsIcon } from 'lucide-react';
+import {
+  ArrowLeft,
+  CircleCheck,
+  CircleDashed,
+  CircleDollarSign,
+  Eye,
+  History,
+  Home,
+  OctagonAlert,
+  RefreshCw,
+  Settings as SettingsIcon,
+} from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { SOURCES, subscriptionVisible } from '../../electron/dashboard-decision.mjs';
@@ -7,6 +18,7 @@ import type { Snapshot } from '../types';
 
 export type Tab = 'overview' | 'activity' | 'costs' | 'settings';
 
+/** The page keys, in the order of their number shortcuts 1-4. */
 export const TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
   { id: 'overview', label: 'Overview', icon: Home },
   { id: 'activity', label: 'Activity', icon: History },
@@ -14,7 +26,7 @@ export const TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
   { id: 'settings', label: 'Settings', icon: SettingsIcon },
 ];
 
-/** A restrained trace mark that remains legible at Windows title-bar size. */
+/** The Flight Deck mark: a fuel tape with a trace running into it. */
 export function BrandMark() {
   return (
     <svg
@@ -22,13 +34,12 @@ export function BrandMark() {
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.7"
+      strokeWidth="1.75"
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
     >
-      <path d="M4 14.5h3.5L10 7l4 11 2.4-7H20" />
-      <path d="M4.6 18.2A8.5 8.5 0 1 1 19.3 6" opacity=".7" />
+      <path d="M14 3h5v18h-5z M14 12h5 M3.5 16l4.5-5 3 3 3.5-4.5" />
     </svg>
   );
 }
@@ -41,7 +52,7 @@ function refreshCadence(minutes: number) {
 
 /**
  * One line on the health of the sources behind the visible subscriptions:
- * "3 sources current", or the ones that need attention by name. The dot is
+ * "3 sources current", or the ones that need attention by name. The icon is
  * paired with words, so the state never rests on colour.
  */
 export function sourceHealth(snapshot: Snapshot) {
@@ -60,6 +71,13 @@ export function sourceHealth(snapshot: Snapshot) {
     ? { tone: 'safe', text: `${rows.length} source${rows.length === 1 ? '' : 's'} current` }
     : { tone: 'unknown', text: `${connected.length} of ${rows.length} sources connected` };
 }
+
+const HEALTH_ICON: Record<string, LucideIcon> = {
+  safe: CircleCheck,
+  watch: Eye,
+  critical: OctagonAlert,
+  unknown: CircleDashed,
+};
 
 /**
  * When the visible subscriptions' sources last collected successfully. A
@@ -86,28 +104,40 @@ function useClock(intervalMs = 30_000) {
   return now;
 }
 
+/** The glareshield before the first snapshot: the mark only, nothing to switch or refresh. */
+export function BareGlareshield() {
+  return (
+    <header className="glareshield glareshield-bare">
+      <div className="gs-brand" aria-label="AI Usage">
+        <BrandMark />
+        <span>AI Usage</span>
+      </div>
+    </header>
+  );
+}
+
+/**
+ * The glareshield bar: the mark, the numbered page keys (one tablist, with
+ * 4 Settings set apart at the right end), then source health in words,
+ * freshness and the refresh key laid over the space between them.
+ */
 export function Header({
   snapshot,
   tab,
   onTab,
   refreshing,
   onRefresh,
-  detail,
-  onBack,
 }: {
   snapshot: Snapshot;
   tab: Tab;
   onTab: (tab: Tab) => void;
   refreshing: boolean;
   onRefresh: () => void;
-  /** The provider page open inside the current section, shown as a breadcrumb. */
-  detail?: string | null;
-  onBack?: () => void;
 }) {
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
-  const active = TABS.find((item) => item.id === tab) ?? TABS[0];
   const now = useClock();
   const health = sourceHealth(snapshot);
+  const HealthIcon = HEALTH_ICON[health.tone] ?? CircleDashed;
   const collectedAt = lastCollectedAt(snapshot);
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
@@ -122,76 +152,113 @@ export function Header({
     tabRefs.current[next]?.focus();
   };
 
-  const tabButton = (item: (typeof TABS)[number], index: number) => {
-    const Icon = item.icon;
-    return (
-      <button
-        key={item.id}
-        ref={(element) => {
-          tabRefs.current[index] = element;
-        }}
-        role="tab"
-        id={`tab-${item.id}`}
-        aria-selected={tab === item.id}
-        tabIndex={tab === item.id ? 0 : -1}
-        onClick={() => onTab(item.id)}
-        onKeyDown={(event) => onKeyDown(event, index)}
-        className={tab === item.id ? 'active' : ''}
-      >
-        <Icon aria-hidden="true" />
-        <span>{item.label}</span>
-      </button>
-    );
-  };
-
   return (
-    <>
-      <aside className="app-rail">
-        <button className="rail-brand" onClick={() => onTab('overview')} aria-label="AI Usage, go to overview">
-          <BrandMark />
-          <span>AI Usage</span>
-        </button>
-        <div role="tablist" aria-orientation="vertical" aria-label="Sections">
-          <div className="rail-primary">{TABS.slice(0, -1).map(tabButton)}</div>
-          <div className="rail-secondary">{tabButton(TABS.at(-1)!, TABS.length - 1)}</div>
-        </div>
-      </aside>
-      <header className="app-header">
-        <div className="command-title">
-          {detail ? (
-            <nav className="breadcrumb" aria-label="Breadcrumb">
-              <button type="button" onClick={onBack}>
-                <ArrowLeft aria-hidden="true" />
-                {active.label}
-              </button>
-              <span aria-hidden="true">/</span>
-              <strong aria-current="page">{detail}</strong>
-            </nav>
-          ) : (
-            <strong>{active.label}</strong>
-          )}
-          {snapshot.isPreview && <span className="preview-tag">Preview data</span>}
-        </div>
-        <div className="header-actions">
-          <span className={`source-health ${health.tone}`}>
-            <i aria-hidden="true" />
-            {health.text}
-          </span>
-          <span className="refresh-cadence" title={`Snapshot ${shortDate(snapshot.generatedAt)}`}>
-            {collectedAt == null ? 'Not collected yet' : `Updated ${relativeTime(collectedAt, now)}`}
-            <span className="refresh-auto"> · {refreshCadence(snapshot.settings.refreshIntervalMinutes)}</span>
-          </span>
+    <header className="glareshield">
+      <button
+        type="button"
+        className="gs-brand"
+        onClick={() => onTab('overview')}
+        aria-label="AI Usage, go to overview"
+      >
+        <BrandMark />
+        <span>AI Usage</span>
+      </button>
+      <div role="tablist" aria-orientation="horizontal" aria-label="Sections" className="gs-keys">
+        {TABS.map((item, index) => (
           <button
-            className="icon-button"
-            disabled={refreshing}
-            onClick={onRefresh}
-            title={`${refreshing ? 'Refreshing' : 'Refresh'} (R)`}
-            aria-label={refreshing ? 'Refreshing local usage' : 'Refresh local usage'}
+            key={item.id}
+            ref={(element) => {
+              tabRefs.current[index] = element;
+            }}
+            type="button"
+            role="tab"
+            id={`tab-${item.id}`}
+            aria-selected={tab === item.id}
+            aria-keyshortcuts={String(index + 1)}
+            tabIndex={tab === item.id ? 0 : -1}
+            onClick={() => onTab(item.id)}
+            onKeyDown={(event) => onKeyDown(event, index)}
+            className={`gs-key${item.id === 'settings' ? ' gs-key-settings' : ''}${tab === item.id ? ' active' : ''}`}
           >
-            <RefreshCw className={refreshing ? 'spin' : ''} aria-hidden="true" />
+            <span className="gs-key-face">
+              <span className="kc" aria-hidden="true">
+                {index + 1}
+              </span>
+              {item.label}
+            </span>
           </button>
-        </div>
-      </header>
-    </>
+        ))}
+      </div>
+      <div className="gs-status">
+        {snapshot.isPreview && <span className="badge gs-preview">Preview data</span>}
+        <span className={`gs-health ${health.tone}`}>
+          <HealthIcon aria-hidden="true" />
+          {health.text}
+        </span>
+        <span className="gs-fresh" title={`Snapshot ${shortDate(snapshot.generatedAt)}`}>
+          {collectedAt == null ? 'Not collected yet' : `Updated ${relativeTime(collectedAt, now)}`}
+          <span className="gs-cadence"> · {refreshCadence(snapshot.settings.refreshIntervalMinutes)}</span>
+        </span>
+        <button
+          type="button"
+          className="ibtn"
+          disabled={refreshing}
+          onClick={onRefresh}
+          title={`${refreshing ? 'Refreshing' : 'Refresh'} (R)`}
+          aria-label={refreshing ? 'Refreshing local usage' : 'Refresh local usage'}
+          aria-keyshortcuts="R"
+        >
+          <RefreshCw className={refreshing ? 'spin' : ''} aria-hidden="true" />
+        </button>
+      </div>
+    </header>
+  );
+}
+
+/**
+ * The ECAM title row under the glareshield: underlined caps naming the page,
+ * or, on a provider page, the breadcrumb back to the Overview. Costs and
+ * Activity draw their own title (their h1 is styled as one in shell.css), and
+ * Settings keeps its only h1 for screen readers, so the titles drawn here are
+ * visual and hidden from assistive technology; the tab already names the page.
+ */
+export function PageTitle({ tab, detail, onBack }: { tab: Tab; detail?: string | null; onBack?: () => void }) {
+  if (detail) {
+    return (
+      <div className="page-title has-breadcrumb">
+        <nav className="breadcrumb" aria-label="Breadcrumb">
+          <button type="button" className="btn" onClick={onBack} aria-label="Back to Overview (Esc)">
+            <ArrowLeft aria-hidden="true" />
+            Overview
+          </button>
+          <span aria-hidden="true">/</span>
+          <strong aria-current="page">{detail}</strong>
+        </nav>
+        <span className="page-title-hint">
+          <kbd className="kc">Esc</kbd> back to Overview
+        </span>
+      </div>
+    );
+  }
+  const title = tab === 'overview' ? 'Overview' : tab === 'settings' ? 'Settings' : null;
+  if (!title) return null;
+  return (
+    <div className="page-title">
+      <p className="ecam-title" aria-hidden="true">
+        {title}
+      </p>
+    </div>
+  );
+}
+
+/** The footer strip: where the snapshot came from, and the keyboard shortcuts. */
+export function FooterStrip({ snapshot }: { snapshot: Snapshot }) {
+  return (
+    <footer className="app-footer">
+      <span>
+        Snapshot {shortDate(snapshot.generatedAt)} · {snapshot.timezone} · Local data only
+      </span>
+      <span className="app-footer-keys">1–4 sections · R refresh · Esc dismiss toast / close provider page</span>
+    </footer>
   );
 }

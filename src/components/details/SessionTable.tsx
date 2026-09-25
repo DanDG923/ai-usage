@@ -1,7 +1,7 @@
 import { compactNumber, projectName, shortDate, sourceLabel } from '../../lib';
 import type { SessionPage, SessionPageOptions, Snapshot } from '../../types';
 import { Pagination, usePagedQuery } from './paging';
-import { EquivalentValue, matchesQuery } from './Tables';
+import { EquivalentValue, SourceMark, matchesQuery } from './Tables';
 
 type SessionRow = SessionPage['rows'][number];
 
@@ -23,10 +23,12 @@ export function SessionTable({ snapshot, query }: { snapshot: Snapshot; query: s
   });
   const { days, filter, preview, data, loading, error } = state;
   return (
-    <section className="panel table-panel session-panel" aria-busy={loading} aria-labelledby="sessions-heading">
-      <div className="panel-heading">
+    <section className="panel costs-panel session-panel" aria-busy={loading} aria-labelledby="sessions-heading">
+      <div className="costs-head">
         <div>
-          <h2 id="sessions-heading">Sessions</h2>
+          <h3 id="sessions-heading" className="pnl-title">
+            Sessions
+          </h3>
           <p>
             {preview
               ? 'Search the supplied example sessions.'
@@ -35,7 +37,7 @@ export function SessionTable({ snapshot, query }: { snapshot: Snapshot; query: s
         </div>
       </div>
       <div className="table-scroll">
-        <table>
+        <table className="costs-table session-table">
           <thead>
             <tr>
               <th>Source</th>
@@ -52,18 +54,17 @@ export function SessionTable({ snapshot, query }: { snapshot: Snapshot; query: s
               data.rows.map((row) => (
                 <tr key={`${row.sourceId}-${row.sessionId}-${row.model}`}>
                   <td>
-                    <span className={`source-dot ${row.sourceId}`} aria-hidden="true" />
-                    {sourceLabel(row.sourceId)}
+                    <SourceMark sourceId={row.sourceId} />
                   </td>
-                  <td>
-                    <strong>{projectName(row.project)}</strong>
-                  </td>
+                  <td className="costs-name">{projectName(row.project)}</td>
                   <td>
                     <code className="session-id" title={row.sessionId}>
                       {row.sessionId.slice(0, 8)}
                     </code>
                   </td>
-                  <td>{row.model}</td>
+                  <td>
+                    <span className="costs-model">{row.model}</span>
+                  </td>
                   <td>{shortDate(row.occurredAt)}</td>
                   <td className="num">{compactNumber(row.totalTokens)}</td>
                   <td className="num">
@@ -79,7 +80,7 @@ export function SessionTable({ snapshot, query }: { snapshot: Snapshot; query: s
                   ) : error ? (
                     <div className="session-error">
                       <span role="alert">{error}</span>
-                      <button className="secondary-button" onClick={state.retry}>
+                      <button type="button" className="btn" onClick={state.retry}>
                         Try again
                       </button>
                     </div>
@@ -99,7 +100,7 @@ export function SessionTable({ snapshot, query }: { snapshot: Snapshot; query: s
       {data && error && (
         <div className="session-error">
           <span role="alert">{error} Showing the previous results.</span>
-          <button className="secondary-button" onClick={state.retry}>
+          <button type="button" className="btn" onClick={state.retry}>
             Try again
           </button>
         </div>

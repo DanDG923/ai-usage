@@ -54,6 +54,9 @@ function assertArchive(entries) {
   const bundledClaude = entries.filter((entry) => /(^|\/)node_modules\/@anthropic-ai\/claude-agent-sdk-win32-/i.test(entry));
   if (bundledClaude.length) fail('the optional bundled Claude executable is packaged');
 
+  const previewOnly = entries.filter((entry) => /^dist\/assets\/(?:demo|flyout-preview)-/.test(entry));
+  if (previewOnly.length) fail(`browser-preview demo code is packaged: ${previewOnly.join(', ')}`);
+
   const privateLocalData = entries.filter((entry) => {
     const basename = path.posix.basename(entry).toLowerCase();
     return /(^|\/)(?:backups|\.git|\.codex|\.claude)(?:\/|$)/i.test(entry)

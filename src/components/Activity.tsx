@@ -1,5 +1,6 @@
-import { CheckCircle2, CircleAlert, Database, History } from 'lucide-react';
+import { AlertOctagon, AlertTriangle, CheckCircle2, CircleDashed } from 'lucide-react';
 import { dateTimeLabel, percent, relativeTime, shortDate } from '../lib';
+import type { ProviderView } from '../provider-view';
 import { providerViews } from '../provider-view';
 import type { Snapshot } from '../types';
 import { DailyUsageChart } from './Charts';
@@ -7,13 +8,20 @@ import { ActivityHeatmap } from './details/ActivityHeatmap';
 import { CycleHistory } from './details/CycleHistory';
 import { RelativeTime } from './details/RelativeTime';
 import '../pages.css';
+import '../styles/activity.css';
 
+/**
+ * A source's standing as an icon and a word (Deck-StatesParts frame 15):
+ * current is on track, a stale source needs a refresh (caution), a failing one
+ * is unavailable (warning), and an ended window waits for a reading (neutral).
+ */
 function sourceState(status: string, expired: boolean) {
-  if (expired) return { label: 'Needs reading', tone: 'watch', icon: CircleAlert };
+  if (expired) return { label: 'Needs reading', tone: 'unknown', icon: CircleDashed };
   if (status === 'connected') return { label: 'Current', tone: 'safe', icon: CheckCircle2 };
-  if (status === 'stale' || status === 'degraded') return { label: 'Needs refresh', tone: 'watch', icon: CircleAlert };
-  if (status === 'error') return { label: 'Unavailable', tone: 'critical', icon: CircleAlert };
-  return { label: status || 'Waiting', tone: 'unknown', icon: Database };
+  if (status === 'stale' || status === 'degraded')
+    return { label: 'Needs refresh', tone: 'watch', icon: AlertTriangle };
+  if (status === 'error') return { label: 'Unavailable', tone: 'critical', icon: AlertOctagon };
+  return { label: status || 'Waiting', tone: 'unknown', icon: CircleDashed };
 }
 
 /**
@@ -31,6 +39,26 @@ function ObservedAt({ value, nowMs }: { value: string; nowMs: number }) {
   );
 }
 
+/**
+ * Current → expected at reset on one horizontal fuel tape: the solid part is
+ * what should be left at the reset, the translucent part what is likely used
+ * before it. Without a projection only the current level is drawn.
+ */
+function EvidenceTape({ view }: { view: ProviderView }) {
+  const current = view.remaining;
+  if (current == null) return null;
+  const expected = view.expectedRemaining == null ? null : Math.min(current, view.expectedRemaining);
+  const description =
+    `${view.name}: ${percent(current)} left now` +
+    (expected == null ? ', no expected level at reset yet.' : `, ${percent(expected)} expected at reset.`);
+  return (
+    <span className={`log-tape ${view.id}`} role="img" aria-label={description}>
+      <i className="log-tape-used" style={{ width: `${current}%` }} />
+      {expected != null && <i className="log-tape-left" style={{ width: `${expected}%` }} />}
+    </span>
+  );
+}
+
 export function Activity({ snapshot, days }: { snapshot: Snapshot; days: number }) {
   const views = providerViews(snapshot);
   const nowMs = Date.parse(snapshot.generatedAt);
@@ -40,6 +68,8 @@ export function Activity({ snapshot, days }: { snapshot: Snapshot; days: number 
     fable: snapshot.settings.showClaudeSubscription !== false ? snapshot.cycles.fable : [],
   };
   const cycleCount = Object.values(visibleCycles).reduce((total, rows) => total + rows.length, 0);
+  const showDaily = snapshot.settings.showCodexSubscription !== false;
+  const tapeKey = views.some((view) => view.remaining != null && view.expectedRemaining != null);
   return (
     <main
       className="page activity-page"
@@ -48,37 +78,33 @@ export function Activity({ snapshot, days }: { snapshot: Snapshot; days: number 
       aria-labelledby="tab-activity"
       tabIndex={-1}
     >
-      <section className="page-lead product-lead">
+      <section className="page-lead product-lead log-lead">
         <div>
           <h1>Activity and evidence</h1>
           <p>Source freshness, local usage patterns, and the reset history behind each allowance forecast.</p>
         </div>
-        <div className="page-fact">
-          <History aria-hidden="true" />
-          <span>
-            {cycleCount} reset cycle{cycleCount === 1 ? '' : 's'} shown
-          </span>
-        </div>
+        <span className="badge log-count">
+          {cycleCount} reset cycle{cycleCount === 1 ? '' : 's'} shown
+        </span>
       </section>
 
       {views.length > 0 ? (
-        <section className="panel evidence-panel">
-          <div className="panel-heading">
-            <div>
-              <h2>Source evidence</h2>
-              <p>Balances are never presented as current when their local source or observation is stale.</p>
-            </div>
+        <section className="pnl log-panel log-evidence" aria-labelledby="evidence-log-heading">
+          <div className="log-heading">
+            <h2 className="pnl-title" id="evidence-log-heading">
+              Source evidence
+            </h2>
+            <p>Balances are never presented as current when their local source or observation is stale.</p>
           </div>
-          <div className="table-scroll compact-table-scroll">
+          <div className="log-scroll">
             <table className="evidence-table">
               <thead>
                 <tr>
-                  <th>Provider</th>
-                  <th>Status</th>
-                  <th>Last observation</th>
-                  <th>Provenance</th>
-                  <th className="num">Current</th>
-                  <th className="num">Expected at reset</th>
+                  <th className="log-col-provider">Provider</th>
+                  <th className="log-col-status">Status</th>
+                  <th className="log-col-time">Last observation</th>
+                  <th className="log-col-provenance">Provenance</th>
+                  <th className="log-col-tape">Current → expected at reset</th>
                 </tr>
               </thead>
               <tbody>
@@ -87,8 +113,8 @@ export function Activity({ snapshot, days }: { snapshot: Snapshot; days: number 
                   const Icon = state.icon;
                   return (
                     <tr key={view.id}>
-                      <td>
-                        <span className={`source-dot ${view.id}`} aria-hidden="true" />
+                      <td className="log-provider">
+                        <span className={`swatch ${view.id}`} aria-hidden="true" />
                         <strong>{view.name}</strong>
                         <small>{view.subtitle}</small>
                       </td>
@@ -110,22 +136,41 @@ export function Activity({ snapshot, days }: { snapshot: Snapshot; days: number 
                           )}
                         </small>
                       </td>
-                      <td>{view.provenance.replaceAll('-', ' ')}</td>
-                      <td className="num">
-                        {view.remaining == null ? '—' : `${view.estimated ? '~' : ''}${percent(view.remaining)}`}
+                      <td>
+                        <span className="chip">{view.provenance.replaceAll('-', ' ')}</span>
+                      </td>
+                      <td className="log-tape-cell">
+                        <span className="log-tape-row">
+                          <strong className="num">
+                            {view.remaining == null ? '—' : `${view.estimated ? '~' : ''}${percent(view.remaining)}`}
+                          </strong>
+                          <EvidenceTape view={view} />
+                          <span className="num">{percent(view.expectedRemaining)}</span>
+                        </span>
                         {view.expired && <small>Window expired</small>}
                       </td>
-                      <td className="num">{percent(view.expectedRemaining)}</td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
           </div>
+          {tapeKey && (
+            <div className="log-tape-key" aria-hidden="true">
+              <span>
+                <i className="left" />
+                Left at reset
+              </span>
+              <span>
+                <i className="used" />
+                Likely used before reset
+              </span>
+            </div>
+          )}
         </section>
       ) : (
-        <section className="panel status-panel">
-          <h2>No subscriptions shown</h2>
+        <section className="pnl log-panel log-none">
+          <h2 className="pnl-title">No subscriptions shown</h2>
           <p>
             Show a subscription in Settings to see its allowance evidence and reset cycles. Your saved history is
             retained.
@@ -133,7 +178,7 @@ export function Activity({ snapshot, days }: { snapshot: Snapshot; days: number 
         </section>
       )}
 
-      <div className="activity-grid">
+      <div className="log-grid">
         {snapshot.costs.activityGrid ? (
           <ActivityHeatmap
             grid={snapshot.costs.activityGrid}
@@ -141,20 +186,24 @@ export function Activity({ snapshot, days }: { snapshot: Snapshot; days: number 
             days={snapshot.costs.periodDays}
           />
         ) : (
-          <section className="panel activity-empty">
-            <h2>When the work happens</h2>
-            <p>Hourly activity appears after local token records have been collected.</p>
+          <section className="pnl log-panel heatmap-panel" aria-labelledby="heatmap-heading">
+            <div className="log-heading">
+              <h2 className="pnl-title" id="heatmap-heading">
+                When the work happens
+              </h2>
+            </div>
+            <div className="empty-chart">Hourly activity appears after local token records have been collected.</div>
           </section>
         )}
-        {snapshot.settings.showCodexSubscription !== false && (
-          <section className="panel table-panel daily-usage-panel activity-daily-panel">
-            <div className="panel-heading">
-              <div>
-                <h2>Daily Codex usage</h2>
-                <p>
-                  Official daily token totals from the local Codex service over the current {days}-day analysis period.
-                </p>
-              </div>
+        {showDaily && (
+          <section className="pnl log-panel log-daily" aria-labelledby="daily-usage-heading">
+            <div className="log-heading">
+              <h2 className="pnl-title" id="daily-usage-heading">
+                Daily Codex usage
+              </h2>
+              <p>
+                Official daily token totals from the local Codex service over the current {days}-day analysis period.
+              </p>
             </div>
             <DailyUsageChart rows={snapshot.dailyUsage || []} days={days} />
           </section>

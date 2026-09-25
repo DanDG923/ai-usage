@@ -1,29 +1,40 @@
-import { AlertTriangle, Bell, BellOff, CheckCircle2, Gauge, RefreshCw, Settings as SettingsIcon } from 'lucide-react';
+import {
+  AlertTriangle,
+  Bell,
+  BellOff,
+  CircleCheck,
+  CircleDashed,
+  OctagonAlert,
+  PanelTop,
+  RefreshCw,
+  Settings as SettingsIcon,
+} from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { Component, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { dailyBudget, paceLabel } from '../budget';
 import { percent, quotaWindows, relativeTime, timeLabel, verdictSentence, whenLabel } from '../lib';
 import { providerViews, type ProviderView } from '../provider-view';
+import { applyThemeAttribute } from '../theme';
 import type {
   DashboardNavigation,
   DashboardVerdict,
+  FlyoutBridge,
   FlyoutSnapshot,
   ForecastState,
   Quota,
   Settings,
   Snapshot,
   Source,
-  Theme,
 } from '../types';
 
-type Tone = 'ok' | 'warn' | 'bad' | 'muted';
-
-const STATUS: Record<ForecastState, { label: string; tone: Tone; icon: LucideIcon }> = {
-  safe: { label: 'On track', tone: 'ok', icon: CheckCircle2 },
-  watch: { label: 'Watch', tone: 'warn', icon: AlertTriangle },
-  risk: { label: 'At risk', tone: 'warn', icon: AlertTriangle },
-  critical: { label: 'Critical', tone: 'bad', icon: AlertTriangle },
-  unknown: { label: 'Learning', tone: 'muted', icon: Gauge },
+// A cell's status is an icon and a word. Watch keeps the warning triangle, as
+// the tray always drew it; a state still learning is a dashed circle.
+const STATUS: Record<ForecastState, { label: string; icon: LucideIcon }> = {
+  safe: { label: 'On track', icon: CircleCheck },
+  watch: { label: 'Watch', icon: AlertTriangle },
+  risk: { label: 'At risk', icon: AlertTriangle },
+  critical: { label: 'Critical', icon: OctagonAlert },
+  unknown: { label: 'Learning', icon: CircleDashed },
 };
 
 const STATES = Object.keys(STATUS) as ForecastState[];
@@ -87,18 +98,11 @@ export function normalizeFlyoutSnapshot(value: unknown): FlyoutSnapshot | null {
   };
 }
 
-/** Same rule as App.tsx: an explicit choice is pinned, "system" follows Windows. */
-function applyThemeAttribute(theme: Theme | undefined) {
-  const root = document.documentElement;
-  if (theme === 'dark' || theme === 'light') root.dataset.theme = theme;
-  else delete root.dataset.theme;
-}
-
 function errorText(reason: unknown) {
   return reason instanceof Error ? reason.message : String(reason || 'Unknown local error.');
 }
 
-/** The app's trace mark, as drawn by BrandMark in Header.tsx. */
+/** The Flight Deck mark (a fuel tape with a trace running into it), as BrandMark in Header.tsx. */
 function BrandMark() {
   return (
     <svg
@@ -106,13 +110,12 @@ function BrandMark() {
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.7"
+      strokeWidth="1.75"
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
     >
-      <path d="M4 14.5h3.5L10 7l4 11 2.4-7H20" />
-      <path d="M4.6 18.2A8.5 8.5 0 1 1 19.3 6" opacity=".7" />
+      <path d="M14 3h5v18h-5z M14 12h5 M3.5 16l4.5-5 3 3 3.5-4.5" />
     </svg>
   );
 }
@@ -129,19 +132,34 @@ function lastCollectedAt(views: ProviderView[], sources: Source[]) {
   return Number.isFinite(latest) ? latest : null;
 }
 
-type VerdictView = { tone: 'safe' | 'warn' | 'bad' | 'neutral'; headline: string; detail: string };
+/**
+ * The annunciator tone: a forecast state, as the Overview's annunciator takes
+ * them, or failure when the allowances could not be read at all. Unknown is
+ * the neutral dashed lozenge: waiting, learning, or a partial all-clear.
+ */
+type VerdictTone = ForecastState | 'failure';
+type VerdictView = { tone: VerdictTone; headline: string; detail: string };
+
+const VERDICT_ICON: Record<VerdictTone, LucideIcon> = {
+  safe: CircleCheck,
+  watch: AlertTriangle,
+  risk: AlertTriangle,
+  critical: OctagonAlert,
+  unknown: CircleDashed,
+  failure: OctagonAlert,
+};
 
 function verdictView(snapshot: FlyoutSnapshot, views: ProviderView[], snapshotMs: number): VerdictView {
   if (!views.length) {
     return {
-      tone: 'neutral',
+      tone: 'unknown',
       headline: 'No subscriptions shown',
       detail: 'Choose subscriptions in Settings to see their allowances here.',
     };
   }
   if (views.every((view) => !view.current || view.expired)) {
     return {
-      tone: 'neutral',
+      tone: 'unknown',
       headline: 'Waiting for allowance readings',
       detail: 'They appear after the next refresh.',
     };
@@ -172,8 +190,32 @@ function verdictView(snapshot: FlyoutSnapshot, views: ProviderView[], snapshotMs
     const budget = window ? dailyBudget(window, settings, snapshotMs) : null;
     if (budget && budget.budget > 0) detail = `Stay under ${paceLabel(budget.budget)} a day to reach the reset.`;
   }
-  const tone = verdict.state === 'critical' ? 'bad' : verdict.state === 'unknown' ? 'neutral' : 'warn';
-  return { tone, headline: sentence.headline, detail };
+  return { tone: verdict.state, headline: sentence.headline, detail };
+}
+
+/** The compact Master Caution annunciator: an icon lozenge beside the verdict. */
+function Verdict({
+  view,
+  role = 'status',
+  children,
+}: {
+  view: VerdictView;
+  role?: 'status' | 'alert';
+  children?: ReactNode;
+}) {
+  const Icon = VERDICT_ICON[view.tone];
+  return (
+    <section className="annunciator flyout-verdict" data-tone={view.tone} role={role}>
+      <div className="annunciator-lozenge">
+        <Icon aria-hidden="true" />
+      </div>
+      <div className="annunciator-body">
+        <h2>{view.headline}</h2>
+        {view.detail && <p>{view.detail}</p>}
+        {children}
+      </div>
+    </section>
+  );
 }
 
 function ProviderRow({
@@ -193,11 +235,17 @@ function ProviderRow({
   const atReset = waiting || learning ? null : view.expectedRemaining;
   const approx = view.estimated ? '~' : '';
   const reset = whenLabel(view.resetAt, nowMs);
-  const detail = waiting
-    ? 'Waiting for a reading'
-    : atReset == null
-      ? `Resets ${reset}`
-      : `${percent(atReset)} at reset · ${reset}`;
+  // Two halves that wrap as wholes, so the dot stays on the first line and the
+  // day with its time, as the artboard sets it; the text is unchanged.
+  const detail = waiting ? (
+    'Waiting for a reading'
+  ) : atReset == null ? (
+    `Resets ${reset}`
+  ) : (
+    <>
+      <span>{`${percent(atReset)} at reset ·`}</span> <span>{reset}</span>
+    </>
+  );
   const barLabel =
     remaining == null
       ? 'No allowance reading yet'
@@ -213,45 +261,41 @@ function ProviderRow({
         title={`Open ${view.name} in the dashboard`}
         onClick={() => onOpen?.({ tab: 'overview', provider: view.id })}
       >
-        <span className="flyout-row-top">
-          <span className="flyout-swatch" aria-hidden="true" />
-          <span className="flyout-row-name">
-            <strong>{view.name}</strong>
-            <span>{view.subtitle}</span>
+        <span className="flyout-row-name">
+          <span className={`swatch ${view.id}`} aria-hidden="true" />
+          <strong>{view.name}</strong>
+        </span>
+        <span className="flyout-row-plan">{view.subtitle}</span>
+        <span className="flyout-row-gauge">
+          {/* The mini fuel tape: solid is left at reset, translucent is likely
+              used before reset. Without a forecast the balance is outlined:
+              neither legend entry would be true of it. */}
+          <span className="flyout-tape" role="img" aria-label={barLabel}>
+            {remaining != null && (
+              <span
+                className={`flyout-fill ${atReset == null ? 'flyout-fill-now' : 'flyout-fill-used'}`}
+                style={{ height: `${remaining}%` }}
+              />
+            )}
+            {atReset != null && <span className="flyout-fill flyout-fill-reset" style={{ height: `${atReset}%` }} />}
           </span>
           {remaining == null ? (
             <span className="flyout-left flyout-left-none">
-              <span aria-hidden="true">—</span>
-              <span className="flyout-visually-hidden">No reading</span>
+              <strong aria-hidden="true">—</strong>
+              <span className="sr-only">No reading</span>
             </span>
           ) : (
             <span className="flyout-left">
-              <strong>
-                {approx}
-                {percent(remaining)}
-              </strong>
+              <strong>{`${approx}${percent(remaining)}`}</strong>
               <small>left</small>
             </span>
           )}
         </span>
-        <span className="flyout-track" role="img" aria-label={barLabel}>
-          {/* Without a forecast the balance is outlined: neither legend entry
-              ("left at reset", "likely used") would be true of it. */}
-          {remaining != null && (
-            <span
-              className={`flyout-fill ${atReset == null ? 'flyout-fill-now' : 'flyout-fill-used'}`}
-              style={{ width: `${remaining}%` }}
-            />
-          )}
-          {atReset != null && <span className="flyout-fill flyout-fill-reset" style={{ width: `${atReset}%` }} />}
+        <span className="flyout-status" data-state={view.state}>
+          <StatusIcon aria-hidden="true" />
+          {status.label}
         </span>
-        <span className="flyout-row-bottom">
-          <span className={`flyout-status ${status.tone}`}>
-            <StatusIcon aria-hidden="true" />
-            {status.label}
-          </span>
-          <span className="flyout-row-detail">{detail}</span>
-        </span>
+        <span className="flyout-row-detail">{detail}</span>
       </button>
     </li>
   );
@@ -285,12 +329,13 @@ export function TrayFlyout({
     ? verdictView(snapshot, views, snapshotMs)
     : snapshot === null
       ? {
-          tone: 'neutral',
+          // A read that failed is a failure; a store that is only closing
+          // (for an update or sleep) is a neutral wait.
+          tone: error ? 'failure' : 'unknown',
           headline: 'Allowances are unavailable right now',
           detail: 'Open the dashboard for details.',
         }
-      : { tone: 'neutral', headline: 'Loading allowances…', detail: '' };
-  const VerdictIcon = verdict.tone === 'safe' ? CheckCircle2 : verdict.tone === 'neutral' ? Gauge : AlertTriangle;
+      : { tone: 'unknown', headline: 'Loading allowances…', detail: '' };
   const collectedAt = snapshot ? lastCollectedAt(views, snapshot.sources) : null;
   const updated = refreshing
     ? 'Refreshing…'
@@ -306,11 +351,13 @@ export function TrayFlyout({
     <div className="flyout">
       <header className="flyout-header">
         <BrandMark />
-        <span className="flyout-title">AI Usage</span>
-        <span className="flyout-updated">{updated}</span>
+        <div className="flyout-heading">
+          <span className="flyout-title">AI Usage</span>
+          {updated && <span className="flyout-updated">{updated}</span>}
+        </div>
         <button
           type="button"
-          className="flyout-icon-button flyout-refresh"
+          className="ibtn flyout-refresh"
           aria-label="Refresh now"
           title="Refresh now"
           aria-disabled={refreshing || !onRefresh}
@@ -318,21 +365,18 @@ export function TrayFlyout({
             if (!refreshing) onRefresh?.();
           }}
         >
-          <RefreshCw className={refreshing ? 'flyout-spin' : undefined} aria-hidden="true" />
+          <RefreshCw className={refreshing ? 'spin' : undefined} aria-hidden="true" />
         </button>
       </header>
 
-      <section className={`flyout-verdict ${verdict.tone}`} role="status">
-        <VerdictIcon className="flyout-verdict-icon" aria-hidden="true" />
-        <div>
-          <strong>{verdict.headline}</strong>
-          {verdict.detail && <p>{verdict.detail}</p>}
-        </div>
-      </section>
+      <Verdict view={verdict}>
+        {snapshot === undefined && <div className="state-progress" aria-hidden="true" />}
+      </Verdict>
 
       {error && (
         <p className="flyout-error" role="alert">
-          {error}
+          <OctagonAlert aria-hidden="true" />
+          <span>{error}</span>
         </p>
       )}
 
@@ -357,13 +401,14 @@ export function TrayFlyout({
       )}
 
       <footer className="flyout-footer">
-        <button type="button" className="flyout-primary" onClick={() => onOpenDashboard?.({ tab: 'overview' })}>
+        <button type="button" className="btn btn-p" onClick={() => onOpenDashboard?.({ tab: 'overview' })}>
+          <PanelTop aria-hidden="true" />
           Open dashboard
         </button>
         {snoozed ? (
           <button
             type="button"
-            className="flyout-secondary"
+            className="btn"
             title={`Alerts are snoozed until ${timeLabel(snoozedUntil, nowMs)}`}
             onClick={() => onSnooze?.(0)}
           >
@@ -373,7 +418,7 @@ export function TrayFlyout({
         ) : (
           <button
             type="button"
-            className="flyout-secondary"
+            className="btn"
             aria-label="Snooze alerts for 1 hour"
             title="Snooze alerts for 1 hour"
             disabled={!snapshot}
@@ -385,7 +430,7 @@ export function TrayFlyout({
         )}
         <button
           type="button"
-          className="flyout-icon-button flyout-settings"
+          className="ibtn flyout-settings"
           aria-label="Settings"
           title="Settings"
           onClick={() => onOpenDashboard?.({ tab: 'settings' })}
@@ -418,15 +463,17 @@ class FlyoutBoundary extends Component<BoundaryProps, BoundaryState> {
     if (!this.state.failed) return this.props.children;
     return (
       <div className="flyout">
-        <section className="flyout-verdict neutral" role="alert">
-          <AlertTriangle className="flyout-verdict-icon" aria-hidden="true" />
-          <div>
-            <strong>The allowances could not be shown</strong>
-            <p>The dashboard has the full detail.</p>
-          </div>
-        </section>
-        <footer className="flyout-footer">
-          <button type="button" className="flyout-primary" onClick={this.props.onOpenDashboard}>
+        <Verdict
+          role="alert"
+          view={{
+            tone: 'failure',
+            headline: 'The allowances could not be shown',
+            detail: 'The dashboard has the full detail.',
+          }}
+        />
+        <footer className="flyout-footer flyout-footer-single">
+          <button type="button" className="btn btn-p" onClick={this.props.onOpenDashboard}>
+            <PanelTop aria-hidden="true" />
             Open dashboard
           </button>
         </footer>
@@ -435,9 +482,13 @@ class FlyoutBoundary extends Component<BoundaryProps, BoundaryState> {
   }
 }
 
-/** The flyout page: TrayFlyout connected to window.aiUsageFlyout. */
-export function FlyoutApp() {
-  const bridge = typeof window === 'undefined' ? undefined : window.aiUsageFlyout;
+/**
+ * The flyout page: TrayFlyout connected to window.aiUsageFlyout. The bridge
+ * prop is only for the browser preview (see flyout.tsx); Electron passes
+ * nothing, so the preload's bridge is used.
+ */
+export function FlyoutApp({ bridge: previewBridge }: { bridge?: FlyoutBridge } = {}) {
+  const bridge = previewBridge ?? (typeof window === 'undefined' ? undefined : window.aiUsageFlyout);
   const [snapshot, setSnapshot] = useState<FlyoutSnapshot | null | undefined>(bridge ? undefined : null);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');

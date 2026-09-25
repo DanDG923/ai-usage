@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { LOCALE } from '../../lib';
 import type { Settings, Snapshot } from '../../types';
+import { SettingError } from './fields';
 
 const dateFormatter = new Intl.DateTimeFormat(LOCALE, { dateStyle: 'medium', timeZone: 'UTC' });
 
@@ -71,85 +72,74 @@ export function ForecastExcludedDates({
   };
 
   return (
-    <div
-      role="group"
-      className="setting-row setting-row-top forecast-exclusions"
-      aria-labelledby="forecast-exclusions-heading"
-    >
-      <div className="setting-text">
-        <h3 id="forecast-exclusions-heading" className="setting-label">
-          Ignored forecast days
-        </h3>
-        <p id="forecast-exclusions-help" className="setting-description">
-          Exclude an unusual day from the patterns learned for Codex, Claude, and Fable. Recorded usage, costs, and your
-          current allowance stay intact. You can include the day again at any time.
-        </p>
-      </div>
-      <div className="setting-control">
-        <form
-          className="settings-fields forecast-exclusion-controls"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (date && date <= today && !alreadyIgnored && !atLimit) void save([...dates, date].sort());
-          }}
-        >
-          <label>
-            <span>Day to ignore</span>
-            <input
-              ref={dateInput}
-              type="date"
-              min="2020-01-01"
-              max={today}
-              required
-              value={date}
-              disabled={saving}
-              aria-describedby="forecast-exclusions-help forecast-exclusions-timezone"
-              onChange={(event) => setDate(event.target.value)}
-            />
-          </label>
-          <button
-            className="secondary-button"
-            type="submit"
-            disabled={saving || !date || date > today || alreadyIgnored || atLimit}
-          >
-            {alreadyIgnored ? 'Already ignored' : 'Ignore day'}
-          </button>
-        </form>
-        <p id="forecast-exclusions-timezone" className="forecast-exclusion-note">
-          Dates use {snapshot.timezone}. Usage intervals crossing an ignored day are also left out of learning.
-        </p>
-        <p role="status" className="forecast-exclusion-note">
-          {dates.length === 0
-            ? 'No days ignored.'
-            : `${dates.length} ${dates.length === 1 ? 'day' : 'days'} ignored.${atLimit ? ' Include a day again before adding another.' : ''}`}
-        </p>
-        {dates.length > 0 && (
-          <ul className="forecast-exclusion-list" aria-label="Ignored forecast days">
-            {latestFirst.map((ignored) => {
-              const label = dateLabel(ignored);
-              return (
-                <li key={ignored}>
-                  <time dateTime={ignored}>{label}</time>
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    disabled={saving}
-                    aria-label={`Include ${label} in forecasts again`}
-                    onClick={() => {
-                      if (inFlight.current) return;
-                      removing.current = ignored;
-                      void save(dates.filter((item) => item !== ignored));
-                    }}
-                  >
-                    Include again
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-        {error && <p role="alert">{error}</p>}
-      </div>
+    <div role="group" className="setting-stack forecast-exclusions" aria-labelledby="forecast-exclusions-heading">
+      <h3 id="forecast-exclusions-heading" className="setting-label">
+        Ignored forecast days
+      </h3>
+      <p id="forecast-exclusions-help" className="setting-description">
+        Exclude an unusual day from the patterns learned for Codex, Claude, and Fable. Recorded usage, costs, and your
+        current allowance stay intact. You can include the day again at any time.
+      </p>
+      <form
+        className="settings-fields forecast-exclusion-controls"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (date && date <= today && !alreadyIgnored && !atLimit) void save([...dates, date].sort());
+        }}
+      >
+        <label>
+          <span>Day to ignore</span>
+          <input
+            ref={dateInput}
+            type="date"
+            min="2020-01-01"
+            max={today}
+            required
+            value={date}
+            disabled={saving}
+            aria-describedby="forecast-exclusions-help forecast-exclusions-timezone"
+            onChange={(event) => setDate(event.target.value)}
+            className="fld"
+          />
+        </label>
+        <button className="btn" type="submit" disabled={saving || !date || date > today || alreadyIgnored || atLimit}>
+          {alreadyIgnored ? 'Already ignored' : 'Ignore day'}
+        </button>
+      </form>
+      <p id="forecast-exclusions-timezone" className="forecast-exclusion-note">
+        Dates use {snapshot.timezone}. Usage intervals crossing an ignored day are also left out of learning.
+      </p>
+      <p role="status" className={`forecast-exclusion-status${dates.length === 0 ? ' is-empty' : ''}`}>
+        {dates.length === 0
+          ? 'No days ignored.'
+          : `${dates.length} ${dates.length === 1 ? 'day' : 'days'} ignored.${atLimit ? ' Include a day again before adding another.' : ''}`}
+      </p>
+      {dates.length > 0 && (
+        <ul className="forecast-exclusion-list" aria-label="Ignored forecast days">
+          {latestFirst.map((ignored) => {
+            const label = dateLabel(ignored);
+            return (
+              <li key={ignored}>
+                <time dateTime={ignored}>{label}</time>
+                <button
+                  className="btn"
+                  type="button"
+                  disabled={saving}
+                  aria-label={`Include ${label} in forecasts again`}
+                  onClick={() => {
+                    if (inFlight.current) return;
+                    removing.current = ignored;
+                    void save(dates.filter((item) => item !== ignored));
+                  }}
+                >
+                  Include again
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {error && <SettingError>{error}</SettingError>}
     </div>
   );
 }

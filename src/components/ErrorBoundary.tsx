@@ -1,18 +1,26 @@
+import { OctagonAlert } from 'lucide-react';
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 
-/** The fallback is a plain component so its markup can be rendered on its own. */
+/**
+ * The fallback is a plain component so its markup can be rendered on its own.
+ * Inside the dashboard it replaces only the page that failed, so the
+ * glareshield stays usable; the raw message is kept verbatim for reporting.
+ */
 export function ErrorFallback({ message }: { message: string }) {
   return (
-    <div className="app-shell">
-      <main className="page">
-        <section className="panel status-panel error-fallback" role="alert">
+    <div className="state-stage">
+      <section className="state-panel is-error error-fallback" role="alert">
+        <span className="state-panel-icon">
+          <OctagonAlert aria-hidden="true" />
+        </span>
+        <div className="state-panel-body">
           <h1>AI Usage hit a rendering error</h1>
-          <p>{message}</p>
-          <button className="refresh-button" onClick={() => window.location.reload()}>
+          <p className="state-panel-message">{message}</p>
+          <button type="button" className="btn btn-p" onClick={() => window.location.reload()}>
             Reload dashboard
           </button>
-        </section>
-      </main>
+        </div>
+      </section>
     </div>
   );
 }
