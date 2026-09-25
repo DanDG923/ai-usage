@@ -14,9 +14,8 @@ const RISK_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 const HEALTHY = new Set(['connected', 'ready', 'observing', 'estimating', 'activity-only']);
 const FALLEN_BACK = new Set(['stale', 'degraded', 'error']);
 
-// An automatic refresh does not read Claude plan usage, so a Claude source can
-// turn 'stale' only because its last reading aged past the freshness limit.
-// Nothing fell back then; only a requested read that failed is a fallback.
+// Automatic refreshes can age a Claude reading or carry forward a failed
+// read. They never introduce a new plan-usage failure themselves.
 function agedWithoutReading(source) {
   if (source?.status !== 'stale') return false;
   const metadata = source.metadata || {};
@@ -201,7 +200,7 @@ function decideNotifications({ previous, current, state = emptyState(), nowMs = 
   }
   next.lastResetSignatures = resetSignatures;
 
-  // Fallback: a collector that was healthy and is now serving cached data.
+  // Fallback: a collector that was healthy (or merely aged) and now failed.
   const health = new Map((current?.sources || []).map((source) => [source.id, source]));
   const previousHealth = new Map((previous?.sources || []).map((source) => [source.id, source]));
   for (const source of visibleSources(current)) {
@@ -209,10 +208,18 @@ function decideNotifications({ previous, current, state = emptyState(), nowMs = 
     if (!now) continue;
     const signature = `${source.healthId}|${now.status}`;
     const known = next.lastFallbackSignatures[source.healthId];
+    const agedSignature = `${source.healthId}|aged`;
+    if (agedWithoutReading(now)) {
+      // Persist the distinction: tray-idle cleanup drops previous metadata.
+      // After a real failure, an automatic run must not rearm its alert.
+      const alreadyFailed = [...FALLEN_BACK].some((status) => known === `${source.healthId}|${status}`);
+      if (!alreadyFailed) next.lastFallbackSignatures[source.healthId] = agedSignature;
+      continue;
+    }
     next.lastFallbackSignatures[source.healthId] = signature;
-    if (!FALLEN_BACK.has(now.status) || known === signature || agedWithoutReading(now)) continue;
+    if (!FALLEN_BACK.has(now.status) || known === signature) continue;
     const was = previousHealth.get(source.healthId);
-    if (!was || !HEALTHY.has(was.status)) continue;
+    if (!was || (!HEALTHY.has(was.status) && known !== agedSignature)) continue;
     if (!settings.notifyFallback || snoozed) continue;
     notifications.push({
       kind: 'fallback',

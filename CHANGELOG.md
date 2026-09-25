@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.51 — 25 September 2026
+
+- Keep Claude marked out of date when the status-line helper refreshes one allowance window while another active window still needs a Refresh. Source health now agrees before and after the next automatic collection.
+- Restore the fallback notification when a requested Claude or Fable Refresh fails after a reading has naturally aged. Automatic collection stays quiet, repeated failures notify only once until recovery, and snoozed or disabled notifications remain suppressed, including after tray-idle memory cleanup.
+
 ## 1.0.50 — 25 September 2026
 
 - Redesign the whole app in a new "Flight Deck" style, built around one question per allowance: will it last until its reset? A glareshield bar with numbered page keys (1 Overview, 2 Activity, 3 Costs, 4 Settings) replaces the side rail and carries source health, freshness and **Refresh**; each page has a cockpit-style title, and a footer shows the snapshot time and keyboard shortcuts.
