@@ -156,7 +156,12 @@ function normalizeUsagePayload(payload, observedAt) {
   }
   const first = fable[0];
   if (fable.some((entry) => entry.utilization !== first.utilization || entry.resetsAt !== first.resetsAt)) {
-    return invalid('conflicting Fable model-scoped windows');
+    // Fable 5 and Fable 5.1 share one allowance, reported as one "Fable"
+    // window. Two that disagree cannot both be it, but they say nothing
+    // against the overall windows in the same payload, which are kept.
+    return {
+      kind: 'unavailable', reason: 'fable-window-conflict', planType, overall, extraUsage,
+    };
   }
   if (Date.parse(first.resetsAt) <= Date.parse(observedAt)) {
     return {
@@ -203,7 +208,7 @@ function recordProviderWindows(store, normalized, observedAt) {
       store.recordObservation({
         sourceId: FABLE_SOURCE_ID,
         bucketId: FABLE_BUCKET_ID,
-        bucketName: 'Fable 5 weekly',
+        bucketName: 'Fable weekly',
         observedAt,
         usedPercent: normalized.fable.utilization,
         remainingPercent: 100 - normalized.fable.utilization,
@@ -286,8 +291,17 @@ function localFableActivity(store, nowMs, allowance) {
     WHERE source_id = 'claude' AND occurred_at >= ? AND occurred_at <= ?
       AND LOWER(COALESCE(model, '')) LIKE '%fable%'
   `).get(since, through);
+  // Fable 5 and Fable 5.1 draw on the same allowance, so the totals above
+  // cover both; the versions seen are kept for diagnostics.
+  const models = store.prepare(`
+    SELECT model, COUNT(*) AS requests FROM usage_events
+    WHERE source_id = 'claude' AND occurred_at >= ? AND occurred_at <= ?
+      AND LOWER(COALESCE(model, '')) LIKE '%fable%'
+    GROUP BY model ORDER BY requests DESC, model ASC
+  `).all(since, through).map((entry) => ({ model: String(entry.model), requests: Number(entry.requests || 0) }));
   return {
     scope: 'this-device',
+    models,
     since,
     through,
     requests: Number(row.requests || 0),

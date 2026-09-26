@@ -47,6 +47,67 @@ export type TokenCapacityEstimate = {
   warnings: string[];
 };
 
+/** A point in Fable units: the Claude weekly pool's remaining divided by Fable's share. */
+export type SharedPoolApplied = {
+  status: 'applied';
+  /** Fable's share of the weekly pool, 0.5. */
+  share: number;
+  /** The Fable limit's own remaining, as the provider or estimate reports it. */
+  capRemaining: number;
+  /** The Claude weekly pool's remaining. */
+  poolRemaining: number;
+  /** The pool's remaining in Fable points (poolRemaining / share), up to 200. */
+  poolAsFable: number;
+  /** What Fable can still use: the lower of the two. */
+  usableRemaining: number;
+  binding: 'cap' | 'pool';
+  /** 'pool' when the Claude weekly limit caps Fable at any point before the reset on the expected path. */
+  bindingAtReset: 'cap' | 'pool' | null;
+  /** The same for the heavier-week path. */
+  heavyBindsAtReset: boolean;
+  /** Which limit sets the expected figure at Fable's own reset. */
+  cappedAtReset: 'cap' | 'pool' | null;
+  estimated: boolean;
+  /** Which pace the forecast's pace fields describe: Fable's own, or all Claude use in Fable points. */
+  paceSource: 'cap' | 'pool';
+  /** Fable's own forecast before the cap, and its own observed readings. */
+  cap: {
+    expectedRemaining: number | null;
+    heavyRemaining: number | null;
+    exhaustsAt: string | null;
+    heavyExhaustsAt: string | null;
+    state: ForecastState;
+    paceRatio: number;
+    safePace: number;
+    recentPace: number;
+    workingPace: number;
+    windowPace: number | null;
+    reservePercent: number;
+    confidence: number;
+    observed: Point[];
+    expected: Point[];
+    heavy: Point[];
+    /** The token capacity before the cap, when the cap changed it. */
+    tokenCapacity: TokenCapacityEstimate | null;
+  };
+  pool: {
+    bucketId: string;
+    bucketName: string;
+    observedAt: string;
+    resetsAt: string;
+    provenance: string;
+    state: ForecastState;
+    expectedRemaining: number | null;
+    heavyRemaining: number | null;
+    exhaustsAt: string | null;
+  };
+  ceiling: { observed: Point[]; expected: Point[] };
+};
+
+export type SharedPool =
+  | SharedPoolApplied
+  | { status: 'unavailable'; reason: 'no-weekly-pool' | 'pool-expired' | 'pool-unknown' | 'share-inconsistent' };
+
 export type QuotaWindow = {
   bucketId: string;
   bucketName: string;
@@ -61,6 +122,8 @@ export type QuotaWindow = {
   forecast: Forecast;
   /** Approximate token capacity at the observed workload mix, never a provider token quota. */
   tokenCapacity?: TokenCapacityEstimate | null;
+  /** Fable only: the cap the shared Claude weekly pool puts on this window. */
+  sharedPool?: SharedPool;
 };
 
 export type Quota = QuotaWindow & { windows: QuotaWindow[] };
@@ -79,6 +142,8 @@ export type DashboardVerdictDetail = {
   exhaustsAt: string | null;
   heavyExhaustsAt: string | null;
   paceRatio: number;
+  /** Allowances that draw on this window and are affected with it, e.g. Fable on Claude weekly. */
+  includes?: string[];
 };
 
 export type DashboardVerdict = {
@@ -309,8 +374,29 @@ export type PriceRow = {
   source_url: string | null;
 };
 
+/** This device's Fable activity in the current Fable window, split by version. */
+export type FableActivity = {
+  since: string;
+  through: string;
+  currency: string;
+  models: {
+    model: string;
+    requests: number;
+    totalTokens: number;
+    cacheReadTokens: number;
+    /** API-equivalent value at today's prices, in `currency`. */
+    cost: number;
+    covered: boolean;
+  }[];
+};
+
+/** The extra-usage setting the newest Claude plan-usage read reported. */
+export type ClaudeExtraUsage = { isEnabled: boolean; utilization: number | null; observedAt: string };
+
 export type Snapshot = {
   desktopEstimates?: DesktopEstimates;
+  fableActivity?: FableActivity | null;
+  claudeExtraUsage?: ClaudeExtraUsage | null;
   generatedAt: string;
   timezone: string;
   settings: Settings;

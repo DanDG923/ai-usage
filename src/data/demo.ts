@@ -1,4 +1,13 @@
-import type { CycleRow, Forecast, Quota, Snapshot, TokenCapacityEstimate } from '../types';
+import type {
+  CycleRow,
+  Forecast,
+  ForecastState,
+  Point,
+  Quota,
+  QuotaWindow,
+  Snapshot,
+  TokenCapacityEstimate,
+} from '../types';
 
 const now = Date.now();
 const day = 86_400_000;
@@ -41,7 +50,7 @@ function forecast(remaining: number, expected: number, heavy: number, seed: numb
 
 // Synthetic browser-preview examples only, never an account token allowance.
 function exampleCapacity(name: string, remaining: number): TokenCapacityEstimate {
-  const learning = name === 'Fable 5';
+  const learning = name === 'Fable';
   const weeklyTokens = name === 'Codex' ? 18_200_000 : 9_600_000;
   const factor = remaining / 100;
   return {
@@ -58,7 +67,7 @@ function exampleCapacity(name: string, remaining: number): TokenCapacityEstimate
     observedPercent: learning ? 6 : 92,
     calibratedAt: new Date(now - 4 * 60_000).toISOString(),
     modelMix: learning
-      ? [{ model: 'claude-fable-5', share: 1 }]
+      ? [{ model: 'claude-fable-5-1', share: 1 }]
       : [
           { model: name === 'Codex' ? 'gpt-6-astra' : 'claude-opus-5', share: 0.7 },
           { model: name === 'Codex' ? 'gpt-5.6-sol' : 'claude-sonnet-5', share: 0.3 },
@@ -96,6 +105,103 @@ function quota(
   return { ...q, windows: [q] };
 }
 
+/**
+ * The preview's copy of electron/fable-shared-pool.cjs: Fable's limit is a
+ * ceiling inside the Claude weekly pool, so usable Fable is the lower of its
+ * own remaining and Claude's divided by Fable's half share. Both demo
+ * forecasts share `now` and their reset, so their points line up.
+ */
+function withSharedPool(fable: Quota, claude: Quota): Quota {
+  const share = 0.5;
+  const own = fable.forecast;
+  const pool = claude.forecast;
+  const combine = (mine: Point[], theirs: Point[]) =>
+    mine.map((point, index) => ({
+      at: point.at,
+      remaining: Math.max(0, Math.min(100, point.remaining, (theirs[index]?.remaining ?? Infinity) / share)),
+    }));
+  const expected = combine(own.series.expected, pool.series.expected);
+  const heavy = combine(own.series.heavy, pool.series.heavy);
+  const observed = combine(own.series.observed, pool.series.observed);
+  const poolAsFable = Math.min(200, Math.round(claude.remainingPercent) / share);
+  const binding = poolAsFable < fable.remainingPercent ? 'pool' : 'cap';
+  const poolBinds =
+    binding === 'pool' ||
+    own.series.expected.some(
+      (point, index) => (pool.series.expected[index]?.remaining ?? Infinity) / share < point.remaining,
+    );
+  const crossing = (series: Point[]) => {
+    const at = series.find((point) => point.remaining <= 0)?.at;
+    return at == null ? null : new Date(at).toISOString();
+  };
+  const expectedRemaining = expected.at(-1)?.remaining ?? 0;
+  const heavyRemaining = heavy.at(-1)?.remaining ?? 0;
+  const state: ForecastState =
+    expectedRemaining <= 0 ? 'critical' : heavyRemaining <= 0 ? 'risk' : expectedRemaining < 20 ? 'watch' : 'safe';
+  const { windows: _windows, ...rest } = fable;
+  const window: QuotaWindow = {
+    ...rest,
+    sharedPool: {
+      status: 'applied',
+      share,
+      capRemaining: fable.remainingPercent,
+      poolRemaining: claude.remainingPercent,
+      poolAsFable,
+      usableRemaining: Math.min(fable.remainingPercent, poolAsFable),
+      binding,
+      bindingAtReset: poolBinds ? 'pool' : 'cap',
+      estimated: false,
+      paceSource: poolBinds && pool.paceRatio > own.paceRatio ? 'pool' : 'cap',
+      cap: {
+        expectedRemaining: own.expectedRemaining,
+        heavyRemaining: own.heavyRemaining,
+        exhaustsAt: own.exhaustsAt ?? null,
+        heavyExhaustsAt: own.heavyExhaustsAt ?? null,
+        state: own.state,
+        paceRatio: own.paceRatio,
+        safePace: own.safePace,
+        recentPace: own.recentPace,
+        workingPace: own.workingPace,
+        windowPace: own.windowPace,
+        reservePercent: own.reservePercent ?? 0,
+        confidence: own.confidence,
+        observed: own.series.observed,
+        expected: own.series.expected,
+        heavy: own.series.heavy,
+        tokenCapacity: null,
+      },
+      heavyBindsAtReset: poolBinds,
+      cappedAtReset: poolBinds ? 'pool' : 'cap',
+      pool: {
+        bucketId: claude.bucketId,
+        bucketName: claude.bucketName,
+        observedAt: claude.observedAt,
+        resetsAt: claude.resetsAt,
+        provenance: claude.provenance,
+        state: pool.state,
+        expectedRemaining: pool.expectedRemaining,
+        heavyRemaining: pool.heavyRemaining,
+        exhaustsAt: pool.exhaustsAt ?? null,
+      },
+      ceiling: {
+        observed: pool.series.observed.map((point) => ({ at: point.at, remaining: point.remaining / share })),
+        expected: pool.series.expected.map((point) => ({ at: point.at, remaining: point.remaining / share })),
+      },
+    },
+    forecast: {
+      ...own,
+      state: poolBinds && pool.state === 'risk' && state === 'safe' ? 'risk' : state,
+      expectedRemaining,
+      heavyRemaining,
+      exhaustsAt: crossing(expected),
+      heavyExhaustsAt: crossing(heavy),
+      paceRatio: poolBinds ? Math.max(own.paceRatio, pool.paceRatio) : own.paceRatio,
+      series: { observed, expected, heavy },
+    },
+  };
+  return { ...window, windows: [window] };
+}
+
 function cycles(resetDays: number, peaks: number[], costs: number[]): CycleRow[] {
   return peaks.map((peak, index) => {
     const resetsAt = now + resetDays * day - index * 7 * day;
@@ -119,6 +225,10 @@ const chart = Array.from({ length: 30 }, (_, index) => ({
   codex: 12 + Math.sin(index / 2.8) * 8 + index * 0.6,
   claude: 8 + Math.cos(index / 3.2) * 5 + index * 0.32,
 }));
+
+// Fable's heavier week spends 72 Fable points, 36 of the week: Claude's
+// heavier week spends at least that much, so the two previews agree.
+const claudeDemo = quota('Claude', 95, 78, 52, 4.5, 0.13);
 
 const PROJECT_A = 'C:\\Users\\you\\Documents\\Codex\\ai-usage';
 const PROJECT_B = 'C:\\Users\\you\\Documents\\Claude\\architecture-review';
@@ -180,6 +290,16 @@ export const demoSnapshot: Snapshot = {
       source_url: 'https://developers.openai.com/api/docs/models/compare',
     },
     {
+      model: 'claude-fable-5-1',
+      input_usd_per_million: 10,
+      cache_write_usd_per_million: 12.5,
+      cache_write_1h_usd_per_million: 20,
+      cache_read_usd_per_million: 0.25,
+      output_usd_per_million: 50,
+      effective_from: '2026-09-01',
+      source_url: 'https://platform.claude.com/docs/en/about-claude/pricing',
+    },
+    {
       model: 'claude-fable-5',
       input_usd_per_million: 10,
       cache_write_usd_per_million: 12.5,
@@ -187,6 +307,16 @@ export const demoSnapshot: Snapshot = {
       cache_read_usd_per_million: 1,
       output_usd_per_million: 50,
       effective_from: '2026-08-01',
+      source_url: 'https://platform.claude.com/docs/en/about-claude/pricing',
+    },
+    {
+      model: 'claude-opus-5-5',
+      input_usd_per_million: 4,
+      cache_write_usd_per_million: 5,
+      cache_write_1h_usd_per_million: 8,
+      cache_read_usd_per_million: 0.2,
+      output_usd_per_million: 20,
+      effective_from: '2026-09-22',
       source_url: 'https://platform.claude.com/docs/en/about-claude/pricing',
     },
     {
@@ -272,7 +402,7 @@ export const demoSnapshot: Snapshot = {
     },
     {
       id: 'claude-fable',
-      name: 'Fable 5',
+      name: 'Fable',
       kind: 'fable',
       status: 'connected',
       status_detail: 'Official model-scoped Fable allowance and actual local activity.',
@@ -298,26 +428,50 @@ export const demoSnapshot: Snapshot = {
           },
         },
         fableDerived: { derived: false, reason: 'official-model-scoped' },
+        models: ['claude-fable-5-1', 'claude-fable-5'],
       },
     },
   ],
   quotas: {
     codex: quota('Codex', 78, 30, 3, 6.3, 0.78),
-    claude: quota('Claude', 95, 84, 79, 4.5, 0.13),
-    fable: quota('Fable 5', 72, 41, 0, 4.5, 0.49),
+    claude: claudeDemo,
+    fable: withSharedPool(quota('Fable', 72, 41, 0, 4.5, 0.49), claudeDemo),
+  },
+  fableActivity: {
+    since: new Date(now - 2.5 * day).toISOString(),
+    through: new Date(now).toISOString(),
+    currency: 'GBP',
+    models: [
+      {
+        model: 'claude-fable-5-1',
+        requests: 118,
+        totalTokens: 26_400_000,
+        cacheReadTokens: 18_100_000,
+        cost: 142.6,
+        covered: true,
+      },
+      {
+        model: 'claude-fable-5',
+        requests: 28,
+        totalTokens: 5_600_000,
+        cacheReadTokens: 3_900_000,
+        cost: 61.2,
+        covered: true,
+      },
+    ],
   },
   dashboardVerdict: {
     state: 'risk',
     reason: 'heavy-exhaustion',
-    label: 'Fable 5 could reach its limit under heavier usage',
+    label: 'Fable could reach its limit under heavier usage',
     windowsChecked: 3,
-    affected: ['Fable 5 · Fable 5 weekly'],
+    affected: ['Fable · Fable weekly'],
     details: [
       {
         sourceId: 'fable',
-        sourceLabel: 'Fable 5',
+        sourceLabel: 'Fable',
         bucketId: 'fable_seven_day',
-        bucketName: 'Fable 5 weekly',
+        bucketName: 'Fable weekly',
         state: 'risk',
         reasons: ['heavy-exhaustion'],
         expectedRemaining: 41,
@@ -538,3 +692,39 @@ demoSnapshot.costs.tasks = demoSnapshot.costs.sessions.map((session, index) => {
     ],
   };
 });
+
+/**
+ * The preview with `?demo=shared-pool`: Opus has used most of the Claude
+ * week, so the week, not Fable's own limit, caps what Fable can still use.
+ */
+export function sharedPoolDemoSnapshot(): Snapshot {
+  const claude = quota('Claude', 38, 12, 0, 4.5, 0.36);
+  const fable = withSharedPool(quota('Fable', 90, 70, 52, 4.5, 0.1), claude);
+  return {
+    ...demoSnapshot,
+    quotas: { ...demoSnapshot.quotas, claude, fable },
+    dashboardVerdict: {
+      state: 'risk',
+      reason: 'heavy-exhaustion',
+      label: 'Claude could reach its limit under heavier usage, Fable included',
+      windowsChecked: 3,
+      affected: ['Claude · Claude weekly'],
+      details: [
+        {
+          sourceId: 'claude',
+          sourceLabel: 'Claude',
+          bucketId: claude.bucketId,
+          bucketName: claude.bucketName,
+          state: 'risk',
+          reasons: ['heavy-exhaustion'],
+          expectedRemaining: claude.forecast.expectedRemaining,
+          heavyRemaining: claude.forecast.heavyRemaining,
+          exhaustsAt: claude.forecast.exhaustsAt ?? null,
+          heavyExhaustsAt: claude.forecast.heavyExhaustsAt ?? null,
+          paceRatio: claude.forecast.paceRatio,
+          includes: ['Fable'],
+        },
+      ],
+    },
+  };
+}

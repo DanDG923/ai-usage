@@ -69,9 +69,21 @@ function createNavigationQueue({ now = Date.now, ttlMs = NAVIGATION_TTL_MS } = {
 const EMPTY_SERIES = Object.freeze({ observed: Object.freeze([]), expected: Object.freeze([]), heavy: Object.freeze([]) });
 const FLYOUT_FIELDS = ['generatedAt', 'timezone', 'settings', 'sources', 'fableApplies', 'dashboardVerdict', 'resetCredits'];
 
+// Fable's shared-pool summary keeps its figures; the chart lines go.
+function lightSharedPool(sharedPool) {
+  if (!sharedPool || typeof sharedPool !== 'object' || sharedPool.status !== 'applied') return sharedPool;
+  return {
+    ...sharedPool,
+    ceiling: { observed: [], expected: [] },
+    ...(sharedPool.cap && typeof sharedPool.cap === 'object'
+      ? { cap: { ...sharedPool.cap, observed: [], expected: [], heavy: [], tokenCapacity: null } } : {}),
+  };
+}
+
 function lightWindow(window) {
   if (!window || typeof window !== 'object') return null;
   const { tokenCapacity: _tokenCapacity, windows: _windows, ...rest } = window;
+  if ('sharedPool' in rest) rest.sharedPool = lightSharedPool(rest.sharedPool);
   return rest.forecast && typeof rest.forecast === 'object' ? { ...rest, forecast: { ...rest.forecast, series: EMPTY_SERIES } } : rest;
 }
 

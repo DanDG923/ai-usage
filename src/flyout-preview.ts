@@ -1,4 +1,4 @@
-import { demoSnapshot } from './data/demo';
+import { demoSnapshot, sharedPoolDemoSnapshot } from './data/demo';
 import type { DashboardVerdict, FlyoutBridge, FlyoutSnapshot, ForecastState, Quota } from './types';
 
 /*
@@ -15,6 +15,7 @@ import type { DashboardVerdict, FlyoutBridge, FlyoutSnapshot, ForecastState, Quo
  *   snoozed      alerts are snoozed for an hour
  *   render-error the rows throw while drawing (the boundary's fallback)
  *   safe, watch, critical, partial, learning, waiting, single   verdict and row states
+ *   shared-pool  the Claude weekly limit caps Fable
  */
 
 const HOUR = 3_600_000;
@@ -41,7 +42,9 @@ function verdictFor(snapshot: FlyoutSnapshot, state: ForecastState, label: strin
 }
 
 function demoFlyoutSnapshot(variant: string): FlyoutSnapshot {
-  const snapshot = structuredClone(demoSnapshot) as unknown as FlyoutSnapshot;
+  const snapshot = structuredClone(
+    variant === 'shared-pool' ? sharedPoolDemoSnapshot() : demoSnapshot,
+  ) as unknown as FlyoutSnapshot;
   const now = Date.parse(snapshot.generatedAt);
   const { quotas } = snapshot;
   if (variant === 'snoozed') snapshot.settings.alertsSnoozedUntil = new Date(now + HOUR).toISOString();
@@ -51,11 +54,11 @@ function demoFlyoutSnapshot(variant: string): FlyoutSnapshot {
   }
   if (variant === 'watch') {
     setState(quotas.fable, 'watch');
-    snapshot.dashboardVerdict = verdictFor(snapshot, 'watch', 'Fable 5 is using its allowance faster than usual');
+    snapshot.dashboardVerdict = verdictFor(snapshot, 'watch', 'Fable is using its allowance faster than usual');
   }
   if (variant === 'critical') {
     setState(quotas.fable, 'critical');
-    snapshot.dashboardVerdict = verdictFor(snapshot, 'critical', 'Fable 5 is projected to run out before reset');
+    snapshot.dashboardVerdict = verdictFor(snapshot, 'critical', 'Fable is projected to run out before reset');
   }
   if (variant === 'partial' || variant === 'learning') {
     setState(quotas.fable, 'unknown', true);

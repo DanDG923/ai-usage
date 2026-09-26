@@ -152,7 +152,7 @@ export function ForecastSection({
                 onCommit={(value) => update({ forecastFallbackRate: value })}
               />
               <SettingNote>
-                History is weighted by recency, hour, weekday, and current momentum. Codex, Claude, and Fable 5 learn
+                History is weighted by recency, hour, weekday, and current momentum. Codex, Claude, and Fable learn
                 independently; the heavier case uses the busy end of each source’s observed pattern.
               </SettingNote>
             </div>

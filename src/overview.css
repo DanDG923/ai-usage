@@ -317,10 +317,11 @@
   margin-top: 1px;
 }
 
-/* Recessed notes: banked resets, a stale reading, an early-reset adjustment */
+/* Recessed notes: banked resets, a stale reading, an early-reset adjustment, Fable's shared pool */
 .provider-banked,
 .provider-stale,
-.provider-adjustment-note {
+.provider-adjustment-note,
+.provider-pool {
   display: flex;
   align-items: flex-start;
   gap: 10px;
@@ -331,7 +332,8 @@
 }
 .provider-banked > svg,
 .provider-stale > svg,
-.provider-adjustment-note > svg {
+.provider-adjustment-note > svg,
+.provider-pool > svg {
   flex: none;
   width: 16px;
   height: 16px;
@@ -339,17 +341,20 @@
   color: var(--text-2);
 }
 .provider-banked > span,
-.provider-adjustment-note > span {
+.provider-adjustment-note > span,
+.provider-pool > span {
   display: flex;
   flex-direction: column;
   min-width: 0;
 }
 .provider-banked strong,
-.provider-adjustment-note strong {
+.provider-adjustment-note strong,
+.provider-pool strong {
   font-weight: 700;
 }
 .provider-banked small,
-.provider-adjustment-note small {
+.provider-adjustment-note small,
+.provider-pool small {
   color: var(--text-2);
   font-size: var(--fs-12);
 }
@@ -362,6 +367,10 @@
 }
 .provider-adjustment-note {
   border-left: 3px solid var(--text);
+}
+/* The pool is Claude's: when it is the tighter limit its edge takes Claude's colour. */
+.provider-pool.limited {
+  border-left: 3px solid var(--claude);
 }
 
 /* The card's way to its provider page: pinned to the foot, a double gap above it. */

@@ -88,7 +88,7 @@ function importClaudeInboxFile(store, inboxPath) {
         const sourceId = isFable ? 'claude-fable' : 'claude';
         const descriptor = claudeWindowDescriptor(key);
         const minutes = isFable ? 10_080 : descriptor.windowMinutes;
-        const bucketName = isFable ? 'Fable 5 weekly' : descriptor.bucketName;
+        const bucketName = isFable ? 'Fable weekly' : descriptor.bucketName;
         const resetsAt = epochToIso(limit.resets_at);
         if (!resetsAt) {
           result.invalidResets += 1;
@@ -750,7 +750,7 @@ async function refreshClaude(store, inboxPath, options = {}) {
       : fableAuto
         ? 'Fable allowance is estimated from actual local token activity and calibrated official history; it will switch to the provider figure whenever model-scoped usage is available.'
         : fableObserved
-          ? 'Fable 5 has allowance history, but the provider did not return a current model-scoped reading.'
+          ? 'Fable has allowance history, but the provider did not return a current model-scoped reading.'
           : fableTracking.activity.requests
             ? `Imported ${fableTracking.activity.requests} actual local Fable usage event${fableTracking.activity.requests === 1 ? '' : 's'}; the provider did not return a model-scoped allowance.`
             : 'Waiting for actual local Fable activity or a provider model-scoped allowance.';
@@ -760,7 +760,7 @@ async function refreshClaude(store, inboxPath, options = {}) {
   const fableScanSucceeded = activityCurrent && (!providerStale || !readPlanUsage);
   store.setSourceStatus('claude-fable', fableStatus, fableDetail, {
     sharedWithOverall: true,
-    modelId: 'claude-fable-5',
+    models: (fableTracking.activity.models || []).map((entry) => entry.model),
     transcriptEvents: fableTracking.activity.requests,
     fableDerived,
     automatic: {

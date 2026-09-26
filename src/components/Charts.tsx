@@ -162,7 +162,12 @@ export function runwaySummary(view: ProviderView) {
   const expected = forecast.exhaustsAt
     ? `expected to run out ${dateTimeLabel(forecast.exhaustsAt)}`
     : `expected ${percent(view.expectedRemaining)} at reset`;
-  return `${view.name}: ${percent(view.remaining)} left now; ${expected}; ${heavier}`;
+  const pool = view.current?.sharedPool;
+  const now =
+    pool?.status === 'applied' && view.poolLimited
+      ? `${percent(view.remaining)} usable now (Fable limit ${percent(pool.capRemaining)} left, capped by Claude weekly)`
+      : `${percent(view.remaining)} left now`;
+  return `${view.name}: ${now}; ${expected}; ${heavier}`;
 }
 
 /**
@@ -246,6 +251,25 @@ function runwayLayout(view: ProviderView, schedule: Schedule, size: RunwaySize, 
       at = next.getTime();
     }
   }
+  // Fable only: the Claude weekly limit in Fable points. Every model draws on
+  // it, so Fable can never use what lies above it: that area is hatched as
+  // chart furniture, not drawn as a Claude series, whose own percentage is
+  // half this line. Above 100 it cannot bind, and the plot's clip hides it.
+  const pool = current.sharedPool?.status === 'applied' ? current.sharedPool : null;
+  const yUnclamped = (remaining: number) => dims.top + (1 - Math.max(-5, Math.min(120, remaining)) / 100) * plotHeight;
+  const capPoints = (
+    pool ? [...pool.ceiling.observed.filter((point) => point.at < nowAt), ...pool.ceiling.expected] : []
+  )
+    .filter((point) => point.at >= minAt && point.at <= maxAt)
+    .map((point) => ({ at: point.at, x: x(point.at), y: yUnclamped(point.remaining), remaining: point.remaining }));
+  const capLine = capPoints.length > 1 ? linePath(capPoints) : '';
+  const capArea =
+    capPoints.length > 1
+      ? `${capLine} L${capPoints.at(-1)!.x.toFixed(1)},${(dims.top - 2).toFixed(1)} L${capPoints[0].x.toFixed(1)},${(dims.top - 2).toFixed(1)} Z`
+      : '';
+  // Labelled at its last visible point, where it meets the reset.
+  let capLabel: (typeof capPoints)[number] | null = null;
+  for (const point of capPoints) if (point.remaining <= 100 && point.remaining >= 6) capLabel = point;
   const expectedEnd = expectedPoints.at(-1) ?? null;
   const heavyEnd = heavyPoints.at(-1) ?? null;
   // Spaced at render time, once the heavier label is known to be shown or not.
@@ -267,6 +291,15 @@ function runwayLayout(view: ProviderView, schedule: Schedule, size: RunwaySize, 
     observedPath: linePath(scale(observedWindow(observed, minAt))),
     expectedPath: linePath(scale(expectedPoints)),
     heavyPath: linePath(scale(heavyPoints)),
+    capLine,
+    capArea,
+    capLabel,
+    capAt: pool
+      ? (at: number) => {
+          const points = [...pool.ceiling.observed.filter((point) => point.at < nowAt), ...pool.ceiling.expected];
+          return boundedValueAt(points, at);
+        }
+      : null,
     band,
     inactive,
     midnights,
@@ -375,6 +408,7 @@ export function RunwayChart({
           observed: hoverAt <= nowAt ? boundedValueAt(forecast.series.observed, hoverAt) : null,
           expected: projection && hoverAt >= nowAt ? boundedValueAt(forecast.series.expected, hoverAt) : null,
           heavy: projection && showHeavy && hoverAt >= nowAt ? boundedValueAt(forecast.series.heavy, hoverAt) : null,
+          cap: layout.capAt ? layout.capAt(hoverAt) : null,
         };
   const rows =
     size === 'full'
@@ -400,6 +434,15 @@ export function RunwayChart({
           onMouseLeave={interactive ? () => setHoverAt(null) : undefined}
         >
           <defs>
+            <pattern
+              id={`${clipId}-cap`}
+              width="6"
+              height="6"
+              patternUnits="userSpaceOnUse"
+              patternTransform="rotate(45)"
+            >
+              <line className="runway-cap-hatch" x1="0" y1="0" x2="0" y2="6" />
+            </pattern>
             <clipPath id={clipId}>
               <rect x={dims.left} y={dims.top - 1} width={plotWidth} height={plotHeight + 2} />
             </clipPath>
@@ -436,9 +479,21 @@ export function RunwayChart({
           <g clipPath={`url(#${clipId})`}>
             {showHeavy && layout.band && <path d={layout.band} className="runway-band" />}
             {showHeavy && <path d={layout.heavyPath} className="runway-heavy" />}
+            {layout.capArea && <path d={layout.capArea} className="runway-cap-area" fill={`url(#${clipId}-cap)`} />}
+            {layout.capLine && <path d={layout.capLine} className="runway-cap-line" />}
             <path d={layout.expectedPath} className="runway-expected" />
             <path d={layout.observedPath} className="runway-observed" />
           </g>
+          {layout.capLabel && (
+            <text
+              className="runway-cap-label"
+              x={Math.min(layout.capLabel.x, resetX) - 6}
+              y={Math.max(dims.top + 10, layout.capLabel.y - 6)}
+              textAnchor="end"
+            >
+              Claude weekly cap
+            </text>
+          )}
           <line x1={nowX} x2={nowX} y1={dims.top - 10} y2={plotBottom} className="now-line" />
           {(!layout.hasReset || Math.abs(nowX - resetX) >= 42) && (
             <text className="runway-cap" x={Math.max(dims.left + 12, nowX)} y={dims.top - 14} textAnchor="middle">
@@ -585,6 +640,12 @@ export function RunwayChart({
               <span>
                 <i className="tip-glyph heavy" aria-hidden="true" />
                 Heavier week · {Math.round(hover.heavy)}% left
+              </span>
+            )}
+            {hover.cap != null && hover.cap <= 100 && (
+              <span>
+                <i className="tip-glyph cap" aria-hidden="true" />
+                Claude weekly cap · {Math.round(hover.cap)}%
               </span>
             )}
             <small>{isActiveAt(hoverAt, schedule) ? 'Inside your active hours' : 'Outside active hours'}</small>

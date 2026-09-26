@@ -43,11 +43,24 @@ function primaryWindow(quota) {
   return selectDisplayedWindows(quotaWindows(quota)).primary;
 }
 
+// The dashboard's "left now" rule (src/lib.ts). Fable is capped by what is
+// left of the shared Claude weekly pool.
 function displayedRemaining(window) {
   if (!window) return null;
+  if (window.sharedPool?.status === 'applied') return window.sharedPool.usableRemaining;
   const forecast = window.forecast || {};
   if (forecast.currentIsEstimated && forecast.estimatedCurrentRemaining != null) return forecast.estimatedCurrentRemaining;
   return window.remainingPercent;
+}
+
+function isEstimated(window) {
+  if (window?.sharedPool?.status === 'applied') return Boolean(window.sharedPool.estimated);
+  return Boolean(window?.forecast?.currentIsEstimated && window?.forecast?.estimatedCurrentRemaining != null);
+}
+
+// "usable" when the Claude weekly limit, not Fable's own, sets what is left.
+function poolLimited(window) {
+  return window?.sharedPool?.status === 'applied' && window.sharedPool.binding === 'pool';
 }
 
 function resetDistance(resetsAt, nowMs) {
@@ -70,12 +83,14 @@ function buildSummaryLines(snapshot, nowMs = Date.now()) {
     }
     const forecast = window.forecast || {};
     const remaining = displayedRemaining(window);
-    const estimated = forecast.currentIsEstimated && forecast.estimatedCurrentRemaining != null;
+    const estimated = isEstimated(window);
     if (forecast.expired) {
       lines.push(`${source.label}: window has reset, waiting for a new reading`);
       continue;
     }
-    const parts = [`${estimated ? '~' : ''}${Math.round(remaining ?? 0)}% left`];
+    const parts = [poolLimited(window)
+      ? `${estimated ? '~' : ''}${Math.round(remaining ?? 0)}% usable (Fable limit ${Math.round(window.sharedPool.capRemaining)}% left)`
+      : `${estimated ? '~' : ''}${Math.round(remaining ?? 0)}% left`];
     if (window.resetsAt) parts.push(`resets in ${resetDistance(window.resetsAt, nowMs)}`);
     if (forecast.expectedRemaining != null) parts.push(`expected ${Math.round(forecast.expectedRemaining)}% at reset`);
     if (forecast.exhaustsAt) parts.push(`runs out ${new Date(forecast.exhaustsAt).toLocaleString('en-GB', { weekday: 'short', hour: '2-digit', minute: '2-digit' })}`);
@@ -104,8 +119,8 @@ function buildTrayTooltip(snapshot) {
     const window = primaryWindow(snapshot?.quotas?.[source.key]);
     if (!window || window.forecast?.expired) return `${source.label} —`;
     const remaining = displayedRemaining(window);
-    const estimated = window.forecast?.currentIsEstimated && window.forecast?.estimatedCurrentRemaining != null;
-    return `${source.label} ${estimated ? '~' : ''}${Math.round(remaining ?? 0)}%`;
+    const estimated = isEstimated(window);
+    return `${source.label} ${estimated ? '~' : ''}${Math.round(remaining ?? 0)}%${poolLimited(window) ? ' usable' : ''}`;
   });
   const latest = Math.max(0, ...(snapshot?.sources || []).map((source) => Date.parse(source.lastSuccessAt || source.last_success_at || '') || 0));
   const updated = latest ? `Updated ${new Date(latest).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}` : 'Not collected yet';
@@ -121,6 +136,10 @@ function buildTrayTooltip(snapshot) {
 // not deferred — when the snooze ends, the next refresh judges afresh.
 function decideNotifications({ previous, current, state = emptyState(), nowMs = Date.now() }) {
   const next = { ...emptyState(), ...state, lastResetSignatures: { ...state.lastResetSignatures }, lastFallbackSignatures: { ...state.lastFallbackSignatures } };
+  // Saved before 1.0.52 renamed the allowance: an open episode must not alert again.
+  next.lastRiskSignature = String(next.lastRiskSignature || '').split('|')
+    .map((part) => (part === 'Fable 5 · Fable 5 weekly' ? 'Fable · Fable weekly' : part === 'Fable 5' ? 'Fable' : part))
+    .join('|');
   const settings = current?.settings || {};
   const notifications = [];
   const snoozedUntil = settings.alertsSnoozedUntil ? Date.parse(settings.alertsSnoozedUntil) : Number.NaN;
@@ -149,6 +168,10 @@ function decideNotifications({ previous, current, state = emptyState(), nowMs = 
         ? ` At the current pace the earliest run-out is ${new Date(runsOut).toLocaleString('en-GB', { weekday: 'short', hour: '2-digit', minute: '2-digit' })}.`
         : '';
       const subject = affected.join(', ') || 'An allowance window';
+      const included = [...new Set((verdict.details || []).flatMap((detail) => detail.includes || []))];
+      const shared = included.length
+        ? ` ${included.join(' and ')} ${included.length > 1 ? 'draw' : 'draws'} on the same weekly limit, so ${included.length > 1 ? 'they are' : 'it is'} affected too.`
+        : '';
       const title = verdict.state === 'critical'
         ? 'An allowance is projected to run out'
         : verdict.reason === 'heavy-exhaustion'
@@ -156,13 +179,13 @@ function decideNotifications({ previous, current, state = emptyState(), nowMs = 
           : verdict.reason === 'mixed'
             ? (affected.length > 1 ? 'Multiple allowances need attention' : 'An allowance needs attention')
             : 'AI usage pace needs attention';
-      const body = verdict.state === 'critical'
+      const body = (verdict.state === 'critical'
         ? `${subject} is projected to exhaust its allowance before reset.${when}`
         : verdict.reason === 'heavy-exhaustion'
           ? `${subject} remains above zero in the expected forecast, but could exhaust under heavier usage before reset.`
           : verdict.reason === 'mixed'
             ? `${subject} ${affected.length > 1 ? "need" : "needs"} attention for different forecast reasons. Open AI Usage for the provider-level detail.${when}`
-            : `${subject} is above the configured safe pace.${when}`;
+            : `${subject} is above the configured safe pace.${when}`) + shared;
       notifications.push({
         kind: 'risk',
         title,

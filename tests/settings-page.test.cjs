@@ -306,7 +306,7 @@ test('switches expose their state as a switch and in words', () => {
 test('the reserve preview shows each visible provider’s daily budget and omits those without one', () => {
   const snapshot = structuredClone(demoSnapshot);
   const nowMs = Date.parse(snapshot.generatedAt);
-  const expected = [['codex', 'Codex'], ['claude', 'Claude'], ['fable', 'Fable 5']].flatMap(([id, name]) => {
+  const expected = [['codex', 'Codex'], ['claude', 'Claude'], ['fable', 'Fable']].flatMap(([id, name]) => {
     const current = lib.primaryWindow(snapshot.quotas[id]);
     const value = budget.dailyBudget(current, snapshot.settings, nowMs, snapshot.settings.reservePercent);
     return value ? [{ id, name, label: budget.paceLabel(value.budget) }] : [];

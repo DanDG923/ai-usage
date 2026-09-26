@@ -38,7 +38,7 @@ export function ManualSection({ onManual }: { onManual: (observation: ManualObse
             onChange={(event) => setSourceId(event.target.value as ManualObservation['sourceId'])}
             className="fld"
           >
-            <option value="claude-fable">Fable 5 weekly</option>
+            <option value="claude-fable">Fable weekly</option>
             <option value="claude">Claude overall weekly</option>
             <option value="codex">Codex weekly</option>
           </select>

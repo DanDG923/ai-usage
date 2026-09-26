@@ -42,7 +42,7 @@ app.whenReady().then(async () => {
   await until(() => document.querySelector('.provider-card.fable .provider-card-link'));
   await evaluate(() => document.querySelector('.provider-card.fable .provider-card-link').click());
   await until(() => document.querySelector('.detail-page .runway-chart.full'));
-  assert.match(await evaluate(() => document.querySelector('.breadcrumb [aria-current="page"]').textContent), /Fable 5/);
+  assert.match(await evaluate(() => document.querySelector('.breadcrumb [aria-current="page"]').textContent), /Fable/);
   // Focus moves on the next animation frame, which a loaded test machine can delay.
   await until(() => document.activeElement?.id === 'panel-overview');
   // Trying a reserve re-plans the budget and draws the same reserve on the chart.

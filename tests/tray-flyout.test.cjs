@@ -847,7 +847,7 @@ test('the verdict annunciator keeps a partial all-clear neutral and marks a fail
   partial.dashboardVerdict = buildDashboardVerdict(partial);
   const partialVerdict = verdictOf(renderFlyout(partial));
   assert.match(partialVerdict, /data-tone="unknown"/);
-  assert.match(text(partialVerdict), /^Usage status needs data: Fable 5/);
+  assert.match(text(partialVerdict), /^Usage status needs data: Fable/);
   assert.match(text(partialVerdict), /Codex and Claude are on track\./);
   assert.doesNotMatch(partialVerdict, /circle-check/, 'green and its check belong to a verdict that assessed every allowance');
   // Positive control for the icon names; Watch keeps the warning triangle.

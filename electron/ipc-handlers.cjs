@@ -74,7 +74,7 @@ function registerIpc(context) {
       store.recordObservation({
         sourceId,
         bucketId: store.getManualBucketId(sourceId),
-        bucketName: sourceId === 'claude-fable' ? 'Fable 5 weekly' : 'Weekly',
+        bucketName: sourceId === 'claude-fable' ? 'Fable weekly' : 'Weekly',
         observedAt: new Date().toISOString(),
         usedPercent,
         remainingPercent: 100 - usedPercent,

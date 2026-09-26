@@ -9,11 +9,24 @@ export function subscriptionVisible(settings, providerId) {
 export const SOURCES = [
   { id: 'codex', healthId: 'codex', label: 'Codex' },
   { id: 'claude', healthId: 'claude', label: 'Claude' },
-  { id: 'fable', healthId: 'claude-fable', label: 'Fable 5' },
+  { id: 'fable', healthId: 'claude-fable', label: 'Fable' },
 ];
 
 const ACTIONABLE_STATES = ['critical', 'risk', 'watch'];
 const KNOWN_STATES = new Set([...ACTIONABLE_STATES, 'safe', 'unknown']);
+const SEVERITY = { unknown: 0, safe: 1, watch: 2, risk: 3, critical: 4 };
+
+// Fable's limit sits inside the Claude weekly pool. When that pool, not the
+// Fable limit, is what makes Fable's forecast worse than its own would be,
+// the cause is the Claude weekly window: one event, reported once, on Claude,
+// with Fable named as included. A Fable state from its own limit or its own
+// pace stays a Fable entry.
+export function poolDrivenBucket(window) {
+  const pool = window?.sharedPool;
+  if (pool?.status !== 'applied' || (pool.bindingAtReset !== 'pool' && !pool.heavyBindsAtReset)) return null;
+  const own = KNOWN_STATES.has(pool.cap?.state) ? pool.cap.state : 'unknown';
+  return SEVERITY[windowState(window)] > SEVERITY[own] ? pool.pool?.bucketId || null : null;
+}
 
 function quotaWindows(quota) {
   if (!quota) return [];
@@ -95,6 +108,31 @@ export function evidenceNeedsRefresh(window) {
   return Number.isFinite(staleHours) && staleHours > freshnessLimitHours(window);
 }
 
+// Whether a pool-driven Fable window folds into this Claude window: the same
+// weekly bucket, at least as severe. Shared with the Overview's attention list.
+export function foldsInto(fableWindow, claudeWindow) {
+  const bucket = poolDrivenBucket(fableWindow);
+  return Boolean(bucket && claudeWindow?.bucketId === bucket
+    && SEVERITY[windowState(claudeWindow)] >= SEVERITY[windowState(fableWindow)]);
+}
+
+// Whether a Fable figure depends on the Claude weekly limit: the week caps it
+// now, on the expected path to the reset, or on the heavier one.
+export function dependsOnClaudeWeekly(fableWindow) {
+  const pool = fableWindow?.sharedPool;
+  return pool?.status === 'applied'
+    && (pool.binding === 'pool' || pool.bindingAtReset === 'pool' || Boolean(pool.heavyBindsAtReset));
+}
+
+// The Claude weekly window a Fable figure follows, when Fable depends on it
+// and its own reading needs a Refresh: Fable's figure is then no fresher.
+export function stalePoolWindow(fableWindow, claudeQuota) {
+  const pool = fableWindow?.sharedPool;
+  if (!dependsOnClaudeWeekly(fableWindow)) return null;
+  const window = quotaWindows(claudeQuota).find((entry) => entry.bucketId === pool.pool?.bucketId);
+  return window && !window.forecast?.expired && evidenceNeedsRefresh(window) ? window : null;
+}
+
 export function buildDashboardVerdict(snapshot = {}) {
   const quotas = snapshot.quotas || {};
   const sourceHealth = new Map((snapshot.sources || []).map((source) => [source.id, source]));
@@ -120,9 +158,11 @@ export function buildDashboardVerdict(snapshot = {}) {
         state: windowState(window),
         label: windowLabel(source.label, window),
         forecast: window.forecast,
+        poolBucket: source.id === 'fable' ? poolDrivenBucket(window) : null,
       });
       const health = sourceHealth.get(source.healthId);
-      if (['error', 'stale', 'degraded'].includes(health?.status) || evidenceNeedsRefresh(window)) {
+      if (['error', 'stale', 'degraded'].includes(health?.status) || evidenceNeedsRefresh(window)
+        || (source.id === 'fable' && stalePoolWindow(window, quotas.claude))) {
         staleSources.push(source.label);
       }
     }
@@ -132,9 +172,21 @@ export function buildDashboardVerdict(snapshot = {}) {
     return { state: 'unknown', reason: null, label: 'No subscriptions shown', windowsChecked: 0, affected: [], details: [] };
   }
 
-  const actionable = ACTIONABLE_STATES.find((state) => assessed.some((entry) => entry.state === state));
+  // A pool-driven Fable entry folds into the Claude weekly entry it follows,
+  // which is always at least as severe: Fable then has twice Claude's room,
+  // and runs out at the same instant.
+  const includes = new Map();
+  const considered = assessed.filter((entry) => {
+    if (!entry.poolBucket) return true;
+    const host = assessed.find((other) => other.sourceId === 'claude' && other.bucketId === entry.poolBucket);
+    if (!host || SEVERITY[host.state] < SEVERITY[entry.state]) return true;
+    includes.set(host, [...(includes.get(host) || []), entry.sourceLabel]);
+    return false;
+  });
+
+  const actionable = ACTIONABLE_STATES.find((state) => considered.some((entry) => entry.state === state));
   if (actionable) {
-    const affectedEntries = assessed.filter((entry) => entry.state === actionable);
+    const affectedEntries = considered.filter((entry) => entry.state === actionable);
     const affected = unique(affectedEntries.map((entry) => entry.label));
     const details = affectedEntries.map((entry) => ({
       sourceId: entry.sourceId,
@@ -148,13 +200,15 @@ export function buildDashboardVerdict(snapshot = {}) {
       exhaustsAt: entry.forecast?.exhaustsAt || null,
       heavyExhaustsAt: entry.forecast?.heavyExhaustsAt || null,
       paceRatio: Number.isFinite(entry.forecast?.paceRatio) ? entry.forecast.paceRatio : 0,
+      ...(includes.has(entry) ? { includes: unique(includes.get(entry)) } : {}),
     }));
     const reasons = unique(details.flatMap((entry) => entry.reasons));
     const reason = reasons.length === 1 || details.length === 1 ? reasons[0] : 'mixed';
+    const included = unique(details.flatMap((entry) => entry.includes || []));
     return {
       state: actionable,
       reason,
-      label: actionableLabel(actionable, affected, reason, details, assessed),
+      label: `${actionableLabel(actionable, affected, reason, details, considered)}${included.length ? `, ${joinNames(included)} included` : ''}`,
       windowsChecked: assessed.length,
       affected,
       details,

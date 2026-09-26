@@ -17,7 +17,7 @@ import { applyThemeAttribute } from './theme';
 import type { ProviderId } from './provider-view';
 import type { ManualObservation, PriceRow, Settings as SettingsType, Snapshot } from './types';
 
-const DETAIL_NAMES: Record<ProviderId, string> = { codex: 'Codex', claude: 'Claude', fable: 'Fable 5' };
+const DETAIL_NAMES: Record<ProviderId, string> = { codex: 'Codex', claude: 'Claude', fable: 'Fable' };
 
 const BUSY_NOTICE = 'AI Usage is finishing an update; the dashboard will refresh shortly.';
 
@@ -74,8 +74,9 @@ export default function App() {
   useEffect(() => {
     if (!isBrowserPreview) return;
     let active = true;
-    void import('./data/demo').then(({ demoSnapshot }) => {
-      if (active) commitSnapshot(demoSnapshot);
+    void import('./data/demo').then(({ demoSnapshot, sharedPoolDemoSnapshot }) => {
+      const variant = new URLSearchParams(window.location.search).get('demo');
+      if (active) commitSnapshot(variant === 'shared-pool' ? sharedPoolDemoSnapshot() : demoSnapshot);
     });
     return () => {
       active = false;

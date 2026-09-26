@@ -1,9 +1,21 @@
 import { AlertOctagon, AlertTriangle, CheckCircle2, ChevronRight, EyeOff, Plug } from 'lucide-react';
 import { useMemo, useState, type ReactNode } from 'react';
 import { bankedResetsFor } from '../banked-resets';
-import { dailyBudget, paceLabel, scheduleOf } from '../budget';
+import { dailyBudget, forecastReserve, paceLabel, scheduleOf } from '../budget';
 import { currentCycleFor } from '../cycle-match';
-import { dateTimeLabel, dayDate, money, percent, relativeTime, resetDistance, shortDate, whenLabel } from '../lib';
+import {
+  capVisible,
+  compactNumber,
+  extraUsageAtLastRefresh,
+  dateTimeLabel,
+  dayDate,
+  money,
+  percent,
+  relativeTime,
+  resetDistance,
+  shortDate,
+  whenLabel,
+} from '../lib';
 import { providerViews, type ProviderId, type ProviderView } from '../provider-view';
 import type { CycleRow, Settings, Snapshot } from '../types';
 import { RunwayChart } from './Charts';
@@ -67,6 +79,197 @@ function Tone({ tone, children }: { tone: 'risk' | 'critical'; children: string 
       <Icon aria-hidden="true" />
       {children}
     </span>
+  );
+}
+
+/** "Fable 5.1" for claude-fable-5-1, with or without a date snapshot suffix. */
+export function fableVersionName(model: string) {
+  const match = /^claude-fable-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?$/i.exec(model.trim());
+  return match ? `Fable ${match[1]}${match[2] ? `.${match[2]}` : ''}` : model;
+}
+
+const POOL_UNAVAILABLE: Record<string, string> = {
+  'no-weekly-pool': 'Not checked against Claude weekly: there is no Claude weekly reading yet. Press Refresh.',
+  'pool-expired': 'Not checked against Claude weekly: its reading is from before the last reset. Press Refresh.',
+  'pool-unknown': 'Not checked against Claude weekly: its reading has no usable figure. Press Refresh.',
+  'share-inconsistent':
+    'Not checked against Claude weekly: the Fable reading is more than twice the Claude weekly use read with it, so the 50% rule does not match these readings.',
+};
+
+/**
+ * What happens at the limit that binds, from the extra-usage setting the last
+ * Refresh reported. When the Claude weekly limit binds, reaching it stops
+ * every model, and switching model does not help.
+ */
+function afterLimitText(view: ProviderView, snapshot: Snapshot, nowMs: number) {
+  const pool = view.current?.sharedPool;
+  const weeklyBinds = pool?.status === 'applied' && (pool.binding === 'pool' || pool.bindingAtReset === 'pool');
+  const extra = extraUsageAtLastRefresh(snapshot);
+  const reset = whenLabel(
+    (weeklyBinds && pool?.status === 'applied' ? pool.pool.resetsAt : view.resetAt) ?? null,
+    nowMs,
+  );
+  if (!extra) return 'Press Refresh to check whether extra usage is on.';
+  const on = extra.state === 'on';
+  const when = extra.observedAt ? `, ${dateTimeLabel(extra.observedAt)}` : '';
+  const status =
+    extra.state === 'used-up'
+      ? `Extra usage was on, but its monthly limit was used up at your last Refresh${when}.`
+      : `Extra usage was ${on ? 'on' : 'off'} at your last Refresh${when}.`;
+  const rule = weeklyBinds
+    ? on
+      ? 'At the weekly limit, every Claude model moves to extra usage at API rates, Fable included.'
+      : `At the weekly limit, every Claude model stops until ${reset}. Switching model will not help.`
+    : on
+      ? 'At the Fable limit, Fable continues on extra usage at API rates; other Claude models keep using the weekly limit.'
+      : `At the Fable limit, Fable stops until ${reset}; other Claude models keep working.`;
+  return `${rule} ${status}`;
+}
+
+/**
+ * Fable's limit is a ceiling inside the Claude weekly limit, not a pool of
+ * its own: every model's use shrinks the week, and Fable can never use more
+ * than is left of it. Both limits now and at the reset, which one binds, what
+ * happens at it, and this device's Fable activity by version.
+ */
+function ClaudeWeeklyPanel({
+  view,
+  snapshot,
+  nowMs,
+  related,
+  onOpenProvider,
+}: {
+  view: ProviderView;
+  snapshot: Snapshot;
+  nowMs: number;
+  related: ProviderView | undefined;
+  onOpenProvider?: (provider: ProviderId) => void;
+}) {
+  const pool = view.current && !view.expired ? view.current.sharedPool : undefined;
+  const versions = snapshot.fableActivity?.models ?? [];
+  const currency = snapshot.fableActivity?.currency ?? snapshot.settings.currency;
+  const atReset = (value: number | null | undefined) => (value == null ? '—' : percent(Math.max(0, value)));
+  return (
+    <section className="pnl pd-panel pd-related pd-pool" aria-labelledby="related-heading">
+      <div className="pd-panel-head">
+        <h2 id="related-heading">Claude weekly limit</h2>
+        <p>Fable draws on your Claude weekly limit: up to half of it, and never more than is left.</p>
+      </div>
+      {pool?.status === 'applied' ? (
+        <>
+          <table className="pd-pool-table">
+            <caption className="sr-only">Fable and Claude weekly limits, now and expected at the reset</caption>
+            <thead>
+              <tr>
+                <th scope="col">
+                  <span className="sr-only">Limit</span>
+                </th>
+                <th scope="col">Now</th>
+                <th scope="col">At reset</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row">Fable limit</th>
+                <td>{percent(pool.capRemaining)}</td>
+                <td>{atReset(pool.cap.expectedRemaining)}</td>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <span className="swatch claude" aria-hidden="true" /> Claude weekly
+                  {Math.abs(Date.parse(pool.pool.resetsAt) - Date.parse(view.resetAt ?? '')) > 60_000 && (
+                    <small>{` · resets ${whenLabel(pool.pool.resetsAt, nowMs)}`}</small>
+                  )}
+                </th>
+                <td>{percent(pool.poolRemaining)}</td>
+                <td>{atReset(pool.pool.expectedRemaining)}</td>
+              </tr>
+              <tr>
+                <th scope="row">Claude weekly, in Fable terms</th>
+                <td>{percent(Math.min(100, pool.poolAsFable))}</td>
+                <td>
+                  {atReset(
+                    pool.pool.expectedRemaining == null
+                      ? null
+                      : Math.min(100, pool.pool.expectedRemaining / pool.share),
+                  )}
+                </td>
+              </tr>
+              <tr className="pd-pool-usable">
+                <th scope="row">Usable Fable</th>
+                <td>{percent(pool.usableRemaining)}</td>
+                <td>{view.expectedRemaining == null ? '—' : percent(view.expectedRemaining)}</td>
+              </tr>
+            </tbody>
+          </table>
+          <p
+            className={`pd-pool-binding${pool.binding === 'pool' || pool.bindingAtReset === 'pool' ? ' limited' : ''}`}
+          >
+            {pool.binding === 'pool'
+              ? 'Limited now by Claude weekly.'
+              : pool.bindingAtReset === 'pool'
+                ? pool.pool.exhaustsAt
+                  ? `Limited by the Fable limit now; Claude weekly is expected to run out ${whenLabel(pool.pool.exhaustsAt, nowMs)} and cap Fable first.`
+                  : 'Limited by the Fable limit now; Claude weekly is expected to cap Fable before the reset.'
+                : 'Limited by the Fable limit; Claude weekly has room to spare.'}
+          </p>
+          <p className="pd-detail">1% of Claude weekly = 2% of the Fable limit (Anthropic’s 50% rule).</p>
+        </>
+      ) : pool?.status === 'unavailable' ? (
+        <p className="pd-detail">{POOL_UNAVAILABLE[pool.reason] ?? POOL_UNAVAILABLE['pool-unknown']}</p>
+      ) : null}
+      {view.current && !view.expired && <p className="pd-detail">{afterLimitText(view, snapshot, nowMs)}</p>}
+      {related && (
+        <button
+          type="button"
+          className="pd-related-row"
+          onClick={() => onOpenProvider?.(related.id)}
+          disabled={!onOpenProvider}
+        >
+          <span className="pd-related-name">
+            <span className={`swatch ${related.id}`} aria-hidden="true" />
+            <span>
+              <strong>{related.name}</strong>
+              {related.remaining != null && (
+                <span className="pd-related-left">{` · ${Math.round(related.remaining)}% left`}</span>
+              )}
+            </span>
+          </span>
+          <StatePill state={related.state} />
+          <ChevronRight aria-hidden="true" />
+        </button>
+      )}
+      {versions.length > 0 && (
+        <div className="pd-pool-versions">
+          <table className="pd-pool-table">
+            <caption>
+              Both versions share one Fable limit. This split is this device’s activity this week, not allowance.
+            </caption>
+            <thead>
+              <tr>
+                <th scope="col">Model</th>
+                <th scope="col">Requests</th>
+                <th scope="col">Tokens</th>
+                <th scope="col">API-equivalent</th>
+              </tr>
+            </thead>
+            <tbody>
+              {versions.map((entry) => (
+                <tr key={entry.model}>
+                  <th scope="row">{fableVersionName(entry.model)}</th>
+                  <td>{compactNumber(entry.requests)}</td>
+                  <td>{compactNumber(entry.totalTokens)}</td>
+                  <td>{entry.covered ? money(entry.cost, currency) : 'Unpriced'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="pd-detail">
+            Fable 5.1 cache reads cost less at API prices; Anthropic has not said whether they use less of the limit.
+          </p>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -178,7 +381,9 @@ function CycleTable({ view, snapshot }: { view: ProviderView; snapshot: Snapshot
                   ? 'Awaiting current reading'
                   : forecast?.expectedRemaining == null
                     ? 'Learning'
-                    : `${percent(forecast.expectedRemaining)} expected at reset`}
+                    : quota.sharedPool?.status === 'applied' && quota.sharedPool.cappedAtReset === 'pool'
+                      ? `${percent(forecast.expectedRemaining)} usable at reset, capped by Claude weekly`
+                      : `${percent(forecast.expectedRemaining)} expected at reset`}
               </td>
             </tr>
             {past.map(pastRow)}
@@ -209,6 +414,13 @@ function CycleTable({ view, snapshot }: { view: ProviderView; snapshot: Snapshot
       </ul>
     </>
   );
+}
+
+/** When Claude weekly, not the Fable limit, sets Fable's budget, the figures are that budget in Fable terms. */
+export function weeklyBudgetNote(view: ProviderView) {
+  const pool = view.current?.sharedPool;
+  if (view.id !== 'fable' || pool?.status !== 'applied' || pool.bindingAtReset !== 'pool') return null;
+  return 'Set by Claude weekly and counted in Fable terms: each 1% of Claude weekly any model uses removes 2% of Fable.';
 }
 
 function Planner({
@@ -265,7 +477,7 @@ function Planner({
         ? 'Lower the reserve, or use it more lightly until the reset.'
         : `Use ${view.name} more lightly until the reset to keep some allowance.`
       : reserve > 0
-        ? `At the heavier pace you would dip into your ${reserve}% reserve before the reset.`
+        ? `At the heavier pace you would dip into your ${Math.round(budget.reserve)}% reserve before the reset.`
         : heavyEnds
           ? `At the heavier pace ${view.name} runs out ${whenLabel(heavyEnds, nowMs)}, ${gapBeforeReset(heavyEnds, view.resetAt)}.`
           : 'At the heavier pace the allowance would be used up before the reset.';
@@ -280,6 +492,7 @@ function Planner({
       <p className="pd-figure">
         <strong>{paceLabel(budget.budget)}</strong> <span>per active day</span>
       </p>
+      {weeklyBudgetNote(view) && <p className="pd-detail">{weeklyBudgetNote(view)}</p>}
       <div className="pd-gauge">
         {budget.reserve > 0 && (
           <p className="pd-gauge-label">{`Daily budget, keeping ${Math.round(budget.reserve)}% in reserve`}</p>
@@ -439,8 +652,11 @@ export function ProviderDetail({
         {view.current && !view.expired && view.remaining != null ? (
           <dl className="pd-figures">
             <div>
-              <dt className="lbl">Left now</dt>
+              <dt className="lbl">{view.poolLimited ? 'Usable now' : 'Left now'}</dt>
               <dd className="pd-big">{`${view.estimated ? '~' : ''}${Math.round(view.remaining)}%`}</dd>
+              {view.poolLimited && view.current.sharedPool?.status === 'applied' && (
+                <dd className="pd-sub">{`Fable limit ${percent(view.current.sharedPool.capRemaining)} left`}</dd>
+              )}
             </div>
             <div>
               <dt className="lbl">Expected at reset</dt>
@@ -526,6 +742,12 @@ export function ProviderDetail({
                     Heavier-week range
                   </li>
                 )}
+                {capVisible(view.current) && (
+                  <li>
+                    <i className="key-cap" aria-hidden="true" />
+                    Above the Claude weekly cap: not usable
+                  </li>
+                )}
                 <li>
                   <i className="key-inactive" aria-hidden="true" />
                   Outside active hours
@@ -548,7 +770,7 @@ export function ProviderDetail({
                 schedule={schedule}
                 size="full"
                 showHeavy={showHeavy}
-                reserve={reserveDraft ?? savedReserve}
+                reserve={forecastReserve(view.current, reserveDraft ?? savedReserve)}
               />
               <RunwayOutcomes view={view} nowMs={nowMs} />
             </section>
@@ -584,35 +806,41 @@ export function ProviderDetail({
             />
           )}
 
-          {related && (
-            <section className="pnl pd-panel pd-related" aria-labelledby="related-heading">
-              <div className="pd-panel-head">
-                <h2 id="related-heading">Related allowance</h2>
-                <p>
-                  {view.id === 'fable'
-                    ? 'Fable 5 has its own weekly limit within your Claude plan.'
-                    : 'Fable 5 has a separate weekly limit inside this plan.'}
-                </p>
-              </div>
-              <button
-                type="button"
-                className="pd-related-row"
-                onClick={() => onOpenProvider?.(related.id)}
-                disabled={!onOpenProvider}
-              >
-                <span className="pd-related-name">
-                  <span className={`swatch ${related.id}`} aria-hidden="true" />
-                  <span>
-                    <strong>{related.name}</strong>
-                    {related.remaining != null && (
-                      <span className="pd-related-left">{` · ${Math.round(related.remaining)}% left`}</span>
-                    )}
+          {view.id === 'fable' ? (
+            <ClaudeWeeklyPanel
+              view={view}
+              snapshot={snapshot}
+              nowMs={nowMs}
+              related={related}
+              onOpenProvider={onOpenProvider}
+            />
+          ) : (
+            related && (
+              <section className="pnl pd-panel pd-related" aria-labelledby="related-heading">
+                <div className="pd-panel-head">
+                  <h2 id="related-heading">Related allowance</h2>
+                  <p>Fable can use up to half of this weekly limit, and every Claude model draws on the same limit.</p>
+                </div>
+                <button
+                  type="button"
+                  className="pd-related-row"
+                  onClick={() => onOpenProvider?.(related.id)}
+                  disabled={!onOpenProvider}
+                >
+                  <span className="pd-related-name">
+                    <span className={`swatch ${related.id}`} aria-hidden="true" />
+                    <span>
+                      <strong>{related.name}</strong>
+                      {related.remaining != null && (
+                        <span className="pd-related-left">{` · ${Math.round(related.remaining)}% ${related.poolLimited ? 'usable' : 'left'}`}</span>
+                      )}
+                    </span>
                   </span>
-                </span>
-                <StatePill state={related.state} />
-                <ChevronRight aria-hidden="true" />
-              </button>
-            </section>
+                  <StatePill state={related.state} />
+                  <ChevronRight aria-hidden="true" />
+                </button>
+              </section>
+            )
           )}
 
           <section className="pnl pd-panel pd-evidence" aria-labelledby="evidence-heading">

@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.52 — 26 September 2026
+
+- Treat Fable's limit the way Anthropic describes it: up to half of your Claude weekly limit, inside that limit rather than beside it. Every Claude model draws on the week, so what other models use leaves less for Fable: with Opus at 70% of the week, Fable has 60% of its limit available, not 100%. The Fable card, runway, daily budget, verdict, tray and flyout now show **usable** Fable, the lower of Fable's own remaining and what the Claude weekly limit leaves, with the provider's own Fable figure beside it. The runway hatches the part of the Fable limit the week can no longer cover, forecasts follow whichever limit runs out first, and when the Claude weekly limit is the cause the alert names Claude once, "Fable included", instead of raising two. Nothing new reads your Claude plan usage.
+- Add a **Claude weekly limit** panel to the Fable page: the Fable limit, Claude weekly and usable Fable now and at the reset, which one binds, what happens at the limit given the extra-usage setting from your last Refresh, and this device's Fable activity split between Fable 5.1 and Fable 5.
+- Add built-in Claude Fable 5.1 and Claude Opus 5.5 API-equivalent pricing. Both were priced as their predecessors: Fable 5.1 cache reads cost $0.25 per million tokens, not Fable 5's $1, and Opus 5.5 costs $4 input, $0.20 cache reads and $20 output per million, not Opus 5's rates. Claude Code sessions are mostly cache reads, so costs for these models were overstated by roughly three quarters (Fable 5.1) to nine tenths (Opus 5.5). Existing usage is repriced automatically and custom prices are preserved. A future point release now shows as unpriced instead of borrowing its predecessor's price.
+- Weigh Fable 5.1 and Opus 5.5 by their own rates when the local Fable estimate splits Claude weekly use between models.
+- Call the allowance "Fable" rather than "Fable 5": Fable 5 and 5.1 share one limit, which Claude reports as "Fable". Existing readings are renamed on upgrade.
+- Keep the Claude weekly and five-hour readings from a Refresh if Claude ever reports two conflicting Fable windows; Fable is then shown as unavailable instead of the whole read being discarded.
+- Preserve local usage history, settings, observations, and backups during an in-place update.
+
 ## 1.0.51 — 25 September 2026
 
 - Keep Claude marked out of date when the status-line helper refreshes one allowance window while another active window still needs a Refresh. Source health now agrees before and after the next automatic collection.

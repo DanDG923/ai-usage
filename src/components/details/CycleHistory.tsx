@@ -2,7 +2,7 @@ import { compactNumber, dayDate, money, percent } from '../../lib';
 import type { CycleRow, Snapshot } from '../../types';
 
 type CycleKey = keyof Snapshot['cycles'];
-const LABELS: Record<CycleKey, string> = { codex: 'Codex', claude: 'Claude', fable: 'Fable 5' };
+const LABELS: Record<CycleKey, string> = { codex: 'Codex', claude: 'Claude', fable: 'Fable' };
 
 /** "Mon 14 Sept: 74% used", with the open window named, for the tooltip and the text alternative. */
 function cycleLabel(row: CycleRow) {

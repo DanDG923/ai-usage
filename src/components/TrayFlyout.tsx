@@ -250,8 +250,8 @@ function ProviderRow({
     remaining == null
       ? 'No allowance reading yet'
       : atReset == null
-        ? `${approx}${percent(remaining)} left now; no forecast yet`
-        : `${approx}${percent(remaining)} left now; about ${percent(atReset)} expected to be left at reset`;
+        ? `${approx}${percent(remaining)} ${view.poolLimited ? 'usable' : 'left'} now; no forecast yet`
+        : `${approx}${percent(remaining)} ${view.poolLimited ? 'usable' : 'left'} now; about ${percent(atReset)} expected to be left at reset`;
   return (
     <li>
       <button
@@ -287,7 +287,7 @@ function ProviderRow({
           ) : (
             <span className="flyout-left">
               <strong>{`${approx}${percent(remaining)}`}</strong>
-              <small>left</small>
+              <small>{view.poolLimited ? 'usable' : 'left'}</small>
             </span>
           )}
         </span>

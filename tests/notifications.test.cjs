@@ -109,7 +109,7 @@ test('heavy-only risk uses conditional wording rather than pace wording', () => 
   const current = snapshot({
     dashboardVerdict: {
       state: 'risk', reason: 'heavy-exhaustion',
-      label: 'Fable 5 could reach its limit under heavier usage', affected: ['Fable 5 · Weekly'],
+      label: 'Fable could reach its limit under heavier usage', affected: ['Fable · Weekly'],
     },
     quotas: { codex: null, claude: null, fable: { ...fable, windows: [fable] } },
   });
@@ -210,7 +210,7 @@ test('ageing preserves the next fallback alert without rearming an ongoing failu
       previous = { sources: current.sources.map(({ id, status }) => ({ id, status })) };
       return result.notifications.filter((entry) => entry.kind === 'fallback').map((entry) => entry.title);
     };
-    const expected = ['Claude readings are running on cached data', 'Fable 5 readings are running on cached data'];
+    const expected = ['Claude readings are running on cached data', 'Fable readings are running on cached data'];
     assert.deepEqual(check(healthy), []);
     assert.deepEqual(check(aged), []);
     assert.deepEqual(check(aged), []);
@@ -253,10 +253,10 @@ test('the summary text and tray tooltip share the same headline numbers', () => 
   const text = buildSummaryText(current, NOW);
   assert.match(text, /All allowances on track/);
   assert.match(text, /Codex: 60% left · resets in 3d 22h · expected 30% at reset/);
-  assert.match(text, /Fable 5: no allowance reading yet/);
+  assert.match(text, /Fable: no allowance reading yet/);
   assert.match(text, /GBP 12\.50 API-equivalent over the last 30 days/);
   const tooltip = buildTrayTooltip(current, NOW);
-  assert.match(tooltip, /^Codex 60% · Claude 90% · Fable 5 —\n/);
+  assert.match(tooltip, /^Codex 60% · Claude 90% · Fable —\n/);
 });
 
 test('the tray tooltip headlines the weekly window even when a shorter window is riskier', () => {
@@ -271,7 +271,7 @@ test('the tray tooltip headlines the weekly window even when a shorter window is
     forecast: { state: 'risk', expectedRemaining: 0, currentIsEstimated: false, exhaustsAt: '2026-09-01T12:00:00.000Z', expired: false },
   });
   const current = snapshot({ quotas: { codex: { ...weekly, windows: [weekly, fiveHour] }, claude: null, fable: null } });
-  assert.match(buildTrayTooltip(current, NOW), /^Codex 60% · Claude — · Fable 5 —\n/);
+  assert.match(buildTrayTooltip(current, NOW), /^Codex 60% · Claude — · Fable —\n/);
 });
 
 test('a forecast-only change never announces a reset and a real shorter-window reset still does', () => {

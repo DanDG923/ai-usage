@@ -4,7 +4,7 @@ import type { Settings, Snapshot } from '../../types';
 import { SelectSetting, SettingBlock, SettingColumns, SettingRow, SettingsSection } from './fields';
 
 export function sourceMark(id: string) {
-  return id === 'codex' ? 'Cx' : id === 'claude-fable' ? 'F5' : 'Cl';
+  return id === 'codex' ? 'Cx' : id === 'claude-fable' ? 'Fb' : 'Cl';
 }
 
 // Statuses every consumer treats as stale data (see electron/store.cjs

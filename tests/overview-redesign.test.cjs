@@ -199,11 +199,15 @@ test('a provider page plans the week, names the related allowance and shows its 
   const snapshot = structuredClone(demoSnapshot);
   const html = render(ProviderDetail, { snapshot, provider: 'fable', onBack() {}, onOpenProvider() {} });
   const content = text(html);
-  assert.match(content, /Fable 5 .*At risk/);
+  assert.match(content, /Fable .*At risk/);
   assert.match(content, /Daily budget [^]*?\d+(\.\d)?% per active day/);
   assert.match(content, /Keep in reserve 0% of the allowance/);
   assert.match(content, /A typical week fits; a heavier one doesn’t/);
-  assert.match(content, /Related allowance Fable 5 has its own weekly limit within your Claude plan\. Claude · 95% left On track/);
+  assert.match(content, /Claude weekly limit Fable draws on your Claude weekly limit: up to half of it, and never more than is left\./);
+  assert.match(content, /Fable limit 72% 41% Claude weekly 95% 78% Claude weekly, in Fable terms 100% 100% Usable Fable 72% 41%/);
+  assert.match(content, /Limited by the Fable limit; Claude weekly has room to spare\./);
+  assert.match(content, /Claude · 95% left On track/);
+  assert.match(content, /Fable 5\.1 118 26\.4m £142\.60 Fable 5 28 5\.6m £61\.20/, 'this device’s Fable activity is split by version');
   assert.match(content, /Evidence Reading Official provider reading|Evidence Reading/);
   assert.match(content, /Learned from 29 days · 89% confidence/);
   assert.match(content, /Past weeks/);
@@ -304,9 +308,9 @@ test('banked resets: Codex reports its own, Claude free resets are recorded by h
   const snapshot = structuredClone(demoSnapshot);
   snapshot.settings = { ...snapshot.settings, claudeFreeResets: 1, claudeFreeResetsExpireOn: '2099-12-31' };
   const html = render(Overview, { snapshot, refreshing: false, onRefresh: async () => {}, onSetupClaude() {}, onSources() {} });
-  const claudeCard = text(html.slice(html.indexOf('aria-label="Claude allowance"'), html.indexOf('aria-label="Fable 5 allowance"')));
+  const claudeCard = text(html.slice(html.indexOf('aria-label="Claude allowance"'), html.indexOf('aria-label="Fable allowance"')));
   assert.match(claudeCard, /1 free reset available Recorded by you; claim it in Claude’s Usage settings\. Expires /);
-  const fableCard = text(html.slice(html.indexOf('aria-label="Fable 5 allowance"'), html.indexOf('id="attention-heading"')));
+  const fableCard = text(html.slice(html.indexOf('aria-label="Fable allowance"'), html.indexOf('id="attention-heading"')));
   assert.doesNotMatch(fableCard, /free reset|reset credit/);
 });
 

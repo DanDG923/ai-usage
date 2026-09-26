@@ -62,6 +62,18 @@ export function inactiveRanges(startMs: number, endMs: number, schedule: Schedul
   return ranges;
 }
 
+/**
+ * A reserve setting, as a share of this window. While the Claude weekly limit
+ * sets Fable's budget, keeping 10% of the week back keeps 20% of Fable back,
+ * the rule the backend applies to the window's own forecast reserve.
+ */
+export function forecastReserve(window: QuotaWindow | null | undefined, percent: number) {
+  const pool = window?.sharedPool;
+  if (pool?.status === 'applied' && pool.bindingAtReset === 'pool' && pool.share > 0)
+    return Math.max(0, Math.min(90, percent / pool.share));
+  return percent;
+}
+
 export type DailyBudget = {
   /** Share of the allowance that can be used per active day and still keep the reserve at reset. */
   budget: number;
@@ -114,7 +126,15 @@ export function dailyBudget(
   // fraction of a day and read as "use 280% a day".
   if ((window.windowMinutes != null && window.windowMinutes < 1_440) || activeDaysLeft < 1) return null;
   const remaining = Math.max(0, Math.min(100, displayedRemaining(window)));
-  const reserve = Math.max(0, Math.min(90, reserveOverride ?? forecast.reservePercent ?? settings.reservePercent ?? 0));
+  const reserve = Math.max(
+    0,
+    Math.min(
+      90,
+      reserveOverride != null
+        ? forecastReserve(window, reserveOverride)
+        : (forecast.reservePercent ?? settings.reservePercent ?? 0),
+    ),
+  );
   const paceUntil = (used: number, endsAt: string | null | undefined) => {
     const endMs = endsAt ? Date.parse(endsAt) : NaN;
     const hours =

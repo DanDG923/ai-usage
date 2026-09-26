@@ -230,13 +230,13 @@ test('provider reassurance checks shorter windows and stale evidence as well as 
   const shorter = { ...structuredClone(claude.windows[0]), bucketId: 'five_hour', windowMinutes: 300 };
   shorter.forecast.state = 'risk';
   claude.windows.push(shorter);
-  assert.equal(lib.verdictSentence(verdict, snapshot.quotas).secondary, 'Fable 5 is on track.');
+  assert.equal(lib.verdictSentence(verdict, snapshot.quotas).secondary, 'Fable is on track.');
   shorter.forecast.state = 'safe';
   shorter.forecast.staleHours = 2;
-  assert.equal(lib.verdictSentence(verdict, snapshot.quotas).secondary, 'Fable 5 is on track.');
+  assert.equal(lib.verdictSentence(verdict, snapshot.quotas).secondary, 'Fable is on track.');
   shorter.forecast.staleHours = 0;
-  assert.equal(lib.verdictSentence(verdict, snapshot.quotas).secondary, 'Claude and Fable 5 are on track.');
-  assert.equal(lib.verdictSentence(verdict, snapshot.quotas, [{ id: 'claude', status: 'degraded' }]).secondary, 'Fable 5 is on track.');
+  assert.equal(lib.verdictSentence(verdict, snapshot.quotas).secondary, 'Claude and Fable are on track.');
+  assert.equal(lib.verdictSentence(verdict, snapshot.quotas, [{ id: 'claude', status: 'degraded' }]).secondary, 'Fable is on track.');
 });
 
 test('current-cycle rows do not borrow totals from another reset or show expired history as current', () => {
@@ -430,7 +430,7 @@ test('recorded allowance changes are listed in Settings with their source, insta
   const empty = text(render(ForecastSection, { snapshot, update }));
   assert.match(empty, /Allowance changes/);
   assert.match(empty, /No allowance changes recorded\./);
-  assert.match(empty, /Claude weekly \(including Fable 5\)/, 'the subscription choice names the shared pool');
+  assert.match(empty, /Claude weekly \(including Fable\)/, 'the subscription choice names the shared pool');
   snapshot.settings.allowanceChanges = [
     { source: 'codex', at: '2026-08-20T10:00:00.000Z', previousAllowancePercent: 80 },
     { source: 'claude', at: '2026-09-13T06:00:00.000Z', previousAllowancePercent: 150 },
@@ -438,7 +438,7 @@ test('recorded allowance changes are listed in Settings with their source, insta
   const html = render(ForecastSection, { snapshot, update });
   const listed = text(html);
   assert.match(listed, /2 changes recorded\./);
-  assert.match(listed, /Claude weekly \(including Fable 5\) 13 Sept 2026, 07:00\s*, previously 150% of the allowance that followed/);
+  assert.match(listed, /Claude weekly \(including Fable\) 13 Sept 2026, 07:00\s*, previously 150% of the allowance that followed/);
   assert.match(listed, /Codex main weekly 20 Aug 2026, 11:00\s*, previously 80% of the allowance that followed/);
   assert.ok(listed.indexOf('13 Sept 2026') < listed.indexOf('20 Aug 2026'), 'latest change first');
   assert.match(html, /<time dateTime="2026-09-13T06:00:00.000Z">/);
@@ -465,8 +465,8 @@ test('attention preserves late critical rows and sorts urgency before provider o
   snapshot.dashboardVerdict = { ...snapshot.dashboardVerdict, details: [] };
   const html = render(Overview, { snapshot, refreshing: false, onRefresh: async () => {}, onSetupClaude() {}, onSources() {} });
   const attention = html.slice(html.indexOf('class="insight-list"'));
-  assert.ok(attention.indexOf('Fable 5 is expected to run out') >= 0);
-  assert.ok(attention.indexOf('Fable 5 is expected to run out') < attention.indexOf('Codex is above its safe pace'));
+  assert.ok(attention.indexOf('Fable is expected to run out') >= 0);
+  assert.ok(attention.indexOf('Fable is expected to run out') < attention.indexOf('Codex is above its safe pace'));
   assert.match(attention, /Last 30 days/);
 });
 
@@ -476,11 +476,11 @@ test('the status line states its window once, with a daily budget, and the list 
     snapshot, refreshing: false, onRefresh: async () => {}, onSetupClaude() {}, onSources() {}, onOpenProvider() {},
   });
   const status = text(html.slice(html.indexOf('class="overview-status'), html.indexOf('class="allowance-section"')));
-  assert.match(status, /Fable 5 could reach its limit under heavier usage/);
-  assert.match(status, /Keep Fable 5 under \d+(\.\d)?% of its allowance per active day to reach its .+ reset\./);
-  assert.match(status, /Plan Fable 5 usage/);
+  assert.match(status, /Fable could reach its limit under heavier usage/);
+  assert.match(status, /Keep Fable under \d+(\.\d)?% of its allowance per active day to reach its .+ reset\./);
+  assert.match(status, /Plan Fable usage/);
   const attention = text(html.slice(html.indexOf('id="attention-heading"'), html.indexOf('id="value-heading"')));
-  assert.doesNotMatch(attention, /Fable 5 could run out under heavier usage/, 'the status line already says it');
+  assert.doesNotMatch(attention, /Fable could run out under heavier usage/, 'the status line already says it');
   // Banked resets sit on their provider's card, not in the list.
   assert.doesNotMatch(attention, /reset credit/);
   const codexCard = text(html.slice(html.indexOf('aria-label="Codex allowance"'), html.indexOf('aria-label="Claude allowance"')));
@@ -577,7 +577,7 @@ test('each runway runs on its own window, shades inactive hours and marks a heav
   assert.match(html, /class="runway-band"/);
   assert.match(html, /Heavier week runs out/);
   assert.match(html, /View runway data/);
-  assert.match(html, /aria-label="Fable 5: 72% left now; expected 41% at reset; a heavier week runs out /);
+  assert.match(html, /aria-label="Fable: 72% left now; expected 41% at reset; a heavier week runs out /);
   const compact = render(RunwayChart, { view: codex, schedule });
   assert.doesNotMatch(compact, /View runway data/, 'cards leave the data table to the provider page');
   assert.doesNotMatch(render(RunwayChart, { view: fable, schedule, size: 'full', showHeavy: false }), /runway-band|Heavier week runs out/);

@@ -15,7 +15,7 @@ const RESET_TOLERANCE_MS = 60_000;
 const MIN_INTERVAL_PERCENT = 5;
 const MIN_INTERVALS = 3;
 const OFFICIAL_PROVENANCES = new Set(CALIBRATION_PROVENANCES);
-const MODEL_IDS = new Set(['claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-sonnet-5', 'claude-haiku-4-5']);
+const MODEL_IDS = new Set(['claude-fable-5-1', 'claude-fable-5', 'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-sonnet-5', 'claude-haiku-4-5']);
 const EMPTY_MIX = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
 const BASE_WARNINGS = [
   'This estimates capacity for the observed model and token mix, not a fixed provider token limit.',

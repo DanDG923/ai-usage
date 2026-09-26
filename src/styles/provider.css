@@ -1,5 +1,5 @@
 /*
- * The provider page (Fable 5, Codex, Claude): the header with its four
+ * The provider page (Fable, Codex, Claude): the header with its four
  * readouts, the runway panel, past windows, the daily budget planner, the
  * related allowance, the evidence rows and weekly token capacity.
  *
@@ -600,6 +600,68 @@
   flex: none;
   width: 16px;
   height: 16px;
+}
+
+/* ---------- Fable: the Claude weekly limit it sits inside ---------- */
+
+.detail-page .pd-pool {
+  gap: 10px;
+}
+.detail-page .pd-pool-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.detail-page .pd-pool-table caption {
+  padding-bottom: 6px;
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  text-align: left;
+  caption-side: top;
+}
+.detail-page .pd-pool-table th,
+.detail-page .pd-pool-table td {
+  padding: 5px 0;
+  border-bottom: 1px solid var(--rule);
+  text-align: right;
+  white-space: nowrap;
+}
+.detail-page .pd-pool-table thead th {
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.detail-page .pd-pool-table th[scope='row'],
+.detail-page .pd-pool-table thead th:first-child {
+  padding-right: var(--sp-3);
+  font-weight: 400;
+  text-align: left;
+  white-space: normal;
+}
+.detail-page .pd-pool-table td + td {
+  padding-left: var(--sp-3);
+}
+.detail-page .pd-pool-table .pd-pool-usable th,
+.detail-page .pd-pool-table .pd-pool-usable td {
+  border-bottom: 0;
+  font-weight: 700;
+}
+/* The limit is Claude's: when it is the tighter one its line carries Claude's edge. */
+.detail-page .pd-pool-binding {
+  margin: 0;
+}
+.detail-page .pd-pool-binding.limited {
+  padding-left: 9px;
+  border-left: 3px solid var(--claude);
+}
+.detail-page .pd-pool-versions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--rule);
 }
 
 /* ---------- Evidence ---------- */

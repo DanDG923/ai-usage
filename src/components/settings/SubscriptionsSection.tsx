@@ -115,7 +115,7 @@ export function SubscriptionsSection({
           />
           <ToggleRow
             title="Show Claude"
-            description="Claude allowances, including Fable 5, forecasts, and reminders."
+            description="Claude allowances, including Fable, forecasts, and reminders."
             checked={showClaude}
             onChange={(checked) => void update({ showClaudeSubscription: checked })}
           />

@@ -4,7 +4,7 @@ import type { AllowanceChange, Settings, Snapshot } from '../../types';
 import { SettingError } from './fields';
 
 const SOURCE_LABELS: Record<AllowanceChange['source'], string> = {
-  claude: 'Claude weekly (including Fable 5)',
+  claude: 'Claude weekly (including Fable)',
   codex: 'Codex main weekly',
 };
 const MAX_CHANGES = 24;
@@ -98,7 +98,7 @@ export function AllowanceChanges({
         Record when a subscription’s main weekly allowance changed size, for example when a promotional boost ended.
         Readings taken before the change are rescaled to the current allowance, so the jump at the change is not learned
         as usage and earlier weeks stay comparable for pace and token capacity. Recorded usage, costs, and the
-        provider’s own percentages are unchanged. Claude entries also cover Fable 5’s shared weekly pool. Five-hour and
+        provider’s own percentages are unchanged. Claude entries also cover Fable’s shared weekly pool. Five-hour and
         other independent model limits keep their own history.
       </p>
       <form

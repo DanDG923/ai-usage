@@ -8,7 +8,7 @@ import type { QuotaWindow, Snapshot, TokenCapacityEstimate } from '../types';
 const PROVIDERS = [
   { id: 'codex', name: 'Codex' },
   { id: 'claude', name: 'Claude' },
-  { id: 'fable', name: 'Fable 5' },
+  { id: 'fable', name: 'Fable' },
 ] as const;
 
 /** Token categories in display order, each with its mark in the mix bar (ink first, then greys). */

@@ -1,4 +1,4 @@
-import { SOURCES, evidenceNeedsRefresh } from '../electron/dashboard-decision.mjs';
+import { SOURCES, evidenceNeedsRefresh, stalePoolWindow } from '../electron/dashboard-decision.mjs';
 import { selectDisplayedWindows } from '../electron/quota-selection.mjs';
 import type { DashboardVerdict, Quota, QuotaWindow, Snapshot } from './types';
 
@@ -200,19 +200,60 @@ export function primaryWindow(quota: Quota | null | undefined): QuotaWindow | nu
   return selectDisplayedWindows(quotaWindows(quota)).primary;
 }
 
+/**
+ * What is left now. A Fable window is capped by the shared Claude weekly pool
+ * (electron/fable-shared-pool.cjs); its own provider figure stays on the window.
+ */
 export function displayedRemaining(entry: QuotaWindow) {
+  if (entry.sharedPool?.status === 'applied') return entry.sharedPool.usableRemaining;
   return entry.forecast.currentIsEstimated && entry.forecast.estimatedCurrentRemaining != null
     ? entry.forecast.estimatedCurrentRemaining
     : entry.remainingPercent;
 }
 
+export type ExtraUsageState = { state: 'on' | 'off' | 'used-up'; observedAt: string | null };
+
+/**
+ * Whether extra usage was on at the last Refresh that reported it: the
+ * snapshot's own record, or, in a snapshot without one, the newest window
+ * metadata that carries it.
+ */
+export function extraUsageAtLastRefresh(
+  snapshot: Pick<Snapshot, 'quotas' | 'claudeExtraUsage'>,
+): ExtraUsageState | null {
+  const read = (value: unknown, observedAt: string | null) => {
+    if (!value || typeof value !== 'object') return null;
+    const row = value as Record<string, unknown>;
+    if (typeof row.isEnabled !== 'boolean') return null;
+    const utilization = typeof row.utilization === 'number' ? row.utilization : null;
+    const state: ExtraUsageState['state'] = !row.isEnabled ? 'off' : (utilization ?? 0) >= 100 ? 'used-up' : 'on';
+    return { state, observedAt };
+  };
+  if (snapshot.claudeExtraUsage !== undefined) {
+    return snapshot.claudeExtraUsage ? read(snapshot.claudeExtraUsage, snapshot.claudeExtraUsage.observedAt) : null;
+  }
+  const windows = [snapshot.quotas.fable, snapshot.quotas.claude].flatMap((quota) => quotaWindows(quota));
+  const newest = windows
+    .filter((window) => read(window.metadata?.extraUsage, window.observedAt))
+    .sort((a, b) => Date.parse(b.observedAt) - Date.parse(a.observedAt))[0];
+  return newest ? read(newest.metadata.extraUsage, newest.observedAt) : null;
+}
+
+/** Whether a Fable window's Claude weekly cap comes under 100% anywhere on its runway. */
+export function capVisible(entry: QuotaWindow | null | undefined) {
+  const pool = entry?.sharedPool;
+  if (pool?.status !== 'applied') return false;
+  return [...pool.ceiling.observed, ...pool.ceiling.expected].some((point) => point.remaining < 100);
+}
+
 export function isEstimated(entry: QuotaWindow) {
+  if (entry.sharedPool?.status === 'applied') return entry.sharedPool.estimated;
   return Boolean(entry.forecast.currentIsEstimated && entry.forecast.estimatedCurrentRemaining != null);
 }
 
 /**
  * The Overview's status line, written as a sentence from the backend verdict.
- * The verdict's affected entries look like "Fable 5 · Fable 5 weekly"; the
+ * The verdict's affected entries look like "Fable · Fable weekly"; the
  * provider name is the part before the separator.
  */
 export function verdictSentence(
@@ -237,7 +278,9 @@ export function verdictSentence(
       return (
         active.length > 0 &&
         active.every((window) => {
-          return window.forecast.state === 'safe' && !evidenceNeedsRefresh(window);
+          return (
+            window.forecast.state === 'safe' && !evidenceNeedsRefresh(window) && !stalePoolWindow(window, quotas.claude)
+          );
         })
       );
     })

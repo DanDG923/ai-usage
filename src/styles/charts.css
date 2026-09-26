@@ -113,6 +113,31 @@ svg.runway-chart text.runway-end {
   stroke-dasharray: 1.5 3;
 }
 
+/* Fable only: the Claude weekly limit in Fable points, as a ceiling. Neutral
+   furniture like the reserve line: the area above it is not usable. */
+.runway-chart .runway-cap-hatch {
+  stroke: var(--text-3);
+  stroke-width: 1.5;
+  stroke-opacity: 0.55;
+}
+.runway-chart .runway-cap-area {
+  stroke: none;
+}
+.runway-chart .runway-cap-line {
+  fill: none;
+  stroke: var(--text-2);
+  stroke-width: 1;
+}
+svg.runway-chart text.runway-cap-label {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  fill: var(--text-2);
+  paint-order: stroke;
+  stroke: var(--panel);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+
 /* Now */
 .runway-chart .now-line {
   stroke: var(--text);
@@ -329,6 +354,11 @@ div.empty-chart.runway-empty {
   border: 1.5px solid var(--series);
   background: var(--panel-2);
 }
+.chart-tip .tip-glyph.cap {
+  width: 10px;
+  height: 0;
+  border-top: 1px solid var(--text-2);
+}
 .chart-tip .tip-swatch {
   width: 9px;
   height: 9px;
@@ -479,6 +509,11 @@ svg.budget-gauge {
   font-size: var(--fs-12);
   color: var(--text-2);
 }
+.budget-strip .budget-note {
+  margin: 6px 0 0;
+  color: var(--text-2);
+  font-size: var(--fs-12);
+}
 .budget-legend .budget-legend-item {
   display: inline-flex;
   align-items: center;
@@ -569,6 +604,16 @@ svg.budget-gauge {
   height: 2px;
   border: 0;
   background: repeating-linear-gradient(90deg, var(--series) 0 6px, transparent 6px 10px);
+}
+.runway-key i.key-cap {
+  flex: none;
+  display: inline-block;
+  box-sizing: border-box;
+  width: 20px;
+  height: 8px;
+  border-bottom: 1px solid var(--text-2);
+  background: repeating-linear-gradient(45deg, var(--text-3) 0 1.5px, transparent 1.5px 4px);
+  opacity: 0.8;
 }
 .runway-key i.key-band {
   width: 20px;

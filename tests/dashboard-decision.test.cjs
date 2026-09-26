@@ -67,7 +67,7 @@ test('a heavier-only exhaustion is possible, not described as likely', () => {
   });
 
   assert.equal(verdict.reason, 'heavy-exhaustion');
-  assert.equal(verdict.label, 'Fable 5 could reach its limit under heavier usage');
+  assert.equal(verdict.label, 'Fable could reach its limit under heavier usage');
   assert.doesNotMatch(verdict.label, /likely/i);
 });
 

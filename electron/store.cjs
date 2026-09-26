@@ -5,7 +5,8 @@ const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 const { buildDashboardVerdict } = require('./dashboard-decision.cjs');
 const { isOfficialWindow, selectDisplayedWindows } = require('./quota-selection.cjs');
-const { FABLE_BUCKET, projectFableAllowance } = require('./fable-projection.cjs');
+const { FABLE_BUCKET, FABLE_BUCKET_NAME, projectFableAllowance } = require('./fable-projection.cjs');
+const { applySharedPool } = require('./fable-shared-pool.cjs');
 const { codexQuotaLabel } = require('./codex-quota-label.cjs');
 const { forecastQuota, normaliseObservation, prepareObservation, clusterByWindow, withoutStaleRestatements } = require('./forecast.cjs');
 const { TaskUsage } = require('./task-usage.cjs');
@@ -16,9 +17,11 @@ const { isAllowanceChange, isAllowanceChangeList, normalizeAllowanceChanges } = 
 const SOURCE_DEFINITIONS = [
   ['codex', 'Codex', 'codex'],
   ['claude', 'Claude', 'claude'],
-  ['claude-fable', 'Fable 5', 'fable'],
+  ['claude-fable', 'Fable', 'fable'],
 ];
 const KNOWN_SOURCE_IDS = new Set(SOURCE_DEFINITIONS.map(([id]) => id));
+// Stored by versions before 1.0.52 and still present in their backups.
+const LEGACY_FABLE_BUCKET_NAME = 'Fable 5 weekly';
 const DAY_MS = 24 * 60 * 60 * 1000;
 // Beyond this age, keep each local day's endpoints and peak per bucket/window.
 // Provider rebounds must not erase the maximum shown in reset-cycle history.
@@ -180,7 +183,11 @@ const PRICE_ROWS = [
   ['codex-auto-review', 4, 5, 5, 0.4, 20],
   ['gpt-5.6-terra', 2, 2.5, 2.5, 0.2, 12],
   ['gpt-5.6-luna', 0.2, 0.25, 0.25, 0.02, 1.2],
+  // Fable 5.1 and Opus 5.5 standard rates verified 2026-09-26. Fable 5.1
+  // differs from Fable 5 only in cache reads: $0.25 against $1 per MTok.
+  ['claude-fable-5-1', 10, 12.5, 20, 0.25, 50],
   ['claude-fable-5', 10, 12.5, 20, 1, 50],
+  ['claude-opus-5-5', 4, 5, 8, 0.2, 20],
   ['claude-opus-5', 5, 6.25, 10, 0.5, 25],
   ['claude-opus-4-8', 5, 6.25, 10, 0.5, 25],
   ['claude-sonnet-5', 2, 2.5, 4, 0.2, 10],
@@ -237,8 +244,11 @@ function round(value, digits = 2) {
   return Math.round((Number(value) + Number.EPSILON) * factor) / factor;
 }
 
-// A catalogue model name followed by a date or version suffix, e.g. "-20260901".
-const VERSION_SUFFIX = /^(?:\d{8}|\d{4}(?:-\d{2}){0,2}|v?\d+(?:[.-]\d+)*)$/;
+// A catalogue model name followed by a date snapshot suffix, e.g. "-20260901".
+// Only dates: a point release such as claude-fable-5-1 or claude-opus-5-5 is
+// a different model with its own prices, and must show as unpriced until it
+// has a row rather than silently borrowing its predecessor's.
+const VERSION_SUFFIX = /^(?:\d{8}|\d{4}(?:-\d{2}){0,2})$/;
 
 // Analytics call these once per usage event; constructing an Intl formatter
 // each time was the dominant cost of a snapshot, so they are cached per zone.
@@ -502,7 +512,7 @@ class UsageStore {
       DELETE FROM quota_observations
       WHERE source_id = 'claude' AND bucket_id = 'manual-weekly';
       UPDATE OR IGNORE quota_observations
-      SET bucket_id = 'fable_seven_day', bucket_name = 'Fable 5 weekly'
+      SET bucket_id = 'fable_seven_day', bucket_name = 'Fable weekly'
       WHERE source_id = 'claude-fable' AND bucket_id = 'fable-weekly';
       DELETE FROM quota_observations
       WHERE source_id = 'claude-fable' AND bucket_id = 'fable-weekly';
@@ -540,6 +550,23 @@ class UsageStore {
         this.prepare("DELETE FROM quota_observations WHERE provenance = 'derived-tokens'").run();
         this.prepare('INSERT INTO settings(key, value_json, updated_at) VALUES (?, ?, ?)')
           .run(fableProjectionMigration, 'true', iso());
+        this.db.exec('COMMIT');
+      } catch (error) {
+        try { this.db.exec('ROLLBACK'); } catch { /* Preserve the migration failure. */ }
+        throw error;
+      }
+    }
+    const fableNameMigration = 'migration.fable-name-v1';
+    if (!this.prepare('SELECT 1 FROM settings WHERE key = ?').get(fableNameMigration)) {
+      // Fable 5 and Fable 5.1 share one allowance, which Claude reports as
+      // "Fable". Earlier versions named the source and its bucket after Fable 5.
+      this.db.exec('BEGIN IMMEDIATE');
+      try {
+        this.prepare("UPDATE sources SET name = 'Fable' WHERE id = 'claude-fable' AND name = 'Fable 5'").run();
+        this.prepare("UPDATE quota_observations SET bucket_name = ? WHERE source_id = 'claude-fable' AND bucket_name = ?")
+          .run(FABLE_BUCKET_NAME, LEGACY_FABLE_BUCKET_NAME);
+        this.prepare('INSERT INTO settings(key, value_json, updated_at) VALUES (?, ?, ?)')
+          .run(fableNameMigration, 'true', iso());
         this.db.exec('COMMIT');
       } catch (error) {
         try { this.db.exec('ROLLBACK'); } catch { /* Preserve the migration failure. */ }
@@ -643,12 +670,13 @@ class UsageStore {
     for (const row of PRICE_ROWS) {
       const astra = row[0] === 'gpt-6-astra';
       const newGpt6 = row[0] === 'gpt-6-sol' || row[0] === 'gpt-6-luna';
+      const claudeEffective = { 'claude-fable-5-1': '2026-09-01', 'claude-opus-5-5': '2026-09-22' }[row[0]];
       const source = astra || newGpt6
         ? `https://developers.openai.com/api/docs/models/${row[0]}`
         : row[0].startsWith('claude')
         ? 'https://platform.claude.com/docs/en/about-claude/pricing'
         : 'https://developers.openai.com/api/docs/models/compare';
-      insertPrice.run(...row, newGpt6 ? '2026-09-22' : astra ? '2026-09-04' : '2026-08-01', source);
+      insertPrice.run(...row, claudeEffective ?? (newGpt6 ? '2026-09-22' : astra ? '2026-09-04' : '2026-08-01'), source);
     }
     // Repair only the obsolete built-in Sonnet row. User-edited rows do not
     // match this complete old vector and are left alone.
@@ -1141,7 +1169,9 @@ class UsageStore {
         bucketId,
         bucketName: sourceId === 'codex'
           ? codexQuotaLabel(latest.bucket_name || bucketId, latest.window_minutes, metadata)
-          : latest.bucket_name || bucketId,
+          : sourceId === 'claude-fable' && latest.bucket_name === LEGACY_FABLE_BUCKET_NAME
+            ? FABLE_BUCKET_NAME
+            : latest.bucket_name || bucketId,
         observedAt: latest.observed_at,
         usedPercent: latest.used_percent,
         remainingPercent: latest.remaining_percent,
@@ -1199,7 +1229,7 @@ class UsageStore {
     const projection = this.getFableProjection(settings, nowMs);
     if (!projection.available) return null;
     const point = (entry) => ({
-      source_id: 'claude-fable', bucket_id: FABLE_BUCKET, bucket_name: 'Fable 5 weekly',
+      source_id: 'claude-fable', bucket_id: FABLE_BUCKET, bucket_name: FABLE_BUCKET_NAME,
       observed_at: entry.observedAt, used_percent: entry.usedPercent, remaining_percent: 100 - entry.usedPercent,
       resets_at: projection.resetsAt, window_minutes: projection.windowMinutes, plan_type: projection.planType,
       provenance: 'derived-tokens', confidence: projection.confidence, metadata_json: '{}',
@@ -1209,7 +1239,7 @@ class UsageStore {
     const forecast = forecastQuota([...bucketRows, ...projection.series.map(point)], forecastOptions);
     return {
       bucketId: FABLE_BUCKET,
-      bucketName: 'Fable 5 weekly',
+      bucketName: FABLE_BUCKET_NAME,
       observedAt: iso(nowMs),
       usedPercent: projection.usedPercent,
       remainingPercent: 100 - projection.usedPercent,
@@ -2034,10 +2064,13 @@ class UsageStore {
     const settings = this.getSettings();
     const sources = this.prepare('SELECT * FROM sources ORDER BY CASE id WHEN \'codex\' THEN 1 WHEN \'claude\' THEN 2 ELSE 3 END').all()
       .map((row) => ({ ...row, metadata: json(row.metadata_json, {}) }));
+    const claude = this.getQuota('claude', settings, nowMs, { tokenCapacity });
     const quotas = {
       codex: this.getQuota('codex', settings, nowMs, { tokenCapacity }),
-      claude: this.getQuota('claude', settings, nowMs, { tokenCapacity }),
-      fable: this.getQuota('claude-fable', settings, nowMs, { tokenCapacity }),
+      claude,
+      // Fable's limit sits inside the Claude weekly pool: whatever any model
+      // has used of the week also caps what Fable can still use.
+      fable: applySharedPool(this.getQuota('claude-fable', settings, nowMs, { tokenCapacity }), claude, { nowMs, settings }),
     };
     // A plan the provider names other than Max has no Fable allowance, so
     // with no Fable reading there is nothing for the verdict to wait for.
@@ -2060,11 +2093,69 @@ class UsageStore {
     };
   }
 
+  // Fable 5 and Fable 5.1 draw on one allowance; this splits this device's
+  // Fable activity in the current Fable window by version, with what those
+  // tokens are worth at today's API prices. Only tokens and money are split:
+  // the provider reports one percentage for both.
+  getFableActivity(fableQuota, settings = this.getSettings(), nowMs = Date.now()) {
+    const resetMs = Date.parse(fableQuota?.resetsAt ?? '');
+    const throughMs = nowMs;
+    const sinceMs = Number.isFinite(resetMs) && resetMs > nowMs ? resetMs - 7 * DAY_MS : nowMs - 7 * DAY_MS;
+    const rate = Number(settings.usdToCurrency || 1);
+    const rows = this.prepare(`
+      SELECT model, COUNT(*) AS requests,
+        COALESCE(SUM(input_tokens), 0) AS input_tokens,
+        COALESCE(SUM(cached_input_tokens), 0) AS cached_input_tokens,
+        COALESCE(SUM(cache_write_input_tokens), 0) AS cache_write_input_tokens,
+        -- A row from before the five-minute/one-hour split counts as five-minute
+        -- writes, row by row, as Costs does; summing first would lose it.
+        COALESCE(SUM(CASE WHEN cache_write_5m_input_tokens + cache_write_1h_input_tokens = 0
+          THEN cache_write_input_tokens ELSE cache_write_5m_input_tokens END), 0) AS cache_write_5m_input_tokens,
+        COALESCE(SUM(cache_write_1h_input_tokens), 0) AS cache_write_1h_input_tokens,
+        COALESCE(SUM(output_tokens), 0) AS output_tokens
+      FROM usage_events
+      WHERE source_id = 'claude' AND occurred_at >= ? AND occurred_at <= ?
+        AND LOWER(COALESCE(model, '')) LIKE '%fable%'
+      GROUP BY model
+    `).all(iso(sinceMs), iso(throughMs));
+    const models = rows.map((row) => {
+      const cost = this.calculateCost({ ...row, source_id: 'claude' });
+      return {
+        model: String(row.model),
+        requests: Number(row.requests || 0),
+        totalTokens: Number(row.input_tokens || 0) + Number(row.cached_input_tokens || 0)
+          + Number(row.cache_write_input_tokens || 0) + Number(row.output_tokens || 0),
+        cacheReadTokens: Number(row.cached_input_tokens || 0),
+        cost: round(cost.actualUsd * rate, 4),
+        covered: cost.covered,
+      };
+    }).sort((a, b) => b.totalTokens - a.totalTokens || a.model.localeCompare(b.model));
+    return { since: iso(sinceMs), through: iso(throughMs), currency: settings.currency, models };
+  }
+
+  // The extra-usage setting the newest plan-usage read reported, from either
+  // Claude source. A newer status-line or projected reading carries none, so
+  // the headline window's metadata alone can miss the last Refresh.
+  getClaudeExtraUsage(nowMs = Date.now()) {
+    const row = this.prepare(`
+      SELECT metadata_json, observed_at FROM quota_observations
+      WHERE source_id IN ('claude', 'claude-fable') AND provenance = 'official-claude-usage'
+        AND observed_at >= ? AND observed_at <= ? AND metadata_json LIKE '%"extraUsage"%'
+      ORDER BY observed_at DESC, id DESC LIMIT 1
+    `).get(iso(nowMs - FORECAST_LOOKBACK_MS), iso(nowMs + QUOTA_CLOCK_SKEW_MS));
+    const extra = json(row?.metadata_json, {})?.extraUsage;
+    if (!extra || typeof extra !== 'object' || typeof extra.isEnabled !== 'boolean') return null;
+    const utilization = Number.isFinite(extra.utilization) ? extra.utilization : null;
+    return { isEnabled: extra.isEnabled, utilization, observedAt: row.observed_at };
+  }
+
   getDashboardSnapshot(days = 30, nowMs = Date.now()) {
     const snapshot = this.getTraySnapshot(nowMs, { tokenCapacity: true });
     const { settings, quotas } = snapshot;
     return {
       ...snapshot,
+      fableActivity: this.getFableActivity(quotas.fable, settings, nowMs),
+      claudeExtraUsage: this.getClaudeExtraUsage(nowMs),
       priceCatalog: this.getPriceCatalog(),
       costs: this.getCostAnalytics(days, settings, nowMs),
       desktopEstimates: require('./desktop-estimates.cjs').desktopAnalytics(this, days, settings, nowMs),

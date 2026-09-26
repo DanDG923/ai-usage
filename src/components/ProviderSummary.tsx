@@ -1,4 +1,13 @@
-import { AlertOctagon, AlertTriangle, ChevronRight, CircleDashed, Hourglass, Info, RefreshCw } from 'lucide-react';
+import {
+  AlertOctagon,
+  AlertTriangle,
+  ChevronRight,
+  CircleDashed,
+  Hourglass,
+  Info,
+  Layers,
+  RefreshCw,
+} from 'lucide-react';
 import { useMemo } from 'react';
 import type { BankedResets } from '../banked-resets';
 import { dailyBudget, scheduleOf } from '../budget';
@@ -12,6 +21,7 @@ import {
   quotaWindows,
   resetDistance,
   whenLabel,
+  type ExtraUsageState,
 } from '../lib';
 import type { ProviderView } from '../provider-view';
 import type { Settings } from '../types';
@@ -99,6 +109,64 @@ export function SessionWindows({ view, nowMs }: { view: ProviderView; nowMs: num
   );
 }
 
+/**
+ * Fable's limit sits inside the Claude weekly pool: every model's use shrinks
+ * the pool, and Fable can never use more than is left of it. Says which of
+ * the two is the tighter one, with both figures.
+ */
+export function SharedPoolRow({
+  view,
+  nowMs,
+  extraUsage = null,
+}: {
+  view: ProviderView;
+  nowMs: number;
+  /** The extra-usage setting from the last Refresh, which decides what reaching the week means. */
+  extraUsage?: ExtraUsageState | null;
+}) {
+  const pool = view.current?.sharedPool;
+  if (pool?.status !== 'applied' || view.expired) return null;
+  const limitedNow = pool.binding === 'pool';
+  const limitedLater = !limitedNow && pool.bindingAtReset === 'pool';
+  const claude = `Claude weekly ${percent(pool.poolRemaining)} left`;
+  let title: string;
+  let detail: string | null = null;
+  if (limitedNow && pool.usableRemaining <= 0) {
+    title = 'Claude weekly limit reached';
+    const reset = whenLabel(pool.pool.resetsAt, nowMs);
+    detail =
+      extraUsage?.state === 'on'
+        ? 'Fable continues with every other Claude model on extra usage at API rates (on at your last Refresh).'
+        : extraUsage
+          ? `Fable is paused with every other Claude model until ${reset}.`
+          : `Fable pauses with every other Claude model until ${reset} unless extra usage is on. Press Refresh to check.`;
+  } else if (limitedNow) {
+    title = 'Capped by Claude weekly';
+    detail = `${claude} = ${percent(pool.usableRemaining)} of the Fable limit. Fable limit itself: ${percent(pool.capRemaining)} left.`;
+  } else if (limitedLater) {
+    title = 'Claude weekly will cap Fable before reset';
+    const own =
+      pool.cap.expectedRemaining == null
+        ? ''
+        : `; Fable’s own limit would leave ${percent(pool.cap.expectedRemaining)}`;
+    detail =
+      pool.pool.expectedRemaining == null
+        ? `${claude}, shared by every Claude model.`
+        : `Expected to fall to ${percent(pool.pool.expectedRemaining)} (= ${percent(Math.min(100, pool.pool.expectedRemaining / pool.share))} of Fable) by ${whenLabel(pool.pool.resetsAt, nowMs)}${own}.`;
+  } else {
+    title = `Within Claude weekly (${percent(pool.poolRemaining)} left)`;
+  }
+  return (
+    <p className={`provider-pool${limitedNow || limitedLater ? ' limited' : ''}`}>
+      <Layers aria-hidden="true" />
+      <span>
+        <strong>{title}</strong>
+        {detail && <small>{detail}</small>}
+      </span>
+    </p>
+  );
+}
+
 /** Resets the provider lets you claim; context only, never counted as allowance. */
 export function BankedResetsRow({ banked }: { banked: BankedResets }) {
   return (
@@ -172,6 +240,7 @@ export function ProviderSummary({
   nowMs,
   settings = DEFAULT_SCHEDULE,
   banked = null,
+  extraUsage = null,
   onOpen,
 }: {
   view: ProviderView;
@@ -179,6 +248,8 @@ export function ProviderSummary({
   settings?: ScheduleSettings;
   /** Banked or free resets for this provider, shown in the card's spare space. */
   banked?: BankedResets | null;
+  /** Fable only: whether extra usage was on at the last Refresh. */
+  extraUsage?: ExtraUsageState | null;
   onOpen?: () => void;
 }) {
   const { activeDays, activeStartHour, activeEndHour } = settings;
@@ -244,10 +315,10 @@ export function ProviderSummary({
       <CardHead view={view} pill={<StatePill state={view.state} />} />
       <div className="provider-card-figures">
         <div className="provider-left">
-          <span className="lbl">Left now</span>
+          <span className="lbl">{view.poolLimited ? 'Usable now' : 'Left now'}</span>
           <p>
             <strong>{`${view.estimated ? '~' : ''}${Math.round(view.remaining)}%`}</strong>
-            <span>{view.estimated ? 'left · estimated' : 'left'}</span>
+            <span>{[view.poolLimited ? 'usable' : 'left', ...(view.estimated ? ['estimated'] : [])].join(' · ')}</span>
           </p>
         </div>
         <div className="provider-reset">
@@ -258,7 +329,19 @@ export function ProviderSummary({
       </div>
       <RunwayChart view={view} schedule={schedule} size="compact" reserve={reserve} />
       <ProviderOutcomes view={view} nowMs={nowMs} />
-      {budget && <DailyBudgetStrip budget={budget} provider={view.id} />}
+      {/* Below the runway, so every card's runway sits at the same height. */}
+      <SharedPoolRow view={view} nowMs={nowMs} extraUsage={extraUsage} />
+      {budget && (
+        <DailyBudgetStrip
+          budget={budget}
+          provider={view.id}
+          note={
+            view.current.sharedPool?.status === 'applied' && view.current.sharedPool.bindingAtReset === 'pool'
+              ? 'Set by Claude weekly, in Fable terms: every Claude model draws on it.'
+              : null
+          }
+        />
+      )}
       {banked && <BankedResetsRow banked={banked} />}
       {view.stale && (
         <p className="provider-stale">

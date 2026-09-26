@@ -1,6 +1,6 @@
 'use strict';
 
-// The Fable 5 allowance estimate as a projection: computed from official
+// The Fable allowance estimate as a projection: computed from official
 // readings and local activity whenever a snapshot is built, and never written
 // to quota_observations. A persisted estimate outlived the settings and
 // evidence it was computed from — an allowance change, a corrected import, a
@@ -34,6 +34,8 @@ function officialBetween(store, sourceId, bucketId, sinceIso, nowMs) {
 }
 
 const FABLE_BUCKET = 'fable_seven_day';
+// One allowance covers Fable 5 and Fable 5.1; Claude reports it as "Fable".
+const FABLE_BUCKET_NAME = 'Fable weekly';
 const OVERALL_BUCKET = 'seven_day';
 // Fable's cap is half the overall weekly allowance: spending all of Fable is
 // spending half the week. So one point of Fable is half a point of the overall
@@ -45,8 +47,16 @@ const FABLE_ALLOWANCE_SHARE = 0.5;
 // user-editable API price catalogue. They are only a stable attribution model
 // for splitting a provider-reported allowance step between Claude model
 // families; changing display prices or FX must never rewrite subscription use.
-const ALLOWANCE_PRESSURE_V1 = [
+//
+// v2 gives Fable 5.1 and Opus 5.5 their own rows. Before it, both matched
+// their predecessors by prefix, so a Fable 5.1 cache read weighed four times
+// its API rate. Anthropic publishes no conversion from tokens to plan usage,
+// only that cached tokens count less and that Fable uses limits faster, so the
+// weights stay API-proportional, the basis v1 was built on.
+const ALLOWANCE_PRESSURE_V2 = [
+  ['claude-fable-5-1', 10, 12.5, 20, 0.25, 50],
   ['claude-fable-5', 10, 12.5, 20, 1, 50],
+  ['claude-opus-5-5', 4, 5, 8, 0.2, 20],
   ['claude-opus-5', 5, 6.25, 10, 0.5, 25],
   ['claude-opus-4-8', 5, 6.25, 10, 0.5, 25],
   ['claude-sonnet-5', 2, 2.5, 4, 0.2, 10],
@@ -56,7 +66,7 @@ const ALLOWANCE_PRESSURE_V1 = [
 // Longest name first so a dated variant matches its exact family, not a
 // shorter prefix. Built once; the per-model answer is remembered because the
 // pressure scan asks for it once per usage event.
-const ALLOWANCE_PROFILES = ALLOWANCE_PRESSURE_V1
+const ALLOWANCE_PROFILES = ALLOWANCE_PRESSURE_V2
   .map(([name, input, write5m, write1h, read, output]) => ({ name, input, write5m, write1h, read, output }))
   .sort((a, b) => b.name.length - a.name.length);
 const allowanceProfiles = new Map();
@@ -384,7 +394,7 @@ function computeProjection(store, nowMs) {
       anchoredAt: anchor ? anchor.observed_at : null,
       measuredSteps: steps.length,
       measuredPairs: pair.pairs,
-      profile: 'allowance-pressure-v1',
+      profile: 'allowance-pressure-v2',
       pairMeasuredPressure: pair.measuredPressure,
       steppedPercent: stepped,
       projectedTailPercent: tail,
@@ -412,4 +422,4 @@ function deriveFableEstimate(store, nowMs = Date.now()) {
   return { derived: true, usedPercent, ceiling, clamped, method, measuredSteps, measuredPairs, anchored };
 }
 
-module.exports = { FABLE_BUCKET, deriveFableEstimate, projectFableAllowance };
+module.exports = { FABLE_ALLOWANCE_SHARE, FABLE_BUCKET, FABLE_BUCKET_NAME, deriveFableEstimate, projectFableAllowance };

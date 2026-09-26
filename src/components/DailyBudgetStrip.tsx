@@ -26,11 +26,14 @@ export function DailyBudgetStrip({
   budget,
   provider,
   heading = true,
+  note = null,
 }: {
   budget: DailyBudget;
   provider: ProviderId;
   /** Off where the page already shows the budget figure beside the gauge. */
   heading?: boolean;
+  /** One line under the legend, such as Fable's budget being Claude weekly's. */
+  note?: string | null;
 }) {
   const axis = gaugeScale(budget.scaleMax);
   const max = axis.max;
@@ -107,6 +110,7 @@ export function DailyBudgetStrip({
         )}
         <span className="budget-scale">0–{max}% / day</span>
       </div>
+      {note && <p className="budget-note">{note}</p>}
     </div>
   );
 }

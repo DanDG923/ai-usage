@@ -7,11 +7,13 @@ import {
   CircleDashed,
   RefreshCw,
 } from 'lucide-react';
-import { subscriptionVisible } from '../../electron/dashboard-decision.mjs';
+import { foldsInto, subscriptionVisible } from '../../electron/dashboard-decision.mjs';
 import { bankedResetsFor } from '../banked-resets';
 import { dailyBudget, paceLabel } from '../budget';
 import {
   allowanceWindowLabel,
+  capVisible,
+  extraUsageAtLastRefresh,
   compactNumber,
   dateTimeLabel,
   money,
@@ -53,10 +55,24 @@ function names(views: ProviderView[]) {
 
 // Every active window earns its own line: the weekly headline and any shorter
 // session window are separate allowances with separate resets.
-function windowInsights(provider: ProviderId, name: string, window: QuotaWindow, nowMs: number): Insight[] {
+function windowInsights(
+  provider: ProviderId,
+  name: string,
+  window: QuotaWindow,
+  nowMs: number,
+  included: string | null = null,
+): Insight[] {
   const forecast = window.forecast;
   const about = { provider, bucketId: window.bucketId };
   if (forecast.expired) return [];
+  // Fable draws on this window: one event, named once, with Fable included.
+  if (included) {
+    return windowInsights(provider, name, window, nowMs).map((row) => ({
+      ...row,
+      title: `${row.title}, ${included} included`,
+      detail: `${row.detail} Every Claude model shares this weekly limit.`,
+    }));
+  }
   if (forecast.exhaustsAt) {
     return [
       {
@@ -93,12 +109,22 @@ function windowInsights(provider: ProviderId, name: string, window: QuotaWindow,
 
 function insights(views: ProviderView[], snapshot: Snapshot, nowMs: number): Insight[] {
   const rows: Insight[] = [];
+  // When the Claude weekly limit, not Fable's own, drives Fable's forecast,
+  // Fable's lines are Claude's: they are reported there, not twice.
+  const fable = views.find((view) => view.id === 'fable')?.current ?? null;
+  const claudeWindows = views.find((view) => view.id === 'claude')?.quota?.windows ?? [];
+  const host = fable ? claudeWindows.find((window) => foldsInto(fable, window)) : undefined;
   for (const view of views) {
     const forecast = view.current?.forecast;
     if (!view.current || !forecast || forecast.expired) continue;
-    rows.push(...windowInsights(view.id, view.name, view.current, nowMs));
+    const folded = view.id === 'fable' && host != null;
+    const included = (window: QuotaWindow) =>
+      view.id === 'claude' && host?.bucketId === window.bucketId ? 'Fable' : null;
+    if (!folded) rows.push(...windowInsights(view.id, view.name, view.current, nowMs, included(view.current)));
     for (const window of view.secondaryWindows) {
-      rows.push(...windowInsights(view.id, `${view.name} ${allowanceWindowLabel(window)}`, window, nowMs));
+      rows.push(
+        ...windowInsights(view.id, `${view.name} ${allowanceWindowLabel(window)}`, window, nowMs, included(window)),
+      );
     }
     if (view.stale) {
       rows.push({
@@ -371,6 +397,12 @@ export function Overview({
               <i className="key-band" aria-hidden="true" />
               Heavier-week range
             </li>
+            {views.some((view) => capVisible(view.current)) && (
+              <li>
+                <i className="key-cap" aria-hidden="true" />
+                Above the Claude weekly cap: not usable
+              </li>
+            )}
             <li>
               <i className="key-inactive" aria-hidden="true" />
               Outside active hours
@@ -401,6 +433,7 @@ export function Overview({
               nowMs={nowMs}
               settings={snapshot.settings}
               banked={bankedResetsFor(view.id, snapshot, nowMs)}
+              extraUsage={view.id === 'fable' ? extraUsageAtLastRefresh(snapshot) : null}
               onOpen={onOpenProvider ? () => onOpenProvider(view.id) : undefined}
             />
           ))}

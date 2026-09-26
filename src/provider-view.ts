@@ -1,7 +1,13 @@
 import { selectDisplayedWindows } from '../electron/quota-selection.mjs';
-import { SOURCES, evidenceNeedsRefresh, subscriptionVisible } from '../electron/dashboard-decision.mjs';
+import {
+  SOURCES,
+  evidenceNeedsRefresh,
+  stalePoolWindow,
+  subscriptionVisible,
+} from '../electron/dashboard-decision.mjs';
 import {
   compactNumber,
+  dateTimeLabel,
   displayedRemaining,
   isEstimated,
   modelAllowanceName,
@@ -32,6 +38,8 @@ export type ProviderView = {
   notes: string[];
   /** Active windows shorter than the headline one, such as a five-hour session. */
   secondaryWindows: QuotaWindow[];
+  /** Fable only: what is left now is set by the Claude weekly limit, not Fable's own. */
+  poolLimited: boolean;
 };
 
 function sentence(text: string) {
@@ -86,9 +94,20 @@ function providerSubtitle(id: ProviderId, current: QuotaWindow | null, source: S
   return `${sentence(measurement)} · ${modelAllowanceName(current) ? `${modelAllowanceName(current)} · ` : ''}${sentence(windowLabel(current.windowMinutes))}`;
 }
 
-function providerNotes(id: ProviderId, current: QuotaWindow | null, source: Source | null) {
+function providerNotes(
+  id: ProviderId,
+  current: QuotaWindow | null,
+  source: Source | null,
+  poolWindow: QuotaWindow | null,
+  snapshot: Snapshot,
+) {
   const notes: string[] = [];
   if (!current) return notes;
+  if (poolWindow) {
+    notes.push(
+      `Usable Fable follows the Claude weekly reading from ${dateTimeLabel(poolWindow.observedAt)}. Press Refresh to update both.`,
+    );
+  }
   if (current.forecast.expired) return ['The last allowance window ended. A new provider reading is needed.'];
   if (current.provenance === 'derived-tokens') {
     notes.push('Allowance estimated from local activity and calibrated history.');
@@ -97,7 +116,18 @@ function providerNotes(id: ProviderId, current: QuotaWindow | null, source: Sour
     notes.push(`Latest source status: ${source.status}. The balance is being projected from the last reading.`);
   }
   if (id === 'fable') {
-    const activity = fableActivity(source);
+    // The dashboard snapshot's per-version table covers the current Fable
+    // window; the note uses the same figures so the page states one total.
+    const collected = fableActivity(source);
+    const byVersion = snapshot.fableActivity?.models;
+    const activity =
+      byVersion && collected
+        ? {
+            ...collected,
+            requests: byVersion.reduce((total, entry) => total + entry.requests, 0),
+            tokens: byVersion.reduce((total, entry) => total + entry.totalTokens, 0),
+          }
+        : collected;
     if (activity) {
       const activityStale = activity.activitySource && activity.activitySource !== 'current';
       notes.push(
@@ -129,6 +159,8 @@ function buildProviderViews(snapshot: Snapshot): ProviderView[] {
       const current = primaryWindow(quota);
       const expired = Boolean(current?.forecast.expired);
       const source = snapshot.sources.find((entry) => entry.id === sourceId) ?? null;
+      // The same rule as the verdict: a stale Claude reading ages the Fable figure it caps.
+      const poolWindow = id === 'fable' ? stalePoolWindow(current, snapshot.quotas.claude) : null;
       return {
         id,
         name,
@@ -153,10 +185,14 @@ function buildProviderViews(snapshot: Snapshot): ProviderView[] {
         stale: Boolean(
           expired ||
           (source && ['stale', 'degraded', 'error'].includes(source.status)) ||
-          quotaWindows(quota).some((entry) => !entry.forecast.expired && evidenceNeedsRefresh(entry)),
+          quotaWindows(quota).some((entry) => !entry.forecast.expired && evidenceNeedsRefresh(entry)) ||
+          poolWindow,
         ),
-        notes: providerNotes(id, current, source),
+        notes: providerNotes(id, current, source, poolWindow, snapshot),
         secondaryWindows: current ? selectDisplayedWindows(quotaWindows(quota)).secondary : [],
+        poolLimited: Boolean(
+          !expired && current?.sharedPool?.status === 'applied' && current.sharedPool.binding === 'pool',
+        ),
       };
     },
   );
