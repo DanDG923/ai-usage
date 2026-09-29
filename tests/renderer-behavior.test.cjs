@@ -649,6 +649,15 @@ test('the safe-pace note follows the pace the user treats as a risk and never pr
   assert.equal(tone(overview(1.2), 'Codex is above its safe pace'), 'warm');
   // At a 3× risk pace, 1.5× is worth knowing but is not the warning the verdict would give.
   assert.equal(tone(overview(3), 'Codex is above its safe pace'), 'neutral');
+  // A risk pace below 1.05 still opens the note, since the verdict already calls this a risk.
+  codex.forecast.paceRatio = 1.03;
+  assert.equal(tone(overview(1), 'Codex is above its safe pace'), 'warm');
+  assert.match(text(overview(1)), /1\.03× the sustainable pace/);
+  // Under the safe pace itself it is not "above" it, and there is nothing to cut.
+  codex.forecast.paceRatio = 0.95;
+  const under = overview(0.9);
+  assert.equal(tone(under, 'Codex is near its safe pace'), 'warm');
+  assert.doesNotMatch(text(under), /Codex is above its safe pace|Reduce active usage by about 0%/);
   // No safe pace left: the backend's ratio is a placeholder, not "2.2× the sustainable pace".
   codex.forecast.safePace = 0;
   codex.forecast.paceRatio = 2.2;

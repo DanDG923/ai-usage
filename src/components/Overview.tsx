@@ -95,7 +95,8 @@ function windowInsights(
       },
     ];
   }
-  if (forecast.paceRatio > 1.05) {
+  // A risk pace set below 1.05 opens the note too: the verdict already calls it a risk.
+  if (forecast.paceRatio > Math.min(1.05, riskPace)) {
     // With no safe pace left the ratio is a placeholder, not a multiple.
     if (forecast.safePace <= 0) {
       return [
@@ -107,14 +108,27 @@ function windowInsights(
         },
       ];
     }
+    // Two decimals near 1×, where one would round 1.03× down to "1.0×".
+    const multiple = forecast.paceRatio.toFixed(forecast.paceRatio < 1.1 ? 2 : 1);
+    // Warm only past the pace the user treats as a risk (Settings → Alerts),
+    // the same line the verdict and its alerts use.
+    const tone = forecast.paceRatio > riskPace ? 'warm' : 'neutral';
+    if (forecast.paceRatio <= 1) {
+      return [
+        {
+          tone,
+          title: `${name} is near its safe pace`,
+          detail: `${multiple}× the sustainable pace, past the ${riskPace}× you treat as a risk.`,
+          about,
+        },
+      ];
+    }
     const reduction = Math.max(0, Math.round((1 - 1 / forecast.paceRatio) * 100));
     return [
       {
-        // Warm only past the pace the user treats as a risk (Settings → Alerts),
-        // the same line the verdict and its alerts use.
-        tone: forecast.paceRatio > riskPace ? 'warm' : 'neutral',
+        tone,
         title: `${name} is above its safe pace`,
-        detail: `${forecast.paceRatio.toFixed(1)}× the sustainable pace. Reduce active usage by about ${reduction}% to return to plan.`,
+        detail: `${multiple}× the sustainable pace. Reduce active usage by about ${reduction}% to return to plan.`,
         about,
       },
     ];
