@@ -676,7 +676,7 @@ test('a failed reset of the live cursor keeps the rotated file for the next refr
     fs.renameSync(inbox, rotated);
     fs.writeFileSync(inbox, lines(3, 10), 'utf8');
     // A one-off storage failure while the live cursor is being reset.
-    store.forgetImportedFile = function (...args) {
+    store.forgetImportedFile = function () {
       store.forgetImportedFile = forget;
       throw Object.assign(new Error('database is locked'), { code: 'ERR_SQLITE_BUSY' });
     };
