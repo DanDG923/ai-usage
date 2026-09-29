@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.53 — 29 September 2026
+
+- Keep the local Fable estimate inside the current Claude allowance cycle. When Claude refills the weekly allowance before it updates the reset time, the estimate now starts again with the new cycle instead of ignoring its use, and use from before the refill no longer carries into it. A recorded allowance change is no longer mistaken for a refill, and a stale status-line reading no longer lowers the Fable ceiling.
+- Stop a corrected Fable reading and its rebound, such as 20% → 19% → 20%, from counting as Fable use when the estimate is calibrated.
+- Judge Claude's source status and the outcome of a **Refresh** on the readings the Claude card actually shows. A lower status-line reading that the card ignores no longer marks Claude as current, and a failed **Refresh** is no longer reported as successful because of it or because of a helper reading brought in by an earlier collection.
+- Show a source as needing a refresh in Activity and in the header once its allowance reading is out of date, as the verdict and provider cards already did. Before, a successful collection kept it "Current" until the next one, which with manual refresh could be indefinitely.
+- Keep a reserve you are still trying on a provider page. Moving the slider while a save is in progress no longer discards the newer value, the save button can no longer be pressed twice, and closing to the tray no longer drops an unsaved reserve.
+- Hide a remaining-token estimate once its allowance reading is over 24 hours old without waiting for a new snapshot, while keeping the full-week estimate, and keep relative times and planning hours moving between snapshots.
+- Install, detect and remove the status-line helper in the Claude configuration folder set by `CLAUDE_CONFIG_DIR`, where Claude Code reads its settings.
+- Update the Claude Agent SDK that reads plan usage when you press **Refresh** to 0.3.282. The usage response it returns is unchanged.
+- Preserve local usage history, settings, observations, and backups during an in-place update.
+
 ## 1.0.52 — 26 September 2026
 
 - Treat Fable's limit the way Anthropic describes it: up to half of your Claude weekly limit, inside that limit rather than beside it. Every Claude model draws on the week, so what other models use leaves less for Fable: with Opus at 70% of the week, Fable has 60% of its limit available, not 100%. The Fable card, runway, daily budget, verdict, tray and flyout now show **usable** Fable, the lower of Fable's own remaining and what the Claude weekly limit leaves, with the provider's own Fable figure beside it. The runway hatches the part of the Fable limit the week can no longer cover, forecasts follow whichever limit runs out first, and when the Claude weekly limit is the cause the alert names Claude once, "Fable included", instead of raising two. Nothing new reads your Claude plan usage.

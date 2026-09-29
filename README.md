@@ -9,9 +9,9 @@ It imports local usage evidence, learns your real burn pattern, evaluates every 
 
 ## Install
 
-Use `AI-Usage-Setup-1.0.52-x64.exe` for a normal Windows installation. Running it over an existing installation upgrades in place and preserves the local database, settings, observations, and backups. Uninstalling first is neither required nor recommended. Install this version once to enable future updates through the app.
+Use `AI-Usage-Setup-1.0.53-x64.exe` for a normal Windows installation. Running it over an existing installation upgrades in place and preserves the local database, settings, observations, and backups. Uninstalling first is neither required nor recommended. Install this version once to enable future updates through the app.
 
-Use `AI-Usage-Portable-1.0.52-x64.exe` for a single executable that does not install the app. Windows SmartScreen may show an unknown-publisher warning because this personal build is not backed by a commercial code-signing certificate; verify the supplied SHA-256 hash before running it.
+Use `AI-Usage-Portable-1.0.53-x64.exe` for a single executable that does not install the app. Windows SmartScreen may show an unknown-publisher warning because this personal build is not backed by a commercial code-signing certificate; verify the supplied SHA-256 hash before running it.
 
 ## Personal private updates
 
@@ -245,7 +245,7 @@ Linting uses oxlint (typescript-eslint does not yet support the TypeScript 7 com
 ## Publish future private updates
 
 1. Update `package.json`, both root versions in `package-lock.json`, the current installer names in this README, the version contract test, and `CHANGELOG.md`. Keep the GitHub repository private and retain the matching `updateFeed` and `build.publish` settings in `package.json`; the separate `updateFeed` survives packaging so the installed app can verify its destination.
-2. Complete the checks above, review the changes, and merge them. Create and push the matching version tag, for example `v1.0.52` for version `1.0.52`.
+2. Complete the checks above, review the changes, and merge them. Create and push the matching version tag, for example `v1.0.53` for version `1.0.53`.
 3. The **Private Windows release** GitHub Actions workflow builds Windows x64 packages, checks the manifest and packaged contents, and creates a draft release. It uploads the Setup installer, portable executable, installer block map, `latest.yml`, and `SHA256SUMS.txt`, verifies each remote asset's size and SHA-256 digest, then publishes the release as latest. The normal pull-request CI job is unchanged.
 
 The release workflow can also be started manually with an existing version tag. It refuses a mismatched version, a public or different destination, a tag whose commit is not already on `main`, an existing release for that tag, or a version older than an existing stable release. If an upload fails, any created release stays a draft for inspection and is not offered to the app. Review and remove that incomplete draft before retrying; the workflow never overwrites existing release assets.
@@ -263,7 +263,7 @@ Choose **Sign in to Claude** and complete the account flow in your browser. AI U
 
 ### Review maintenance changes
 
-Local packaging output now defaults to `%LOCALAPPDATA%\AI Usage\Build\release`, with `AI_USAGE_BUILD_OUTPUT` available for an explicit alternative. CI keeps its `release` folder. Use the package scripts so the builder, release notes and audit resolve the same location. `npm run version:check` verifies release metadata; `node tools/bump-version.cjs 1.0.52` prepares a future version and its changelog entry without tagging or publishing.
+Local packaging output now defaults to `%LOCALAPPDATA%\AI Usage\Build\release`, with `AI_USAGE_BUILD_OUTPUT` available for an explicit alternative. CI keeps its `release` folder. Use the package scripts so the builder, release notes and audit resolve the same location. `npm run version:check` verifies release metadata; `node tools/bump-version.cjs 1.0.53` prepares a future version and its changelog entry without tagging or publishing.
 
 `npm test` uses two test processes, isolated provider folders, an explicit Europe/London test clock zone, fast SQLite settings for disposable fixtures, and cleanup of only the temporary folders created by that run. `npm run test:electron` repeats the suite with the shipped Electron runtime. Renderer interaction tests also exercise the real Chromium DOM with a fake bridge.
 
