@@ -9,6 +9,7 @@ const { createFableUsageTracker, providerReadingFresh } = require('./fable-track
 const { QUOTA_CLOCK_SKEW_MS, validQuotaTime } = require('./quota-time.cjs');
 const { isProviderProvenance } = require('./quota-provenance.mjs');
 const { deriveFableEstimate } = require('./fable-projection.cjs');
+const { freshReadGraceFor, withoutStaleRestatements } = require('./forecast.cjs');
 const { IncrementalReadError, planIncrementalRead, readCompleteLines } = require('./incremental-file.cjs');
 const { epochToIso } = require('./time.cjs');
 const { claudeWindowDescriptor } = require('./claude-window-descriptors.cjs');
@@ -537,31 +538,43 @@ function uninstallClaudeHelper() {
 // each Claude window that is still running, and whether all of them are
 // recent by the dashboard verdict's freshness rule. An automatic refresh does
 // not read plan usage, so this is how it judges the Claude source.
-function latestPlanUsageReading(store, nowMs) {
-  const rows = store.prepare(`SELECT bucket_id, observed_at, resets_at, window_minutes, provenance FROM quota_observations
-    WHERE source_id = 'claude' AND observed_at <= ? AND observed_at >= ? ORDER BY observed_at DESC, id DESC`)
+// Readings are judged as the card shows them: a lower status-line reading
+// that restates limits a session fetched earlier is held back there, so it
+// can make Claude neither current here nor a failed Refresh successful.
+function latestPlanUsageReading(store, nowMs, graceMs) {
+  const rows = store.prepare(`SELECT bucket_id, observed_at, resets_at, window_minutes, used_percent, remaining_percent, provenance
+    FROM quota_observations WHERE source_id = 'claude' AND observed_at <= ? AND observed_at >= ? ORDER BY observed_at ASC, id ASC`)
     .all(new Date(nowMs + QUOTA_CLOCK_SKEW_MS).toISOString(), new Date(nowMs - 8 * 24 * 60 * 60 * 1000).toISOString());
+  const buckets = new Map();
+  for (const row of rows) {
+    if (!validQuotaTime(Date.parse(row.observed_at), Date.parse(row.resets_at), row.window_minutes, nowMs)) continue;
+    if (!buckets.has(row.bucket_id)) buckets.set(row.bucket_id, []);
+    buckets.get(row.bucket_id).push(row);
+  }
   const latest = new Map();
   let lastPlanUsageReadMs = null;
-  for (const row of rows) {
-    if (!isProviderProvenance(row.provenance)) continue;
-    const observedMs = Date.parse(row.observed_at);
-    if (!validQuotaTime(observedMs, Date.parse(row.resets_at), row.window_minutes, nowMs)) continue;
+  for (const [bucketId, bucketRows] of buckets) {
+    const accepted = withoutStaleRestatements(bucketRows, { nowMs, freshReadGraceMs: graceMs })
+      .filter((row) => isProviderProvenance(row.provenance));
+    if (accepted.length) latest.set(bucketId, accepted.at(-1));
     // One plan-usage read records every window it returns at the same instant.
-    if (row.provenance === 'official-claude-usage') lastPlanUsageReadMs ??= observedMs;
-    if (!latest.has(row.bucket_id)) latest.set(row.bucket_id, row);
+    const planUsageRead = accepted.findLast((row) => row.provenance === 'official-claude-usage');
+    if (planUsageRead) lastPlanUsageReadMs = Math.max(lastPlanUsageReadMs ?? -Infinity, Date.parse(planUsageRead.observed_at));
   }
   // A window the latest plan-usage read did not return (a model or app limit
   // the provider stopped reporting) keeps its older row until it resets, and
   // Refresh cannot renew it, so it does not decide whether Claude is current.
   const active = [...latest.values()].filter((row) => Date.parse(row.resets_at) > nowMs
     && (lastPlanUsageReadMs == null || Date.parse(row.observed_at) >= lastPlanUsageReadMs));
-  if (!active.length) return { lastReadAt: null, staleReadAt: null, fresh: false };
+  if (!active.length) return { lastReadAt: null, staleReadAt: null, statusLineReadAt: null, fresh: false };
   const lastReadAt = active.reduce((last, row) => laterIso(last, row.observed_at), null);
+  // The newest status-line reading the card shows for any window.
+  const statusLineReadAt = active.filter((row) => row.provenance === 'official-statusline')
+    .reduce((last, row) => laterIso(last, row.observed_at), null);
   // The oldest reading that is out of date, which the stale detail quotes.
   const staleReadAt = active.filter((row) => !providerReadingFresh(row, nowMs))
     .reduce((oldest, row) => (!oldest || Date.parse(row.observed_at) < Date.parse(oldest) ? row.observed_at : oldest), null);
-  return { lastReadAt, staleReadAt, fresh: !staleReadAt };
+  return { lastReadAt, staleReadAt, statusLineReadAt, fresh: !staleReadAt };
 }
 
 function readingTime(value) {
@@ -646,12 +659,17 @@ async function refreshClaude(store, inboxPath, options = {}) {
   const providerScanSucceeded = Boolean(fableTracking.provider?.attemptSucceeded
     && ['observed', 'unavailable'].includes(fableTracking.provider.kind));
   const activityCurrent = fableTracking.health.activitySource === 'current';
-  const statuslineAge = nowMs - Date.parse(statusLine.latestClaudeObservedAt);
-  const hasFreshClaudeEvidence = (statusLine.claudeObservations > 0 && statuslineAge >= -60_000 && statuslineAge <= 5 * 60_000)
-    || Number(fableTracking.provider?.overallWindowsRecorded || 0) > 0;
+  const acceptedReading = latestPlanUsageReading(store, nowMs, freshReadGraceFor(store.getSettings()));
+  // A helper import stands in for the provider only when the card shows what
+  // it just captured, and it can renew only the windows it reports: every
+  // active window must then be current, as an automatic run would judge it.
+  const statuslineAge = nowMs - Date.parse(acceptedReading.statusLineReadAt);
+  const helperRefreshed = statusLine.claudeObservations > 0 && statuslineAge >= -60_000 && statuslineAge <= 5 * 60_000
+    && acceptedReading.fresh;
+  const hasFreshClaudeEvidence = helperRefreshed || Number(fableTracking.provider?.overallWindowsRecorded || 0) > 0;
   // Plan usage not requested: judge the last reading by its age, and count
   // the run a success when its local work succeeded.
-  const planReading = readPlanUsage ? null : latestPlanUsageReading(store, nowMs);
+  const planReading = readPlanUsage ? null : acceptedReading;
   const lastRequest = readPlanUsage
     ? { at: new Date(nowMs).toISOString(), succeeded: hasFreshClaudeEvidence || providerScanSucceeded, provider: fableTracking.provider }
     : previousPlanUsageRequest(store);
@@ -659,8 +677,8 @@ async function refreshClaude(store, inboxPath, options = {}) {
   const failedSince = (observedAt) => !readPlanUsage && lastRequest?.succeeded === false
     && !(Date.parse(observedAt) >= Date.parse(lastRequest.at));
   const lastRequestFailed = failedSince(planReading?.lastReadAt);
-  // A helper import can refresh only one window. Automatic runs must judge
-  // all active windows even when this run just imported fresh evidence.
+  // Automatic runs judge all active windows even when this run just imported
+  // fresh evidence.
   const claudeFresh = readPlanUsage ? hasFreshClaudeEvidence : Boolean(planReading?.fresh) && !lastRequestFailed;
   const claudeScanSucceeded = readPlanUsage
     ? (hasFreshClaudeEvidence || providerScanSucceeded) && activityCurrent

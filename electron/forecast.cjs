@@ -400,6 +400,12 @@ function restatesSessionLimits(row) {
 // before any fresh read are kept because nothing yet shows them to be stale.
 const STALE_RESTATEMENT_MARGIN = 0.5;
 const FRESH_READ_GRACE_MS = 2 * HOUR_MS;
+// How long a lower status-line reading waits for the provider's next read to
+// confirm or contradict it: two refreshes, and never less than two hours.
+function freshReadGraceFor(settings) {
+  const minutes = Number(settings.refreshIntervalMinutes);
+  return Math.max(FRESH_READ_GRACE_MS, minutes > 0 ? 2 * minutes * 60_000 : 0);
+}
 function withoutStaleRestatements(rows, { nowMs = Date.now(), freshReadGraceMs = FRESH_READ_GRACE_MS } = {}) {
   const parsed = rows.map(normaliseObservation);
   const nextFresh = Array.from({ length: parsed.length }, () => null);
@@ -1053,4 +1059,4 @@ function forecastQuota(observations, options = {}) {
     series: { ...adjusted.series, heavy }, resetAdjustment: adjustment };
 }
 
-module.exports = { activeHoursBetween, clusterByWindow, sameWindowDrift, normaliseObservation, prepareObservation, deriveLearningSamples, exhaustionTime, forecastQuota, forecastState, percentile, restatesSessionLimits, withoutStaleRestatements };
+module.exports = { activeHoursBetween, clusterByWindow, sameWindowDrift, normaliseObservation, prepareObservation, deriveLearningSamples, exhaustionTime, forecastQuota, forecastState, freshReadGraceFor, percentile, restatesSessionLimits, withoutStaleRestatements };
