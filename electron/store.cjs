@@ -1258,14 +1258,15 @@ class UsageStore {
   // revision or change the key. The tail grows with wall time, so a value is
   // good for a minute and never past the window reset or a pending change.
   getFableProjection(settings, nowMs) {
-    if (this.db.isTransaction) return projectFableAllowance(this, nowMs);
+    const projectionOptions = { freshReadGraceMs: freshReadGraceMs(settings) };
+    if (this.db.isTransaction) return projectFableAllowance(this, nowMs, projectionOptions);
     const revision = this.prepare(`SELECT COALESCE(SUM(revision), 0) AS value FROM analytics_revisions
       WHERE (domain = 'quota' AND source_id IN ('claude', 'claude-fable')) OR (domain = 'usage' AND source_id = 'claude')`).get().value;
     const allowanceChanges = settings.allowanceChanges || [];
-    const key = JSON.stringify(allowanceChanges);
+    const key = JSON.stringify([allowanceChanges, projectionOptions.freshReadGraceMs]);
     const cached = this.fableProjectionCache;
     if (cached && cached.revision === revision && cached.key === key && nowMs >= cached.evaluatedAt && nowMs < cached.expiresAt) return cached.value;
-    const value = projectFableAllowance(this, nowMs);
+    const value = projectFableAllowance(this, nowMs, projectionOptions);
     let expiresAt = nowMs + 60_000;
     if (value.available) expiresAt = Math.min(expiresAt, Date.parse(value.resetsAt));
     for (const change of allowanceChanges) {

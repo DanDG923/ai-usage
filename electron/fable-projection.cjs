@@ -8,6 +8,7 @@
 // rows to go stale, so there is nothing to rescale, retire or discard.
 
 const { createAllowanceScaler } = require('./allowance-changes.cjs');
+const { clusterByWindow, normaliseObservation, restatesSessionLimits, withoutStaleRestatements } = require('./forecast.cjs');
 const { OFFICIAL_PROVENANCES } = require('./quota-provenance.mjs');
 
 // Every input is bounded by the projection's own clock. A reading dated
@@ -31,6 +32,16 @@ function officialBetween(store, sourceId, bucketId, sinceIso, nowMs) {
       AND observed_at >= ? AND observed_at <= ?
     ORDER BY observed_at ASC, id ASC
   `).all(sourceId, bucketId, ...OFFICIAL_PROVENANCES, sinceIso, new Date(nowMs).toISOString());
+}
+
+// Official readings as the Claude card and forecast see them: a stale
+// status-line restatement is held back, and the rest are split into allowance
+// cycles. A provider can replenish before it moves the reset timestamp, so a
+// shared timestamp alone does not put two readings in the same cycle.
+function allowanceCycles(rows, nowMs, freshReadGraceMs) {
+  const accepted = withoutStaleRestatements(rows, { nowMs, freshReadGraceMs });
+  return clusterByWindow(accepted.map((row) => ({ ...normaliseObservation(row), row })))
+    .map((cluster) => cluster.rows.map((entry) => entry.row));
 }
 
 const FABLE_BUCKET = 'fable_seven_day';
@@ -126,30 +137,49 @@ function allowancePressure(store, modelLike, sinceIso, untilIso) {
 // Two official Fable readings bound an interval exactly the way two overall
 // readings do, and between them the Fable rate needs no share assumption at
 // all: the percentage moved this much, the local Fable value was this many
-// fixed allowance-pressure units, and their ratio is the rate. Pairs must share a reset — a delta
-// across a reset is meaningless — but a rate learned in one window carries
-// into the next, because it is a property of pricing and caps, not the week.
-function fablePairCalibration(store, nowMs, usedOf = rawUsedPercent) {
+// fixed allowance-pressure units, and their ratio is the rate. Pairs must
+// share an allowance cycle — a delta across a reset or a replenishment is
+// meaningless — but a rate learned in one cycle carries into the next,
+// because it is a property of pricing and caps, not the week.
+function fablePairCalibration(store, nowMs, usedOf = rawUsedPercent, freshReadGraceMs) {
   const sinceIso = new Date(nowMs - 21 * 24 * 60 * 60 * 1000).toISOString();
-  const readings = officialBetween(store, 'claude-fable', FABLE_BUCKET, sinceIso, nowMs);
   let deltaSum = 0;
   let pressureSum = 0;
   let pairs = 0;
-  for (let index = 1; index < readings.length; index += 1) {
-    const before = readings[index - 1];
-    const after = readings[index];
-    if (Math.abs(new Date(after.resets_at).getTime() - new Date(before.resets_at).getTime()) > 60_000) continue;
-    // Backward movement is a correction or a mistyped reading, not consumption.
-    const delta = usedOf(after) - usedOf(before);
-    // Equal displayed readings are interval-censored: real use may have moved
-    // by less than the provider's rounding precision. Treating them as a
-    // measured zero rate would freeze every later estimate.
-    if (!Number.isFinite(delta) || delta <= 0) continue;
-    const measured = allowancePressure(store, 'fable', before.observed_at, after.observed_at);
-    if (!(measured.pressure > 0) || !measured.complete) continue;
-    deltaSum += delta;
-    pressureSum += measured.pressure;
-    pairs += 1;
+  for (const readings of allowanceCycles(officialBetween(store, 'claude-fable', FABLE_BUCKET, sinceIso, nowMs), nowMs, freshReadGraceMs)) {
+    // Consumption is only a new high-water mark within the cycle. A backward
+    // move is a correction or a mistyped reading, and the rebound after it
+    // returns to use already counted. Each rise is measured from the latest
+    // reading that confirmed the mark; a status-line repeat of it only
+    // restates what a session fetched earlier, so it cannot bound the rise.
+    let highWater = NaN;
+    let from = null;
+    for (const after of readings) {
+      const used = usedOf(after);
+      if (!Number.isFinite(used)) continue;
+      if (!from) {
+        highWater = used;
+        from = after;
+        continue;
+      }
+      if (used < highWater) continue;
+      // Equal displayed readings are interval-censored: real use may have moved
+      // by less than the provider's rounding precision. Treating them as a
+      // measured zero rate would freeze every later estimate.
+      if (used === highWater) {
+        if (!restatesSessionLimits(after)) from = after;
+        continue;
+      }
+      const delta = used - highWater;
+      const before = from;
+      highWater = used;
+      from = after;
+      const measured = allowancePressure(store, 'fable', before.observed_at, after.observed_at);
+      if (!(measured.pressure > 0) || !measured.complete) continue;
+      deltaSum += delta;
+      pressureSum += measured.pressure;
+      pairs += 1;
+    }
   }
   return pressureSum > 0
     ? { ratePerPressure: deltaSum / pressureSum, pairs, measuredPressure: pressureSum }
@@ -250,11 +280,11 @@ function planEvidence(store, overallWindow, nowMs) {
 // That ceiling must never be carried forward across later local activity: the
 // unobserved overall percentage moves too. A manual Fable reading re-anchors
 // the running total whenever one is present.
-function computeProjection(store, nowMs) {
+function computeProjection(store, nowMs, { freshReadGraceMs } = {}) {
   // Read the bucket directly rather than through getQuota, which forecasts
   // every window of every source on the way past.
-  const overallWindow = latestOfficialAt(store, 'claude', OVERALL_BUCKET, nowMs);
-  if (!overallWindow) return { derived: false, reason: 'no-overall-reading' };
+  const latest = latestOfficialAt(store, 'claude', OVERALL_BUCKET, nowMs);
+  if (!latest) return { derived: false, reason: 'no-overall-reading' };
   // Anthropic includes Fable in the shared weekly pool on Max and qualifying
   // premium seats, while Pro and standard seats use credits instead. The local
   // status line does not identify seat class, so anything short of an
@@ -263,34 +293,44 @@ function computeProjection(store, nowMs) {
   // this window that names one: a status-line row carries none and must not
   // switch the projection off merely by being newest. The structured
   // model-scoped provider window remains authoritative for every plan.
-  const planType = planEvidence(store, overallWindow, nowMs);
+  const planType = planEvidence(store, latest, nowMs);
   if (planType !== 'max') {
     return { derived: false, reason: 'fable-not-confirmed-in-shared-plan', planType };
   }
   const usedOf = allowanceAdjustedUsed(store, nowMs);
-  const resetMs = new Date(overallWindow.resets_at).getTime();
-  const windowMinutes = Number(overallWindow.window_minutes) > 0 ? Number(overallWindow.window_minutes) : 10_080;
-  const windowMs = windowMinutes * 60_000;
-  const overallUsed = usedOf(overallWindow);
-  const overallObservedMs = new Date(overallWindow.observed_at).getTime();
-  if (!Number.isFinite(resetMs) || !Number.isFinite(overallUsed) || !Number.isFinite(overallObservedMs)) {
-    return { derived: false, reason: 'invalid-overall-reading' };
-  }
+  const resetMs = new Date(latest.resets_at).getTime();
+  if (!Number.isFinite(resetMs)) return { derived: false, reason: 'invalid-overall-reading' };
   if (resetMs <= nowMs) return { derived: false, reason: 'overall-window-expired' };
+  const windowMinutes = Number(latest.window_minutes) > 0 ? Number(latest.window_minutes) : 10_080;
+  const windowMs = windowMinutes * 60_000;
   const windowStartMs = resetMs - windowMs;
 
-  const readings = officialBetween(store, 'claude', OVERALL_BUCKET, new Date(windowStartMs).toISOString(), nowMs)
-    .filter((row) => Math.abs(new Date(row.resets_at).getTime() - resetMs) <= 60_000);
+  // The current cycle's readings, as the Claude card sees them. After an early
+  // replenishment the cycle starts at the first reading that showed it, and
+  // nothing observed before then — a step, an anchor or local activity — is
+  // part of this cycle's use.
+  const cycles = allowanceCycles(
+    officialBetween(store, 'claude', OVERALL_BUCKET, new Date(windowStartMs).toISOString(), nowMs)
+      .filter((row) => Math.abs(new Date(row.resets_at).getTime() - resetMs) <= 60_000),
+    nowMs, freshReadGraceMs);
+  const readings = cycles.at(-1) ?? [];
+  const cycleStartMs = cycles.length > 1 ? new Date(readings[0].observed_at).getTime() : windowStartMs;
+  const overallWindow = readings.at(-1) ?? latest;
+  const overallUsed = usedOf(overallWindow);
+  const overallObservedMs = new Date(overallWindow.observed_at).getTime();
+  if (!Number.isFinite(overallUsed) || !Number.isFinite(overallObservedMs)) {
+    return { derived: false, reason: 'invalid-overall-reading' };
+  }
 
-  // An official Fable reading inside this window is the best possible start.
-  // Without one the window starts at zero, which is right after a reset and
+  // An official Fable reading inside this cycle is the best possible start.
+  // Without one the cycle starts at zero, which is right after a reset and
   // an understatement on a machine that joined the window late — reported as
   // lower confidence rather than papered over.
   const anchor = [latestOfficialAt(store, 'claude-fable', FABLE_BUCKET, nowMs)]
-    .find((row) => row && new Date(row.observed_at).getTime() >= windowStartMs
+    .find((row) => row && new Date(row.observed_at).getTime() >= cycleStartMs
       && Math.abs(new Date(row.resets_at).getTime() - resetMs) <= 60_000) || null;
   const baseUsed = anchor ? usedOf(anchor) : 0;
-  const baseAtMs = anchor ? new Date(anchor.observed_at).getTime() : windowStartMs;
+  const baseAtMs = anchor ? new Date(anchor.observed_at).getTime() : cycleStartMs;
 
   // Structural ceiling at the timestamp of the latest overall observation.
   // Activity after that instant is deliberately added outside the ceiling.
@@ -301,7 +341,7 @@ function computeProjection(store, nowMs) {
   // so when one exists it wins. The overall-share split is the fallback — and
   // it needs the overall figure to actually step, which an integer percentage
   // on a machine that mostly runs without the status line may never do.
-  const pair = fablePairCalibration(store, nowMs, usedOf);
+  const pair = fablePairCalibration(store, nowMs, usedOf, freshReadGraceMs);
   let raw;
   let method;
   let steps = [];
@@ -405,8 +445,10 @@ function computeProjection(store, nowMs) {
 
 // Read-only. The store builds the displayed window and the forecast's
 // learning series from this; the collector reports it as source status.
-function projectFableAllowance(store, nowMs = Date.now()) {
-  const result = computeProjection(store, nowMs);
+// `freshReadGraceMs` is the store's wait for a lower status-line reading to be
+// confirmed; left out, the forecast's default applies.
+function projectFableAllowance(store, nowMs = Date.now(), options = {}) {
+  const result = computeProjection(store, nowMs, options);
   // The plan is kept on this refusal: a named plan other than Max has no
   // Fable allowance to wait for, while an unnamed one is only unknown.
   if (!result.derived) return { available: false, reason: result.reason, ...(result.planType ? { planType: result.planType } : {}) };
