@@ -129,6 +129,26 @@ test('closing IPC serves the last full snapshot rather than a tray-only notifica
   assert.equal(handlers.get('dashboard:get-snapshot')().costs.periodDays, 30);
 });
 
+test('a failed period read leaves the main process on the period the renderer still shows', () => {
+  const h = mainHarness();
+  const handlers = new Map();
+  let fail = true;
+  registerIpc({ handleIpc: (name, fn) => handlers.set(name, fn), storageClosing: () => false,
+    setPeriodDays: h.run('setPeriodDays'),
+    snapshot: () => {
+      if (fail) throw new Error('database is locked');
+      return { costs: { periodDays: h.run('periodDays') } };
+    },
+  });
+  h.run('periodDays = 30;');
+  assert.throws(() => handlers.get('dashboard:get-snapshot')({}, 90), /locked/);
+  // Later pushes are built for this period; 90 days would be discarded by the
+  // renderer, which kept 30, and its cost figures would stop updating.
+  assert.equal(h.run('periodDays'), 30);
+  fail = false;
+  assert.equal(handlers.get('dashboard:get-snapshot')({}, 90).costs.periodDays, 90);
+});
+
 test('Quit during storage close cancels the prepared update instead of authorizing the installer', async () => {
   const h = mainHarness();
   let releaseClose;

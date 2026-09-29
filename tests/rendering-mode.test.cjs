@@ -101,3 +101,26 @@ test('a rendering change is a cheap setting that never rebuilds the dashboard sn
   assert.equal(rebuilt, 0);
   assert.equal(patched, 1);
 });
+
+test('digest settings patch the snapshot, while a new refresh interval rebuilds the forecasts it affects', async () => {
+  const handlers = new Map();
+  let invalidated = 0;
+  let patched = 0;
+  registerIpc({
+    handleIpc: (name, fn) => handlers.set(name, fn),
+    store: { updateSettings: (patch) => ({ ...patch }) },
+    databaseJobs: { run: (operation) => Promise.resolve().then(operation) },
+    invalidateSnapshot: () => { invalidated++; },
+    applySettingsEffects: () => {},
+    snapshot: () => ({}),
+    patchSnapshotSettings: () => { patched++; return { settings: {} }; },
+    updateTray: () => {},
+  });
+  const update = (patch) => handlers.get('dashboard:update-settings')({}, patch);
+  await update({ notifyDigest: true });
+  await update({ digestHour: 7 });
+  assert.deepEqual({ invalidated, patched }, { invalidated: 0, patched: 2 });
+  // The grace a lower status-line reading waits for is two refresh intervals.
+  await update({ refreshIntervalMinutes: 240 });
+  assert.deepEqual({ invalidated, patched }, { invalidated: 1, patched: 2 });
+});

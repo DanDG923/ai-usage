@@ -342,6 +342,7 @@ function mainHarness({ env = {} } = {}) {
     screen: {
       getCursorScreenPoint: () => ({ x: 1710, y: 1050 }),
       getDisplayMatching: () => ({ bounds: display('bottom').displayBounds, workArea: display('bottom').workArea }),
+      getAllDisplays: () => [{ bounds: display('bottom').displayBounds, workArea: display('bottom').workArea }],
     },
   };
   const filename = path.resolve(__dirname, '../electron/main.cjs');
@@ -511,6 +512,54 @@ test('showing the flyout or the dashboard asks only for an automatic refresh', a
   dashboard.emit('show');
   assert.deepEqual(plain(h.run('staleRequests')).at(-1), { trigger: 'window-show' });
   await flush();
+});
+
+test('showing the dashboard while an update has closed storage does not read the closed database', () => {
+  const h = mainHarness();
+  h.run("preparingUpdate = true; store = { getSettings() { throw new Error('database is not open'); } };");
+  assert.doesNotThrow(() => h.run("refreshIfStale({ trigger: 'window-show' })"));
+});
+
+test('a released dashboard reopens where it was only while that place is still on a display', () => {
+  const h = mainHarness();
+  const [{ workArea }] = h.electron.screen.getAllDisplays();
+  h.run(`savedWindowBounds = { x: ${workArea.x + 40}, y: ${workArea.y + 30}, width: 900, height: 700 }; createWindow()`);
+  assert.deepEqual(plain(h.created().at(-1).options).x, workArea.x + 40);
+  // Released on a monitor that has since been disconnected: keep the size only.
+  h.run(`savedWindowBounds = { x: ${workArea.x + workArea.width + 500}, y: ${workArea.y}, width: 900, height: 700 }; createWindow()`);
+  const { x, y, width, height } = h.created().at(-1).options;
+  assert.deepEqual({ x, y, width, height }, { x: undefined, y: undefined, width: 900, height: 700 });
+});
+
+test('a crashed dashboard renderer is reloaded on screen and released when hidden or failing again', () => {
+  const h = mainHarness();
+  h.run('createWindow()');
+  const dashboard = h.created().at(-1);
+  let reloads = 0;
+  dashboard.webContents.reload = () => { reloads += 1; };
+  dashboard.getNormalBounds = () => ({ x: 10, y: 20, width: 900, height: 700 });
+  dashboard.isMaximized = () => false;
+  dashboard.webContents.emit('render-process-gone', {}, { reason: 'clean-exit' });
+  assert.equal(reloads, 0);
+  dashboard.show();
+  dashboard.webContents.emit('render-process-gone', {}, { reason: 'crashed' });
+  assert.equal(reloads, 1, 'a visible window is reloaded');
+  assert.equal(dashboard.destroyed, false);
+  // Failing again straight after a reload must not loop.
+  dashboard.webContents.emit('render-process-gone', {}, { reason: 'crashed' });
+  assert.equal(reloads, 1);
+  assert.equal(dashboard.destroyed, true);
+  assert.deepEqual(plain(h.run('savedWindowBounds')), { x: 10, y: 20, width: 900, height: 700 });
+  assert.equal(h.run('window'), null, 'the next open builds a fresh window');
+
+  h.run('createWindow()');
+  const hidden = h.created().at(-1);
+  hidden.webContents.reload = () => { reloads += 1; };
+  hidden.getNormalBounds = () => ({ x: 0, y: 0, width: 800, height: 600 });
+  hidden.isMaximized = () => false;
+  hidden.webContents.emit('render-process-gone', {}, { reason: 'oom' });
+  assert.equal(reloads, 1, 'a hidden window is released, not reloaded');
+  assert.equal(hidden.destroyed, true);
 });
 
 test('publishes reach an existing flyout as a light payload, and the theme sets its background', () => {

@@ -55,6 +55,14 @@ test('relaunch temporarily restores only captured token variables and cleans up 
   assert.deepEqual(currentEnvironment, { PATH: 'current', GH_TOKEN: 'existing' });
 });
 
+test('a relaunch keeps the command line but never the sign-in --hidden flag', () => {
+  const calls = [];
+  const app = { relaunch: (options) => calls.push(options) };
+  relaunchApplication({ app, environment: {}, currentEnvironment: {}, argv: ['C:\\AI Usage\\AI Usage.exe', '--hidden', '--flag'] });
+  relaunchApplication({ app, environment: {}, currentEnvironment: {}, argv: ['electron.exe', '.'] });
+  assert.deepEqual(calls, [{ args: ['--flag'] }, { args: ['.'] }]);
+});
+
 test('NSIS asynchronous elevation retries preserve launch tokens only for trusted installer processes', async () => {
   const calls = [];
   const updater = { installerPath: 'C:\\download\\setup.exe', spawnLog: async (...args) => { calls.push(args); } };

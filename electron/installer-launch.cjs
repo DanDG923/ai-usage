@@ -105,12 +105,15 @@ function installDirectoryWritable(executablePath = process.execPath) {
 
 // Electron relaunch inherits process.env and has no environment option. Restore
 // only for this trusted scheduling call, then immediately remove the tokens again.
-function relaunchApplication({ app, environment, currentEnvironment = process.env }) {
+// Without arguments the new instance would repeat this one's command line, so
+// an app started hidden at sign-in would reopen to the tray after a restart
+// the user asked for from its window.
+function relaunchApplication({ app, environment, currentEnvironment = process.env, argv = process.argv }) {
   const names = Object.keys(environment || {}).filter((name) => /^(?:GH_TOKEN|GITHUB_TOKEN)$/i.test(name));
   const previous = names.map((name) => [name, currentEnvironment[name]]);
   try {
     for (const name of names) currentEnvironment[name] = environment[name];
-    app.relaunch();
+    app.relaunch({ args: argv.slice(1).filter((arg) => arg !== '--hidden') });
   } finally {
     for (const [name, value] of previous) {
       if (value == null) delete currentEnvironment[name];

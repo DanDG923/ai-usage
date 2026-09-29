@@ -170,6 +170,21 @@ test('the host spawns on demand, resolves by id, and fails in-flight requests if
   await assert.rejects(respawned, /stopped/);
 });
 
+test('a fatal child error is logged rather than thrown in the main process, and its exit fails the request', async () => {
+  const children = [];
+  const logs = [];
+  const host = createCollectorHost({
+    fork: () => { const child = fakeChild(); children.push(child); return child; },
+    modulePath: 'collector-service.cjs', config: {}, requestTimeoutMs: 1000, onLog: (message) => logs.push(message),
+  });
+  const pending = host.refreshAll();
+  // Electron reports a fatal V8 error as an 'error' event, then the exit.
+  assert.doesNotThrow(() => children[0].emit('error', 'FatalError', 'v8::internal::Heap', 'report'));
+  assert.match(logs.join('\n'), /Collector process error: FatalError at v8::internal::Heap/);
+  children[0].emit('exit', 134);
+  await assert.rejects(pending, /stopped unexpectedly/);
+});
+
 test('a request that never answers times out and recycles the child', async () => {
   const children = [];
   const host = createCollectorHost({
