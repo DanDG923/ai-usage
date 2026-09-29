@@ -98,8 +98,9 @@ function createMaintenanceHost({
       pending.delete(message.id);
       clearTimeout(entry.timer);
       // A preview keeps its worker until it is imported, cancelled or expires.
+      // A failed import leaves it in place for another try.
       if (entry.type === 'preview-desktop-export' && message.ok) previewHeldUntil = now() + PREVIEW_HOLD_MS;
-      if (entry.type === 'import-desktop-export' || entry.type === 'cancel-desktop-export') previewHeldUntil = 0;
+      if (entry.type === 'cancel-desktop-export' || (entry.type === 'import-desktop-export' && message.ok)) previewHeldUntil = 0;
       if (message.ok) entry.resolve(message.result);
       else entry.reject(new Error(message.error?.message || 'Storage maintenance failed.'));
       if (worker === spawned) scheduleIdle();

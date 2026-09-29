@@ -257,6 +257,12 @@ test('a desktop import preview keeps its worker until it is imported, cancelled 
   await preview;
   idle(10 * 60_000);
   assert.equal(host.running, true, 'the user is still reviewing the preview');
+  // A failed import keeps the preview for another try.
+  const failed = host.request('import-desktop-export', { previewId: 'preview-1' });
+  workers[0].emit('message', { id: workers[0].sent.at(-1).id, ok: false, error: { message: 'Disk full' } });
+  await assert.rejects(failed, /Disk full/);
+  idle(60_000);
+  assert.equal(host.running, true, 'the preview survives a failed import');
   const cancel = host.request('cancel-desktop-export', { previewId: 'preview-1' });
   reply(workers[0], { cancelled: true });
   await cancel;
