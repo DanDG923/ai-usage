@@ -278,6 +278,24 @@ test('a replenishment before the reset timestamp moves restarts the projection w
   assert.ok(Math.abs(fresh.usedPercent - 2) < 0.01, `one new point, all Fable: ${fresh.usedPercent}`);
 });
 
+test('a recorded allowance upgrade is not mistaken for a replenishment', (t) => {
+  const context = fixture(t);
+  // Before the upgrade the allowance was a quarter of today's: 8% then is 2%
+  // now, so the provider's drop from 8% to 2% is the same use, not a new cycle.
+  context.overall(NOW - 30 * HOUR, 0);
+  context.usage('before-upgrade', NOW - 25 * HOUR, 'claude-fable-5', 4_000_000);
+  context.overall(NOW - 20 * HOUR, 8);
+  context.store.updateSettings({ allowanceChanges: [{ source: 'claude', at: iso(NOW - 15 * HOUR), previousAllowancePercent: 25 }] });
+  context.overall(NOW - 10 * HOUR, 2);
+  context.usage('after-upgrade', NOW - 5 * HOUR, 'claude-fable-5', 2_000_000);
+  context.overall(NOW - HOUR, 3);
+  const projection = projectFableAllowance(context.store, NOW);
+  // Two points before the upgrade and one after, in today's terms, all of it
+  // Fable and doubled for the half cap.
+  assert.ok(Math.abs(projection.usedPercent - 6) < 0.01, `usedPercent ${projection.usedPercent}`);
+  assert.equal(projection.measuredSteps, 2);
+});
+
 test('a stale status-line restatement near zero is not mistaken for a replenishment', (t) => {
   const context = fixture(t);
   fableWeek(context);

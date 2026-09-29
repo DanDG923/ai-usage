@@ -34,13 +34,19 @@ function officialBetween(store, sourceId, bucketId, sinceIso, nowMs) {
   `).all(sourceId, bucketId, ...OFFICIAL_PROVENANCES, sinceIso, new Date(nowMs).toISOString());
 }
 
-// Official readings as the Claude card and forecast see them: a stale
-// status-line restatement is held back, and the rest are split into allowance
-// cycles. A provider can replenish before it moves the reset timestamp, so a
-// shared timestamp alone does not put two readings in the same cycle.
-function allowanceCycles(rows, nowMs, freshReadGraceMs) {
-  const accepted = withoutStaleRestatements(rows, { nowMs, freshReadGraceMs });
-  return clusterByWindow(accepted.map((row) => ({ ...normaliseObservation(row), row })))
+// Official readings as the Claude forecast sees them: expressed in today's
+// allowance, a stale status-line restatement held back, and the rest split
+// into allowance cycles. A provider can replenish before it moves the reset
+// timestamp, so a shared timestamp alone does not put two readings in the same
+// cycle. Percentages are compared only after a recorded allowance change is
+// applied: after a fourfold upgrade an earlier 8% is today's 2%, the same use
+// rather than a replenishment. Each cycle returns the original stored rows.
+function allowanceCycles(rows, nowMs, freshReadGraceMs, usedOf = rawUsedPercent) {
+  const current = rows.map((row) => {
+    const usedPercent = usedOf(row);
+    return { ...normaliseObservation(row), usedPercent, remainingPercent: 100 - usedPercent, row };
+  });
+  return clusterByWindow(withoutStaleRestatements(current, { nowMs, freshReadGraceMs }))
     .map((cluster) => cluster.rows.map((entry) => entry.row));
 }
 
@@ -146,7 +152,8 @@ function fablePairCalibration(store, nowMs, usedOf = rawUsedPercent, freshReadGr
   let deltaSum = 0;
   let pressureSum = 0;
   let pairs = 0;
-  for (const readings of allowanceCycles(officialBetween(store, 'claude-fable', FABLE_BUCKET, sinceIso, nowMs), nowMs, freshReadGraceMs)) {
+  const rows = officialBetween(store, 'claude-fable', FABLE_BUCKET, sinceIso, nowMs);
+  for (const readings of allowanceCycles(rows, nowMs, freshReadGraceMs, usedOf)) {
     // Consumption is only a new high-water mark within the cycle. A backward
     // move is a correction or a mistyped reading, and the rebound after it
     // returns to use already counted. Each rise is measured from the latest
@@ -312,7 +319,7 @@ function computeProjection(store, nowMs, { freshReadGraceMs } = {}) {
   const cycles = allowanceCycles(
     officialBetween(store, 'claude', OVERALL_BUCKET, new Date(windowStartMs).toISOString(), nowMs)
       .filter((row) => Math.abs(new Date(row.resets_at).getTime() - resetMs) <= 60_000),
-    nowMs, freshReadGraceMs);
+    nowMs, freshReadGraceMs, usedOf);
   const readings = cycles.at(-1) ?? [];
   const cycleStartMs = cycles.length > 1 ? new Date(readings[0].observed_at).getTime() : windowStartMs;
   const overallWindow = readings.at(-1) ?? latest;
