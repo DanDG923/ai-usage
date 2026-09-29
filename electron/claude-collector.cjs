@@ -160,7 +160,13 @@ function importClaudeInbox(store, inboxPath) {
   const rotations = rotated.map((filePath) => path.basename(filePath));
   const restartedFor = new Set(store.getImportedFile(inboxPath)?.state?.rotations ?? []);
   if (rotated.some((filePath, index) => !store.getImportedFile(filePath) && !restartedFor.has(rotations[index]))) {
-    try { store.forgetImportedFile(inboxPath); } catch { /* Storage is failing; the next refresh retries it. */ }
+    try {
+      store.forgetImportedFile(inboxPath);
+    } catch {
+      // The rotated file is the only sign of the restart. Leave it unread, so
+      // the next refresh retries the reset before it can be imported and removed.
+      return emptyInboxResult({ readErrors: 1 });
+    }
   }
   for (const filePath of [...rotated, inboxPath]) {
     let result;

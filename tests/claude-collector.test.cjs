@@ -661,6 +661,35 @@ test('a rotated file that keeps failing to import restarts the live inbox once, 
   }
 });
 
+test('a failed reset of the live cursor keeps the rotated file for the next refresh', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-rotation-'));
+  const store = new UsageStore(path.join(root, 'test.sqlite'), path.join(root, 'Backups'));
+  const inbox = path.join(root, 'inbox.jsonl');
+  const rotated = `${inbox}.rotated-202608291005000000-1`;
+  const at = (minute) => new Date(Date.parse('2026-08-29T10:00:00Z') + minute * 60_000).toISOString();
+  const row = (minute) => JSON.stringify({ ai_usage_captured_at: at(minute), rate_limits: { seven_day: { used_percentage: 20 + minute / 10, resets_at: '2026-09-04T12:00:00Z' } } });
+  const lines = (from, to) => Array.from({ length: to - from }, (_, index) => `${row(from + index)}\n`).join('');
+  const forget = store.forgetImportedFile;
+  try {
+    fs.writeFileSync(inbox, lines(0, 3), 'utf8');
+    importClaudeInbox(store, inbox);
+    fs.renameSync(inbox, rotated);
+    fs.writeFileSync(inbox, lines(3, 10), 'utf8');
+    // A one-off storage failure while the live cursor is being reset.
+    store.forgetImportedFile = function (...args) {
+      store.forgetImportedFile = forget;
+      throw Object.assign(new Error('database is locked'), { code: 'ERR_SQLITE_BUSY' });
+    };
+    assert.equal(importClaudeInbox(store, inbox).readErrors, 1);
+    assert.equal(fs.existsSync(rotated), true, 'the only sign of the rotation is kept');
+    assert.equal(importClaudeInbox(store, inbox).invalidRecords, 0, 'the retry restarts the new inbox');
+    assert.equal(store.db.prepare("SELECT COUNT(*) AS count FROM quota_observations WHERE source_id = 'claude'").get().count, 10);
+  } finally {
+    store.forgetImportedFile = forget;
+    store.close();
+  }
+});
+
 test('the helper doubles every PowerShell single-quote character in its inbox path', () => {
   const helper = makeHelperScript("C:\\Users\\O\u2019Brien\\AppData\\Roaming\\ai-usage\\Bob's inbox.jsonl");
   assert.ok(helper.includes("$target = 'C:\\Users\\O\u2019\u2019Brien\\AppData\\Roaming\\ai-usage\\Bob''s inbox.jsonl'"));
