@@ -1,5 +1,5 @@
 import { AlertOctagon, AlertTriangle, CheckCircle2, ChevronRight, EyeOff, Plug } from 'lucide-react';
-import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { bankedResetsFor } from '../banked-resets';
 import { dailyBudget, forecastReserve, paceLabel, scheduleOf } from '../budget';
 import { currentCycleFor } from '../cycle-match';
@@ -435,12 +435,13 @@ function Planner({
   snapshot: Snapshot;
   /** A reserve being tried on this page; the page's chart draws it too. */
   draft: number | null;
-  onDraft: (percent: number | null) => void;
+  onDraft: Dispatch<SetStateAction<number | null>>;
   onSaveReserve?: (percent: number) => Promise<boolean> | void;
   onOpenSettings?: (section: string) => void;
 }) {
   const saved = Math.round(Number(snapshot.settings.reservePercent) || 0);
   const setDraft = onDraft;
+  const [saving, setSaving] = useState(false);
   const reserve = draft ?? saved;
   const nowMs = Date.parse(snapshot.generatedAt);
   const budget = dailyBudget(view.current, snapshot.settings, nowMs, reserve);
@@ -530,15 +531,27 @@ function Planner({
         </div>
       </div>
       {draft != null && draft !== saved && (
-        <div className="pd-save">
+        // Releasing the hidden window would discard the unsaved reserve, so the
+        // page refuses it while one is shown, and while a save is pending.
+        <div className="pd-save" data-keep-awake="true" aria-busy={saving}>
           <span>{`Trying ${draft}%. Forecasts still use ${saved}%.`}</span>
           <div className="pd-save-keys">
             {onSaveReserve && (
               <button
                 type="button"
                 className="btn btn-p"
+                disabled={saving}
                 onClick={async () => {
-                  if ((await onSaveReserve(draft)) !== false) setDraft(null);
+                  const submitted = draft;
+                  setSaving(true);
+                  try {
+                    // The slider stays live during the save: clear only the
+                    // value that was saved, never a newer choice.
+                    if ((await onSaveReserve(submitted)) !== false)
+                      setDraft((current) => (current === submitted ? null : current));
+                  } finally {
+                    setSaving(false);
+                  }
                 }}
               >
                 {`Use ${draft}% for all forecasts`}

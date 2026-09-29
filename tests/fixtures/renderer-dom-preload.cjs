@@ -8,6 +8,9 @@ let heldPages = [];
 let pageDelay = false;
 let errors = [];
 let rejectSettings = false;
+let holdSettings = false;
+let heldSettings = [];
+let prepareSleep = null;
 const page = (kind, options) => {
   const rows = snapshot.costs[kind] || [];
   const data = { rows, total: rows.length, page: options.page, pageSize: options.pageSize, totalPages: 1 };
@@ -28,6 +31,7 @@ contextBridge.exposeInMainWorld('aiUsage', {
   onUpdateStatus: () => () => {},
   updateSettings: async (patch) => {
     if (rejectSettings) throw new Error('Deliberate settings rejection');
+    if (holdSettings) await new Promise((resolve) => heldSettings.push(resolve));
     const currency = patch.currency || snapshot.settings.currency;
     const rate = currency === 'USD' ? 1 : patch.usdToCurrency ?? snapshot.settings.currencyRates[currency];
     snapshot.settings = { ...snapshot.settings, ...patch, usdToCurrency: rate,
@@ -38,6 +42,7 @@ contextBridge.exposeInMainWorld('aiUsage', {
   getClaudeSetup: async () => ({ installed: true, auth: 'signed-in', dismissed: false }),
   configureClaude: async () => ({ dismissed: true }),
   refresh: async () => { throw new Error('Deliberate refresh rejection'); },
+  onPrepareSleep(callback) { prepareSleep = callback; return () => { if (prepareSleep === callback) prepareSleep = null; }; },
 });
 contextBridge.exposeInMainWorld('testBridge', {
   push(next) { for (const listener of listeners) listener(next); },
@@ -49,4 +54,9 @@ contextBridge.exposeInMainWorld('testBridge', {
   releasePages() { pageDelay = false; for (const resolve of heldPages.splice(0)) resolve(); },
   errors: () => errors,
   rejectSettings(value) { rejectSettings = value; },
+  holdSettings(value) { holdSettings = value; },
+  releaseSettings() { holdSettings = false; for (const resolve of heldSettings.splice(0)) resolve(); },
+  heldSettings: () => heldSettings.length,
+  // What the renderer answers when the hidden window asks to release it.
+  prepareSleep: () => (prepareSleep ? prepareSleep() : null),
 });
