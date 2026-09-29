@@ -1132,6 +1132,36 @@ test('one malformed transcript message is rejected without stopping the file or 
   }
 });
 
+test('CLAUDE_CONFIG_DIR relocates the status-line helper with the settings Claude Code reads', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-claude-helper-home-'));
+  const previous = { USERPROFILE: process.env.USERPROFILE, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
+  const profile = path.join(root, 'profile');
+  const home = path.join(root, 'relocated-claude');
+  fs.mkdirSync(profile, { recursive: true });
+  fs.mkdirSync(home, { recursive: true });
+  const original = { type: 'command', command: 'own-status.cmd' };
+  fs.writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ statusLine: original }));
+  try {
+    process.env.USERPROFILE = profile;
+    process.env.CLAUDE_CONFIG_DIR = home;
+    const installed = installClaudeHelper(path.join(root, 'inbox.jsonl'));
+    assert.equal(installed.settingsPath, path.join(home, 'settings.json'));
+    assert.equal(path.dirname(installed.helperPath), home);
+    const settings = JSON.parse(fs.readFileSync(path.join(home, 'settings.json'), 'utf8'));
+    assert.match(settings.statusLine.command, /ai-usage-statusline\.ps1/, 'the settings Claude Code reads now invoke the helper');
+    assert.equal(fs.existsSync(path.join(profile, '.claude')), false, 'the unused profile folder is left alone');
+    assert.equal(isClaudeHelperInstalled(), true);
+    const removed = uninstallClaudeHelper();
+    assert.equal(removed.restoredPreviousStatusLine, true);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, 'settings.json'), 'utf8')).statusLine, original);
+    assert.equal(isClaudeHelperInstalled(), false);
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});
+
 test('CLAUDE_CONFIG_DIR relocates the transcript scan', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-claude-home-'));
   const previous = { USERPROFILE: process.env.USERPROFILE, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };

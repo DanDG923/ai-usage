@@ -380,10 +380,12 @@ function updateManagedHelper(helperPath, inboxPath) {
   }
 }
 
+// The configuration folder the transcript scan reads, so the helper is
+// installed, found and removed in the settings Claude Code actually uses when
+// CLAUDE_CONFIG_DIR relocates them.
 function helperPaths() {
-  const home = process.env.USERPROFILE;
-  if (!home) throw new Error('Windows user profile was not found.');
-  const claudeDirectory = path.join(home, '.claude');
+  const claudeDirectory = providerHome('CLAUDE_CONFIG_DIR', '.claude');
+  if (!claudeDirectory) throw new Error('Windows user profile was not found.');
   return {
     claudeDirectory,
     settingsPath: path.join(claudeDirectory, 'settings.json'),
