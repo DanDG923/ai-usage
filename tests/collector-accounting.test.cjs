@@ -332,3 +332,66 @@ test('diagnostics time sequential imports and timestamp allowance readings after
   assert.equal(result.health.activityDurationMs, 20);
   assert.equal(result.refreshedAt, new Date(baseline + 120).toISOString());
 });
+
+const rollout = (serial) => `rollout-2026-09-29T10-00-00-0199a0c1-0000-7000-8000-00000000000${serial}.jsonl`;
+const codexRows = (store) => store.prepare("SELECT COUNT(*) AS count FROM usage_events WHERE source_id = 'codex'").get().count;
+
+test('a thread archived in Codex keeps its cursor, so work written before the move is imported once', (t) => {
+  const { root, store, write } = fixture(t);
+  const live = write(`.codex/sessions/2026/09/29/${rollout(1)}`, [...context, tokenRecord(1, 1)]);
+  assert.equal(importLocalSessions(store).events, 1);
+  // More work, then Archive in Codex before the next refresh: the rollout
+  // moves to archived_sessions with its unread tail.
+  fs.appendFileSync(live, `${[tokenRecord(2, 2), tokenRecord(3, 3)].map(JSON.stringify).join('\n')}\n`);
+  const archived = path.join(root, '.codex', 'archived_sessions', rollout(1));
+  fs.mkdirSync(path.dirname(archived), { recursive: true });
+  fs.renameSync(live, archived);
+  const result = importLocalSessions(store);
+  assert.equal(result.events, 2, 'only the tail is read');
+  assert.equal(result.reconciliationBackup, null, 'a moved log needs no safety backup');
+  assert.equal(codexRows(store), 3);
+  assert.equal(store.getImportedFile(live), null);
+  assert.ok(store.getImportedFile(archived));
+  assert.equal(importLocalSessions(store).importedFiles, 0);
+  // Unarchiving moves it back unchanged; the cursor follows and nothing repeats.
+  fs.renameSync(archived, live);
+  assert.equal(importLocalSessions(store).events, 0);
+  assert.ok(store.getImportedFile(live));
+  assert.equal(store.getImportedFile(archived), null);
+  assert.equal(codexRows(store), 3);
+});
+
+test('a thread started and archived between two refreshes is imported from the archive', (t) => {
+  const { store, write } = fixture(t);
+  write(`.codex/archived_sessions/${rollout(2)}`, [...context, tokenRecord(1, 1), tokenRecord(2, 2)]);
+  assert.equal(importLocalSessions(store).events, 2);
+  assert.equal(codexRows(store), 2);
+});
+
+test('a copy of a rollout does not take the cursor of an original that is still in place', (t) => {
+  const { root, store, write } = fixture(t);
+  const live = write(`.codex/sessions/2026/09/29/${rollout(3)}`, [...context, tokenRecord(1, 1)]);
+  importLocalSessions(store);
+  const copy = path.join(root, '.codex', 'archived_sessions', rollout(3));
+  fs.mkdirSync(path.dirname(copy), { recursive: true });
+  fs.copyFileSync(live, copy);
+  importLocalSessions(store);
+  assert.ok(store.getImportedFile(live), 'the original keeps its cursor');
+  assert.equal(codexRows(store), 1, 'the copy adds nothing');
+});
+
+test('a restore rechecks archived and relocated Codex logs as well as live ones, and leaves Claude alone', (t) => {
+  const { root, store, write } = fixture(t);
+  const archived = write(`.codex/archived_sessions/${rollout(4)}`, [...context, tokenRecord(1, 1)]);
+  importLocalSessions(store);
+  // A cursor under a CODEX_HOME outside the profile, and a Claude transcript cursor.
+  const relocated = path.join(root, 'elsewhere', 'sessions', rollout(5));
+  store.markImportedFile(relocated, 1, 1, { sessionId: 'session-b', agentAttributionVersion: 1, accountingVersion: 1, eventKeyVersion: 1 });
+  const transcript = path.join(root, '.claude', 'projects', 'demo', 'session.jsonl');
+  store.markImportedFile(transcript, 1, 1, { collector: 'claude-transcript', agentAttributionVersion: 1, accountingVersion: 1 });
+  store.restoreFromExport({ schemaVersion: 1, usageEvents: [{ event_key: 'codex:restored:1', source_id: 'codex',
+    occurred_at: timestamp(5), input_tokens: 1, output_tokens: 1 }] });
+  assert.equal(store.getImportedFile(archived).state.accountingVersion, undefined);
+  assert.equal(store.getImportedFile(relocated).state.accountingVersion, undefined);
+  assert.equal(store.getImportedFile(transcript).state.accountingVersion, 1);
+});
