@@ -636,19 +636,29 @@ test('a rotated file that keeps failing to import restarts the live inbox once, 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-rotation-'));
   const store = new UsageStore(path.join(root, 'test.sqlite'), path.join(root, 'Backups'));
   const inbox = path.join(root, 'inbox.jsonl');
-  const row = (minute) => JSON.stringify({ ai_usage_captured_at: new Date(Date.parse('2026-08-29T10:00:00Z') + minute * 60_000).toISOString(),
-    rate_limits: { seven_day: { used_percentage: 20, resets_at: '2026-09-04T12:00:00Z' } } });
+  const at = (minute) => new Date(Date.parse('2026-08-29T10:00:00Z') + minute * 60_000).toISOString();
+  const row = (minute) => JSON.stringify({ ai_usage_captured_at: at(minute),
+    rate_limits: { seven_day: { used_percentage: 20 + minute, resets_at: '2026-09-04T12:00:00Z' } } });
+  // Storage fails on the rotated file's reading every time, as the collector
+  // storage-failure tests inject it, so that file never gets a cursor.
+  const record = store.recordObservation;
+  store.recordObservation = function (observation) {
+    if (observation.observedAt === at(0)) throw Object.assign(new Error('database is locked'), { code: 'ERR_SQLITE_ERROR' });
+    return record.call(this, observation);
+  };
   try {
-    // Unreadable as a file on every platform, so its import fails each time.
-    fs.mkdirSync(`${inbox}.rotated-202608291005000000-1`);
-    fs.writeFileSync(inbox, `${row(0)}\n${row(1)}\n`, 'utf8');
+    fs.writeFileSync(`${inbox}.rotated-202608291005000000-1`, `${row(0)}\n`, 'utf8');
+    fs.writeFileSync(inbox, `${row(1)}\n${row(2)}\n`, 'utf8');
     const first = importClaudeInbox(store, inbox);
     assert.equal(first.readErrors, 1);
     assert.ok(first.bytesRead > 0);
     const second = importClaudeInbox(store, inbox);
     assert.equal(second.readErrors, 1);
     assert.equal(second.bytesRead, 0, 'the unchanged live inbox is not read again');
-  } finally { store.close(); }
+  } finally {
+    store.recordObservation = record;
+    store.close();
+  }
 });
 
 test('the helper doubles every PowerShell single-quote character in its inbox path', () => {
