@@ -241,6 +241,112 @@ test('readings dated ahead of the projection clock wait for their own timestamp'
   assert.equal(projectFableAllowance(anchored.store, NOW + 6 * 60_000).anchored, true);
 });
 
+test('a replenishment before the reset timestamp moves restarts the projection with the new cycle', (t) => {
+  const context = fixture(t);
+  context.overall(NOW - 30 * HOUR, 49);
+  context.usage('old-cycle', NOW - 29 * HOUR, 'claude-fable-5', 1_000_000);
+  context.overall(NOW - 28 * HOUR, 50);
+  // Replenished, but the provider still reports the old reset timestamp.
+  context.overall(NOW - 20 * HOUR, 0);
+  context.usage('new-cycle', NOW - 10 * HOUR, 'claude-fable-5', 5_000_000);
+  context.overall(NOW - HOUR, 5);
+  const projection = projectFableAllowance(context.store, NOW);
+  assert.equal(projection.available, true);
+  assert.ok(Math.abs(projection.usedPercent - 10) < 0.01, `five new points, all Fable: ${projection.usedPercent}`);
+  assert.deepEqual(projection.series.map((point) => Math.round(point.usedPercent)), [10, 10]);
+
+  // The previous cycle's Fable use must not carry into the new one either.
+  const opusOnly = fixture(t);
+  opusOnly.overall(NOW - 30 * HOUR, 10);
+  opusOnly.usage('old-cycle', NOW - 29 * HOUR, 'claude-fable-5', 4_000_000);
+  opusOnly.overall(NOW - 28 * HOUR, 50);
+  opusOnly.overall(NOW - 20 * HOUR, 0);
+  opusOnly.usage('new-cycle', NOW - 10 * HOUR, 'claude-opus-5', 5_000_000);
+  opusOnly.overall(NOW - HOUR, 5);
+  assert.equal(projectFableAllowance(opusOnly.store, NOW).usedPercent, 0);
+
+  // Nor may an anchor taken before the replenishment.
+  const anchored = fixture(t);
+  anchored.overall(NOW - 30 * HOUR, 10);
+  anchored.fable(NOW - 29 * HOUR, 30, { provenance: 'manual-official', metadata: {} });
+  anchored.overall(NOW - 28 * HOUR, 50);
+  anchored.overall(NOW - 20 * HOUR, 0);
+  anchored.usage('new-cycle', NOW - 10 * HOUR, 'claude-fable-5', 1_000_000);
+  anchored.overall(NOW - HOUR, 1);
+  const fresh = projectFableAllowance(anchored.store, NOW);
+  assert.equal(fresh.anchored, false);
+  assert.ok(Math.abs(fresh.usedPercent - 2) < 0.01, `one new point, all Fable: ${fresh.usedPercent}`);
+});
+
+test('a recorded allowance upgrade is not mistaken for a replenishment', (t) => {
+  const context = fixture(t);
+  // Before the upgrade the allowance was a quarter of today's: 8% then is 2%
+  // now, so the provider's drop from 8% to 2% is the same use, not a new cycle.
+  context.overall(NOW - 30 * HOUR, 0);
+  context.usage('before-upgrade', NOW - 25 * HOUR, 'claude-fable-5', 4_000_000);
+  context.overall(NOW - 20 * HOUR, 8);
+  context.store.updateSettings({ allowanceChanges: [{ source: 'claude', at: iso(NOW - 15 * HOUR), previousAllowancePercent: 25 }] });
+  context.overall(NOW - 10 * HOUR, 2);
+  context.usage('after-upgrade', NOW - 5 * HOUR, 'claude-fable-5', 2_000_000);
+  context.overall(NOW - HOUR, 3);
+  const projection = projectFableAllowance(context.store, NOW);
+  // Two points before the upgrade and one after, in today's terms, all of it
+  // Fable and doubled for the half cap.
+  assert.ok(Math.abs(projection.usedPercent - 6) < 0.01, `usedPercent ${projection.usedPercent}`);
+  assert.equal(projection.measuredSteps, 2);
+});
+
+test('a stale status-line restatement near zero is not mistaken for a replenishment', (t) => {
+  const context = fixture(t);
+  fableWeek(context);
+  // A session that fetched its limits at the start of the week redraws them.
+  context.overall(NOW - 30 * 60_000, 1, { planType: null, provenance: 'official-statusline', metadata: {} });
+  const projection = projectFableAllowance(context.store, NOW);
+  assert.equal(projection.available, true);
+  assert.ok(Math.abs(projection.usedPercent - 20) < 0.01, `usedPercent ${projection.usedPercent}`);
+  assert.equal(projection.ceiling, 40, 'the ceiling follows the reading the Claude card shows');
+});
+
+// Last week's Fable readings supply the only calibration pair candidates; this
+// week has one overall reading and no anchor, so only a pair can project it.
+function calibrationWeek(context, values) {
+  const previousReset = iso(Date.parse(RESET) - 7 * 24 * HOUR);
+  const times = [NOW - 6 * 24 * HOUR, NOW - 5 * 24 * HOUR, NOW - 4 * 24 * HOUR];
+  values.forEach(([used, provenance], index) => {
+    if (index > 0) context.usage(`calibration-${index}`, times[index] - 6 * HOUR, 'claude-fable-5', 500_000);
+    context.fable(times[index], used, { resetsAt: previousReset, provenance, metadata: {} });
+  });
+  context.overall(NOW - 2 * HOUR, 3);
+  context.usage('this-week', NOW - HOUR, 'claude-fable-5', 2_000_000);
+  return projectFableAllowance(context.store, NOW);
+}
+
+test('a correction and its rebound are not measured as Fable consumption', (t) => {
+  const rebound = calibrationWeek(fixture(t),
+    [[20, 'official-claude-usage'], [19, 'official-statusline'], [20, 'official-statusline']]);
+  assert.deepEqual(rebound, { available: false, reason: 'not-enough-overall-readings' },
+    'usage never passed the 20% already observed');
+  const rise = calibrationWeek(fixture(t),
+    [[20, 'official-claude-usage'], [19, 'official-statusline'], [22, 'official-statusline']]);
+  assert.equal(rise.method, 'fable-anchor-pair');
+  assert.equal(rise.measuredPairs, 1);
+  assert.equal(rise.calibration.pairMeasuredPressure, 10,
+    'the rise is measured from the reading that set the high-water mark, so both sessions count');
+});
+
+test('a Fable replenishment starts a new high-water mark for calibration', (t) => {
+  const context = fixture(t);
+  context.fable(NOW - 30 * HOUR, 60);
+  context.fable(NOW - 20 * HOUR, 1);
+  context.usage('after-replenishment', NOW - 15 * HOUR, 'claude-fable-5', 1_000_000);
+  context.fable(NOW - 10 * HOUR, 6);
+  context.overall(NOW - 2 * HOUR, 3);
+  context.usage('tail', NOW - HOUR, 'claude-fable-5', 1_000_000);
+  const projection = projectFableAllowance(context.store, NOW);
+  assert.equal(projection.method, 'fable-anchor-pair');
+  assert.equal(projection.measuredPairs, 1, 'the rise after the replenishment is real consumption');
+});
+
 test('the tracker anchors on the reading the card shows: the latest usable one in the bucket', (t) => {
   const context = fixture(t);
   context.fable(NOW - 2 * HOUR, 40);

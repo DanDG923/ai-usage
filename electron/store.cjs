@@ -8,7 +8,7 @@ const { isOfficialWindow, selectDisplayedWindows } = require('./quota-selection.
 const { FABLE_BUCKET, FABLE_BUCKET_NAME, projectFableAllowance } = require('./fable-projection.cjs');
 const { applySharedPool } = require('./fable-shared-pool.cjs');
 const { codexQuotaLabel } = require('./codex-quota-label.cjs');
-const { forecastQuota, normaliseObservation, prepareObservation, clusterByWindow, withoutStaleRestatements } = require('./forecast.cjs');
+const { forecastQuota, freshReadGraceFor, normaliseObservation, prepareObservation, clusterByWindow, withoutStaleRestatements } = require('./forecast.cjs');
 const { TaskUsage } = require('./task-usage.cjs');
 const { estimateTokenCapacity, LOOKBACK_MS: TOKEN_CAPACITY_LOOKBACK_MS, STALENESS_MS: TOKEN_CAPACITY_STALENESS_MS } = require('./token-capacity.cjs');
 const { MAX_QUOTA_RESET_AHEAD_MS, QUOTA_CLOCK_SKEW_MS, FORECAST_LOOKBACK_MS, validQuotaTime } = require('./quota-time.cjs');
@@ -73,13 +73,6 @@ const SETTING_ALIASES = { notifyInApp: 'notifyDesktop' };
 
 function isIsoOrNull(value) {
   return value === null || (typeof value === 'string' && Number.isFinite(Date.parse(value)));
-}
-
-// How long a lower status-line reading waits for the provider's next read to
-// confirm or contradict it: two refreshes, and never less than two hours.
-function freshReadGraceMs(settings) {
-  const minutes = Number(settings.refreshIntervalMinutes);
-  return Math.max(2 * 60 * 60_000, minutes > 0 ? 2 * minutes * 60_000 : 0);
 }
 
 function isForecastDate(value) {
@@ -1139,7 +1132,7 @@ class UsageStore {
     }
     // A stale status-line restatement must not become the card's current
     // balance, a forecast reading or a token-capacity interval.
-    const restatementOptions = { nowMs, freshReadGraceMs: freshReadGraceMs(settings) };
+    const restatementOptions = { nowMs, freshReadGraceMs: freshReadGraceFor(settings) };
     for (const [bucketId, bucketRows] of grouped) {
       grouped.set(bucketId, withoutStaleRestatements(bucketRows, restatementOptions));
     }
@@ -1258,14 +1251,15 @@ class UsageStore {
   // revision or change the key. The tail grows with wall time, so a value is
   // good for a minute and never past the window reset or a pending change.
   getFableProjection(settings, nowMs) {
-    if (this.db.isTransaction) return projectFableAllowance(this, nowMs);
+    const projectionOptions = { freshReadGraceMs: freshReadGraceFor(settings) };
+    if (this.db.isTransaction) return projectFableAllowance(this, nowMs, projectionOptions);
     const revision = this.prepare(`SELECT COALESCE(SUM(revision), 0) AS value FROM analytics_revisions
       WHERE (domain = 'quota' AND source_id IN ('claude', 'claude-fable')) OR (domain = 'usage' AND source_id = 'claude')`).get().value;
     const allowanceChanges = settings.allowanceChanges || [];
-    const key = JSON.stringify(allowanceChanges);
+    const key = JSON.stringify([allowanceChanges, projectionOptions.freshReadGraceMs]);
     const cached = this.fableProjectionCache;
     if (cached && cached.revision === revision && cached.key === key && nowMs >= cached.evaluatedAt && nowMs < cached.expiresAt) return cached.value;
-    const value = projectFableAllowance(this, nowMs);
+    const value = projectFableAllowance(this, nowMs, projectionOptions);
     let expiresAt = nowMs + 60_000;
     if (value.available) expiresAt = Math.min(expiresAt, Date.parse(value.resetsAt));
     for (const change of allowanceChanges) {

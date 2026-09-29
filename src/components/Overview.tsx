@@ -24,6 +24,7 @@ import {
   whenLabel,
 } from '../lib';
 import { providerViews, type ProviderId, type ProviderView } from '../provider-view';
+import { snapshotNowMs } from '../snapshot-time';
 import type { ForecastState, QuotaWindow, Snapshot } from '../types';
 import { API_EQUIVALENT_EXPLAINER, InfoTip } from './InfoTip';
 import { ProviderSummary } from './ProviderSummary';
@@ -245,7 +246,7 @@ export function Overview({
   /** Opens Settings at a section; falls back to onSources when absent. */
   onOpenSettings?: (section: string) => void;
 }) {
-  const nowMs = Date.parse(snapshot.generatedAt);
+  const nowMs = snapshotNowMs(snapshot);
   const views = providerViews(snapshot);
   const verdict = verdictSentence(
     snapshot.dashboardVerdict,

@@ -730,3 +730,69 @@ test('a failed Refresh stays visible through automatic runs until a Refresh succ
   assert.equal(claude.metadata.planUsage.lastRequest.succeeded, true);
   assert.doesNotMatch(claude.status_detail, /could not read/);
 });
+
+// A lower status-line reading for the same reset is held back from the card
+// while the provider's last read is inside the grace period. The source status
+// and the Refresh outcome are judged on the same accepted readings.
+test('a status-line restatement the card holds back cannot make Claude current or a failed Refresh succeed', async (t) => {
+  const { refreshClaude } = collectorWithPortSpy();
+  const { root, store, source } = collectorFixture(t);
+  // In the past, so every capture below is accepted as already taken.
+  const nowMs = Date.now() - 15 * MINUTE;
+  const fiveReset = new Date(nowMs + 180 * MINUTE).toISOString();
+  const weekReset = new Date(nowMs + 3 * 1440 * MINUTE).toISOString();
+  for (const [bucketId, usedPercent, resetsAt] of [['five_hour', 40, fiveReset], ['seven_day', 20, weekReset]]) {
+    store.recordObservation({
+      sourceId: 'claude', bucketId, bucketName: bucketId, observedAt: new Date(nowMs - 90 * MINUTE).toISOString(),
+      usedPercent, remainingPercent: 100 - usedPercent, resetsAt, windowMinutes: WINDOW_MINUTES[bucketId],
+      provenance: 'official-claude-usage', confidence: 1, metadata: {},
+    });
+  }
+  const inbox = path.join(root, 'inbox.jsonl');
+  const capture = (at, fiveUsed, { weekly = true } = {}) => fs.appendFileSync(inbox, `${JSON.stringify({
+    ai_usage_captured_at: new Date(at).toISOString(),
+    rate_limits: {
+      five_hour: { used_percentage: fiveUsed, resets_at: fiveReset },
+      ...(weekly ? { seven_day: { used_percentage: 20, resets_at: weekReset } } : {}),
+    },
+  })}\n`);
+  const rateLimited = { read: async () => { throw Object.assign(new Error('HTTP 429'), { code: 'rate_limited' }); } };
+
+  capture(nowMs - 30_000, 1);
+  await refreshClaude(store, inbox, { activityReader: quietActivity, clock: () => new Date(nowMs) });
+  const card = store.getQuota('claude', store.getSettings(), nowMs).windows.find((window) => window.bucketId === 'five_hour');
+  assert.equal(card.usedPercent, 40, 'the card holds the lower restatement back');
+  assert.equal(source('claude').status, 'stale', 'the ninety-minute-old five-hour reading it shows is out of date');
+
+  capture(nowMs + 20_000, 1);
+  await refreshClaude(store, inbox, { readPlanUsage: true, usagePort: rateLimited, activityReader: quietActivity, clock: () => new Date(nowMs + 60_000) });
+  let claude = source('claude');
+  assert.equal(claude.status, 'stale');
+  assert.equal(claude.metadata.planUsage.lastRequest.succeeded, false);
+  assert.match(claude.status_detail, /did not replace it/);
+
+  await refreshClaude(store, inbox, { activityReader: quietActivity, clock: () => new Date(nowMs + 120_000) });
+  claude = source('claude');
+  assert.equal(claude.status, 'stale');
+  assert.match(claude.status_detail, /The last Refresh could not read Claude plan usage \(rate_limited\)\./,
+    'a held-back status-line row is not a newer reading that replaces the failed Refresh');
+
+  // A status-line reading the card accepts still stands in for the provider.
+  capture(nowMs + 150_000, 41);
+  await refreshClaude(store, inbox, { readPlanUsage: true, usagePort: rateLimited, activityReader: quietActivity, clock: () => new Date(nowMs + 180_000) });
+  claude = source('claude');
+  assert.equal(claude.status, 'connected');
+  assert.equal(claude.metadata.planUsage.lastRequest.succeeded, true);
+
+  // The next Refresh imports only a held-back restatement. The accepted 41%
+  // reading is still recent, but an earlier collection imported it, so it
+  // cannot stand in for this failed request.
+  capture(nowMs + 380_000, 1, { weekly: false });
+  await refreshClaude(store, inbox, { readPlanUsage: true, usagePort: rateLimited, activityReader: quietActivity, clock: () => new Date(nowMs + 400_000) });
+  const five = store.getQuota('claude', store.getSettings(), nowMs + 400_000).windows.find((window) => window.bucketId === 'five_hour');
+  assert.equal(five.usedPercent, 41);
+  assert.equal(five.observedAt, new Date(nowMs + 150_000).toISOString());
+  claude = source('claude');
+  assert.equal(claude.metadata.planUsage.lastRequest.succeeded, false);
+  assert.doesNotMatch(claude.status_detail, /evidence was refreshed/);
+});

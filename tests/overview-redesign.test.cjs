@@ -195,6 +195,22 @@ test('freshness reads as a relative time and source health names what needs atte
   assert.deepEqual(header.sourceHealth(snapshot), { tone: 'watch', text: 'Codex needs a refresh' }, 'hidden subscriptions are not reported');
 });
 
+test('source health does not call a connected source current once its allowance reading ages past the freshness limit', () => {
+  const snapshot = structuredClone(demoSnapshot);
+  for (const source of snapshot.sources) source.status = 'connected';
+  const age = (id, staleHours) => { for (const entry of snapshot.quotas[id].windows) entry.forecast.staleHours = staleHours; };
+  age('claude', 23.9);
+  assert.deepEqual(header.sourceHealth(snapshot), { tone: 'safe', text: '3 sources current' });
+  // A weekly reading is current for 24 hours after it was taken.
+  age('claude', 25.9);
+  const health = header.sourceHealth(snapshot);
+  assert.equal(health.tone, 'watch');
+  assert.match(health.text, /^Claude (and Fable )?needs? a refresh$/);
+  snapshot.quotas.claude.windows.forEach((entry) => { entry.forecast.expired = true; });
+  assert.deepEqual(header.sourceHealth(snapshot), { tone: 'safe', text: '3 sources current' },
+    'an ended window waits for a reading; it is not an aged one');
+});
+
 test('a provider page plans the week, names the related allowance and shows its evidence', () => {
   const snapshot = structuredClone(demoSnapshot);
   const html = render(ProviderDetail, { snapshot, provider: 'fable', onBack() {}, onOpenProvider() {} });
