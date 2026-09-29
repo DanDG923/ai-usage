@@ -590,9 +590,37 @@ test('status-line rotation imports the stable old file before the new active inb
   } finally { store.close(); }
 });
 
+test('a rotation between imports restarts the live inbox even once it outgrows the old cursor', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-rotation-'));
+  const store = new UsageStore(path.join(root, 'test.sqlite'), path.join(root, 'Backups'));
+  const inbox = path.join(root, 'inbox.jsonl');
+  const at = (minute) => new Date(Date.parse('2026-08-29T10:00:00Z') + minute * 60_000).toISOString();
+  const row = (minute) => JSON.stringify({ ai_usage_captured_at: at(minute), rate_limits: { seven_day: { used_percentage: 20 + minute / 10, resets_at: '2026-09-04T12:00:00Z' } } });
+  const lines = (from, to) => Array.from({ length: to - from }, (_, index) => `${row(from + index)}\n`).join('');
+  try {
+    fs.writeFileSync(inbox, lines(0, 3), 'utf8');
+    assert.equal(importClaudeInbox(store, inbox).observations, 3);
+    // Before the next import the helper appends, rotates, and writes more to
+    // a new inbox than the old cursor covered.
+    fs.appendFileSync(inbox, lines(3, 5), 'utf8');
+    fs.renameSync(inbox, `${inbox}.rotated-202608291005000000-1`);
+    fs.writeFileSync(inbox, lines(5, 12), 'utf8');
+    const result = importClaudeInbox(store, inbox);
+    assert.equal(result.invalidRecords, 0, 'no record is read from the middle');
+    const stored = store.db.prepare("SELECT COUNT(*) AS count FROM quota_observations WHERE source_id = 'claude'").get().count;
+    assert.equal(stored, 12, 'every reading of both files is kept');
+    assert.equal(importClaudeInbox(store, inbox).snapshots, 0, 'the restarted inbox keeps an ordinary cursor afterwards');
+  } finally { store.close(); }
+});
+
+test('the helper doubles every PowerShell single-quote character in its inbox path', () => {
+  const helper = makeHelperScript("C:\\Users\\O\u2019Brien\\AppData\\Roaming\\ai-usage\\Bob's inbox.jsonl");
+  assert.ok(helper.includes("$target = 'C:\\Users\\O\u2019\u2019Brien\\AppData\\Roaming\\ai-usage\\Bob''s inbox.jsonl'"));
+});
+
 test('generated helper writes BOM-free UTF-8 and rotates before appending', () => {
   const helper = makeHelperScript('C:\\Temp\\ai-usage\\inbox.jsonl');
-  assert.match(helper, /AI_USAGE_HELPER_VERSION=1\.0\.3/);
+  assert.match(helper, /AI_USAGE_HELPER_VERSION=1\.0\.4/);
   assert.match(helper, /Move-Item/);
   assert.match(helper, /UTF8Encoding\(\$false\)/);
   assert.match(helper, /AppendAllText/);

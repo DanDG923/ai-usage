@@ -41,7 +41,9 @@ function laterIso(left, right) {
   return Date.parse(right) > Date.parse(left) ? right : left;
 }
 
-function importClaudeInboxFile(store, inboxPath) {
+// `restarted` says the helper has rotated the live inbox since its cursor was
+// stored: the file at this path is a new one, whatever its size.
+function importClaudeInboxFile(store, inboxPath, { restarted = false } = {}) {
   if (!fs.existsSync(inboxPath)) return emptyInboxResult();
   let stat;
   try {
@@ -49,7 +51,7 @@ function importClaudeInboxFile(store, inboxPath) {
   } catch {
     return emptyInboxResult({ readErrors: 1 });
   }
-  const previous = store.getImportedFile(inboxPath);
+  const previous = restarted ? null : store.getImportedFile(inboxPath);
   if (previous && previous.modified_ms === stat.mtimeMs && previous.size_bytes === stat.size) {
     return emptyInboxResult();
   }
@@ -148,10 +150,15 @@ function importClaudeInbox(store, inboxPath) {
   const total = emptyInboxResult();
   const numericKeys = ['snapshots', 'usageEvents', 'observations', 'claudeObservations', 'fableObservations',
     'invalidRecords', 'invalidResets', 'rejectedRecords', 'readErrors', 'bytesRead'];
+  // A rotated file with no cursor was rotated since the last import, so the
+  // live inbox restarted from empty. Once it grows past the old cursor it
+  // would look like an append and its first records would be skipped. Reading
+  // it from the start is safe: observations are upserted by reading time.
+  const restarted = rotated.some((filePath) => !store.getImportedFile(filePath));
   for (const filePath of [...rotated, inboxPath]) {
     let result;
     try {
-      result = importClaudeInboxFile(store, filePath);
+      result = importClaudeInboxFile(store, filePath, { restarted: restarted && filePath === inboxPath });
     } catch {
       result = emptyInboxResult({ readErrors: 1 });
     }
@@ -253,6 +260,18 @@ function copiedEventRow(store, event) {
   return row;
 }
 
+// Only what transcriptEvent, agent attribution and the fork check read. A row
+// also carries message content and tool inputs (file contents, commands) that
+// can dwarf its usage; none of it is held while the rest of the file is read.
+function usageRowFields(row, usage) {
+  return {
+    sessionId: row.sessionId, timestamp: row.timestamp, cwd: row.cwd, requestId: row.requestId,
+    entrypoint: row.entrypoint, isSidechain: row.isSidechain, effort: row.effort, agentId: row.agentId,
+    forkedFrom: Boolean(row.forkedFrom),
+    message: { id: row.message.id, model: row.message.model, usage },
+  };
+}
+
 function importClaudeTranscripts(store, days = 120) {
   // CLAUDE_CONFIG_DIR relocates Claude Code's directory, projects included.
   const home = providerHome('CLAUDE_CONFIG_DIR', '.claude');
@@ -310,8 +329,7 @@ function importClaudeTranscripts(store, days = 120) {
         if (row.type !== 'assistant' || !usage) continue;
         const messageId = row.message?.id || row.requestId || row.uuid;
         if (!messageId || !row.timestamp) continue;
-        // Message content can dwarf usage metadata; never retain prompt text.
-        latestByMessage.set(messageId, { ...row, message: { id: row.message.id, model: row.message.model, usage }, content: undefined });
+        latestByMessage.set(messageId, usageRowFields(row, usage));
       }
     } catch (error) {
       if (!(error instanceof IncrementalReadError)) throw error;
@@ -362,16 +380,22 @@ function importClaudeTranscripts(store, days = 120) {
 }
 
 
+// Bumped whenever the script changes, so installed copies are rewritten.
+const HELPER_VERSION = 'AI_USAGE_HELPER_VERSION=1.0.4';
+
 function makeHelperScript(inboxPath) {
-  const target = inboxPath.replaceAll("'", "''");
-  return `# AI_USAGE_HELPER_VERSION=1.0.3\n$ErrorActionPreference = 'SilentlyContinue'\n$raw = [Console]::In.ReadToEnd()\nif ([string]::IsNullOrWhiteSpace($raw)) { exit 0 }\ntry {\n  $data = $raw | ConvertFrom-Json\n  $safeModel = [ordered]@{}\n  if ($null -ne $data.model.id) { $safeModel.id = $data.model.id }\n  if ($null -ne $data.model.display_name) { $safeModel.display_name = $data.model.display_name }\n  $safe = [ordered]@{\n    ai_usage_captured_at = [DateTime]::UtcNow.ToString('o')\n    model = $safeModel\n    rate_limits = $data.rate_limits\n  }\n  $line = $safe | ConvertTo-Json -Depth 30 -Compress\n  $target = '${target}'\n  $parent = Split-Path -Parent $target\n  New-Item -ItemType Directory -Force -Path $parent | Out-Null\n  if ((Test-Path -LiteralPath $target) -and ((Get-Item -LiteralPath $target).Length -ge ${MAX_INBOX_BYTES})) {\n    $rotated = $target + '.rotated-' + ([DateTime]::UtcNow.ToString('yyyyMMddHHmmssffff')) + '-' + $PID\n    Move-Item -LiteralPath $target -Destination $rotated -ErrorAction SilentlyContinue\n  }\n  $utf8 = New-Object System.Text.UTF8Encoding($false)\n  [System.IO.File]::AppendAllText($target, $line + [Environment]::NewLine, $utf8)\n  $parts = @()\n  if ($null -ne $data.rate_limits.five_hour.used_percentage) { $parts += ('5h: {0:N0}%' -f $data.rate_limits.five_hour.used_percentage) }\n  if ($null -ne $data.rate_limits.seven_day.used_percentage) { $parts += ('7d: {0:N0}%' -f $data.rate_limits.seven_day.used_percentage) }\n  $fable = $data.rate_limits.PSObject.Properties | Where-Object { $_.Name -match 'fable' } | Select-Object -First 1\n  if ($fable) { $parts += ('Fable: {0:N0}%' -f $fable.Value.used_percentage) }\n  $modelLabel = if ($data.model.display_name) { $data.model.display_name } else { 'Claude' }\n  if ($parts.Count -gt 0) { Write-Output ('[{0}] | {1}' -f $modelLabel, ($parts -join ' ')) } else { Write-Output ('[{0}]' -f $modelLabel) }\n} catch {\n  Write-Output '[Claude]'\n}\n`;
+  // PowerShell ends a single-quoted string at any of its four typographic
+  // single quotes as well as at ', so a profile folder such as O’Brien needs
+  // every one doubled, not only the ASCII quote.
+  const target = inboxPath.replace(/['\u2018\u2019\u201A\u201B]/g, '$&$&');
+  return `# ${HELPER_VERSION}\n$ErrorActionPreference = 'SilentlyContinue'\n$raw = [Console]::In.ReadToEnd()\nif ([string]::IsNullOrWhiteSpace($raw)) { exit 0 }\ntry {\n  $data = $raw | ConvertFrom-Json\n  $safeModel = [ordered]@{}\n  if ($null -ne $data.model.id) { $safeModel.id = $data.model.id }\n  if ($null -ne $data.model.display_name) { $safeModel.display_name = $data.model.display_name }\n  $safe = [ordered]@{\n    ai_usage_captured_at = [DateTime]::UtcNow.ToString('o')\n    model = $safeModel\n    rate_limits = $data.rate_limits\n  }\n  $line = $safe | ConvertTo-Json -Depth 30 -Compress\n  $target = '${target}'\n  $parent = Split-Path -Parent $target\n  New-Item -ItemType Directory -Force -Path $parent | Out-Null\n  if ((Test-Path -LiteralPath $target) -and ((Get-Item -LiteralPath $target).Length -ge ${MAX_INBOX_BYTES})) {\n    $rotated = $target + '.rotated-' + ([DateTime]::UtcNow.ToString('yyyyMMddHHmmssffff')) + '-' + $PID\n    Move-Item -LiteralPath $target -Destination $rotated -ErrorAction SilentlyContinue\n  }\n  $utf8 = New-Object System.Text.UTF8Encoding($false)\n  [System.IO.File]::AppendAllText($target, $line + [Environment]::NewLine, $utf8)\n  $parts = @()\n  if ($null -ne $data.rate_limits.five_hour.used_percentage) { $parts += ('5h: {0:N0}%' -f $data.rate_limits.five_hour.used_percentage) }\n  if ($null -ne $data.rate_limits.seven_day.used_percentage) { $parts += ('7d: {0:N0}%' -f $data.rate_limits.seven_day.used_percentage) }\n  $fable = $data.rate_limits.PSObject.Properties | Where-Object { $_.Name -match 'fable' } | Select-Object -First 1\n  if ($fable) { $parts += ('Fable: {0:N0}%' -f $fable.Value.used_percentage) }\n  $modelLabel = if ($data.model.display_name) { $data.model.display_name } else { 'Claude' }\n  if ($parts.Count -gt 0) { Write-Output ('[{0}] | {1}' -f $modelLabel, ($parts -join ' ')) } else { Write-Output ('[{0}]' -f $modelLabel) }\n} catch {\n  Write-Output '[Claude]'\n}\n`;
 }
 
 function updateManagedHelper(helperPath, inboxPath) {
   if (!fs.existsSync(helperPath)) return false;
   try {
     const current = fs.readFileSync(helperPath, 'utf8');
-    if (current.includes('AI_USAGE_HELPER_VERSION=1.0.3')) return false;
+    if (current.includes(HELPER_VERSION)) return false;
     if (!current.includes('ai_usage_captured_at') || !current.includes('ai-usage')) return false;
     fs.writeFileSync(helperPath, makeHelperScript(inboxPath), 'utf8');
     return true;
