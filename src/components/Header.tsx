@@ -14,6 +14,7 @@ import type { LucideIcon } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { SOURCES, subscriptionVisible } from '../../electron/dashboard-decision.mjs';
 import { HEALTHY_SOURCE_STATUSES, relativeTime, shortDate } from '../lib';
+import { allowanceNeedsRefresh } from '../provider-view';
 import type { Snapshot } from '../types';
 
 export type Tab = 'overview' | 'activity' | 'costs' | 'settings';
@@ -53,15 +54,21 @@ function refreshCadence(minutes: number) {
 /**
  * One line on the health of the sources behind the visible subscriptions:
  * "3 sources current", or the ones that need attention by name. The icon is
- * paired with words, so the state never rests on colour.
+ * paired with words, so the state never rests on colour. A source that
+ * collected successfully still needs a refresh while the allowance it shows
+ * is older than the verdict's freshness rule allows.
  */
 export function sourceHealth(snapshot: Snapshot) {
   const visible = SOURCES.filter(({ id }) => subscriptionVisible(snapshot.settings, id));
   const rows = visible
-    .map(({ healthId, label }) => ({ label, source: snapshot.sources.find((entry) => entry.id === healthId) }))
+    .map(({ id, healthId, label }) => ({
+      label,
+      source: snapshot.sources.find((entry) => entry.id === healthId),
+      aged: allowanceNeedsRefresh(snapshot, id),
+    }))
     .filter((row) => row.source);
   const failing = rows.filter((row) => row.source!.status === 'error');
-  const stale = rows.filter((row) => ['stale', 'degraded'].includes(row.source!.status));
+  const stale = rows.filter((row) => row.aged || ['stale', 'degraded'].includes(row.source!.status));
   const connected = rows.filter((row) => HEALTHY_SOURCE_STATUSES.has(row.source!.status));
   const list = (entries: typeof rows) => entries.map((row) => row.label).join(' and ');
   if (failing.length) return { tone: 'critical', text: `${list(failing)} unavailable` };

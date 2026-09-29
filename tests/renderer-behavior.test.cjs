@@ -183,6 +183,22 @@ test('Activity does not call a connected source current when its allowance windo
   assert.doesNotMatch(text(row), /Current|73%/);
 });
 
+test('Activity does not call a connected source current once its allowance reading ages past the freshness limit', () => {
+  const codexRow = (staleHours) => {
+    const snapshot = structuredClone(demoSnapshot);
+    snapshot.sources.find((source) => source.id === 'codex').status = 'connected';
+    for (const entry of snapshot.quotas.codex.windows) entry.forecast.staleHours = staleHours;
+    const html = render(Activity, { snapshot, days: snapshot.costs.periodDays });
+    const table = html.match(/<table class="evidence-table">[\s\S]*?<\/table>/)?.[0];
+    return text(table?.match(/<tr>(?:(?!<\/tr>)[\s\S])*?Codex[\s\S]*?<\/tr>/)?.[0] ?? '');
+  };
+  assert.match(codexRow(0.5), /Current/);
+  // Collection succeeded, but the balance it shows is older than the rule allows.
+  const aged = codexRow(26);
+  assert.match(aged, /Needs refresh/);
+  assert.doesNotMatch(aged, /Current/);
+});
+
 test('the card headlines the weekly allowance and lists a riskier five-hour session beneath it', () => {
   const snapshot = structuredClone(demoSnapshot);
   const weekly = snapshot.quotas.codex.windows[0];

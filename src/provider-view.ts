@@ -138,6 +138,21 @@ function providerNotes(
   return notes;
 }
 
+// Whether a provider's allowance is older than the verdict's freshness rule
+// allows. It is judged apart from the source's last collection: a collection
+// can succeed and still leave the balance it shows in need of a refresh.
+function allowanceAged(quota: Quota | null, poolWindow: QuotaWindow | null) {
+  return (
+    quotaWindows(quota).some((entry) => !entry.forecast.expired && evidenceNeedsRefresh(entry)) || Boolean(poolWindow)
+  );
+}
+
+/** Whether the provider's shown allowance needs a refresh; a stale Claude weekly reading ages the Fable figure it caps. */
+export function allowanceNeedsRefresh(snapshot: Snapshot, id: ProviderId) {
+  const quota = snapshot.quotas[id];
+  return allowanceAged(quota, id === 'fable' ? stalePoolWindow(primaryWindow(quota), snapshot.quotas.claude) : null);
+}
+
 // Each snapshot arrives as one immutable object over IPC, and several views
 // derive the same provider rows from it on every render. The rows are built
 // once per snapshot so their identity is stable for the memoised charts.
@@ -185,8 +200,7 @@ function buildProviderViews(snapshot: Snapshot): ProviderView[] {
         stale: Boolean(
           expired ||
           (source && ['stale', 'degraded', 'error'].includes(source.status)) ||
-          quotaWindows(quota).some((entry) => !entry.forecast.expired && evidenceNeedsRefresh(entry)) ||
-          poolWindow,
+          allowanceAged(quota, poolWindow),
         ),
         notes: providerNotes(id, current, source, poolWindow, snapshot),
         secondaryWindows: current ? selectDisplayedWindows(quotaWindows(quota)).secondary : [],

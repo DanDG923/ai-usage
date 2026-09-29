@@ -12,15 +12,17 @@ import '../styles/activity.css';
 
 /**
  * A source's standing as an icon and a word (Deck-StatesParts frame 15):
- * current is on track, a stale source needs a refresh (caution), a failing one
- * is unavailable (warning), and an ended window waits for a reading (neutral).
+ * current is on track, a stale source or aged reading needs a refresh
+ * (caution), a failing one is unavailable (warning), and an ended window
+ * waits for a reading (neutral). A source that collected successfully is not
+ * current while the balance it shows is older than the freshness rule allows.
  */
-function sourceState(status: string, expired: boolean) {
-  if (expired) return { label: 'Needs reading', tone: 'unknown', icon: CircleDashed };
-  if (status === 'connected') return { label: 'Current', tone: 'safe', icon: CheckCircle2 };
-  if (status === 'stale' || status === 'degraded')
-    return { label: 'Needs refresh', tone: 'watch', icon: AlertTriangle };
+function sourceState(view: ProviderView) {
+  const status = view.source?.status ?? 'waiting';
+  if (view.expired) return { label: 'Needs reading', tone: 'unknown', icon: CircleDashed };
   if (status === 'error') return { label: 'Unavailable', tone: 'critical', icon: AlertOctagon };
+  if (view.stale) return { label: 'Needs refresh', tone: 'watch', icon: AlertTriangle };
+  if (status === 'connected') return { label: 'Current', tone: 'safe', icon: CheckCircle2 };
   return { label: status || 'Waiting', tone: 'unknown', icon: CircleDashed };
 }
 
@@ -109,7 +111,7 @@ export function Activity({ snapshot, days }: { snapshot: Snapshot; days: number 
               </thead>
               <tbody>
                 {views.map((view) => {
-                  const state = sourceState(view.source?.status ?? 'waiting', view.expired);
+                  const state = sourceState(view);
                   const Icon = state.icon;
                   return (
                     <tr key={view.id}>
