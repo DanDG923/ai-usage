@@ -483,8 +483,18 @@ function Planner({
         : heavyEnds
           ? `At the heavier pace ${view.name} runs out ${whenLabel(heavyEnds, nowMs)}, ${gapBeforeReset(heavyEnds, view.resetAt)}.`
           : 'At the heavier pace the allowance would be used up before the reset.';
+  const unsaved = draft != null && draft !== saved;
   return (
-    <section className="pnl pd-panel pd-planner" aria-labelledby="planner-heading">
+    // Releasing the hidden window would discard an unsaved reserve, so the page
+    // refuses it while one is shown and while a save is pending. The guard sits
+    // on the planner itself: moving the slider back to the saved value during a
+    // save hides the unsaved-reserve block before the save has settled.
+    <section
+      className="pnl pd-panel pd-planner"
+      aria-labelledby="planner-heading"
+      data-keep-awake={unsaved || saving ? 'true' : undefined}
+      aria-busy={saving}
+    >
       <div className="pd-panel-head">
         <h2 id="planner-heading">Daily budget</h2>
         <p>
@@ -531,10 +541,8 @@ function Planner({
           <span>{verdictText}</span>
         </div>
       </div>
-      {draft != null && draft !== saved && (
-        // Releasing the hidden window would discard the unsaved reserve, so the
-        // page refuses it while one is shown, and while a save is pending.
-        <div className="pd-save" data-keep-awake="true" aria-busy={saving}>
+      {unsaved && (
+        <div className="pd-save">
           <span>{`Trying ${draft}%. Forecasts still use ${saved}%.`}</span>
           <div className="pd-save-keys">
             {onSaveReserve && (
