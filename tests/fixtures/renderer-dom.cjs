@@ -32,6 +32,18 @@ app.whenReady().then(async () => {
   await evaluate(() => window.testBridge.push(window.testBridge.fixture()));
   await new Promise((resolve) => setTimeout(resolve, 100));
   assert.equal(await evaluate(() => [...document.querySelectorAll('.period-switch button')].find((button) => button.getAttribute('aria-pressed') === 'true').textContent.includes('90')), true, 'old push cannot undo selected period');
+  // A pushed update landing during a Refresh must not re-enable Refresh.
+  await evaluate(() => { window.testBridge.holdRefresh(true); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'r' })); });
+  await until(() => window.testBridge.refreshCalls() === 1);
+  await evaluate(() => { const next = window.testBridge.fixture(); next.costs.periodDays = 90; window.testBridge.push(next); });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(await evaluate(() => document.querySelector('button[aria-keyshortcuts="R"]').disabled), true, 'Refresh stays disabled while it runs');
+  await evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'r' })));
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(await evaluate(() => window.testBridge.refreshCalls()), 1, 'a second Refresh is not started');
+  await evaluate(() => window.testBridge.releaseRefresh());
+  await until(() => !document.querySelector('button[aria-keyshortcuts="R"]').disabled);
+  await evaluate(() => document.querySelector('[aria-label="Dismiss message"]')?.click());
   await evaluate(() => document.querySelector('#tab-overview').click());
   await until(() => document.querySelectorAll('.runway-chart').length === 3);
   await evaluate(() => { const next = window.testBridge.fixture(); for (const quota of Object.values(next.quotas)) { if (!quota) continue; for (const entry of [quota, ...quota.windows]) { entry.resetsAt = new Date(Date.now() + 250).toISOString(); entry.forecast.expired = false; } } window.testBridge.push(next); });
@@ -171,7 +183,25 @@ app.whenReady().then(async () => {
     await new Promise((resolve) => setTimeout(resolve, 200));
     fs.writeFileSync(path.join(process.env.AI_USAGE_RENDERER_QA_DIRECTORY, 'renderer-costs-light-900.png'), (await window.webContents.capturePage()).toPNG());
   }
-  console.log('RENDERER_DOM_PASS: pushes, retained tasks, periods, reset timer, currency, settings navigation and search, keyboard focus and alerts');
+  // A window opened while an update has closed storage explains the wait and
+  // can try again, rather than loading indefinitely.
+  const waiting = new BrowserWindow({ show: false, width: 1280, height: 900,
+    webPreferences: { preload: path.join(__dirname, 'renderer-dom-preload.cjs'), contextIsolation: true, sandbox: false, backgroundThrottling: false, offscreen: true,
+      additionalArguments: ['--decline-reads'] } });
+  const inWaiting = (fn) => waiting.webContents.executeJavaScript(`(${fn.toString()})()`);
+  await waiting.loadURL(process.env.AI_USAGE_RENDERER_URL);
+  for (let attempt = 0; !(await inWaiting(() => document.querySelector('.state-panel.is-error button'))); attempt++) {
+    if (attempt > 100) throw new Error('The declined first read left the loading screen without a retry.');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.match(await inWaiting(() => document.querySelector('.state-panel').textContent), /finishing an update/);
+  await inWaiting(() => { window.testBridge.answerReads(); document.querySelector('.state-panel.is-error button').click(); });
+  for (let attempt = 0; !(await inWaiting(() => document.querySelector('#tab-costs'))); attempt++) {
+    if (attempt > 100) throw new Error('Try again did not load the dashboard.');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  waiting.destroy();
+  console.log('RENDERER_DOM_PASS: pushes, retained tasks, periods, reset timer, refresh state, currency, settings navigation and search, keyboard focus and alerts, declined first read');
   app.exit(0);
  } catch (error) { console.error(error); app.exit(1); }
 }).catch((error) => { console.error(error); app.exit(1); });

@@ -65,11 +65,17 @@ export function inactiveRanges(startMs: number, endMs: number, schedule: Schedul
 /**
  * A reserve setting, as a share of this window. While the Claude weekly limit
  * sets Fable's budget, keeping 10% of the week back keeps 20% of Fable back,
- * the rule the backend applies to the window's own forecast reserve.
+ * the rule the backend applies to the window's own forecast reserve. Like the
+ * backend, it applies only once the Claude weekly forecast is known.
  */
 export function forecastReserve(window: QuotaWindow | null | undefined, percent: number) {
   const pool = window?.sharedPool;
-  if (pool?.status === 'applied' && pool.bindingAtReset === 'pool' && pool.share > 0)
+  if (
+    pool?.status === 'applied' &&
+    pool.bindingAtReset === 'pool' &&
+    pool.share > 0 &&
+    pool.pool.expectedRemaining != null
+  )
     return Math.max(0, Math.min(90, percent / pool.share));
   return percent;
 }

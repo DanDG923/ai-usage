@@ -607,3 +607,76 @@ test('empty hourly activity and chart data tables are available without pointer 
   assert.match(render(CostChart, { costs: demoSnapshot.costs }), /View cost data.*<table>/);
   assert.match(render(DailyUsageChart, { rows: [{ date: '2026-09-14', tokens: 100 }], days: 30 }), /View daily token data.*<table>/);
 });
+
+test('Claude model-scoped weeks are named and grouped apart, never read as the plan weekly allowance', () => {
+  const window = (bucketId, bucketName, metadata) => ({ bucketId, bucketName, windowMinutes: 10_080, metadata });
+  assert.equal(lib.modelAllowanceName(window('seven_day', 'Weekly', { scope: 'overall' })), null);
+  assert.equal(lib.modelAllowanceName(window('seven_day_opus', 'Opus weekly', { scope: 'model' })), 'Opus');
+  // Status-line rows carry no scope; the bucket still says which week it is.
+  assert.equal(lib.allowanceWindowLabel(window('seven_day_opus', 'Opus weekly', {})), 'Opus · weekly');
+  assert.equal(lib.allowanceWindowLabel(window('seven_day_oauth_apps', 'OAuth apps weekly', { scope: 'oauth-apps' })), 'OAuth apps · weekly');
+  assert.equal(lib.modelAllowanceName(window('codex:secondary', 'Weekly', { limitId: 'codex' })), null);
+  assert.equal(lib.modelAllowanceName(window('gpt:secondary', 'Weekly', { limitId: 'gpt-5-codex', limitName: 'GPT-5 Codex' })), 'GPT-5 Codex');
+  assert.equal(lib.modelAllowanceName(window('fable_seven_day', 'Fable weekly', {})), null);
+
+  const snapshot = structuredClone(demoSnapshot);
+  const weekly = lib.primaryWindow(snapshot.quotas.claude);
+  const opus = { ...structuredClone(weekly), bucketId: 'seven_day_opus', bucketName: 'Opus weekly', metadata: { scope: 'model' } };
+  snapshot.quotas.claude = { ...weekly, windows: [weekly, opus] };
+  const view = providerViews(snapshot).find((entry) => entry.id === 'claude');
+  const card = text(render(ProviderSummary, { view, nowMs: Date.parse(snapshot.generatedAt) }));
+  assert.match(card, /Separate model allowances .*main Claude allowance.*Opus · weekly/);
+});
+
+test('the safe-pace note follows the pace the user treats as a risk and never prints a placeholder multiple', () => {
+  const snapshot = structuredClone(demoSnapshot);
+  for (const quota of Object.values(snapshot.quotas)) {
+    for (const entry of [quota, ...quota.windows]) {
+      entry.forecast = { ...entry.forecast, expired: false, exhaustsAt: null, heavyExhaustsAt: null, paceRatio: 1, safePace: 1 };
+    }
+  }
+  snapshot.dashboardVerdict = { ...snapshot.dashboardVerdict, details: [] };
+  const codex = lib.primaryWindow(snapshot.quotas.codex);
+  codex.forecast.paceRatio = 1.5;
+  const overview = (paceRiskThreshold) => render(Overview, {
+    snapshot: { ...snapshot, settings: { ...snapshot.settings, paceRiskThreshold } },
+    refreshing: false, onRefresh: async () => {}, onSetupClaude() {}, onSources() {},
+  });
+  const tone = (html, title) => html.slice(html.lastIndexOf('<article', html.indexOf(title)), html.indexOf(title)).match(/class="insight (\w+)"/)?.[1];
+  assert.equal(tone(overview(1.2), 'Codex is above its safe pace'), 'warm');
+  // At a 3× risk pace, 1.5× is worth knowing but is not the warning the verdict would give.
+  assert.equal(tone(overview(3), 'Codex is above its safe pace'), 'neutral');
+  // No safe pace left: the backend's ratio is a placeholder, not "2.2× the sustainable pace".
+  codex.forecast.safePace = 0;
+  codex.forecast.paceRatio = 2.2;
+  const html = text(overview(1.2));
+  assert.match(html, /Codex has no safe pace left/);
+  assert.doesNotMatch(html, /2\.2× the sustainable pace/);
+});
+
+test('a plan without a Fable allowance is not waited for, on its card or in the list', () => {
+  const snapshot = structuredClone(demoSnapshot);
+  snapshot.quotas.fable = null;
+  snapshot.fableApplies = false;
+  const html = render(Overview, { snapshot, refreshing: false, onRefresh: async () => {}, onSetupClaude() {}, onSources() {} });
+  const attention = text(html.slice(html.indexOf('id="attention-heading"'), html.indexOf('id="value-heading"')));
+  assert.doesNotMatch(attention, /Waiting for .*Fable/);
+  const fableCard = text(html.slice(html.indexOf('aria-label="Fable allowance"'), html.indexOf('id="attention-heading"')));
+  assert.match(fableCard, /Not in plan .*does not include a Fable allowance/);
+  assert.doesNotMatch(fableCard, /Waiting for the provider/);
+});
+
+test('a weekday names only times within six days, so next week never reads as today', () => {
+  const HOUR = 3_600_000;
+  const now = Date.parse('2026-09-29T14:00:00Z'); // Tuesday 15:00 in London
+  assert.notEqual(lib.whenLabel(now + 7 * 24 * HOUR - HOUR, now), lib.whenLabel(now - HOUR, now));
+  assert.match(lib.whenLabel(now + 2 * 24 * HOUR, now), /^Thu/);
+});
+
+test('an empty period has no price coverage to report', () => {
+  const snapshot = structuredClone(demoSnapshot);
+  snapshot.costs = { ...snapshot.costs, totalTokens: 0, coverage: 0, isComplete: true, isLowerBound: false, unpricedModels: [] };
+  const html = text(render(Overview, { snapshot, refreshing: false, onRefresh: async () => {}, onSetupClaude() {}, onSources() {} }));
+  assert.match(html, /Price coverage — No usage in this period/);
+  assert.doesNotMatch(html, /0% All tracked categories priced/);
+});
