@@ -26,7 +26,6 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // Beyond this age, keep each local day's endpoints and peak per bucket/window.
 // Provider rebounds must not erase the maximum shown in reset-cycle history.
 const COMPACT_AFTER_MS = 60 * DAY_MS;
-const BACKUP_ATTEMPT_KEY = 'maintenance.backup-attempt';
 const OPENAI_LONG_CONTEXT_THRESHOLD = 272_000;
 const OPENAI_LONG_CONTEXT_MODELS = new Set(['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
 
@@ -306,6 +305,8 @@ const ATTRIBUTION_METADATA = `CASE WHEN json_valid(metadata_json)
 
 // SQLITE_CORRUPT and SQLITE_NOTADB: the file exists but SQLite cannot read it.
 const UNREADABLE_DATABASE_CODES = new Set([11, 26]);
+// When the last scheduled backup was tried, so a failing one is retried hourly.
+const BACKUP_ATTEMPT_KEY = 'maintenance.backup-attempt';
 
 function openDatabase(databasePath) {
   const open = () => {
