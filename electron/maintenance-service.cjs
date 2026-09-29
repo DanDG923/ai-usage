@@ -6,6 +6,22 @@ const { UsageStore } = require('./store.cjs');
 const { randomUUID } = require('node:crypto');
 const { readDesktopExport, saveDesktopEstimates } = require('./desktop-estimates.cjs');
 
+// Windows can hold a file that was only just closed (antivirus, the search
+// indexer, OneDrive syncing Documents), so moving it into place is retried
+// for a few seconds before the error is reported.
+const BUSY_FILE_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
+async function replaceFile(from, to, attempts = 8) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      fs.renameSync(from, to);
+      return;
+    } catch (error) {
+      if (attempt >= attempts || !BUSY_FILE_CODES.has(error?.code)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 100 * attempt));
+    }
+  }
+}
+
 // All large reads, JSON conversion, SQLite copying and file writes stay in
 // this worker. Only small results cross the port back to the window process.
 function createMaintenanceService({ databasePath, backupDirectory, openStore = (database, backups) => new UsageStore(database, backups) }) {
@@ -77,7 +93,7 @@ function createMaintenanceService({ databasePath, backupDirectory, openStore = (
               for (let offset = 0; offset < bytes.length;) offset += fs.writeSync(descriptor, bytes, offset);
             });
           } finally { fs.closeSync(descriptor); }
-          fs.renameSync(partial, request.filePath);
+          await replaceFile(partial, request.filePath);
         } catch (error) {
           try { fs.unlinkSync(partial); } catch { /* Never created, or already moved. */ }
           throw error;

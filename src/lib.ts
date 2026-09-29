@@ -186,7 +186,8 @@ export function quotaWindows(quota: Quota | null | undefined): QuotaWindow[] {
  * The name of a limit that applies to one model or client rather than the whole
  * plan, or null for a plan's own windows. Codex names these with a limit id;
  * Claude's Opus, Sonnet and OAuth-app weeks carry only their bucket name, and
- * without it every one of them read as the plan's "weekly allowance".
+ * without it every one of them read as the plan's "weekly allowance". Fable's
+ * own windows, whatever their bucket, are Fable's allowance, not a model limit.
  */
 export function modelAllowanceName(window: QuotaWindow): string | null {
   const { limitId, limitName } = window.metadata || {};
@@ -194,7 +195,7 @@ export function modelAllowanceName(window: QuotaWindow): string | null {
     if (limitId === 'codex') return null;
     return typeof limitName === 'string' && limitName.trim() ? limitName : limitId;
   }
-  if (isMainWindow(window) || !window.bucketName?.trim()) return null;
+  if (isMainWindow(window) || /^fable/i.test(window.bucketId) || !window.bucketName?.trim()) return null;
   return window.bucketName.replace(/\s*weekly$/i, '').trim() || null;
 }
 

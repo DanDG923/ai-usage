@@ -277,3 +277,20 @@ test('unpriced usage recorded without a model name is marked as such', () => wit
   assert.deepEqual(unpriced.map(({ model, unnamed }) => ({ model, unnamed })).sort((a, b) => a.model.localeCompare(b.model)),
     [{ model: 'mystery-model', unnamed: undefined }, { model: 'Unknown', unnamed: true }]);
 }));
+
+test('a CSV export waits briefly for Windows to release the file it has just written', async (t) => {
+  const { createMaintenanceService } = require('../electron/maintenance-service.cjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-maint-'));
+  const filePath = path.join(root, 'ledger.csv');
+  const service = createMaintenanceService({ databasePath: path.join(root, 'usage.sqlite'), backupDirectory: path.join(root, 'Backups'),
+    openStore: () => ({ exportLedgerCsv: (_days, _now, write) => { write('occurred_at\r\n'); return { rows: 0, since: '' }; }, close() {} }) });
+  const rename = fs.renameSync;
+  let busy = 2;
+  t.mock.method(fs, 'renameSync', (from, to) => {
+    if (busy-- > 0) throw Object.assign(new Error('The file is in use.'), { code: 'EBUSY' });
+    return rename(from, to);
+  });
+  assert.equal((await service.handle({ type: 'export-csv', filePath, days: 30 })).rows, 0);
+  assert.equal(fs.readFileSync(filePath, 'utf8'), 'occurred_at\r\n');
+  assert.deepEqual(fs.readdirSync(root), ['ledger.csv']);
+});

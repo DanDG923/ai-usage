@@ -32,6 +32,16 @@ app.whenReady().then(async () => {
   await evaluate(() => window.testBridge.push(window.testBridge.fixture()));
   await new Promise((resolve) => setTimeout(resolve, 100));
   assert.equal(await evaluate(() => [...document.querySelectorAll('.period-switch button')].find((button) => button.getAttribute('aria-pressed') === 'true').textContent.includes('90')), true, 'old push cannot undo selected period');
+  // A superseded read that succeeds, then a newer one that fails, leave the
+  // main process on a period this window does not show: it asks again.
+  const period = (days) => window.webContents.executeJavaScript(`[...document.querySelectorAll('.period-switch button')].find((button) => button.textContent === '${days}d').click()`);
+  await period(30);
+  await period(7);
+  await until(() => window.testBridge.requests().includes(7));
+  await evaluate(() => { window.testBridge.resolve(30); window.testBridge.reject(7); });
+  await until(() => window.testBridge.requests().at(-1) === 90);
+  assert.equal(await evaluate(() => [...document.querySelectorAll('.period-switch button')].find((button) => button.getAttribute('aria-pressed') === 'true').textContent), '90d');
+  await evaluate(() => document.querySelector('[aria-label="Dismiss message"]')?.click());
   // A pushed update landing during a Refresh must not re-enable Refresh.
   await evaluate(() => { window.testBridge.holdRefresh(true); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'r' })); });
   await until(() => window.testBridge.refreshCalls() === 1);
@@ -143,6 +153,11 @@ app.whenReady().then(async () => {
   await until(() => window.testBridge.heldSettings() === 1);
   await typeInto('#claude-free-resets input[type="date"]', '2026-10-22');
   await until(() => window.testBridge.heldSettings() === 2);
+  // The earlier save lands, and its snapshot renders, while the later one waits.
+  await evaluate(() => window.testBridge.releaseFirstSetting());
+  await until(() => window.testBridge.fixture().settings.claudeFreeResetsExpireOn === '2026-10-01');
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(await evaluate(() => document.querySelector('#claude-free-resets input[type="date"]').value), '2026-10-22', 'an earlier save landing does not put back a day typed past');
   await evaluate(() => window.testBridge.releaseSettings());
   await until(() => window.testBridge.fixture().settings.claudeFreeResetsExpireOn === '2026-10-22');
   await new Promise((resolve) => setTimeout(resolve, 100));

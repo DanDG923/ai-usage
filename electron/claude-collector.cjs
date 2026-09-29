@@ -41,7 +41,7 @@ function laterIso(left, right) {
   return Date.parse(right) > Date.parse(left) ? right : left;
 }
 
-function importClaudeInboxFile(store, inboxPath) {
+function importClaudeInboxFile(store, inboxPath, state = null) {
   if (!fs.existsSync(inboxPath)) return emptyInboxResult();
   let stat;
   try {
@@ -130,7 +130,7 @@ function importClaudeInboxFile(store, inboxPath) {
     }
     // Never rewrite the live helper file: doing so can race an in-flight append.
     // The durable byte cursor keeps refresh work incremental without risking data.
-    store.markImportedFile(inboxPath, stat.mtimeMs, startOffset + completeBytes);
+    store.markImportedFile(inboxPath, stat.mtimeMs, startOffset + completeBytes, state);
     return result;
   });
 }
@@ -154,12 +154,18 @@ function importClaudeInbox(store, inboxPath) {
   // cursor is dropped before the rotated file (the only sign of the restart)
   // can be imported and deleted, including when the helper has not yet
   // created the new inbox. Reading it from the start is safe: observations
-  // are upserted by reading time.
-  if (rotated.some((filePath) => !store.getImportedFile(filePath))) store.forgetImportedFile(inboxPath);
+  // are upserted by reading time. The live cursor records the rotations it
+  // has restarted for, so a rotated file that keeps failing to import
+  // restarts the inbox once, not on every refresh.
+  const rotations = rotated.map((filePath) => path.basename(filePath));
+  const restartedFor = new Set(store.getImportedFile(inboxPath)?.state?.rotations ?? []);
+  if (rotated.some((filePath, index) => !store.getImportedFile(filePath) && !restartedFor.has(rotations[index]))) {
+    try { store.forgetImportedFile(inboxPath); } catch { /* Storage is failing; the next refresh retries it. */ }
+  }
   for (const filePath of [...rotated, inboxPath]) {
     let result;
     try {
-      result = importClaudeInboxFile(store, filePath);
+      result = importClaudeInboxFile(store, filePath, filePath === inboxPath ? { rotations } : null);
     } catch {
       result = emptyInboxResult({ readErrors: 1 });
     }
@@ -392,13 +398,21 @@ function makeHelperScript(inboxPath) {
   return `# ${HELPER_VERSION}\n$ErrorActionPreference = 'SilentlyContinue'\n$raw = [Console]::In.ReadToEnd()\nif ([string]::IsNullOrWhiteSpace($raw)) { exit 0 }\ntry {\n  $data = $raw | ConvertFrom-Json\n  $safeModel = [ordered]@{}\n  if ($null -ne $data.model.id) { $safeModel.id = $data.model.id }\n  if ($null -ne $data.model.display_name) { $safeModel.display_name = $data.model.display_name }\n  $safe = [ordered]@{\n    ai_usage_captured_at = [DateTime]::UtcNow.ToString('o')\n    model = $safeModel\n    rate_limits = $data.rate_limits\n  }\n  $line = $safe | ConvertTo-Json -Depth 30 -Compress\n  $target = '${target}'\n  $parent = Split-Path -Parent $target\n  New-Item -ItemType Directory -Force -Path $parent | Out-Null\n  if ((Test-Path -LiteralPath $target) -and ((Get-Item -LiteralPath $target).Length -ge ${MAX_INBOX_BYTES})) {\n    $rotated = $target + '.rotated-' + ([DateTime]::UtcNow.ToString('yyyyMMddHHmmssffff')) + '-' + $PID\n    Move-Item -LiteralPath $target -Destination $rotated -ErrorAction SilentlyContinue\n  }\n  $utf8 = New-Object System.Text.UTF8Encoding($false)\n  [System.IO.File]::AppendAllText($target, $line + [Environment]::NewLine, $utf8)\n  $parts = @()\n  if ($null -ne $data.rate_limits.five_hour.used_percentage) { $parts += ('5h: {0:N0}%' -f $data.rate_limits.five_hour.used_percentage) }\n  if ($null -ne $data.rate_limits.seven_day.used_percentage) { $parts += ('7d: {0:N0}%' -f $data.rate_limits.seven_day.used_percentage) }\n  $fable = $data.rate_limits.PSObject.Properties | Where-Object { $_.Name -match 'fable' } | Select-Object -First 1\n  if ($fable) { $parts += ('Fable: {0:N0}%' -f $fable.Value.used_percentage) }\n  $modelLabel = if ($data.model.display_name) { $data.model.display_name } else { 'Claude' }\n  if ($parts.Count -gt 0) { Write-Output ('[{0}] | {1}' -f $modelLabel, ($parts -join ' ')) } else { Write-Output ('[{0}]' -f $modelLabel) }\n} catch {\n  Write-Output '[Claude]'\n}\n`;
 }
 
+// Claude Code runs the helper with Windows PowerShell 5.1, which reads a
+// script without a byte-order mark in the ANSI code page: a profile folder
+// with any non-ASCII character (José, or O’Brien with a typographic
+// apostrophe) became a different path. With the mark it reads UTF-8.
+function writeHelperScript(helperPath, inboxPath) {
+  fs.writeFileSync(helperPath, `\uFEFF${makeHelperScript(inboxPath)}`, 'utf8');
+}
+
 function updateManagedHelper(helperPath, inboxPath) {
   if (!fs.existsSync(helperPath)) return false;
   try {
     const current = fs.readFileSync(helperPath, 'utf8');
     if (current.includes(HELPER_VERSION)) return false;
     if (!current.includes('ai_usage_captured_at') || !current.includes('ai-usage')) return false;
-    fs.writeFileSync(helperPath, makeHelperScript(inboxPath), 'utf8');
+    writeHelperScript(helperPath, inboxPath);
     return true;
   } catch {
     return false;
@@ -515,7 +529,7 @@ function installClaudeHelper(inboxPath) {
     fs.unlinkSync(previousStatusLinePath);
   }
   delete settings.aiUsagePreviousStatusLine;
-  fs.writeFileSync(helperPath, makeHelperScript(inboxPath), 'utf8');
+  writeHelperScript(helperPath, inboxPath);
   settings.statusLine = {
     type: 'command',
     command: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${helperPath}"`,

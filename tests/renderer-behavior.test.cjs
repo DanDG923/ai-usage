@@ -618,6 +618,9 @@ test('Claude model-scoped weeks are named and grouped apart, never read as the p
   assert.equal(lib.modelAllowanceName(window('codex:secondary', 'Weekly', { limitId: 'codex' })), null);
   assert.equal(lib.modelAllowanceName(window('gpt:secondary', 'Weekly', { limitId: 'gpt-5-codex', limitName: 'GPT-5 Codex' })), 'GPT-5 Codex');
   assert.equal(lib.modelAllowanceName(window('fable_seven_day', 'Fable weekly', {})), null);
+  // A status-line Fable key outside the canonical ones, and a legacy bucket.
+  assert.equal(lib.modelAllowanceName(window('fable:fable_five_hour', 'Fable weekly', {})), null);
+  assert.equal(lib.modelAllowanceName(window('fable-weekly', 'Fable 5 weekly', {})), null);
 
   const snapshot = structuredClone(demoSnapshot);
   const weekly = lib.primaryWindow(snapshot.quotas.claude);

@@ -155,6 +155,20 @@ export default function App() {
         desiredPeriod.current = committedPeriod.current;
         setLoadError(message);
         notices.fail(message);
+        // An earlier read that succeeded before this one failed leaves the
+        // main process on a period this window no longer shows, and its later
+        // updates would be set aside. Ask again, quietly, for the one shown.
+        const shown = committedPeriod.current;
+        if (period !== shown && hasSnapshot.current) {
+          window.aiUsage.getSnapshot(shown).then(
+            (next) => {
+              if (request !== loadRequest.current || !next) return;
+              commitSnapshot(next);
+              setLoadError('');
+            },
+            () => {},
+          );
+        }
       } finally {
         if (request === loadRequest.current) {
           pendingPeriod.current = null;

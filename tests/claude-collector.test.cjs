@@ -632,6 +632,25 @@ test('a refresh between a rotation and the new inbox still restarts that inbox',
   } finally { store.close(); }
 });
 
+test('a rotated file that keeps failing to import restarts the live inbox once, not every refresh', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-rotation-'));
+  const store = new UsageStore(path.join(root, 'test.sqlite'), path.join(root, 'Backups'));
+  const inbox = path.join(root, 'inbox.jsonl');
+  const row = (minute) => JSON.stringify({ ai_usage_captured_at: new Date(Date.parse('2026-08-29T10:00:00Z') + minute * 60_000).toISOString(),
+    rate_limits: { seven_day: { used_percentage: 20, resets_at: '2026-09-04T12:00:00Z' } } });
+  try {
+    // Unreadable as a file on every platform, so its import fails each time.
+    fs.mkdirSync(`${inbox}.rotated-202608291005000000-1`);
+    fs.writeFileSync(inbox, `${row(0)}\n${row(1)}\n`, 'utf8');
+    const first = importClaudeInbox(store, inbox);
+    assert.equal(first.readErrors, 1);
+    assert.ok(first.bytesRead > 0);
+    const second = importClaudeInbox(store, inbox);
+    assert.equal(second.readErrors, 1);
+    assert.equal(second.bytesRead, 0, 'the unchanged live inbox is not read again');
+  } finally { store.close(); }
+});
+
 test('the helper doubles every PowerShell single-quote character in its inbox path', () => {
   const helper = makeHelperScript("C:\\Users\\O\u2019Brien\\AppData\\Roaming\\ai-usage\\Bob's inbox.jsonl");
   assert.ok(helper.includes("$target = 'C:\\Users\\O\u2019\u2019Brien\\AppData\\Roaming\\ai-usage\\Bob''s inbox.jsonl'"));
@@ -838,6 +857,8 @@ test('helper installation preserves prior status line outside Claude settings', 
   try {
     const result = installClaudeHelper(path.join(root, 'inbox.jsonl'));
     const settings = JSON.parse(fs.readFileSync(result.settingsPath, 'utf8'));
+    // Windows PowerShell 5.1 reads a script without a byte-order mark as ANSI.
+    assert.deepEqual([...fs.readFileSync(path.join(claude, 'ai-usage-statusline.ps1')).subarray(0, 3)], [0xef, 0xbb, 0xbf]);
     assert.equal(settings.aiUsagePreviousStatusLine, undefined);
     assert.match(settings.statusLine.command, /ai-usage-statusline\.ps1/);
     assert.equal(result.previousStatusLinePreserved, true);
