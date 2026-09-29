@@ -274,7 +274,8 @@ export type CostAnalytics = {
   coverage: number;
   isComplete: boolean;
   isLowerBound: boolean;
-  unpricedModels: { sourceId: string; model: string; tokens: number }[];
+  /** `unnamed` marks records without a model name, which no price can match. */
+  unpricedModels: { sourceId: string; model: string; tokens: number; unnamed?: boolean }[];
   requestCount: number;
   byModel: ModelCost[];
   byProject: ProjectCost[];

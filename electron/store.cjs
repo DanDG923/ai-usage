@@ -1700,6 +1700,8 @@ class UsageStore {
           sourceId: event.source_id,
           model: event.model || 'Unknown',
           tokens: 0,
+          // Records without a model name: no catalogue price can apply to them.
+          ...(event.model ? {} : { unnamed: true }),
         };
         unpriced.tokens += eventTokens;
         unpricedModelsMap.set(unpricedKey, unpriced);

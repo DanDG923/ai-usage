@@ -69,6 +69,7 @@ contextBridge.exposeInMainWorld('testBridge', {
   holdSettings(value) { holdSettings = value; },
   releaseSettings() { holdSettings = false; for (const resolve of heldSettings.splice(0)) resolve(); },
   heldSettings: () => heldSettings.length,
+  setSettings(patch) { snapshot.settings = { ...snapshot.settings, ...patch }; },
   holdRefresh(value) { holdRefresh = value; },
   releaseRefresh() { holdRefresh = false; for (const resolve of heldRefreshes.splice(0)) resolve(); },
   refreshCalls: () => refreshCalls,

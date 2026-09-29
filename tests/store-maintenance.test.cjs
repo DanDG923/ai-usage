@@ -269,3 +269,11 @@ test('a failed CSV export leaves the chosen file untouched and no partial file b
   assert.equal(fs.readFileSync(filePath, 'utf8'), 'previous export');
   assert.deepEqual(fs.readdirSync(root), ['ledger.csv']);
 });
+
+test('unpriced usage recorded without a model name is marked as such', () => withStore((store) => {
+  store.recordUsageEvent({ eventKey: 'no-model', sourceId: 'codex', occurredAt: iso(NOW - DAY), model: null, inputTokens: 10 });
+  store.recordUsageEvent({ eventKey: 'named', sourceId: 'codex', occurredAt: iso(NOW - DAY), model: 'mystery-model', inputTokens: 10 });
+  const unpriced = store.getCostAnalytics(30, store.getSettings(), NOW).unpricedModels;
+  assert.deepEqual(unpriced.map(({ model, unnamed }) => ({ model, unnamed })).sort((a, b) => a.model.localeCompare(b.model)),
+    [{ model: 'mystery-model', unnamed: undefined }, { model: 'Unknown', unnamed: true }]);
+}));

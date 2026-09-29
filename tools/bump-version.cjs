@@ -27,7 +27,11 @@ function bumpVersion(root, version) {
   lock.version = version;
   lock.packages[''].version = version;
   let changelog = fs.readFileSync(file('CHANGELOG.md'), 'utf8');
-  if (!changelog.includes(`## ${version}\n`) && !changelog.includes(`## ${version}\r\n`)) {
+  // Notes written before the bump keep their heading, dated or not
+  // ("## 1.2.4 — 2 October 2026"); the placeholder only fills a missing one.
+  // Otherwise a second heading above them would publish the placeholder.
+  const heading = new RegExp(`^## ${version.replaceAll('.', '\\.')}(?:[ \\t]|\\r?$)`, 'm');
+  if (!heading.test(changelog)) {
     changelog = changelog.replace(/^# Changelog\s*/, `# Changelog\n\n## ${version}\n\n- Release notes pending review.\n\n`);
   }
   const readme = fs.readFileSync(file('README.md'), 'utf8').replaceAll(previous, version);

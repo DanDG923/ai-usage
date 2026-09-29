@@ -1,5 +1,5 @@
 import { useId, useState } from 'react';
-import { LOCALE } from '../../lib';
+import { LOCALE, localDateKey } from '../../lib';
 import type { PriceRow, Settings, Snapshot } from '../../types';
 import { API_EQUIVALENT_EXPLAINER, InfoTip } from '../InfoTip';
 import {
@@ -11,6 +11,7 @@ import {
   SettingRow,
   SettingsSection,
 } from './fields';
+import { unpricedModels } from './settings-sections';
 
 const FIELDS = [
   'input_usd_per_million',
@@ -91,7 +92,7 @@ function PriceEditor({
     void onSave({
       ...row,
       ...Object.fromEntries(FIELDS.map((key) => [key, Number(draft[key])])),
-      effective_from: new Date().toISOString().slice(0, 10),
+      effective_from: localDateKey(new Date()),
       source_url: null,
     });
   };
@@ -178,35 +179,19 @@ export function PricingSection({
       setSavingCurrency(false);
     }
   };
-  const pricedModels = new Set(snapshot.priceCatalog.map((row) => row.model.toLowerCase()));
-  const seenModels = new Set(pricedModels);
-  const unpricedRows = [
-    ...snapshot.costs.unpricedModels,
-    ...(snapshot.desktopEstimates?.byModel ?? []).flatMap((entry) =>
-      entry.model && entry.estimatedCost === null
-        ? [{ model: entry.model, sourceId: 'Claude desktop/web export' }]
-        : [],
-    ),
-  ]
-    .filter((entry) => {
-      const model = entry.model.toLowerCase();
-      if (seenModels.has(model)) return false;
-      seenModels.add(model);
-      return true;
-    })
-    .map((entry) => ({
-      sourceId: entry.sourceId,
-      row: {
-        model: entry.model,
-        input_usd_per_million: 0,
-        cache_write_usd_per_million: 0,
-        cache_write_1h_usd_per_million: 0,
-        cache_read_usd_per_million: 0,
-        output_usd_per_million: 0,
-        effective_from: new Date().toISOString().slice(0, 10),
-        source_url: null,
-      } satisfies PriceRow,
-    }));
+  const unpricedRows = unpricedModels(snapshot).map((entry) => ({
+    sourceId: entry.sourceId,
+    row: {
+      model: entry.model,
+      input_usd_per_million: 0,
+      cache_write_usd_per_million: 0,
+      cache_write_1h_usd_per_million: 0,
+      cache_read_usd_per_million: 0,
+      output_usd_per_million: 0,
+      effective_from: localDateKey(new Date()),
+      source_url: null,
+    } satisfies PriceRow,
+  }));
   const rateValid =
     rateDraft.trim() !== '' &&
     Number.isFinite(Number(rateDraft)) &&

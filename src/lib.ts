@@ -71,6 +71,11 @@ export function shortDate(value?: string | number | null) {
   return date ? SHORT_DATE.format(date) : '—';
 }
 
+/** The local calendar day as YYYY-MM-DD; toISOString() would give the UTC day. */
+export function localDateKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
 export function dayDate(value?: string | number | null) {
   if (!value) return '—';
   const date = parseDate(value);

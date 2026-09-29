@@ -149,15 +149,31 @@ export function sourcesBadge(sources: readonly Pick<Source, 'status'>[]): Source
 }
 
 /**
- * Detected models without a catalogue price, counted once per model name the
- * way the API pricing table lists them.
+ * Detected models without a catalogue price that a price can be added for,
+ * once per model name: the ledger's, then Claude desktop/web export models.
+ * The API pricing table lists exactly these and the section list counts them.
+ * Records without a model name are left out; no price could apply to them.
  */
-export function unpricedModelCount(snapshot: Pick<Snapshot, 'costs' | 'priceCatalog'>) {
-  const priced = new Set(snapshot.priceCatalog.map((row) => row.model.toLowerCase()));
-  const models = new Set<string>();
-  for (const entry of snapshot.costs.unpricedModels ?? []) {
+export function unpricedModels(snapshot: Pick<Snapshot, 'costs' | 'priceCatalog' | 'desktopEstimates'>) {
+  const seen = new Set(snapshot.priceCatalog.map((row) => row.model.toLowerCase()));
+  const candidates = [
+    ...(snapshot.costs.unpricedModels ?? []).filter((entry) => !entry.unnamed),
+    ...(snapshot.desktopEstimates?.byModel ?? []).flatMap((entry) =>
+      entry.model && entry.estimatedCost === null
+        ? [{ model: entry.model, sourceId: 'Claude desktop/web export' }]
+        : [],
+    ),
+  ];
+  const rows: { model: string; sourceId: string }[] = [];
+  for (const entry of candidates) {
     const model = entry.model.toLowerCase();
-    if (!priced.has(model)) models.add(model);
+    if (seen.has(model)) continue;
+    seen.add(model);
+    rows.push({ model: entry.model, sourceId: entry.sourceId });
   }
-  return models.size;
+  return rows;
+}
+
+export function unpricedModelCount(snapshot: Pick<Snapshot, 'costs' | 'priceCatalog' | 'desktopEstimates'>) {
+  return unpricedModels(snapshot).length;
 }

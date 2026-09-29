@@ -1,3 +1,4 @@
+import { localDateKey } from '../../lib';
 import type { CostAnalytics } from '../../types';
 
 /** Share of prompt-side tokens served from cache, across every priced or unpriced model. */
@@ -11,10 +12,6 @@ export function cacheHitRate(costs: CostAnalytics) {
     if (row.sourceId !== 'codex') prompt += row.cachedInputTokens;
   }
   return prompt > 0 ? cached / prompt : null;
-}
-
-function localDateKey(date: Date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
 /**

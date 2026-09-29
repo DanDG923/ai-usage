@@ -23,6 +23,25 @@ test('version tool updates all current metadata while preserving historical chan
   assert.throws(() => bumpVersion(root, '../bad'), /stable/);
 });
 
+test('version tool keeps release notes written ahead of the bump under a dated heading', () => {
+  const { releaseNotes } = require('../tools/release-notes.cjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-version-'));
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ version: '1.2.3' }));
+  fs.writeFileSync(path.join(root, 'package-lock.json'), JSON.stringify({ version: '1.2.3', packages: { '': { version: '1.2.3' } } }));
+  fs.writeFileSync(path.join(root, 'README.md'), 'AI-Usage-Setup-1.2.3-x64.exe AI-Usage-Portable-1.2.3-x64.exe');
+  for (const newline of ['\n', '\r\n']) {
+    fs.writeFileSync(path.join(root, 'CHANGELOG.md'), ['# Changelog', '', '## 1.2.4 — 2 October 2026', '', '- The reviewed notes.', '', '## 1.2.3', '', '- Old notes.', ''].join(newline));
+    bumpVersion(root, '1.2.4');
+    const changelog = fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8');
+    assert.equal(changelog.match(/^## 1\.2\.4\b/gm).length, 1, 'no second heading');
+    assert.equal(releaseNotes(changelog, '1.2.4'), '- The reviewed notes.\n');
+  }
+  // A version that only shares a prefix is not the release's heading.
+  fs.writeFileSync(path.join(root, 'CHANGELOG.md'), '# Changelog\n\n## 1.2.40\n\n- Other notes.\n');
+  bumpVersion(root, '1.2.4');
+  assert.match(fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8'), /^## 1\.2\.4\n\n- Release notes pending review\./m);
+});
+
 test('release audit rejects missing runtime code, private data, source maps and bundled executables', () => {
   const entries = ['dist/index.html', 'dist/flyout.html', 'electron/main.cjs', 'electron/preload.cjs', 'electron/flyout-preload.cjs', 'electron/maintenance-host.cjs', 'electron/maintenance-service.cjs', 'electron/desktop-estimates.cjs', 'node_modules/@anthropic-ai/claude-agent-sdk/package.json'];
   assert.doesNotThrow(() => assertArchive(entries));

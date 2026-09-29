@@ -132,8 +132,9 @@ export function ForecastSection({
             max={50}
             step={1}
             suffix="% of allowance"
+            integer
             onDraftChange={setReserveDraft}
-            onCommit={(value) => update({ reservePercent: Math.round(value) })}
+            onCommit={(value) => update({ reservePercent: value })}
           />
           <details className="inline-advanced">
             <summary>

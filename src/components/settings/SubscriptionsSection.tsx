@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import type { Settings, Snapshot } from '../../types';
 import {
   NumericSetting,
@@ -42,27 +42,45 @@ function FreeResetExpiry({
   const [draft, setDraft] = useState(value ?? '');
   const [error, setError] = useState('');
   const latestSave = useRef(0);
-  // A saved value arriving from a snapshot replaces the draft; typing does not.
+  // Saves still on their way, and the date the latest of them asked for.
+  const [pending, setPending] = useState(0);
+  const requested = useRef(value);
+  // The saved date as of the latest render, which a failed save restores.
+  const saved = useRef(value);
+  useEffect(() => {
+    saved.current = value;
+    if (!pending) requested.current = value;
+  }, [value, pending]);
+  // A saved value arriving from a snapshot replaces the draft. Typing does not,
+  // and neither does an earlier save landing while a later one is on its way:
+  // it would put back a day the user has already typed past.
   const [committed, setCommitted] = useState(value);
   if (committed !== value) {
     setCommitted(value);
-    setDraft(value ?? '');
+    if (!pending) setDraft(value ?? '');
   }
   const change = async (next: string) => {
     setDraft(next);
     // A date input reports '' once emptied and while a date is incomplete, and
     // years such as 0002 while one is typed digit by digit; only days are saved.
-    const saved = next === '' ? null : isStorableDate(next) ? next : undefined;
-    if (saved === undefined || saved === value) return;
+    const day = next === '' ? null : isStorableDate(next) ? next : undefined;
+    // Compared with the last day asked for, not the saved one: retyping the
+    // saved day while another save is on its way must still be sent.
+    if (day === undefined || day === requested.current) return;
     // Typing a day can send two saves in a row; only the latest may roll back.
     const attempt = ++latestSave.current;
+    requested.current = day;
+    setPending((count) => count + 1);
     setError('');
     try {
-      if ((await onCommit(saved)) === false) throw new Error('Save failed');
+      if ((await onCommit(day)) === false) throw new Error('Save failed');
     } catch {
       if (attempt !== latestSave.current) return;
-      setDraft(value ?? '');
+      requested.current = saved.current;
+      setDraft(saved.current ?? '');
       setError('This date could not be saved. Try again.');
+    } finally {
+      setPending((count) => count - 1);
     }
   };
   return (
@@ -179,6 +197,7 @@ export function SubscriptionsSection({
                 min={0}
                 max={10}
                 step={1}
+                integer
                 onCommit={(value) =>
                   update(
                     value === 0 ? { claudeFreeResets: 0, claudeFreeResetsExpireOn: null } : { claudeFreeResets: value },

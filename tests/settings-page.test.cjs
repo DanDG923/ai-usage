@@ -344,7 +344,46 @@ test('the reserve field previews its draft before saving', async () => {
   });
   const [reserve] = elements(tree, (node) => node.type === fields.NumericSetting && node.props.label === 'Keep in reserve');
   assert.equal(typeof reserve.props.onDraftChange, 'function');
-  assert.deepEqual([reserve.props.min, reserve.props.max], [0, 50]);
-  await reserve.props.onCommit(12.4);
+  assert.deepEqual([reserve.props.min, reserve.props.max, reserve.props.integer], [0, 50, true]);
+  // A fraction is invalid while typed rather than rounded on save, so the
+  // field never shows a value that was not saved.
+  await reserve.props.onCommit(12);
   assert.deepEqual(patches, [{ reservePercent: 12 }]);
+});
+
+test('whole-number settings reject a fraction instead of rounding or failing to save it', () => {
+  const snapshot = structuredClone(demoSnapshot);
+  const numeric = (Component) => elements(captured(Component, { snapshot, update: noop, actions }), (node) => node.type === fields.NumericSetting);
+  const integers = [...numeric(SubscriptionsSection), ...numeric(ForecastSection)]
+    .filter((node) => node.props.integer).map((node) => node.props.label);
+  assert.deepEqual(integers, ['Free resets available', 'Keep in reserve']);
+  const html = render(fields.NumericSetting, { label: 'Backup sets kept', value: 30, min: 1, max: 365, step: 1, integer: true, onCommit: noop });
+  assert.doesNotMatch(html, /aria-invalid/);
+});
+
+test('the pricing list and its count share one set of priceable models', () => {
+  const snapshot = structuredClone(demoSnapshot);
+  snapshot.costs.unpricedModels = [
+    { sourceId: 'codex', model: 'new-model', tokens: 1 },
+    // Records without a model name: no price could ever apply to them.
+    { sourceId: 'codex', model: 'Unknown', tokens: 5, unnamed: true },
+  ];
+  snapshot.desktopEstimates = { ...snapshot.desktopEstimates, byModel: [
+    { model: 'claude-desktop-only', estimatedCost: null },
+    { model: 'NEW-MODEL', estimatedCost: null },
+    { model: 'claude-priced', estimatedCost: 1 },
+  ] };
+  assert.deepEqual(sections.unpricedModels(snapshot), [
+    { model: 'new-model', sourceId: 'codex' },
+    { model: 'claude-desktop-only', sourceId: 'Claude desktop/web export' },
+  ]);
+  assert.equal(sections.unpricedModelCount(snapshot), 2);
+  const pricing = text(section(renderSettings(snapshot), 'pricing'));
+  assert.match(pricing, /claude-desktop-only/);
+  assert.doesNotMatch(pricing, /\bUnknown\b/);
+});
+
+test('a local calendar day is not the UTC day', () => {
+  // 00:30 on 30 September in London is still 29 September in UTC.
+  assert.equal(lib.localDateKey(new Date('2026-09-29T23:30:00Z')), '2026-09-30');
 });

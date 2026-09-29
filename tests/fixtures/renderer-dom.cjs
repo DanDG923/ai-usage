@@ -135,6 +135,26 @@ app.whenReady().then(async () => {
   assert.equal(await evaluate(() => document.querySelector('#claude-free-resets input[type="date"]').value), '2026-10-22', 'a failed save restores the saved expiry');
   assert.match(await evaluate(() => document.querySelector('#claude-free-resets [role="alert"]').textContent), /could not be saved/);
   await evaluate(() => window.testBridge.rejectSettings(false));
+  // Retyping the saved day while an earlier save is still on its way saves it,
+  // and that earlier save landing does not put back the day typed past.
+  const typeInto = (selector, value) => window.webContents.executeJavaScript(`(() => { const input = document.querySelector(${JSON.stringify(selector)}); input.focus(); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(value)}); input.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  await evaluate(() => { window.testBridge.setSettings({ claudeFreeResets: 1, claudeFreeResetsExpireOn: '2026-10-22' }); window.testBridge.holdSettings(true); });
+  await typeInto('#claude-free-resets input[type="date"]', '2026-10-01');
+  await until(() => window.testBridge.heldSettings() === 1);
+  await typeInto('#claude-free-resets input[type="date"]', '2026-10-22');
+  await until(() => window.testBridge.heldSettings() === 2);
+  await evaluate(() => window.testBridge.releaseSettings());
+  await until(() => window.testBridge.fixture().settings.claudeFreeResetsExpireOn === '2026-10-22');
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(await evaluate(() => document.querySelector('#claude-free-resets input[type="date"]').value), '2026-10-22', 'the day typed last is kept');
+  // A whole-number setting marks a fraction invalid and puts the saved value back without saving it.
+  await typeInto('#claude-free-resets input[type="number"]', '2.5');
+  await until(() => document.querySelector('#claude-free-resets input[type="number"]').getAttribute('aria-invalid') === 'true');
+  // An offscreen window never holds focus, so leave the field as React sees it.
+  await evaluate(() => document.querySelector('#claude-free-resets input[type="number"]').dispatchEvent(new FocusEvent('focusout', { bubbles: true })));
+  await until(() => document.querySelector('#claude-free-resets input[type="number"]').value === '1');
+  assert.equal(await evaluate(() => window.testBridge.fixture().settings.claudeFreeResets), 1);
+  assert.equal(await evaluate(() => Boolean(document.querySelector('#claude-free-resets [role="alert"]'))), false, 'no save was attempted');
   if (process.env.AI_USAGE_RENDERER_QA_DIRECTORY) {
     const capture = async (name) => { await new Promise((resolve) => setTimeout(resolve, 400)); window.webContents.invalidate(); await new Promise((resolve) => setTimeout(resolve, 200)); fs.writeFileSync(path.join(process.env.AI_USAGE_RENDERER_QA_DIRECTORY, name), (await window.webContents.capturePage()).toPNG()); };
     fs.mkdirSync(process.env.AI_USAGE_RENDERER_QA_DIRECTORY, { recursive: true });
