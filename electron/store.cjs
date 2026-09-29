@@ -26,6 +26,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // Beyond this age, keep each local day's endpoints and peak per bucket/window.
 // Provider rebounds must not erase the maximum shown in reset-cycle history.
 const COMPACT_AFTER_MS = 60 * DAY_MS;
+const BACKUP_ATTEMPT_KEY = 'maintenance.backup-attempt';
 const OPENAI_LONG_CONTEXT_THRESHOLD = 272_000;
 const OPENAI_LONG_CONTEXT_MODELS = new Set(['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
 
@@ -2583,18 +2584,24 @@ class UsageStore {
     return removed;
   }
 
-  maybeCreateScheduledBackup() {
+  // Whether a scheduled backup is due, without writing anything. The window
+  // process asks this after every collection, so the storage worker is only
+  // started when there is a backup to make.
+  scheduledBackupDue(nowMs = Date.now()) {
     const frequency = this.getSettings().backupFrequency;
-    if (!frequency || frequency === 'off') return null;
+    if (!frequency || frequency === 'off') return false;
     const intervals = { daily: 24 * 60 * 60 * 1000, weekly: 7 * 24 * 60 * 60 * 1000 };
     const interval = intervals[frequency] || intervals.daily;
-    const attemptKey = 'maintenance.backup-attempt';
-    const attempt = this.prepare('SELECT value_json FROM settings WHERE key = ?').get(attemptKey);
-    if (attempt && Date.now() - Number(json(attempt.value_json, 0)) < 60 * 60_000) return null;
+    const attempt = this.prepare('SELECT value_json FROM settings WHERE key = ?').get(BACKUP_ATTEMPT_KEY);
+    if (attempt && nowMs - Number(json(attempt.value_json, 0)) < 60 * 60_000) return false;
     const latest = this.prepare('SELECT created_at FROM backups ORDER BY created_at DESC LIMIT 1').get();
-    if (latest && Date.now() - new Date(latest.created_at).getTime() < interval) return null;
+    return !(latest && nowMs - new Date(latest.created_at).getTime() < interval);
+  }
+
+  maybeCreateScheduledBackup() {
+    if (!this.scheduledBackupDue()) return null;
     this.prepare('INSERT OR REPLACE INTO settings(key, value_json, updated_at) VALUES (?, ?, ?)')
-      .run(attemptKey, JSON.stringify(Date.now()), iso());
+      .run(BACKUP_ATTEMPT_KEY, JSON.stringify(Date.now()), iso());
     return this.createBackup();
   }
 }

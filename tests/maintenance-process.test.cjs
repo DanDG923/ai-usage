@@ -195,3 +195,119 @@ test('a maintenance request that never answers times out and the wedged worker i
   workers[1].emit('message', { id: workers[1].sent[1].id, ok: true, result: { closed: true } });
   assert.deepEqual(await closing, { closed: true });
 });
+
+function fakeWorkers() {
+  const workers = [];
+  const createWorker = () => {
+    const worker = new EventEmitter();
+    worker.sent = [];
+    worker.terminated = 0;
+    worker.postMessage = (message) => worker.sent.push(message);
+    worker.terminate = async () => { worker.terminated += 1; worker.emit('exit', 1); };
+    workers.push(worker);
+    return worker;
+  };
+  const reply = (worker, result) => worker.emit('message', { id: worker.sent.at(-1).id, ok: true, result });
+  return { workers, createWorker, reply };
+}
+
+test('an idle maintenance worker closes and exits, a new job gets a fresh one, and shutdown waits for it', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { workers, createWorker, reply } = fakeWorkers();
+  const host = createMaintenanceHost({ idleTimeoutMs: 30_000, createWorker });
+  const backup = host.request('scheduled-backup');
+  reply(workers[0], null);
+  assert.equal(await backup, null);
+  t.mock.timers.tick(29_000);
+  assert.equal(workers[0].sent.length, 1, 'still within the idle period');
+  t.mock.timers.tick(1_000);
+  assert.equal(workers[0].sent.at(-1).type, 'close', 'the idle worker is asked to close its store');
+  assert.equal(host.running, false);
+  // A job arriving while it closes starts a fresh worker instead of waiting on it.
+  const ping = host.request('ping');
+  assert.equal(workers.length, 2);
+  reply(workers[1], { ok: true });
+  assert.deepEqual(await ping, { ok: true });
+  // Shutdown closes the current worker and waits for the released one to exit.
+  let closed = false;
+  const closing = host.close().then((result) => { closed = true; return result; });
+  reply(workers[1], { closed: true });
+  await new Promise(setImmediate);
+  assert.equal(closed, false, 'the released worker is still closing');
+  workers[0].emit('exit', 0);
+  assert.deepEqual(await closing, { closed: true });
+  // A released worker that never exits is ended.
+  const stuck = createMaintenanceHost({ idleTimeoutMs: 30_000, createWorker });
+  const job = stuck.request('ping');
+  reply(workers[2], { ok: true });
+  await job;
+  t.mock.timers.tick(30_000);
+  t.mock.timers.tick(10_000);
+  assert.equal(workers[2].terminated, 1);
+});
+
+test('a desktop import preview keeps its worker until it is imported, cancelled or expires', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let clock = 0;
+  const { workers, createWorker, reply } = fakeWorkers();
+  const host = createMaintenanceHost({ idleTimeoutMs: 30_000, now: () => clock, createWorker });
+  const idle = (ms) => { clock += ms; t.mock.timers.tick(ms); };
+  const preview = host.request('preview-desktop-export', { filePath: 'conversations.json' });
+  reply(workers[0], { id: 'preview-1' });
+  await preview;
+  idle(10 * 60_000);
+  assert.equal(host.running, true, 'the user is still reviewing the preview');
+  const cancel = host.request('cancel-desktop-export', { previewId: 'preview-1' });
+  reply(workers[0], { cancelled: true });
+  await cancel;
+  idle(30_000);
+  assert.equal(host.running, false, 'released once the preview is cancelled');
+
+  const again = host.request('preview-desktop-export', { filePath: 'conversations.json' });
+  reply(workers[1], { id: 'preview-2' });
+  await again;
+  idle(29 * 60_000);
+  assert.equal(host.running, true);
+  idle(60_000);
+  assert.equal(host.running, false, 'released once the preview has expired');
+  for (const worker of workers) worker.emit('exit', 0);
+  assert.deepEqual(await host.close(), { closed: true });
+});
+
+test('the window process can tell whether a scheduled backup is due without writing anything', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-worker-'));
+  const store = new UsageStore(path.join(root, 'usage.sqlite'), path.join(root, 'Backups'));
+  try {
+    store.updateSettings({ backupFrequency: 'daily' });
+    assert.equal(store.scheduledBackupDue(), true);
+    assert.equal(store.scheduledBackupDue(), true, 'asking records no attempt');
+    assert.ok(store.maybeCreateScheduledBackup());
+    assert.equal(store.scheduledBackupDue(), false);
+    assert.equal(store.scheduledBackupDue(Date.now() + 25 * 3_600_000), true);
+    store.updateSettings({ backupFrequency: 'off' });
+    assert.equal(store.scheduledBackupDue(Date.now() + 25 * 3_600_000), false);
+  } finally {
+    store.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a real idle worker closes its store and exits on its own', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-worker-'));
+  const config = { databasePath: path.join(root, 'usage.sqlite'), backupDirectory: path.join(root, 'Backups') };
+  new UsageStore(config.databasePath, config.backupDirectory).close();
+  const host = createMaintenanceHost({ ...config, idleTimeoutMs: 50 });
+  try {
+    // Opens the worker's own store connection.
+    await host.request('scheduled-backup');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(host.running, false);
+    const started = Date.now();
+    await host.close();
+    assert.ok(Date.now() - started < 5_000, 'the released worker exited without being terminated');
+  } finally {
+    await host.close();
+    // On Windows an open connection would keep the database locked.
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
