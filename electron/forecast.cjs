@@ -1008,6 +1008,10 @@ function earlyResetAdjustment(observations, options, nowMs) {
   } : null;
 }
 
+// An unchanged run within a day keeps its first and latest reading, and a
+// waypoint at least every COVERAGE_GAP_MS between them. Without the waypoints a
+// quiet day polled throughout became one pair a day apart, which the quiet-day
+// coverage below discards as a gap, so its unused off-schedule hours were lost.
 function collapseReadings(rows, nowMs) {
   const result = [];
   let previous = null, run = 0, previousDay;
@@ -1017,8 +1021,12 @@ function collapseReadings(rows, nowMs) {
       && ['sourceId', 'bucketId', 'usedPercent', 'remainingPercent', 'resetsAt', 'windowMinutes', 'provenance', 'resetEvidence', 'allowanceScaled']
         .every((field) => Object.is(row[field], previous[field]));
     run = same ? run + 1 : 1;
-    if (run > 2) result[result.length - 1] = row;
-    else result.push(row);
+    if (run > 2 && row.observedAt - result[result.length - 2].observedAt <= COVERAGE_GAP_MS) {
+      result[result.length - 1] = row;
+    } else {
+      result.push(row);
+      if (run > 2) run = 2;
+    }
     previous = row; previousDay = day;
   }
   return result;

@@ -485,13 +485,17 @@ test('a quiet day adds off-schedule capacity only for the hours its readings cov
   for (let at = Date.parse('2026-09-15T00:00:00Z'); at < Date.parse('2026-09-18T00:00:00Z'); at += 30 * 60_000) {
     polled.push(row(new Date(at).toISOString(), 14));
   }
-  const [unobserved, briefly, throughout] = [[], brief, polled].map((quiet) => forecastQuota([
-    row('2026-09-14T08:00:00Z', 10), row('2026-09-14T22:00:00Z', 10), row('2026-09-14T22:30:00Z', 14),
-    ...quiet,
-    row('2026-09-18T08:50:00Z', 14), row('2026-09-18T09:00:00Z', 20),
-  ], { now: '2026-09-18T09:00:00Z', schedule: { activeDays: [1, 2, 3, 4, 5, 6, 0], startHour: 8, endHour: 22 } }).expectedRemaining);
-  assert.ok(briefly - unobserved < 0.5, `brief polls ${briefly} vs unobserved ${unobserved}`);
-  assert.ok(throughout - unobserved > 2, `polled quiet days ${throughout} vs unobserved ${unobserved}`);
+  // The store always compacts unchanged readings; a day polled throughout
+  // must still count as observed once it is compacted.
+  for (const compactReadings of [false, true]) {
+    const [unobserved, briefly, throughout] = [[], brief, polled].map((quiet) => forecastQuota([
+      row('2026-09-14T08:00:00Z', 10), row('2026-09-14T22:00:00Z', 10), row('2026-09-14T22:30:00Z', 14),
+      ...quiet,
+      row('2026-09-18T08:50:00Z', 14), row('2026-09-18T09:00:00Z', 20),
+    ], { now: '2026-09-18T09:00:00Z', schedule: { activeDays: [1, 2, 3, 4, 5, 6, 0], startHour: 8, endHour: 22 }, compactReadings }).expectedRemaining);
+    assert.ok(briefly - unobserved < 0.5, `compact ${compactReadings}: brief polls ${briefly} vs unobserved ${unobserved}`);
+    assert.ok(throughout - unobserved > 2, `compact ${compactReadings}: polled quiet days ${throughout} vs unobserved ${unobserved}`);
+  }
 });
 
 test('a fresh window after a reset inherits the prior window pace', () => {

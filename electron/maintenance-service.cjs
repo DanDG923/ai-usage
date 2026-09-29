@@ -65,8 +65,23 @@ function createMaintenanceService({ databasePath, backupDirectory, openStore = (
         } finally { payload.close?.(); }
       }
       case 'export-csv': {
-        const exported = store.exportLedgerCsv(request.days);
-        fs.writeFileSync(request.filePath, exported.csv, 'utf8');
+        // Streamed beside the chosen file and moved into place once complete,
+        // so a failed export never leaves a truncated file under that name.
+        const partial = `${request.filePath}.partial`;
+        let exported;
+        try {
+          const descriptor = fs.openSync(partial, 'w');
+          try {
+            exported = store.exportLedgerCsv(request.days, Date.now(), (text) => {
+              const bytes = Buffer.from(text, 'utf8');
+              for (let offset = 0; offset < bytes.length;) offset += fs.writeSync(descriptor, bytes, offset);
+            });
+          } finally { fs.closeSync(descriptor); }
+          fs.renameSync(partial, request.filePath);
+        } catch (error) {
+          try { fs.unlinkSync(partial); } catch { /* Never created, or already moved. */ }
+          throw error;
+        }
         return { filePath: request.filePath, rows: exported.rows, days: request.days };
       }
       default:
