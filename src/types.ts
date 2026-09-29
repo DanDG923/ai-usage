@@ -398,6 +398,8 @@ export type Snapshot = {
   fableActivity?: FableActivity | null;
   claudeExtraUsage?: ClaudeExtraUsage | null;
   generatedAt: string;
+  /** The display clock: advanced between rebuilds by snapshotAtTime, while generatedAt stays the build time. */
+  clockAt?: string;
   timezone: string;
   settings: Settings;
   sources: Source[];

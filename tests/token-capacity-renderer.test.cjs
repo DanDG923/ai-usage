@@ -12,6 +12,7 @@ let demoSnapshot;
 let TokenCapacity;
 let Overview;
 let ProviderDetail;
+let snapshotAtTime;
 
 test.before(async () => {
   const [{ createServer }, { default: react }] = await Promise.all([import('vite'), import('@vitejs/plugin-react')]);
@@ -20,11 +21,12 @@ test.before(async () => {
     server: { middlewareMode: true, watch: null, hmr: false, ws: false },
     optimizeDeps: { noDiscovery: true, include: [] }, appType: 'custom',
   });
-  [{ demoSnapshot }, { TokenCapacity }, { Overview }, { ProviderDetail }] = await Promise.all([
+  [{ demoSnapshot }, { TokenCapacity }, { Overview }, { ProviderDetail }, { snapshotAtTime }] = await Promise.all([
     server.ssrLoadModule('/src/data/demo.ts'),
     server.ssrLoadModule('/src/components/TokenCapacity.tsx'),
     server.ssrLoadModule('/src/components/Overview.tsx'),
     server.ssrLoadModule('/src/components/ProviderDetail.tsx'),
+    server.ssrLoadModule('/src/snapshot-time.ts'),
   ]);
 });
 
@@ -212,6 +214,31 @@ test('a stale or expired remainder never appears as current while the calibrated
   assert.match(content, /≈ 1m tokens/);
   assert.match(content, /Needs current reading/);
   assert.doesNotMatch(content, /600k|Allowance reading/);
+});
+
+test('between rebuilds the remainder ages out at the same cutoff the backend applies', () => {
+  const { STALENESS_MS } = require('../electron/token-capacity.cjs');
+  const { snapshot, weekly } = fixture();
+  const readAt = Date.parse(weekly.observedAt);
+  // Keep the window open past the cutoff so only the reading's age decides.
+  weekly.resetsAt = new Date(readAt + 3 * STALENESS_MS).toISOString();
+  const within = snapshotAtTime(snapshot, readAt + STALENESS_MS - 60_000);
+  assert.match(text(render(within)), /Est\. remaining at reading ≈ 600k tokens/);
+  const aged = snapshotAtTime(snapshot, readAt + STALENESS_MS + 60_000);
+  const content = text(render(aged));
+  assert.match(content, /Est\. full week ≈ 1m tokens/, 'the calibrated full-week estimate stays');
+  assert.match(content, /Est\. remaining at reading Needs current reading/);
+  assert.doesNotMatch(content, /600k|Allowance reading/);
+  assert.match(content, /over 24 hours old/);
+  assert.equal(snapshot.quotas.codex.windows[0].tokenCapacity.remainingTokens, 600_000, 'the rebuilt snapshot is not changed in place');
+});
+
+test('the display clock advances between rebuilds while the build time stays put', () => {
+  const { snapshot } = fixture();
+  const builtAt = Date.parse(snapshot.generatedAt);
+  const later = snapshotAtTime(snapshot, builtAt + 3 * 3_600_000);
+  assert.equal(later.generatedAt, snapshot.generatedAt, 'no fresh collection is manufactured');
+  assert.equal(later.clockAt, new Date(builtAt + 3 * 3_600_000).toISOString());
 });
 
 test('zero remaining tokens stays an explicit timestamped estimate rather than a missing-reading state', () => {

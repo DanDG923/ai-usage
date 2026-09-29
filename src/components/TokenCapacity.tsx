@@ -3,6 +3,7 @@ import { selectDisplayedWindows } from '../../electron/quota-selection.mjs';
 import { Ban, CircleDashed, Info } from 'lucide-react';
 import { niceScale } from '../chart-scale';
 import { compactNumber, percent, quotaWindows, shortDate } from '../lib';
+import { snapshotNowMs } from '../snapshot-time';
 import type { QuotaWindow, Snapshot, TokenCapacityEstimate } from '../types';
 
 const PROVIDERS = [
@@ -312,7 +313,7 @@ export function TokenCapacity({
               provider={provider}
               window={window}
               timezone={snapshot.timezone}
-              nowMs={Date.parse(snapshot.generatedAt)}
+              nowMs={snapshotNowMs(snapshot)}
               single={Boolean(only)}
             />
           ));

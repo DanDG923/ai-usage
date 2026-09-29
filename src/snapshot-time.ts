@@ -1,8 +1,37 @@
 import { buildDashboardVerdict } from '../electron/dashboard-decision.mjs';
-import type { Quota, QuotaWindow, Snapshot } from './types';
+import type { Quota, QuotaWindow, Snapshot, TokenCapacityEstimate } from './types';
 
 // Claude reports one weekly reset up to a second apart across readings.
 const RESET_TOLERANCE_MS = 60_000;
+// The backend's cutoff for a remaining-token estimate (STALENESS_MS in
+// electron/token-capacity.cjs), and the warning it gives in its place.
+const TOKEN_CAPACITY_STALENESS_MS = 24 * 3_600_000;
+const STALE_REMAINDER_WARNING =
+  'The latest official reading is over 24 hours old; remaining tokens need a fresh reading.';
+
+/** The time a view should treat as now: the display clock, or the build time before it first advances. */
+export function snapshotNowMs(snapshot: Snapshot): number {
+  return Date.parse(snapshot.clockAt ?? snapshot.generatedAt);
+}
+
+/**
+ * The remaining-token estimate the backend would give at this time: it drops
+ * the remainder once its official reading is over a day old, while the
+ * full-window capacity stays. Between rebuilds only the clock moves.
+ */
+function ageTokenCapacity<T extends TokenCapacityEstimate | null | undefined>(estimate: T, nowMs: number): T {
+  if (!estimate?.remainingAsOf || !(nowMs - Date.parse(estimate.remainingAsOf) > TOKEN_CAPACITY_STALENESS_MS))
+    return estimate;
+  return {
+    ...estimate,
+    remainingTokens: null,
+    remainingRange: null,
+    remainingAsOf: null,
+    warnings: estimate.warnings.includes(STALE_REMAINDER_WARNING)
+      ? estimate.warnings
+      : [...estimate.warnings, STALE_REMAINDER_WARNING],
+  };
+}
 
 /**
  * A Fable window capped by a Claude weekly window that has since reset: the
@@ -42,6 +71,7 @@ export function snapshotAtTime(snapshot: Snapshot, nowMs: number): Snapshot {
     const entry = releaseExpiredPool(value, nowMs);
     return {
       ...entry,
+      tokenCapacity: ageTokenCapacity(entry.tokenCapacity, nowMs),
       forecast: {
         ...entry.forecast,
         expired: entry.forecast.expired || Date.parse(entry.resetsAt) <= nowMs,
@@ -54,8 +84,11 @@ export function snapshotAtTime(snapshot: Snapshot, nowMs: number): Snapshot {
       ...updateWindow(quota),
       windows: quota.windows.map(updateWindow),
     };
+  // The display clock never runs behind the build time it started from.
+  const builtAt = Date.parse(snapshot.generatedAt);
   const next = {
     ...snapshot,
+    clockAt: new Date(Number.isFinite(builtAt) ? Math.max(nowMs, builtAt) : nowMs).toISOString(),
     quotas: {
       codex: updateQuota(snapshot.quotas.codex),
       claude: updateQuota(snapshot.quotas.claude),

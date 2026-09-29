@@ -2,6 +2,7 @@ import { AlertOctagon, AlertTriangle, CheckCircle2, CircleDashed } from 'lucide-
 import { dateTimeLabel, percent, relativeTime, shortDate } from '../lib';
 import type { ProviderView } from '../provider-view';
 import { providerViews } from '../provider-view';
+import { snapshotNowMs } from '../snapshot-time';
 import type { Snapshot } from '../types';
 import { DailyUsageChart } from './Charts';
 import { ActivityHeatmap } from './details/ActivityHeatmap';
@@ -63,7 +64,7 @@ function EvidenceTape({ view }: { view: ProviderView }) {
 
 export function Activity({ snapshot, days }: { snapshot: Snapshot; days: number }) {
   const views = providerViews(snapshot);
-  const nowMs = Date.parse(snapshot.generatedAt);
+  const nowMs = snapshotNowMs(snapshot);
   const visibleCycles = {
     codex: snapshot.settings.showCodexSubscription !== false ? snapshot.cycles.codex : [],
     claude: snapshot.settings.showClaudeSubscription !== false ? snapshot.cycles.claude : [],

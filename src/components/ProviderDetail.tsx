@@ -17,6 +17,7 @@ import {
   whenLabel,
 } from '../lib';
 import { providerViews, type ProviderId, type ProviderView } from '../provider-view';
+import { snapshotNowMs } from '../snapshot-time';
 import type { CycleRow, Settings, Snapshot } from '../types';
 import { RunwayChart } from './Charts';
 import { DailyBudgetStrip } from './DailyBudgetStrip';
@@ -443,7 +444,7 @@ function Planner({
   const setDraft = onDraft;
   const [saving, setSaving] = useState(false);
   const reserve = draft ?? saved;
-  const nowMs = Date.parse(snapshot.generatedAt);
+  const nowMs = snapshotNowMs(snapshot);
   const budget = dailyBudget(view.current, snapshot.settings, nowMs, reserve);
   const reset = view.resetAt ? whenLabel(view.resetAt, nowMs) : 'the';
   if (!budget) {
@@ -601,7 +602,7 @@ export function ProviderDetail({
     () => scheduleOf({ activeDays, activeStartHour, activeEndHour }),
     [activeDays, activeStartHour, activeEndHour],
   );
-  const nowMs = Date.parse(snapshot.generatedAt);
+  const nowMs = snapshotNowMs(snapshot);
 
   if (!view) {
     return (
