@@ -544,7 +544,7 @@ function uninstallClaudeHelper() {
 // that restates limits a session fetched earlier is held back there, so it
 // can make Claude neither current here nor a failed Refresh successful.
 function latestPlanUsageReading(store, nowMs, graceMs) {
-  const rows = store.prepare(`SELECT bucket_id, observed_at, resets_at, window_minutes, used_percent, remaining_percent, provenance
+  const rows = store.prepare(`SELECT id, bucket_id, observed_at, resets_at, window_minutes, used_percent, remaining_percent, provenance
     FROM quota_observations WHERE source_id = 'claude' AND observed_at <= ? AND observed_at >= ? ORDER BY observed_at ASC, id ASC`)
     .all(new Date(nowMs + QUOTA_CLOCK_SKEW_MS).toISOString(), new Date(nowMs - 8 * 24 * 60 * 60 * 1000).toISOString());
   const buckets = new Map();
@@ -568,15 +568,12 @@ function latestPlanUsageReading(store, nowMs, graceMs) {
   // Refresh cannot renew it, so it does not decide whether Claude is current.
   const active = [...latest.values()].filter((row) => Date.parse(row.resets_at) > nowMs
     && (lastPlanUsageReadMs == null || Date.parse(row.observed_at) >= lastPlanUsageReadMs));
-  if (!active.length) return { lastReadAt: null, staleReadAt: null, statusLineReadAt: null, fresh: false };
+  if (!active.length) return { lastReadAt: null, staleReadAt: null, fresh: false, windows: [] };
   const lastReadAt = active.reduce((last, row) => laterIso(last, row.observed_at), null);
-  // The newest status-line reading the card shows for any window.
-  const statusLineReadAt = active.filter((row) => row.provenance === 'official-statusline')
-    .reduce((last, row) => laterIso(last, row.observed_at), null);
   // The oldest reading that is out of date, which the stale detail quotes.
   const staleReadAt = active.filter((row) => !providerReadingFresh(row, nowMs))
     .reduce((oldest, row) => (!oldest || Date.parse(row.observed_at) < Date.parse(oldest) ? row.observed_at : oldest), null);
-  return { lastReadAt, staleReadAt, statusLineReadAt, fresh: !staleReadAt };
+  return { lastReadAt, staleReadAt, fresh: !staleReadAt, windows: active };
 }
 
 function readingTime(value) {
@@ -601,6 +598,9 @@ function previousPlanUsageRequest(store) {
 async function refreshClaude(store, inboxPath, options = {}) {
   const readPlanUsage = options.readPlanUsage === true;
   const binary = findClaudeBinary();
+  // Rows this collection's status-line import adds are numbered after every
+  // row stored before it; a line imported again only updates its existing row.
+  const importedAfterId = store.prepare('SELECT COALESCE(MAX(id), 0) AS id FROM quota_observations').get().id;
   let statusLine;
   try {
     statusLine = importClaudeInbox(store, inboxPath);
@@ -662,12 +662,15 @@ async function refreshClaude(store, inboxPath, options = {}) {
     && ['observed', 'unavailable'].includes(fableTracking.provider.kind));
   const activityCurrent = fableTracking.health.activitySource === 'current';
   const acceptedReading = latestPlanUsageReading(store, nowMs, freshReadGraceFor(store.getSettings()));
-  // A helper import stands in for the provider only when the card shows what
-  // it just captured, and it can renew only the windows it reports: every
-  // active window must then be current, as an automatic run would judge it.
-  const statuslineAge = nowMs - Date.parse(acceptedReading.statusLineReadAt);
-  const helperRefreshed = statusLine.claudeObservations > 0 && statuslineAge >= -60_000 && statuslineAge <= 5 * 60_000
-    && acceptedReading.fresh;
+  // A helper import stands in for the provider only when this collection
+  // imported a reading the card shows, captured in the last few minutes. One
+  // an earlier collection imported is not new evidence, however recent. The
+  // import renews only the windows it reports, so every active window must
+  // then be current, as an automatic run would judge it.
+  const helperRefreshed = acceptedReading.fresh && acceptedReading.windows.some((row) => {
+    const ageMs = nowMs - Date.parse(row.observed_at);
+    return row.provenance === 'official-statusline' && row.id > importedAfterId && ageMs >= -60_000 && ageMs <= 5 * 60_000;
+  });
   const hasFreshClaudeEvidence = helperRefreshed || Number(fableTracking.provider?.overallWindowsRecorded || 0) > 0;
   // Plan usage not requested: judge the last reading by its age, and count
   // the run a success when its local work succeeded.
