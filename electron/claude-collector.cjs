@@ -41,9 +41,7 @@ function laterIso(left, right) {
   return Date.parse(right) > Date.parse(left) ? right : left;
 }
 
-// `restarted` says the helper has rotated the live inbox since its cursor was
-// stored: the file at this path is a new one, whatever its size.
-function importClaudeInboxFile(store, inboxPath, { restarted = false } = {}) {
+function importClaudeInboxFile(store, inboxPath) {
   if (!fs.existsSync(inboxPath)) return emptyInboxResult();
   let stat;
   try {
@@ -51,7 +49,7 @@ function importClaudeInboxFile(store, inboxPath, { restarted = false } = {}) {
   } catch {
     return emptyInboxResult({ readErrors: 1 });
   }
-  const previous = restarted ? null : store.getImportedFile(inboxPath);
+  const previous = store.getImportedFile(inboxPath);
   if (previous && previous.modified_ms === stat.mtimeMs && previous.size_bytes === stat.size) {
     return emptyInboxResult();
   }
@@ -152,13 +150,16 @@ function importClaudeInbox(store, inboxPath) {
     'invalidRecords', 'invalidResets', 'rejectedRecords', 'readErrors', 'bytesRead'];
   // A rotated file with no cursor was rotated since the last import, so the
   // live inbox restarted from empty. Once it grows past the old cursor it
-  // would look like an append and its first records would be skipped. Reading
-  // it from the start is safe: observations are upserted by reading time.
-  const restarted = rotated.some((filePath) => !store.getImportedFile(filePath));
+  // would look like an append and its first records would be skipped. Its
+  // cursor is dropped before the rotated file (the only sign of the restart)
+  // can be imported and deleted, including when the helper has not yet
+  // created the new inbox. Reading it from the start is safe: observations
+  // are upserted by reading time.
+  if (rotated.some((filePath) => !store.getImportedFile(filePath))) store.forgetImportedFile(inboxPath);
   for (const filePath of [...rotated, inboxPath]) {
     let result;
     try {
-      result = importClaudeInboxFile(store, filePath, { restarted: restarted && filePath === inboxPath });
+      result = importClaudeInboxFile(store, filePath);
     } catch {
       result = emptyInboxResult({ readErrors: 1 });
     }

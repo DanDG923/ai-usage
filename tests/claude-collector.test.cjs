@@ -613,6 +613,25 @@ test('a rotation between imports restarts the live inbox even once it outgrows t
   } finally { store.close(); }
 });
 
+test('a refresh between a rotation and the new inbox still restarts that inbox', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-rotation-'));
+  const store = new UsageStore(path.join(root, 'test.sqlite'), path.join(root, 'Backups'));
+  const inbox = path.join(root, 'inbox.jsonl');
+  const at = (minute) => new Date(Date.parse('2026-08-29T10:00:00Z') + minute * 60_000).toISOString();
+  const row = (minute) => JSON.stringify({ ai_usage_captured_at: at(minute), rate_limits: { seven_day: { used_percentage: 20 + minute / 10, resets_at: '2026-09-04T12:00:00Z' } } });
+  const lines = (from, to) => Array.from({ length: to - from }, (_, index) => `${row(from + index)}\n`).join('');
+  try {
+    fs.writeFileSync(inbox, lines(0, 3), 'utf8');
+    importClaudeInbox(store, inbox);
+    // The helper has moved the old inbox but not yet written the new one.
+    fs.renameSync(inbox, `${inbox}.rotated-202608291005000000-1`);
+    importClaudeInbox(store, inbox);
+    fs.writeFileSync(inbox, lines(3, 10), 'utf8');
+    assert.equal(importClaudeInbox(store, inbox).invalidRecords, 0, 'no record is read from the middle');
+    assert.equal(store.db.prepare("SELECT COUNT(*) AS count FROM quota_observations WHERE source_id = 'claude'").get().count, 10);
+  } finally { store.close(); }
+});
+
 test('the helper doubles every PowerShell single-quote character in its inbox path', () => {
   const helper = makeHelperScript("C:\\Users\\O\u2019Brien\\AppData\\Roaming\\ai-usage\\Bob's inbox.jsonl");
   assert.ok(helper.includes("$target = 'C:\\Users\\O\u2019\u2019Brien\\AppData\\Roaming\\ai-usage\\Bob''s inbox.jsonl'"));
