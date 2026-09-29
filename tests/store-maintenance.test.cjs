@@ -273,9 +273,11 @@ test('a failed CSV export leaves the chosen file untouched and no partial file b
 test('unpriced usage recorded without a model name is marked as such', () => withStore((store) => {
   store.recordUsageEvent({ eventKey: 'no-model', sourceId: 'codex', occurredAt: iso(NOW - DAY), model: null, inputTokens: 10 });
   store.recordUsageEvent({ eventKey: 'named', sourceId: 'codex', occurredAt: iso(NOW - DAY), model: 'mystery-model', inputTokens: 10 });
+  // A model actually named "Unknown" can be priced, so it stays apart from records with no name.
+  store.recordUsageEvent({ eventKey: 'literal', sourceId: 'codex', occurredAt: iso(NOW - DAY), model: 'Unknown', inputTokens: 5 });
   const unpriced = store.getCostAnalytics(30, store.getSettings(), NOW).unpricedModels;
-  assert.deepEqual(unpriced.map(({ model, unnamed }) => ({ model, unnamed })).sort((a, b) => a.model.localeCompare(b.model)),
-    [{ model: 'mystery-model', unnamed: undefined }, { model: 'Unknown', unnamed: true }]);
+  assert.deepEqual(unpriced.map(({ model, tokens, unnamed }) => ({ model, tokens, unnamed })).sort((a, b) => a.model.localeCompare(b.model) || a.tokens - b.tokens),
+    [{ model: 'mystery-model', tokens: 10, unnamed: undefined }, { model: 'Unknown', tokens: 5, unnamed: undefined }, { model: 'Unknown', tokens: 10, unnamed: true }]);
 }));
 
 test('a CSV export waits briefly for Windows to release the file it has just written', async (t) => {

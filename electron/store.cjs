@@ -1695,7 +1695,8 @@ class UsageStore {
       totalTokens += eventTokens;
       if (cost.covered) coveredTokens += eventTokens;
       else if (eventTokens > 0) {
-        const unpricedKey = `${event.source_id}|${event.model || 'Unknown'}`;
+        // Keyed apart from any model actually named "Unknown", which can be priced.
+        const unpricedKey = event.model ? `${event.source_id}|${event.model}` : `${event.source_id}|`;
         const unpriced = unpricedModelsMap.get(unpricedKey) || {
           sourceId: event.source_id,
           model: event.model || 'Unknown',
