@@ -96,7 +96,9 @@ export function resetDistance(value?: string | null) {
   // "5 hours" read as a disagreement with it.
   const minutes = Math.round(hours * 60);
   if (minutes < 60) return `${Math.max(1, minutes)} min`;
-  if (hours < 24) return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+  // Decided on the rounded minutes, so the last seconds before a full day read
+  // "1 day 0h" rather than "24h 0m".
+  if (minutes < 24 * 60) return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
   // Round the total first so 47.6h reads "1 day 24h" never; it is "2 days 0h".
   const whole = Math.round(hours);
   const days = Math.floor(whole / 24);

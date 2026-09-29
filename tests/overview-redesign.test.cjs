@@ -175,6 +175,9 @@ test('freshness reads as a relative time and source health names what needs atte
   assert.equal(header.lastCollectedAt(snapshot), collected - 600_000, 'hidden subscriptions do not count');
   snapshot.settings.showCodexSubscription = false;
   assert.equal(header.lastCollectedAt(snapshot), null);
+  // A restored setting can hold any number of minutes, not just the menu's whole hours.
+  assert.deepEqual([0, 15, 60, 100, 240].map(header.refreshCadence),
+    ['manual refresh', 'auto every 15 min', 'auto every hour', 'auto every 100 min', 'auto every 4 hours']);
   snapshot.settings.showClaudeSubscription = true;
   snapshot.settings.showCodexSubscription = true;
   assert.deepEqual(header.sourceHealth(snapshot), { tone: 'safe', text: '3 sources current' });
