@@ -11,7 +11,8 @@
 // It reads three local surfaces, none of which it modifies:
 //   1. The status-line inbox the dashboard's helper already writes. Claude Code
 //      hands the status line a rich JSON payload per render; the helper stores
-//      only capture time, model identity, and rate-limit fields.
+//      only capture time, model identity, rate-limit fields, and the session id
+//      and API time that date each reading's fetch.
 //   2. The Claude Code transcripts under ~/.claude/projects.
 //   3. The public Claude Code CLI command list, as a diagnostic only. The app's
 //      SDK reader is a separate surface and is not disproved by no CLI command.

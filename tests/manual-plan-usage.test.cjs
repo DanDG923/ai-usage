@@ -893,4 +893,13 @@ test('Fable is judged by the newest read of its figure, not by an idle redraw of
     await refreshClaude(store, missingInbox(store), { activityReader: quietActivity, clock: () => new Date(nowMs) });
     assert.equal(source('claude-fable').status, 'stale');
   });
+  await t.test('a recent manual entry of the same figure is no provider read', async (tt) => {
+    const { store, source } = collectorFixture(tt);
+    fable(store, nowMs - 120 * MINUTE, 'manual-official');
+    idle(store);
+    await refreshClaude(store, missingInbox(store), { activityReader: quietActivity, clock: () => new Date(nowMs) });
+    const fableSource = source('claude-fable');
+    assert.equal(fableSource.status, 'stale');
+    assert.equal(fableSource.metadata.automatic.allowance.evidenceAt, new Date(nowMs - 36 * 60 * MINUTE).toISOString());
+  });
 });

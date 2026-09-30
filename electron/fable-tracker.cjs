@@ -249,7 +249,12 @@ function getLastCurrentOfficial(store, nowMs) {
     .filter((row) => validQuotaTime(Date.parse(row.observed_at), Date.parse(row.resets_at), row.window_minutes, nowMs));
   const accepted = withoutStaleRestatements(rows, { nowMs, freshReadGraceMs: freshReadGraceFor(store.getSettings()) });
   if (!accepted.length) return null;
-  const latest = { ...accepted.at(-1), evidence_at: new Date(latestEvidenceAt(accepted)).toISOString() };
+  // A manual entry can be the allowance, but never evidence that the provider
+  // was read recently: a provider figure is dated by provider readings alone.
+  const chosen = accepted.at(-1);
+  const evidence = isProviderProvenance(chosen.provenance)
+    ? latestEvidenceAt(accepted.filter((row) => isProviderProvenance(row.provenance))) : Date.parse(chosen.observed_at);
+  const latest = { ...chosen, evidence_at: new Date(evidence).toISOString() };
   const window = { row: latest, bucketId: latest.bucket_id, observedAt: latest.observed_at, resetsAt: latest.resets_at,
     windowMinutes: latest.window_minutes, provenance: latest.provenance, metadata: {} };
   return selectDisplayedWindows([window], { nowMs }).active[0]?.row ?? null;
