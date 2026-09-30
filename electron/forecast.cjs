@@ -424,10 +424,15 @@ function fetchMomentOf(row) {
 // whether it is fresh. A first redraw or first showing only bounds an undated
 // fetch from above: the limits may have been fetched at any point in the
 // window they show, so the figure is known only from that window's start.
+// A figure shown before an early replenishment belongs to the allowance it
+// replaced, even where the reset timestamp is unchanged.
 function evidenceTimes(rows, { known = false } = {}) {
   const parsed = rows.map(normaliseObservation);
-  const firstShown = [];
-  return parsed.map((row) => {
+  let firstShown = [];
+  return parsed.map((row, index) => {
+    if (index > 0 && replenishedWithin(parsed[index - 1], row)) {
+      firstShown = firstShown.filter((entry) => Math.abs(entry.resetsAt - row.resetsAt) > RESET_TOLERANCE_MS);
+    }
     if (!restatesSessionLimits(row)) return row.observedAt;
     if (Number.isFinite(row.fetchedAfter)) return Math.min(row.fetchedAfter, row.observedAt);
     let placed;
@@ -449,23 +454,36 @@ function evidenceTimes(rows, { known = false } = {}) {
   });
 }
 
+// An early replenishment between two readings of a window whose reset
+// timestamp did not move: a new allowance, as `clusterByWindow` reads it.
+// Only a read or a dated fetch shows one; an undated drop may be an idle
+// session restating an older figure.
+function replenishedWithin(previous, row) {
+  return (!restatesSessionLimits(row) || Number.isFinite(row.fetchedAfter))
+    && Math.abs(row.resetsAt - previous.resetsAt) <= RESET_TOLERANCE_MS && clearAllowanceRebase(previous, row);
+}
+
 // When the latest reading's value was last known to hold: the newest evidence
 // among the readings of its window that show the same value. An idle session
 // redrawing a value it fetched hours ago is only as current as that fetch,
-// unless a newer read agrees with it. Readings must be in time order.
-// `known` as for `evidenceTimes`.
+// unless a newer read agrees with it. The same figure from before an early
+// replenishment is no evidence for the allowance that replaced it. Readings
+// must be in time order. `known` as for `evidenceTimes`.
 function latestEvidenceAt(rows, options = {}) {
   const parsed = rows.map(normaliseObservation);
   const current = parsed.at(-1);
   if (!current) return null;
   const times = evidenceTimes(parsed, options);
+  let start = parsed.length - 1;
+  while (start > 0 && !replenishedWithin(parsed[start - 1], parsed[start])) start -= 1;
   let at = times.at(-1);
-  parsed.forEach((row, index) => {
+  for (let index = start; index < parsed.length; index += 1) {
+    const row = parsed[index];
     if (Math.abs(row.resetsAt - current.resetsAt) <= RESET_TOLERANCE_MS
       && Math.abs(usedPercentOf(row) - usedPercentOf(current)) <= STALE_RESTATEMENT_MARGIN) {
       at = Math.max(at, times[index]);
     }
-  });
+  }
   return Math.min(at, current.observedAt);
 }
 

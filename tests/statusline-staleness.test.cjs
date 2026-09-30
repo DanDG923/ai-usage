@@ -218,6 +218,24 @@ test('undated sessions redrawing different figures each keep their own first red
   }
 });
 
+test('a figure from before an early replenishment is no evidence for the allowance that replaced it', () => {
+  // Reads of 80%, then an early replenishment to 0% under the same reset,
+  // then an undated redraw back at 80% whose fetch is unknown.
+  const weekStart = Date.parse(RESET) - 7 * 24 * HOUR;
+  const rows = [reading('2026-09-23T08:00:00.000Z', 80, 'official-claude-usage'),
+    reading('2026-09-23T10:00:00.000Z', 0, 'official-claude-usage'),
+    { ...reading('2026-09-23T15:00:00.000Z', 80, 'official-statusline'), seenSince: '2026-09-23T15:00:00.000Z' }];
+  assert.equal(latestEvidenceAt(rows, { known: true }), weekStart, 'the 08:00 read of the old allowance does not date it');
+  assert.equal(latestEvidenceAt(rows.slice(0, 2).concat(reading('2026-09-23T15:00:00.000Z', 80, 'official-claude-usage')),
+    { known: true }), Date.parse('2026-09-23T15:00:00.000Z'), 'a read of the new allowance does');
+  // From a helper that did not record sessions, the new 80% is first shown
+  // after the replenishment, not when the old allowance reached it.
+  const legacy = [reading('2026-09-23T08:00:00.000Z', 80, 'official-statusline'),
+    reading('2026-09-23T10:00:00.000Z', 0, 'official-claude-usage'),
+    reading('2026-09-23T15:00:00.000Z', 80, 'official-statusline'), reading('2026-09-23T15:10:00.000Z', 80, 'official-statusline')];
+  assert.equal(latestEvidenceAt(legacy), Date.parse('2026-09-23T15:00:00.000Z'));
+});
+
 test('an undated redraw of the window an early replenishment replaced does not return to the card', () => {
   const inWindow = (at, used, provenance, resetsAt) => ({ ...reading(at, used, provenance), resetsAt });
   const oldReset = '2026-09-24T08:00:00.000Z';
