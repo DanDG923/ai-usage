@@ -137,6 +137,20 @@ test('an idle session’s older fetch does not interleave with a working session
   assert.equal(afterReplenishment.at(-1).usedPercent, 0);
 });
 
+test('an undated redraw cannot undercut a dated session’s newer fetch', () => {
+  // No Refresh this week. An idle session the helper first saw with limits in
+  // hand, so undated, redraws 1%; a working session then fetches 40%.
+  const rows = [
+    reading('2026-09-22T10:00:00.000Z', 1, 'official-statusline'),
+    fetched('2026-09-22T10:06:00.000Z', 40, '2026-09-22T10:05:00.000Z'),
+    reading('2026-09-22T10:07:00.000Z', 1, 'official-statusline'),
+    reading('2026-09-22T10:08:00.000Z', 1, 'official-statusline'),
+  ];
+  assert.deepEqual(withoutStaleRestatements(rows, { nowMs: Date.parse('2026-09-22T12:00:00.000Z') }).map((row) => row.usedPercent), [1, 40]);
+  // Only once the 40% is a day old, with nothing newer, is the undated reading believed.
+  assert.equal(withoutStaleRestatements(rows, { nowMs: Date.parse('2026-09-23T10:30:00.000Z') }).at(-1).usedPercent, 1);
+});
+
 test('fetches that cannot be ordered let a rise through and hold a drop back', () => {
   // Each fetch is known only to lie between two redraws, and these overlap.
   const rows = [

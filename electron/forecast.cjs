@@ -427,10 +427,12 @@ function latestEvidenceAt(rows) {
 // working session sees reaches the card at once. Fetched before, it stands
 // only where it agrees with what is known since. When the two fetches cannot
 // be ordered, a higher value is the later use and a lower one is held back.
-// An undated reading (from a helper that did not record sessions) waits for
-// the provider's next read to confirm or contradict it. It is believed without
-// one only after the provider has been silent past the window's freshness
-// limit, when the card already calls the provider's reading out of date.
+// An undated reading (from a helper that did not record sessions, or a
+// session first seen with limits in hand) cannot be ordered against the
+// newest evidence, whether a provider read or a dated session's fetch. A
+// lower one waits for the provider's next read to confirm or contradict it,
+// and is believed without one only once that evidence is past the window's
+// freshness limit, when the card already calls it out of date.
 // Readings must be in time order; readings before any evidence are kept
 // because nothing yet shows them to be stale.
 const STALE_RESTATEMENT_MARGIN = 0.5;
@@ -448,7 +450,6 @@ function withoutStaleRestatements(rows, { nowMs = Date.now(), freshReadGraceMs =
     nextFresh[index] = next;
     if (!restatesSessionLimits(parsed[index])) next = parsed[index];
   }
-  let fresh = null;
   // The newest evidence so far, and the span its fetch is known to lie in.
   let newest = null;
   // Every redraw of one fetch carries its date. The first of them bounds the
@@ -458,7 +459,6 @@ function withoutStaleRestatements(rows, { nowMs = Date.now(), freshReadGraceMs =
     const reading = parsed[index];
     const used = usedPercentOf(reading);
     if (!restatesSessionLimits(reading)) {
-      fresh = reading;
       newest = { reading, from: reading.observedAt, to: reading.observedAt };
       return true;
     }
@@ -482,12 +482,14 @@ function withoutStaleRestatements(rows, { nowMs = Date.now(), freshReadGraceMs =
       newest = { reading: newest.reading, from: Math.max(newest.from, own.from), to: Math.max(newest.to, own.to) };
       return true;
     }
-    const freshUsed = fresh && usedPercentOf(fresh);
-    if (!sameReset(fresh) || used >= freshUsed - STALE_RESTATEMENT_MARGIN) return true;
+    // Undated: its fetch cannot be ordered against the newest evidence, a
+    // provider read or a dated session's fetch alike.
+    const newestUsed = newest && usedPercentOf(newest.reading);
+    if (!sameReset(newest?.reading) || used >= newestUsed - STALE_RESTATEMENT_MARGIN) return true;
     const after = nextFresh[index];
-    if (after) return sameReset(after) && usedPercentOf(after) < freshUsed - STALE_RESTATEMENT_MARGIN;
+    if (after) return sameReset(after) && usedPercentOf(after) < newestUsed - STALE_RESTATEMENT_MARGIN;
     const graceMs = Math.max(freshReadGraceMs, freshnessLimitHours({ windowMinutes: reading.windowMinutes }) * HOUR_MS);
-    return nowMs - fresh.observedAt > graceMs;
+    return nowMs - newest.to > graceMs;
   });
 }
 
