@@ -561,6 +561,17 @@ function withoutStaleRestatements(rows, { nowMs = Date.now(), freshReadGraceMs =
   });
 }
 
+// When a rise in a status-line figure was fetched, as late as needed to fall
+// after the interval it closes began: its fetch's lower bound, else its
+// session's first redraw of it, else the redraw itself. A read is its own time.
+function riseMomentOf(row, startMs) {
+  if (!restatesSessionLimits(row)) return row.observedAt;
+  for (const at of [row.fetchedAfter, row.seenSince]) {
+    if (Number.isFinite(at) && at > startMs && at < row.observedAt) return at;
+  }
+  return row.observedAt;
+}
+
 function deriveLearningSamples(observations, schedule, nowMs, excludedDates = []) {
   const excluded = typeof excludedDates === 'function' ? excludedDates : exclusionLookup(excludedDates);
   const rows = observations.map(normaliseObservation)
@@ -617,9 +628,12 @@ function deriveLearningSamples(observations, schedule, nowMs, excludedDates = []
       // The change-to-change span already includes the quiet time for rate
       // smoothing. Use the latest unchanged reading only to localise the phase
       // and daily allocation; adding that quiet span separately would weight it twice.
-      addIntervalSamples(samples, latest, after, schedule, nowMs, (after.observedAt - anchor.observedAt) / HOUR_MS);
-      anchor = after;
-      latest = after;
+      // The rise is learned up to when its figure was fetched, not redrawn.
+      const at = riseMomentOf(after, latest.observedAt);
+      const rise = at === after.observedAt ? after : { ...after, observedAt: at };
+      addIntervalSamples(samples, latest, rise, schedule, nowMs, (at - anchor.observedAt) / HOUR_MS);
+      anchor = rise;
+      latest = rise;
     } else if (!restatesSessionLimits(after)) {
       latest = after;
     } else if (Number.isFinite(after.fetchedAfter) && after.fetchedAfter > latest.observedAt) {

@@ -305,6 +305,22 @@ test('interleaved stale status-line readings neither reset the window nor add la
   assert.ok(mixed.series.observed.every((point) => point.remaining >= 83));
 });
 
+test('a rise is learned up to its fetch, not its later first redraw', () => {
+  // Active hours end at 17:00 local. The week rises to 20% in a fetch at
+  // 16:30 local that a status line first draws at 18:00.
+  const schedule = { activeDays: [0, 1, 2, 3, 4, 5, 6], startHour: 8, endHour: 17 };
+  const learn = (rise) => deriveLearningSamples([
+    reading('2026-09-22T08:00:00.000Z', 10, 'official-claude-usage'),
+    rise,
+    reading('2026-09-22T19:00:00.000Z', 20, 'official-claude-usage'),
+  ], schedule, Date.parse(NOW)).map(({ weight: _weight, ...sample }) => sample);
+  const read = learn(reading('2026-09-22T15:30:00.000Z', 20, 'official-claude-usage'));
+  const redrawn = learn({ ...reading('2026-09-22T17:00:00.000Z', 20, 'official-statusline'),
+    fetchedAfter: '2026-09-22T15:30:00.000Z', seenSince: '2026-09-22T17:00:00.000Z' });
+  assert.ok(read.some((sample) => sample.changed && sample.phase === 'active'));
+  assert.deepEqual(redrawn, read);
+});
+
 test('a newer dated fetch of an unchanged figure places the next increase as a read would', () => {
   // 10% at 10:00 local, the same 10% confirmed at 18:00, then 20% at 19:00.
   const learn = (confirmation) => deriveLearningSamples([
