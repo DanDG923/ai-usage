@@ -474,8 +474,9 @@ function withoutStaleRestatements(rows, { nowMs = Date.now(), freshReadGraceMs =
   }
   // The newest evidence so far, and the span its fetch is known to lie in.
   let newest = null;
-  // Every redraw of one fetch carries its date. The first of them bounds the
-  // fetch from above; the later ones were recorded after it anyway.
+  // Every redraw of one fetch carries its session's first redraw of it
+  // (`seenSince`), which bounds the fetch from above. A dated reading without
+  // one falls back to the first reading here that carries the same date.
   const firstCarrier = new Map();
   return rows.filter((row, index) => {
     const reading = parsed[index];
@@ -490,7 +491,8 @@ function withoutStaleRestatements(rows, { nowMs = Date.now(), freshReadGraceMs =
     const endedBefore = (other) => reading.resetsAt < other.resetsAt && reading.resetsAt <= reading.observedAt;
     if (Number.isFinite(reading.fetchedAfter)) {
       if (!firstCarrier.has(reading.fetchedAfter)) firstCarrier.set(reading.fetchedAfter, reading.observedAt);
-      const own = { reading, from: reading.fetchedAfter, to: firstCarrier.get(reading.fetchedAfter) };
+      const own = { reading, from: reading.fetchedAfter,
+        to: Number.isFinite(reading.seenSince) ? Math.min(reading.seenSince, reading.observedAt) : firstCarrier.get(reading.fetchedAfter) };
       if (!newest || own.from > newest.to) {
         newest = own;
         return true;

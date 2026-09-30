@@ -227,6 +227,19 @@ test('an undated rise raises the mark a later undated drop must answer to', () =
   assert.equal(withoutStaleRestatements(rows, { nowMs: Date.parse('2026-09-23T10:10:00.000Z') }).at(-1).usedPercent, 15);
 });
 
+test('two sessions sharing a fetch date keep their own upper bounds', () => {
+  // Both sessions' previous redraws fell in the same millisecond, but the
+  // second first showed 20% forty seconds after the first did. A drop fetched
+  // after 20:00:30 is not provably newer than the second session's fetch.
+  const withSeen = (row, seenSince) => ({ ...row, seenSince });
+  const rows = [
+    withSeen(fetched('2026-09-22T20:00:10.000Z', 20, '2026-09-22T20:00:00.000Z'), '2026-09-22T20:00:10.000Z'),
+    withSeen(fetched('2026-09-22T20:00:50.000Z', 20, '2026-09-22T20:00:00.000Z'), '2026-09-22T20:00:50.000Z'),
+    withSeen(fetched('2026-09-22T20:01:00.000Z', 10, '2026-09-22T20:00:30.000Z'), '2026-09-22T20:01:00.000Z'),
+  ];
+  assert.deepEqual(withoutStaleRestatements(rows, { nowMs: Date.parse('2026-09-22T20:05:00.000Z') }).map((row) => row.usedPercent), [20, 20]);
+});
+
 test('fetches that cannot be ordered let a rise through and hold a drop back', () => {
   // Each fetch is known only to lie between two redraws, and these overlap.
   const rows = [
