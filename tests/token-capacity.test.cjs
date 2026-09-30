@@ -242,6 +242,21 @@ test('a rise whose fetch overlaps the anchor’s closes at its first redraw, not
   assert.deepEqual([overlapping.weeklyTokens, overlapping.weeklyRange, overlapping.intervals], [read.weeklyTokens, read.weeklyRange, read.intervals]);
 });
 
+test('an idle redraw restating an older fetch of the latest figure does not change the calibration', () => {
+  // Seven intervals of different capacity and model, then an idle session
+  // redraws the latest 80%, its fetch dated two days before the last read.
+  const steps = [10, 20, 30, 40, 50, 60, 70, 80];
+  const observations = steps.map((used, index) => observation(NOW - (steps.length - 1 - index) * 6 * HOUR, used));
+  const events = [1, 3, 1.2, 2.5, 0.8, 1.9, 1.4].map((millions, index) =>
+    event(NOW - (steps.length - 2 - index) * 6 * HOUR - HOUR, millions * 1_000_000, { model: index % 2 ? 'gpt-5.6-sol' : 'gpt-5.6-terra' }));
+  const calibration = (value) => [value.status, value.weeklyTokens, value.weeklyRange, value.modelMix, value.tokenMix, value.intervals];
+  const read = estimateTokenCapacity(fixture({ nowMs: NOW + HOUR, observations, events }));
+  const redrawn = estimateTokenCapacity(fixture({ nowMs: NOW + HOUR, events, observations: [...observations,
+    observation(NOW + HOUR / 2, 80, { provenance: 'official-statusline', plan_type: null, fetched_after: iso(NOW - 2 * DAY) })] }));
+  assert.equal(read.status, 'available');
+  assert.deepEqual(calibration(redrawn), calibration(read));
+});
+
 test('a redraw from a session first seen with limits in hand does not renew remaining tokens', () => {
   // A day and an hour later, a session the helper never saw open redraws 40%:
   // fetched at some point this week, perhaps before the last provider reading.

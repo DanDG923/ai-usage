@@ -333,11 +333,14 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
     result.reason = 'Learning from official usage: at least three matched intervals of 5 percentage points are needed.';
     return result;
   }
-  const referenceAt = readings.at(-1).evidence;
+  // Age is relative to the newest evidence, not wall time, so merely opening
+  // the dashboard later cannot alter the calibrated weekly capacity. Nor is it
+  // the last redraw, which may restate a fetch older than a later read: no
+  // interval is newer than the reference, so no weight exceeds its size.
+  const referenceAt = retained.reduce((latest, entry) => Math.max(latest, entry.after),
+    readings.reduce((latest, row) => Math.max(latest, row.evidence), -Infinity));
   for (const entry of retained) {
     const distance = mixDistance(mixOf([entry]), recentMix);
-    // Age is relative to the newest evidence, not wall time, so merely opening
-    // the dashboard later cannot alter the calibrated weekly capacity.
     entry.weight *= Math.exp(-(referenceAt - entry.after) / (21 * DAY_MS)) * Math.max(0.2, 1 - distance * 0.8);
   }
   // Even a very recent large interval cannot outweigh every other interval
