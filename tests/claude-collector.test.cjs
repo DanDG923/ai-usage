@@ -1057,13 +1057,14 @@ test('fresh status-line Fable evidence stays current when the SDK is unavailable
   const store = new UsageStore(path.join(root, 'test.sqlite'), path.join(root, 'Backups'));
   const inbox = path.join(root, 'inbox.jsonl');
   const reset = new Date(Date.now() + 4 * 86_400_000).toISOString();
-  fs.writeFileSync(inbox, `${JSON.stringify({
-    ai_usage_captured_at: new Date().toISOString(),
-    rate_limits: {
+  // A session that opened just now and has fetched its first limits.
+  fs.writeFileSync(inbox, `${[
+    { ai_usage_captured_at: new Date(Date.now() - 20_000).toISOString(), session_id: 'fresh-session', api_ms: 0, rate_limits: null },
+    { ai_usage_captured_at: new Date().toISOString(), session_id: 'fresh-session', api_ms: 1_500, rate_limits: {
       seven_day: { used_percentage: 22, resets_at: reset },
       fable_seven_day: { used_percentage: 44, resets_at: reset },
-    },
-  })}\n`);
+    } },
+  ].map((line) => JSON.stringify(line)).join('\n')}\n`);
   try {
     // Updated deliberately: plan usage is read only on an explicit user refresh now,
     // so this SDK-path test asks for one (readPlanUsage: true).

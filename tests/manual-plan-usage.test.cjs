@@ -774,12 +774,14 @@ test('a status-line restatement the card holds back cannot make Claude current o
     });
   }
   const inbox = path.join(root, 'inbox.jsonl');
-  const capture = (at, fiveUsed, { weekly = true } = {}) => fs.appendFileSync(inbox, `${JSON.stringify({
-    ai_usage_captured_at: new Date(at).toISOString(),
-    rate_limits: {
+  // An idle session, first seen with its 1% in hand, restates it; a working
+  // session opens and fetches 41% later on.
+  const capture = (at, fiveUsed, { weekly = true, session = 'idle-session', apiMs = 1_000, limits = true } = {}) => fs.appendFileSync(inbox, `${JSON.stringify({
+    ai_usage_captured_at: new Date(at).toISOString(), session_id: session, api_ms: apiMs,
+    rate_limits: limits ? {
       five_hour: { used_percentage: fiveUsed, resets_at: fiveReset },
       ...(weekly ? { seven_day: { used_percentage: 20, resets_at: weekReset } } : {}),
-    },
+    } : null,
   })}\n`);
   const rateLimited = { read: async () => { throw Object.assign(new Error('HTTP 429'), { code: 'rate_limited' }); } };
 
@@ -802,8 +804,10 @@ test('a status-line restatement the card holds back cannot make Claude current o
   assert.match(claude.status_detail, /The last Refresh could not read Claude plan usage \(rate_limited\)\./,
     'a held-back status-line row is not a newer reading that replaces the failed Refresh');
 
-  // A status-line reading the card accepts still stands in for the provider.
-  capture(nowMs + 150_000, 41);
+  // A status-line reading the card accepts, freshly fetched by a working
+  // session, still stands in for the provider.
+  capture(nowMs + 140_000, 0, { session: 'working-session', apiMs: 0, limits: false });
+  capture(nowMs + 150_000, 41, { session: 'working-session', apiMs: 2_000 });
   await refreshClaude(store, inbox, { readPlanUsage: true, usagePort: rateLimited, activityReader: quietActivity, clock: () => new Date(nowMs + 180_000) });
   claude = source('claude');
   assert.equal(claude.status, 'connected');
@@ -882,6 +886,21 @@ test('an idle session first seen with limits in hand is not new evidence for a f
   assert.equal(store.prepare('SELECT COUNT(*) AS count FROM quota_observations WHERE fetched_after IS NOT NULL').get().count, 0);
   assert.equal(claude.metadata.planUsage.lastRequest.succeeded, false, 'a redraw a minute ago shows no fetch that recent');
   assert.equal(store.getQuota('claude', store.getSettings(), nowMs).evidenceAt, new Date(nowMs - 180 * MINUTE).toISOString());
+});
+
+test('a single redraw from a session first seen with limits in hand is not new evidence for a failed Refresh', async (t) => {
+  const { refreshClaude } = collectorWithPortSpy();
+  const { root, store, source } = collectorFixture(t);
+  const nowMs = Date.now() - 15 * MINUTE;
+  // The helper was just installed; an open session redraws once, thirty
+  // seconds ago, with limits it may have fetched hours before.
+  const inbox = path.join(root, 'inbox.jsonl');
+  fs.writeFileSync(inbox, `${JSON.stringify({ ai_usage_captured_at: new Date(nowMs - 30_000).toISOString(),
+    session_id: 'already-open', api_ms: 9_000,
+    rate_limits: { seven_day: { used_percentage: 20, resets_at: new Date(nowMs + 3 * 1440 * MINUTE).toISOString() } } })}\n`);
+  const rateLimited = { read: async () => { throw Object.assign(new Error('HTTP 429'), { code: 'rate_limited' }); } };
+  await refreshClaude(store, inbox, { readPlanUsage: true, usagePort: rateLimited, activityReader: quietActivity, clock: () => new Date(nowMs) });
+  assert.equal(source('claude').metadata.planUsage.lastRequest.succeeded, false);
 });
 
 test('an idle redraw that agrees with a recent Refresh is still not new evidence for a failed one', async (t) => {

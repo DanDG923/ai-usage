@@ -826,12 +826,14 @@ async function refreshClaude(store, inboxPath, options = {}) {
   // import renews only the windows it reports, so every active window must
   // then be current, as an automatic run would judge it.
   // An idle session's redraw is imported as a new row, but it carries limits
-  // fetched long ago, so its own fetch is what must be recent. The window's
-  // evidence may come from an earlier read that agrees with it, which is not
-  // new evidence from this collection.
+  // fetched long ago, so its own fetch is what must be recent, and known to
+  // be: a session first seen with limits in hand may have fetched them long
+  // before its first redraw. The window's evidence may come from an earlier
+  // read that agrees with it, which is not new evidence from this collection.
   const helperRefreshed = acceptedReading.fresh && acceptedReading.windows.some((row) => {
     const ageMs = nowMs - Date.parse(row.own_evidence_at);
-    return row.provenance === 'official-statusline' && row.id > importedAfterId && ageMs >= -60_000 && ageMs <= 5 * 60_000;
+    return row.provenance === 'official-statusline' && row.fetched_after != null && row.id > importedAfterId
+      && ageMs >= -60_000 && ageMs <= 5 * 60_000;
   });
   const hasFreshClaudeEvidence = helperRefreshed || Number(fableTracking.provider?.overallWindowsRecorded || 0) > 0;
   // Plan usage not requested: judge the last reading by its age, and count

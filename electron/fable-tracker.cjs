@@ -416,12 +416,15 @@ function createFableUsageTracker({ store, usagePort, activityReader, clock = () 
 
     const cached = getLastCurrentOfficial(store, nowMs);
     // A redraw this refresh imported stands in for the provider only if its
-    // own session fetched the limits in the last few minutes; an earlier read
-    // that agrees with it is not new evidence from this refresh.
+    // own session is known to have fetched the limits in the last few
+    // minutes; an earlier read that agrees with it is not new evidence from
+    // this refresh, and a session first seen with limits in hand may have
+    // fetched them long before its first redraw.
     const freshStatuslineFallback = Boolean(cached
       && fallbackObservedAt
       && cached.provenance === 'official-statusline'
       && cached.observed_at === fallbackObservedAt
+      && cached.fetched_after != null
       && nowMs - ownFetchMs(cached) <= 5 * 60_000
       && Date.parse(fallbackObservedAt) <= nowMs + QUOTA_CLOCK_SKEW_MS);
     let allowance;
