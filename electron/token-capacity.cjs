@@ -211,20 +211,22 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
   }
   const excluded = excludedIntervals(excludedDates);
   const intervals = [];
+  // Intervals run between the moments the figures were fetched, not redrawn:
+  // tokens used between a fetch and its later redraw belong to the next rise.
   let anchor = calibrationReadings[0], highWater = anchor.used, cycleReset = anchor.reset, cycle = 0, recovering = false;
   let excludedCount = 0, corrected = false, closeResets = false;
   for (const after of calibrationReadings.slice(1)) {
     // The first reset stays fixed for the entire cluster: chained small reset
     // shifts must not merge unrelated windows across a long observation gap.
     const resetChanged = Math.abs(after.reset - cycleReset) > RESET_TOLERANCE_MS;
-    const gap = after.at - anchor.at;
+    const gap = after.evidence - anchor.evidence;
     const idleRolling = anchor.used === 0 && after.used === 0 && gap > 0
       && Math.abs((after.reset - anchor.reset) - gap) <= RESET_TOLERANCE_MS + gap * 0.01;
     if (idleRolling) { anchor = after; cycleReset = after.reset; continue; }
     const rebased = highWater - after.used >= 5 && after.used <= 2;
     const pinnedAfterIdle = anchor.used === 0 && after.used > 0
-      && after.reset - WEEK_MS >= anchor.at - RESET_TOLERANCE_MS
-      && after.reset - WEEK_MS <= after.at + RESET_TOLERANCE_MS;
+      && after.reset - WEEK_MS >= anchor.evidence - RESET_TOLERANCE_MS
+      && after.reset - WEEK_MS <= after.evidence + RESET_TOLERANCE_MS;
     if (resetChanged || rebased) {
       if (resetChanged && !pinnedAfterIdle && Math.abs(after.reset - cycleReset) < DAY_MS) closeResets = true;
       anchor = after; highWater = after.used; cycleReset = after.reset; cycle += 1; recovering = false;
@@ -235,7 +237,7 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
       anchor = after; highWater = after.used; recovering = false;
       continue;
     }
-    if (excluded(anchor.at, after.at)) {
+    if (excluded(anchor.evidence, after.evidence)) {
       excludedCount += 1;
       highWater = Math.max(highWater, after.used);
       anchor = { ...after, used: highWater };
@@ -251,8 +253,8 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
     }
     highWater = Math.max(highWater, after.used);
     const delta = after.used - anchor.used;
-    if (delta < MIN_INTERVAL_PERCENT || after.at <= anchor.at) continue;
-    intervals.push({ before: anchor.at, after: after.at, delta, cycle, manual: anchor.manual || after.manual });
+    if (delta < MIN_INTERVAL_PERCENT || after.evidence <= anchor.evidence) continue;
+    intervals.push({ before: anchor.evidence, after: after.evidence, delta, cycle, manual: anchor.manual || after.manual });
     anchor = after;
   }
   if (excludedCount) result.warnings.push('Intervals touching an ignored date were excluded from calibration.');
@@ -314,7 +316,7 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
     result.reason = 'Learning from official usage: at least three matched intervals of 5 percentage points are needed.';
     return result;
   }
-  const referenceAt = readings.at(-1).at;
+  const referenceAt = readings.at(-1).evidence;
   for (const entry of retained) {
     const distance = mixDistance(mixOf([entry]), recentMix);
     // Age is relative to the newest evidence, not wall time, so merely opening

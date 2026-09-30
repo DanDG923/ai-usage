@@ -183,6 +183,21 @@ test('expired, stale and newer derived-only reset anchors hide remaining tokens 
   assert.notEqual(estimateTokenCapacity(fixture({ nowMs: NOW + DAY })).remainingTokens, null, 'exactly 24h remains eligible');
 });
 
+test('calibration intervals run between fetches, so a later redraw moves no tokens between rises', () => {
+  // The week reads 20% two hours ago; tokens are then used before that figure
+  // is first redrawn, half an hour after its fetch.
+  const capacity = (second) => estimateTokenCapacity(fixture({
+    observations: [observation(NOW - 3 * HOUR, 10), second, observation(NOW - HOUR, 30), observation(NOW, 40)],
+    events: [event(NOW - 2.5 * HOUR), event(NOW - 1.75 * HOUR), event(NOW - 1.25 * HOUR, 2_000_000), event(NOW - HOUR / 2)],
+  }));
+  const read = capacity(observation(NOW - 2 * HOUR, 20));
+  const redrawn = capacity(observation(NOW - 1.5 * HOUR, 20,
+    { provenance: 'official-statusline', plan_type: null, fetched_after: iso(NOW - 2 * HOUR) }));
+  assert.equal(read.status, 'available');
+  assert.deepEqual([redrawn.weeklyTokens, redrawn.weeklyRange, redrawn.calibratedAt],
+    [read.weeklyTokens, read.weeklyRange, read.calibratedAt]);
+});
+
 test('remaining tokens age from when the latest figure was fetched, not from a status-line redraw of it', () => {
   // A day and an hour later, an idle session redraws the 40% it fetched
   // before the last provider reading.
