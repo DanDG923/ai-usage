@@ -647,6 +647,30 @@ test('a window the latest plan-usage read did not return does not keep Claude st
   assert.equal(source('claude').status, 'connected');
 });
 
+test('a Refresh that returns no window at all leaves no earlier window current', async (t) => {
+  const { refreshClaude } = collectorWithPortSpy();
+  const { store, source } = collectorFixture(t);
+  const nowMs = Date.now() - 15 * MINUTE;
+  recordRead(store, { minutesAgo: 30, windows: { seven_day: 3 * 1440 }, nowMs });
+  // The next Refresh succeeds, but the provider reports no allowance windows.
+  await refreshClaude(store, missingInbox(store), {
+    readPlanUsage: true, activityReader: quietActivity, clock: () => new Date(nowMs),
+    usagePort: { read: async () => ({ subscription_type: 'max', rate_limits_available: false }) },
+  });
+  assert.equal(source('claude').metadata.planUsage.lastRequest.succeeded, true);
+  assert.equal(source('claude').status, 'stale');
+  // Automatic runs do not bring the half-hour-old window back as current.
+  await refreshClaude(store, missingInbox(store), { activityReader: quietActivity, clock: () => new Date(nowMs + MINUTE) });
+  assert.equal(source('claude').status, 'stale');
+  // A session that fetches the window after that read renews it.
+  store.recordObservation({ sourceId: 'claude', bucketId: 'seven_day', bucketName: 'seven_day',
+    observedAt: new Date(nowMs + 2 * MINUTE).toISOString(), usedPercent: 31, remainingPercent: 69,
+    resetsAt: new Date(nowMs + 3 * 1440 * MINUTE).toISOString(), windowMinutes: 10_080, provenance: 'official-statusline',
+    confidence: 1, metadata: {}, fetchedAfter: new Date(nowMs + 90_000).toISOString() });
+  await refreshClaude(store, missingInbox(store), { activityReader: quietActivity, clock: () => new Date(nowMs + 3 * MINUTE) });
+  assert.equal(source('claude').status, 'connected');
+});
+
 test('a window the latest plan-usage read returned stays, whatever redraws of it followed', async (t) => {
   const { refreshClaude } = collectorWithPortSpy();
   const { store, source } = collectorFixture(t);

@@ -696,7 +696,9 @@ function uninstallClaudeHelper() {
 // window is as recent as its evidence (`evidence_at`), not its latest redraw,
 // and a redraw from a session first seen with limits in hand is known only
 // from the start of the window it shows.
-function latestPlanUsageReading(store, nowMs, graceMs) {
+// `emptyReadMs` is a later read that succeeded without returning any window,
+// which omitted every window stored before it.
+function latestPlanUsageReading(store, nowMs, graceMs, emptyReadMs = null) {
   const rows = store.prepare(`SELECT id, bucket_id, observed_at, resets_at, window_minutes, used_percent, remaining_percent, provenance, fetched_after, seen_since
     FROM quota_observations WHERE source_id = 'claude' AND observed_at <= ? AND observed_at >= ? ORDER BY observed_at ASC, id ASC`)
     .all(new Date(nowMs + QUOTA_CLOCK_SKEW_MS).toISOString(), new Date(nowMs - 8 * 24 * 60 * 60 * 1000).toISOString());
@@ -720,6 +722,7 @@ function latestPlanUsageReading(store, nowMs, graceMs) {
         own_evidence_at: new Date(evidenceTimes(accepted, { known: true }).at(-1)).toISOString(), plan_read_ms: planReadMs });
     }
   }
+  if (Number.isFinite(emptyReadMs) && !(lastPlanUsageReadMs >= emptyReadMs)) lastPlanUsageReadMs = emptyReadMs;
   // A window the latest plan-usage read did not return (a model or app limit
   // the provider stopped reporting) keeps its older row until it resets, and
   // Refresh cannot renew it, so it does not decide whether Claude is current.
@@ -738,6 +741,13 @@ function latestPlanUsageReading(store, nowMs, graceMs) {
 
 function readingTime(value) {
   return new Date(value).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+// When a plan-usage read succeeded without returning any overall window.
+function emptyPlanUsageReadMs(request) {
+  const provider = request?.provider;
+  return provider?.attemptSucceeded === true && ['observed', 'unavailable'].includes(provider.kind)
+    && Number(provider.overallWindowsRecorded) === 0 ? Date.parse(request.at) : null;
 }
 
 // The outcome of the last plan-usage read the user asked for, which an
@@ -821,7 +831,13 @@ async function refreshClaude(store, inboxPath, options = {}) {
   const providerScanSucceeded = Boolean(fableTracking.provider?.attemptSucceeded
     && ['observed', 'unavailable'].includes(fableTracking.provider.kind));
   const activityCurrent = fableTracking.health.activitySource === 'current';
-  const acceptedReading = latestPlanUsageReading(store, nowMs, freshReadGraceFor(store.getSettings()));
+  // The last plan-usage read the user asked for: this one, or the one an
+  // earlier Refresh recorded. A read that returned no overall window at all
+  // omitted every window stored before it, as it omits any it does not return.
+  const requestAt = new Date(nowMs).toISOString();
+  const previousRequest = readPlanUsage ? null : previousPlanUsageRequest(store);
+  const emptyReadMs = emptyPlanUsageReadMs(readPlanUsage ? { at: requestAt, provider: fableTracking.provider } : previousRequest);
+  const acceptedReading = latestPlanUsageReading(store, nowMs, freshReadGraceFor(store.getSettings()), emptyReadMs);
   // A helper import stands in for the provider only when this collection
   // imported a reading the card shows, captured in the last few minutes. One
   // an earlier collection imported is not new evidence, however recent. The
@@ -842,8 +858,8 @@ async function refreshClaude(store, inboxPath, options = {}) {
   // the run a success when its local work succeeded.
   const planReading = readPlanUsage ? null : acceptedReading;
   const lastRequest = readPlanUsage
-    ? { at: new Date(nowMs).toISOString(), succeeded: hasFreshClaudeEvidence || providerScanSucceeded, provider: fableTracking.provider }
-    : previousPlanUsageRequest(store);
+    ? { at: requestAt, succeeded: hasFreshClaudeEvidence || providerScanSucceeded, provider: fableTracking.provider }
+    : previousRequest;
   // A failed Refresh that no reading has since replaced.
   const failedSince = (observedAt) => !readPlanUsage && lastRequest?.succeeded === false
     && !(Date.parse(observedAt) >= Date.parse(lastRequest.at));
