@@ -321,6 +321,20 @@ test('a rise is learned up to its fetch, not its later first redraw', () => {
   assert.deepEqual(redrawn, read);
 });
 
+test('a rise fetched on a normal day counts though first redrawn on an ignored one', () => {
+  // The rise is fetched at 23:30 local on the 22nd and first drawn at 00:30
+  // on the 23rd, a date the forecast is told to ignore.
+  const learn = (rise) => deriveLearningSamples([
+    reading('2026-09-22T08:00:00.000Z', 10, 'official-claude-usage'),
+    rise,
+  ], SCHEDULE, Date.parse(NOW), ['2026-09-23']).map(({ weight: _weight, ...sample }) => sample);
+  const read = learn(reading('2026-09-22T22:30:00.000Z', 20, 'official-claude-usage'));
+  const redrawn = learn({ ...reading('2026-09-22T23:30:00.000Z', 20, 'official-statusline'),
+    fetchedAfter: '2026-09-22T22:30:00.000Z', seenSince: '2026-09-22T23:30:00.000Z' });
+  assert.ok(read.some((sample) => sample.changed), 'the rise is learned');
+  assert.deepEqual(redrawn, read);
+});
+
 test('a newer dated fetch of an unchanged figure places the next increase as a read would', () => {
   // 10% at 10:00 local, the same 10% confirmed at 18:00, then 20% at 19:00.
   const learn = (confirmation) => deriveLearningSamples([

@@ -589,10 +589,13 @@ function deriveLearningSamples(observations, schedule, nowMs, excludedDates = []
   let previous = rows[0];
   for (let index = 1; index < rows.length; index += 1) {
     const after = rows[index];
+    // A rise counts from when its figure was fetched, not its later redraw,
+    // for the ignored-day check as for the sample it closes.
+    const riseAt = after.usedPercent > anchor.usedPercent ? riseMomentOf(after, latest.observedAt) : after.observedAt;
     // The smoothing span starts at the last change, not merely the previous
     // poll. Restart both anchors when it crosses an excluded day so neither
     // cumulative usage nor a quiet ignored day changes the learned rate.
-    if (excluded(anchor.observedAt, after.observedAt)) {
+    if (excluded(anchor.observedAt, riseAt)) {
       if (latest.observedAt - anchor.observedAt >= HOUR_MS) {
         addIntervalSamples(samples, anchor, latest, schedule, nowMs);
       }
@@ -629,7 +632,7 @@ function deriveLearningSamples(observations, schedule, nowMs, excludedDates = []
       // smoothing. Use the latest unchanged reading only to localise the phase
       // and daily allocation; adding that quiet span separately would weight it twice.
       // The rise is learned up to when its figure was fetched, not redrawn.
-      const at = riseMomentOf(after, latest.observedAt);
+      const at = riseAt;
       const rise = at === after.observedAt ? after : { ...after, observedAt: at };
       addIntervalSamples(samples, latest, rise, schedule, nowMs, (at - anchor.observedAt) / HOUR_MS);
       anchor = rise;
