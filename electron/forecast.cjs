@@ -624,11 +624,19 @@ function deriveLearningSamples(observations, schedule, nowMs, excludedDates = []
   const samples = [];
   if (rows.length < 2) return samples;
 
+  // A figure an interval starts from counts from when it was fetched, as a
+  // rise does: placed at a later redraw, it would squeeze the use that follows
+  // into too few hours. Never before the interval already learned, nor back
+  // across an ignored day.
+  const fetchedAnchor = (row, notBefore = -Infinity) => {
+    const at = fetchMomentOf(row);
+    return at < row.observedAt && at > notBefore && !excluded(at, row.observedAt) ? { ...row, observedAt: at } : row;
+  };
   // Polling cadence is not evidence. Compact unchanged snapshots into one
   // quiet interval, but retain the latest unchanged reading as the lower bound
   // for the next increase so its active/off-schedule phase stays localised.
-  let anchor = rows[0];
-  let latest = rows[0];
+  let anchor = fetchedAnchor(rows[0]);
+  let latest = anchor;
   let previous = rows[0];
   for (let index = 1; index < rows.length; index += 1) {
     const after = rows[index];
@@ -644,8 +652,8 @@ function deriveLearningSamples(observations, schedule, nowMs, excludedDates = []
       }
       // A provider correction can dip below usage seen on the ignored day.
       // Keep that high-water mark so a later rebound is not counted again.
-      anchor = sameWindowDrift(previous, after) && after.usedPercent < anchor.usedPercent
-        ? { ...after, usedPercent: anchor.usedPercent } : after;
+      anchor = fetchedAnchor(sameWindowDrift(previous, after) && after.usedPercent < anchor.usedPercent
+        ? { ...after, usedPercent: anchor.usedPercent } : after, latest.observedAt);
       latest = anchor;
       previous = after;
       continue;
@@ -662,8 +670,8 @@ function deriveLearningSamples(observations, schedule, nowMs, excludedDates = []
       if (latest.observedAt - anchor.observedAt >= HOUR_MS) {
         addIntervalSamples(samples, anchor, latest, schedule, nowMs);
       }
-      anchor = after;
-      latest = after;
+      anchor = fetchedAnchor(after, latest.observedAt);
+      latest = anchor;
       continue;
     }
     // Provider percentages can jitter backwards within one allowance window.

@@ -93,6 +93,9 @@ function normalizeObservation(row, sourceId, bucketId, scope, nowMs, evidence, k
   return { at, reset, used, plan: typeof row.plan_type === 'string' ? row.plan_type.trim().toLowerCase() || null : null,
     official: OFFICIAL_PROVENANCES.has(row.provenance), manual: row.provenance === 'manual-official',
     provenance: row.provenance, evidence: Math.min(at, evidence.get(row) ?? at), known: Math.min(at, known.get(row) ?? at),
+    // A read or a dated fetch, which can show a replenishment; an undated
+    // redraw may restate older limits.
+    confirms: row.provenance !== 'official-statusline' || Number.isFinite(prepared.fetchedAfter),
     // A status-line reading's first redraw of its fetch: the fetch was no later.
     seenSince: Number.isFinite(prepared.seenSince) ? Math.min(at, prepared.seenSince) : null };
 }
@@ -375,8 +378,13 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
     && (!latestAny.plan || !latestOfficial.plan || latestAny.plan === latestOfficial.plan);
   // The latest official figure is as current as its evidence, as on the card:
   // a status-line redraw re-records limits its session fetched earlier, unless
-  // a newer reading of the same window shows the same figure.
-  const evidenceAt = readings.reduce((latest, row) => (Math.abs(row.reset - latestOfficial.reset) <= RESET_TOLERANCE_MS
+  // a newer reading of the same window shows the same figure. A reading from
+  // before an early replenishment under the same reset belongs to the
+  // allowance it replaced.
+  let since = readings.length - 1;
+  while (since > 0 && !(readings[since].confirms && Math.abs(readings[since].reset - readings[since - 1].reset) <= RESET_TOLERANCE_MS
+    && readings[since - 1].used - readings[since].used >= 5 && readings[since].used <= 2)) since -= 1;
+  const evidenceAt = readings.slice(since).reduce((latest, row) => (Math.abs(row.reset - latestOfficial.reset) <= RESET_TOLERANCE_MS
     && Math.abs(row.used - latestOfficial.used) <= 0.5 ? Math.max(latest, row.known) : latest), latestOfficial.known);
   if (unconfirmedRebase) result.warnings.push('A newer non-official reading suggests the allowance was reset; remaining tokens need a fresh official reading.');
   else if (!currentMatches) result.warnings.push('The current allowance window has no matching official reading; remaining tokens are unavailable.');

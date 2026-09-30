@@ -256,6 +256,19 @@ test('an undated redraw of the window an early replenishment replaced does not r
   assert.equal(withoutStaleRestatements(undated, { nowMs }).length, 2);
 });
 
+test('a rise is learned from the lower figure’s fetch, not its redraw', () => {
+  // A session fetched 10% after 09:00 and first redrew it at 11:00; a Refresh
+  // read 20% at 13:00. Ten points in four hours, as if 10% had been read at 09:00.
+  const nowMs = Date.parse('2026-09-23T14:00:00.000Z');
+  const later = reading('2026-09-23T13:00:00.000Z', 20, 'official-claude-usage');
+  const redrawn = deriveLearningSamples([{ ...reading('2026-09-23T11:00:00.000Z', 10, 'official-statusline'),
+    fetchedAfter: '2026-09-23T09:00:00.000Z' }, later], SCHEDULE, nowMs);
+  const read = deriveLearningSamples([reading('2026-09-23T09:00:00.000Z', 10, 'official-claude-usage'), later], SCHEDULE, nowMs);
+  assert.ok(read.length > 0);
+  assert.deepEqual(redrawn, read);
+  assert.ok(Math.abs(redrawn[0].rate - 2.5) < 1e-9, `rate ${redrawn[0].rate}`);
+});
+
 test('a dated redraw of the replaced window, fetched around the read of the new one, waits for a read', () => {
   const inWindow = (at, used, provenance, resetsAt, bounds = {}) => ({ ...reading(at, used, provenance), resetsAt, ...bounds });
   const oldReset = '2026-09-24T08:00:00.000Z';

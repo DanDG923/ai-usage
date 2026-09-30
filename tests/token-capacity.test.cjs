@@ -257,6 +257,17 @@ test('an idle redraw restating an older fetch of the latest figure does not chan
   assert.deepEqual(calibration(redrawn), calibration(read));
 });
 
+test('a figure from before an early replenishment does not renew the allowance that replaced it', () => {
+  // 40% is read at noon; a read at 13:00 shows an early replenishment to 0%
+  // under the same reset; at 14:00 an undated redraw shows 40% again.
+  const statusLine = { provenance: 'official-statusline', plan_type: null };
+  const replenished = estimateTokenCapacity(fixture({ nowMs: NOW + 3 * HOUR, observations: [...fixture().observations,
+    observation(NOW + HOUR, 0), observation(NOW + 2 * HOUR, 40, { ...statusLine, seen_since: iso(NOW + 2 * HOUR) })] }));
+  assert.equal(replenished.status, 'available');
+  assert.equal(replenished.remainingTokens, null, 'the noon read of the old allowance does not date the new 40%');
+  assert.ok(replenished.warnings.some((warning) => /over 24 hours old/.test(warning)));
+});
+
 test('a redraw from a session first seen with limits in hand does not renew remaining tokens', () => {
   // A day and an hour later, a session the helper never saw open redraws 40%:
   // fetched at some point this week, perhaps before the last provider reading.
