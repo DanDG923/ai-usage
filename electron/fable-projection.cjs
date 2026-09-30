@@ -154,6 +154,18 @@ function confirmsFigure(row) {
   return !restatesSessionLimits(row) || Number.isFinite(normaliseObservation(row).fetchedAfter);
 }
 
+// Where an interval that ends on a rise closes: the rise's evidence, or,
+// when fetches overlap and that falls before the interval's start, the first
+// later moment the new figure is known to have been fetched by. Boundaries
+// then only move forward, so no use falls between intervals or into two.
+function riseEndMs(row, evidenceMs, startMs) {
+  const parsed = normaliseObservation(row);
+  for (const at of [evidenceMs, parsed.seenSince, parsed.observedAt]) {
+    if (Number.isFinite(at) && at > startMs) return Math.min(at, parsed.observedAt);
+  }
+  return startMs;
+}
+
 function fablePairCalibration(store, nowMs, usedOf = rawUsedPercent, freshReadGraceMs) {
   const sinceIso = new Date(nowMs - 21 * 24 * 60 * 60 * 1000).toISOString();
   let deltaSum = 0;
@@ -163,7 +175,7 @@ function fablePairCalibration(store, nowMs, usedOf = rawUsedPercent, freshReadGr
   for (const readings of allowanceCycles(rows, nowMs, freshReadGraceMs, usedOf)) {
     // Each figure is bounded by its evidence, as the projection's own tail is,
     // not by a redraw that may come well after its fetch.
-    const moments = new Map(evidenceTimes(readings).map((at, index) => [readings[index], new Date(at).toISOString()]));
+    const moments = new Map(evidenceTimes(readings).map((at, index) => [readings[index], at]));
     // Consumption is only a new high-water mark within the cycle. A backward
     // move is a correction or a mistyped reading, and the rebound after it
     // returns to use already counted. Each rise is measured from the latest
@@ -171,13 +183,13 @@ function fablePairCalibration(store, nowMs, usedOf = rawUsedPercent, freshReadGr
     // older or undated status-line repeat only restates what a session
     // fetched earlier, so it cannot bound the rise.
     let highWater = NaN;
-    let from = null;
+    let fromMs = NaN;
     for (const after of readings) {
       const used = usedOf(after);
       if (!Number.isFinite(used)) continue;
-      if (!from) {
+      if (!Number.isFinite(fromMs)) {
         highWater = used;
-        from = after;
+        fromMs = moments.get(after);
         continue;
       }
       if (used < highWater) continue;
@@ -185,14 +197,16 @@ function fablePairCalibration(store, nowMs, usedOf = rawUsedPercent, freshReadGr
       // by less than the provider's rounding precision. Treating them as a
       // measured zero rate would freeze every later estimate.
       if (used === highWater) {
-        if (confirmsFigure(after) && moments.get(after) > moments.get(from)) from = after;
+        if (confirmsFigure(after)) fromMs = Math.max(fromMs, moments.get(after));
         continue;
       }
       const delta = used - highWater;
-      const before = from;
+      const startMs = fromMs;
+      const endMs = riseEndMs(after, moments.get(after), startMs);
       highWater = used;
-      from = after;
-      const measured = allowancePressure(store, 'fable', moments.get(before), moments.get(after));
+      fromMs = Math.max(fromMs, endMs);
+      if (!(endMs > startMs)) continue;
+      const measured = allowancePressure(store, 'fable', new Date(startMs).toISOString(), new Date(endMs).toISOString());
       if (!(measured.pressure > 0) || !measured.complete) continue;
       deltaSum += delta;
       pressureSum += measured.pressure;
@@ -221,8 +235,6 @@ function fableStepsFromOverall(store, readings, fromMs, toMs, usedOf = rawUsedPe
   let markMs = moments[0];
   for (let index = 1; index < readings.length; index += 1) {
     const after = readings[index];
-    const atMs = moments[index];
-    const at = new Date(atMs).toISOString();
     // Provider percentages jitter and correct backwards. Consumption is only a
     // new same-window high-water mark; a rebound to an already-seen value adds
     // nothing a second time.
@@ -231,7 +243,10 @@ function fableStepsFromOverall(store, readings, fromMs, toMs, usedOf = rawUsedPe
     const priorHighWater = highWater;
     const beforeMs = markMs;
     highWater = Math.max(highWater, afterUsed);
-    if (afterUsed > priorHighWater || (afterUsed === priorHighWater && confirmsFigure(after))) markMs = Math.max(markMs, atMs);
+    const rise = afterUsed > priorHighWater;
+    const atMs = rise ? riseEndMs(after, moments[index], beforeMs) : moments[index];
+    const at = new Date(atMs).toISOString();
+    if (rise || (afterUsed === priorHighWater && confirmsFigure(after))) markMs = Math.max(markMs, atMs);
     // Readings before an anchor still establish the high-water baseline, even
     // though their movement is already included in that anchor.
     if (!(atMs > fromMs) || atMs > toMs) continue;

@@ -317,6 +317,29 @@ test('readings dated ahead of the projection clock wait for their own timestamp'
   assert.equal(projectFableAllowance(anchored.store, NOW + 6 * 60_000).anchored, true);
 });
 
+test('a rise whose fetch overlaps the previous reading still closes its own interval', (t) => {
+  // Fable reads 10%, then a status line shows 20% from a fetch that may be
+  // older than that read (first redrawn half an hour later), then 30%.
+  const project = (rise) => {
+    const context = fixture(t);
+    context.overall(NOW - 25 * HOUR, 10);
+    context.fable(NOW - 10 * HOUR, 10);
+    context.usage('first', NOW - 9.75 * HOUR, 'claude-fable-5', 1_000_000);
+    rise(context);
+    context.usage('second', NOW - 5 * HOUR, 'claude-fable-5', 3_000_000);
+    context.fable(NOW - 2 * HOUR, 30);
+    context.overall(NOW - 2 * HOUR, 30);
+    context.usage('tail', NOW - HOUR, 'claude-fable-5', 1_000_000);
+    return projectFableAllowance(context.store, NOW);
+  };
+  const read = project((context) => context.fable(NOW - 9.5 * HOUR, 20));
+  const overlapping = project((context) => context.fable(NOW - 9 * HOUR, 20, { planType: null, provenance: 'official-statusline',
+    metadata: {}, fetchedAfter: iso(NOW - 11 * HOUR), seenSince: iso(NOW - 9.5 * HOUR) }));
+  assert.equal(read.method, 'fable-anchor-pair');
+  assert.equal(overlapping.measuredPairs, read.measuredPairs, 'neither rise is lost');
+  assert.ok(Math.abs(overlapping.usedPercent - read.usedPercent) < 1e-9, `${overlapping.usedPercent} vs ${read.usedPercent}`);
+});
+
 test('a replenished cycle starts when its first figure was fetched, not first redrawn', (t) => {
   // The refill shows as 0% from a fetch 20 hours ago; Fable is used before
   // a status line first redraws that 0%, an hour after the fetch.
