@@ -744,6 +744,13 @@ test('the share check never rejects a projection or a Fable reading newer than t
   // Read together, the same figures break the rule.
   const together = apply(fableWindow(40, flat(40)), poolWindow(80, flat(80)));
   assert.deepEqual(together.sharedPool, { status: 'unavailable', reason: 'share-inconsistent' });
+  // An idle session's status line redrew the older Claude figure alongside the
+  // Fable read: it is as old as its fetch, so the figures are not simultaneous.
+  const redrawn = apply(fableWindow(40, flat(40)), poolWindow(80, flat(80),
+    { provenance: 'official-statusline', evidenceAt: iso(T0 - 5 * HOUR) }));
+  assert.equal(redrawn.sharedPool.status, 'applied');
+  assert.equal(redrawn.sharedPool.pool.observedAt, iso(T0 - 5 * HOUR), 'the card quotes the Claude figure by its fetch');
+  assert.equal(redrawn.sharedPool.estimated, true);
 });
 
 test('the projection starts from the rounded usable figure the card shows', () => {
