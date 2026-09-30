@@ -8,7 +8,7 @@
 // rows to go stale, so there is nothing to rescale, retire or discard.
 
 const { createAllowanceScaler } = require('./allowance-changes.cjs');
-const { clusterByWindow, latestEvidenceAt, normaliseObservation, restatesSessionLimits, withoutStaleRestatements } = require('./forecast.cjs');
+const { clusterByWindow, evidenceTimes, latestEvidenceAt, normaliseObservation, restatesSessionLimits, withoutStaleRestatements } = require('./forecast.cjs');
 const { OFFICIAL_PROVENANCES } = require('./quota-provenance.mjs');
 
 // Every input is bounded by the projection's own clock. A reading dated
@@ -154,6 +154,9 @@ function fablePairCalibration(store, nowMs, usedOf = rawUsedPercent, freshReadGr
   let pairs = 0;
   const rows = officialBetween(store, 'claude-fable', FABLE_BUCKET, sinceIso, nowMs);
   for (const readings of allowanceCycles(rows, nowMs, freshReadGraceMs, usedOf)) {
+    // Each figure is bounded by its evidence, as the projection's own tail is,
+    // not by a redraw that may come well after its fetch.
+    const moments = new Map(evidenceTimes(readings).map((at, index) => [readings[index], new Date(at).toISOString()]));
     // Consumption is only a new high-water mark within the cycle. A backward
     // move is a correction or a mistyped reading, and the rebound after it
     // returns to use already counted. Each rise is measured from the latest
@@ -181,7 +184,7 @@ function fablePairCalibration(store, nowMs, usedOf = rawUsedPercent, freshReadGr
       const before = from;
       highWater = used;
       from = after;
-      const measured = allowancePressure(store, 'fable', before.observed_at, after.observed_at);
+      const measured = allowancePressure(store, 'fable', moments.get(before), moments.get(after));
       if (!(measured.pressure > 0) || !measured.complete) continue;
       deltaSum += delta;
       pressureSum += measured.pressure;
@@ -201,10 +204,14 @@ function fableStepsFromOverall(store, readings, fromMs, toMs, usedOf = rawUsedPe
   const steps = [];
   let rejectedCoverage = 0;
   let highWater = readings.length ? usedOf(readings[0]) : NaN;
+  // Each step is bounded by its readings' evidence, as the tail after them
+  // is, so activity between a fetch and its later redraw counts once.
+  const moments = evidenceTimes(readings);
   for (let index = 1; index < readings.length; index += 1) {
-    const before = readings[index - 1];
     const after = readings[index];
-    const atMs = new Date(after.observed_at).getTime();
+    const beforeMs = moments[index - 1];
+    const atMs = moments[index];
+    const at = new Date(atMs).toISOString();
     // Provider percentages jitter and correct backwards. Consumption is only a
     // new same-window high-water mark; a rebound to an already-seen value adds
     // nothing a second time.
@@ -217,9 +224,8 @@ function fableStepsFromOverall(store, readings, fromMs, toMs, usedOf = rawUsedPe
     if (!(atMs > fromMs) || atMs > toMs) continue;
     const deltaOverall = Math.max(0, afterUsed - priorHighWater);
     if (!(deltaOverall > 0)) continue;
-    const fable = allowancePressure(store, 'fable',
-      new Date(Math.max(fromMs, new Date(before.observed_at).getTime())).toISOString(), after.observed_at);
-    const all = allowancePressure(store, null, before.observed_at, after.observed_at);
+    const fable = allowancePressure(store, 'fable', new Date(Math.max(fromMs, beforeMs)).toISOString(), at);
+    const all = allowancePressure(store, null, new Date(beforeMs).toISOString(), at);
     if (!all.complete) {
       rejectedCoverage += 1;
       continue;
@@ -227,7 +233,7 @@ function fableStepsFromOverall(store, readings, fromMs, toMs, usedOf = rawUsedPe
     if (!(all.pressure > 0)) continue;
     const share = Math.min(1, fable.pressure / all.pressure);
     steps.push({
-      at: after.observed_at,
+      at,
       deltaOverall,
       ceiling: Math.min(100, afterUsed / FABLE_ALLOWANCE_SHARE),
       share,

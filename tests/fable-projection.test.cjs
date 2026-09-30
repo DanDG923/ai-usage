@@ -183,6 +183,24 @@ test('an idle redraw of the overall figure does not move the projection boundary
   assert.ok(Math.abs(estimate(true) - without) < 1e-9, 'the redraw changes nothing');
 });
 
+test('a status-line figure bounds calibration at its fetch, as a read at that moment would', (t) => {
+  // Fable is used before and after the fetch that shows the week at 20%; the
+  // status line first redraws that figure two hours after the fetch.
+  const project = (step) => {
+    const context = fixture(t);
+    context.overall(NOW - 25 * HOUR, 10);
+    context.usage('a', NOW - 19 * HOUR, 'claude-fable-5', 2_000_000);
+    step(context);
+    context.usage('b', NOW - 2 * HOUR, 'claude-fable-5', 2_000_000);
+    return projectFableAllowance(context.store, NOW);
+  };
+  const read = project((context) => context.overall(NOW - 3 * HOUR, 20));
+  const redrawn = project((context) => context.overall(NOW - HOUR, 20,
+    { planType: null, provenance: 'official-statusline', metadata: {}, fetchedAfter: iso(NOW - 3 * HOUR) }));
+  assert.ok(Math.abs(read.usedPercent - 40) < 0.01, `the later use is projected once at the step's rate (${read.usedPercent})`);
+  assert.ok(Math.abs(redrawn.usedPercent - read.usedPercent) < 1e-9, `${redrawn.usedPercent} vs ${read.usedPercent}`);
+});
+
 test('the series carries one point per overall step plus the current estimate', (t) => {
   const context = fixture(t);
   context.overall(NOW - 25 * HOUR, 10);
