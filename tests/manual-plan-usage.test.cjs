@@ -796,3 +796,43 @@ test('a status-line restatement the card holds back cannot make Claude current o
   assert.equal(claude.metadata.planUsage.lastRequest.succeeded, false);
   assert.doesNotMatch(claude.status_detail, /evidence was refreshed/);
 });
+
+test('an idle session’s redraw cannot make Claude current or a failed Refresh succeed; its next fetch can', async (t) => {
+  const { refreshClaude } = collectorWithPortSpy();
+  const { root, store, source } = collectorFixture(t);
+  // In the past, so every capture below is accepted as already taken.
+  const nowMs = Date.now() - 15 * MINUTE;
+  const weekReset = new Date(nowMs + 3 * 1440 * MINUTE).toISOString();
+  const inbox = path.join(root, 'inbox.jsonl');
+  const capture = (at, { apiMs, used } = {}) => fs.appendFileSync(inbox, `${JSON.stringify({
+    ai_usage_captured_at: new Date(at).toISOString(), session_id: 'idle-session', api_ms: apiMs ?? 0,
+    rate_limits: used == null ? null : { seven_day: { used_percentage: used, resets_at: weekReset } },
+  })}\n`);
+  const rateLimited = { read: async () => { throw Object.assign(new Error('HTTP 429'), { code: 'rate_limited' }); } };
+  // The session opened and fetched 20% a day and a half ago, then sat idle,
+  // its status line redrawing that 20% every minute.
+  const fetchedAt = nowMs - 36 * 60 * MINUTE;
+  capture(fetchedAt);
+  capture(fetchedAt + 5_000, { apiMs: 2_500, used: 20 });
+  capture(nowMs - 30_000, { apiMs: 2_500, used: 20 });
+  await refreshClaude(store, inbox, { activityReader: quietActivity, clock: () => new Date(nowMs) });
+  let claude = source('claude');
+  assert.equal(claude.status, 'stale', 'a redraw thirty seconds ago carries a fetch a day and a half old');
+  assert.ok(claude.status_detail.includes(`(${readingLabel(fetchedAt)}) is still active but out of date`), claude.status_detail);
+  const card = store.getQuota('claude', store.getSettings(), nowMs);
+  assert.equal(card.evidenceAt, new Date(fetchedAt).toISOString());
+  assert.ok(card.forecast.staleHours > 35, `stale ${card.forecast.staleHours}`);
+
+  capture(nowMs + 30_000, { apiMs: 2_500, used: 20 });
+  await refreshClaude(store, inbox, { readPlanUsage: true, usagePort: rateLimited, activityReader: quietActivity, clock: () => new Date(nowMs + 60_000) });
+  claude = source('claude');
+  assert.equal(claude.metadata.planUsage.lastRequest.succeeded, false, 'the redraw is not new evidence');
+  assert.equal(claude.status, 'stale');
+
+  // The session is used again: its next redraw shows a new response.
+  capture(nowMs + 90_000, { apiMs: 4_100, used: 21 });
+  await refreshClaude(store, inbox, { readPlanUsage: true, usagePort: rateLimited, activityReader: quietActivity, clock: () => new Date(nowMs + 120_000) });
+  claude = source('claude');
+  assert.equal(claude.metadata.planUsage.lastRequest.succeeded, true);
+  assert.equal(claude.status, 'connected');
+});

@@ -232,3 +232,28 @@ test('an undated lower status-line reading reaches the card once the provider re
     store.close();
   }
 });
+
+test('the dashboard clock ages a window from its evidence, not from its latest redraw', async () => {
+  const path = require('node:path');
+  const { createServer } = await import('vite');
+  const server = await createServer({ root: path.resolve(__dirname, '..'), configFile: false,
+    server: { middlewareMode: true, watch: null, hmr: false, ws: false },
+    optimizeDeps: { noDiscovery: true, include: [] }, appType: 'custom' });
+  try {
+    const { snapshotAtTime } = await server.ssrLoadModule('/src/snapshot-time.ts');
+    const builtAt = Date.parse('2026-09-23T09:00:00.000Z');
+    const window = (evidenceAt) => ({
+      bucketId: 'seven_day', bucketName: 'Weekly', observedAt: new Date(builtAt - MINUTE).toISOString(),
+      ...(evidenceAt ? { evidenceAt } : {}), usedPercent: 13, remainingPercent: 87, resetsAt: RESET, windowMinutes: 10_080,
+      planType: null, provenance: 'official-statusline', metadata: {}, forecast: { staleHours: 20, expired: false },
+    });
+    const later = builtAt + 2 * HOUR;
+    for (const [evidenceAt, staleHours] of [['2026-09-22T13:00:00.000Z', 22], [null, 20]]) {
+      const snapshot = { generatedAt: new Date(builtAt).toISOString(), settings: {}, sources: [],
+        quotas: { codex: null, claude: { ...window(evidenceAt), windows: [window(evidenceAt)] }, fable: null } };
+      const aged = snapshotAtTime(snapshot, later).quotas.claude;
+      // With evidence the window keeps ageing from it; without, from the redraw.
+      assert.ok(Math.abs(aged.forecast.staleHours - staleHours) < 1e-9, `${evidenceAt}: ${aged.forecast.staleHours}`);
+    }
+  } finally { await server.close(); }
+});
