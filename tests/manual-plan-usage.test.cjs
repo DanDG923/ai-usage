@@ -624,6 +624,23 @@ test('a window the latest plan-usage read did not return does not keep Claude st
   assert.equal(source('claude').status, 'connected');
 });
 
+test('a window the latest plan-usage read returned stays, whatever redraws of it followed', async (t) => {
+  const { refreshClaude } = collectorWithPortSpy();
+  const { store, source } = collectorFixture(t);
+  const readAt = Date.now() - 10 * MINUTE;
+  const record = (at, provenance, fetchedAfter = null) => store.recordObservation({ sourceId: 'claude', bucketId: 'seven_day',
+    bucketName: 'Weekly', observedAt: new Date(at).toISOString(), usedPercent: 30, remainingPercent: 70,
+    resetsAt: new Date(Date.now() + 3 * 1440 * MINUTE).toISOString(), windowMinutes: 10_080, provenance, confidence: 1,
+    metadata: {}, fetchedAfter: fetchedAfter == null ? null : new Date(fetchedAfter).toISOString() });
+  record(readAt, 'official-claude-usage');
+  // An idle session then redraws the same 30% it fetched five hours ago.
+  record(Date.now() - MINUTE, 'official-statusline', Date.now() - 5 * 60 * MINUTE);
+  await refreshClaude(store, missingInbox(store), { activityReader: quietActivity });
+  const claude = source('claude');
+  assert.equal(claude.status, 'connected');
+  assert.equal(claude.metadata.planUsage.lastReadAt, new Date(readAt).toISOString());
+});
+
 test('the stale detail quotes the oldest out-of-date reading, not the newest', async (t) => {
   const { refreshClaude } = collectorWithPortSpy();
   const { store, source } = collectorFixture(t);

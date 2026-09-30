@@ -709,20 +709,23 @@ function latestPlanUsageReading(store, nowMs, graceMs) {
   for (const [bucketId, bucketRows] of buckets) {
     const accepted = withoutStaleRestatements(bucketRows, { nowMs, freshReadGraceMs: graceMs })
       .filter((row) => isProviderProvenance(row.provenance));
-    if (accepted.length) {
-      latest.set(bucketId, { ...accepted.at(-1), evidence_at: new Date(latestEvidenceAt(accepted)).toISOString(),
-        own_evidence_at: new Date(evidenceTimes(accepted).at(-1)).toISOString() });
-    }
     // One plan-usage read records every window it returns at the same instant.
     const planUsageRead = accepted.findLast((row) => row.provenance === 'official-claude-usage');
-    if (planUsageRead) lastPlanUsageReadMs = Math.max(lastPlanUsageReadMs ?? -Infinity, Date.parse(planUsageRead.observed_at));
+    const planReadMs = planUsageRead ? Date.parse(planUsageRead.observed_at) : null;
+    if (planReadMs != null) lastPlanUsageReadMs = Math.max(lastPlanUsageReadMs ?? -Infinity, planReadMs);
+    if (accepted.length) {
+      latest.set(bucketId, { ...accepted.at(-1), evidence_at: new Date(latestEvidenceAt(accepted)).toISOString(),
+        own_evidence_at: new Date(evidenceTimes(accepted).at(-1)).toISOString(), plan_read_ms: planReadMs });
+    }
   }
   // A window the latest plan-usage read did not return (a model or app limit
   // the provider stopped reporting) keeps its older row until it resets, and
   // Refresh cannot renew it, so it does not decide whether Claude is current.
-  // A later redraw renews it only with a fetch no older than that read.
+  // A later redraw renews it only with a fetch no older than that read; a
+  // window the read did return stays, whatever redraws of it followed.
   const active = [...latest.values()].filter((row) => Date.parse(row.resets_at) > nowMs
-    && (lastPlanUsageReadMs == null || Date.parse(row.own_evidence_at) >= lastPlanUsageReadMs));
+    && (lastPlanUsageReadMs == null || row.plan_read_ms === lastPlanUsageReadMs
+      || Date.parse(row.own_evidence_at) >= lastPlanUsageReadMs));
   if (!active.length) return { lastReadAt: null, staleReadAt: null, fresh: false, windows: [] };
   const lastReadAt = active.reduce((last, row) => laterIso(last, row.evidence_at), null);
   // The oldest reading that is out of date, which the stale detail quotes.
