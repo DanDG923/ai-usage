@@ -160,6 +160,14 @@ test('a redraw of the window that just reset does not replace the new one', () =
     fetched('2026-09-28T08:02:00.000Z', 40, '2026-09-28T08:00:30.000Z'),
   ];
   assert.deepEqual(withoutStaleRestatements(rows, { nowMs: Date.parse('2026-09-28T08:03:00.000Z') }).map((row) => row.usedPercent), [0]);
+  // An undated redraw of the old window cannot be ordered either and goes the
+  // same way, while an undated one of the new window gets through.
+  const undated = [
+    rows[0],
+    reading('2026-09-28T08:02:00.000Z', 40, 'official-statusline'),
+    { ...reading('2026-09-28T08:02:30.000Z', 1, 'official-statusline'), resetsAt: nextReset },
+  ];
+  assert.deepEqual(withoutStaleRestatements(undated, { nowMs: Date.parse('2026-09-28T08:03:00.000Z') }).map((row) => row.usedPercent), [0, 1]);
   // The other way round, the new window's redraw is the newer evidence.
   const turning = [
     fetched('2026-09-28T07:59:50.000Z', 40, '2026-09-28T07:59:00.000Z'),
@@ -168,10 +176,29 @@ test('a redraw of the window that just reset does not replace the new one', () =
   assert.deepEqual(withoutStaleRestatements(turning, { nowMs: Date.parse('2026-09-28T08:03:00.000Z') }).map((row) => row.usedPercent), [40, 0]);
 });
 
+test('undated sessions redrawing different figures each keep their own first redraw', () => {
+  const { store, now, record } = cardStore();
+  try {
+    // Two sessions first seen with limits in hand, at 13% and at 20%, each
+    // redrawing its figure every minute for two hours between the other's.
+    const first = now - 2 * HOUR;
+    for (let at = first; at <= now - MINUTE; at += MINUTE) {
+      record(at, 13, 'official-statusline', null, first);
+      record(at + 500, 20, 'official-statusline', null, first + 500);
+    }
+    const quota = store.getQuota('claude', store.getSettings(), now);
+    assert.equal(quota.usedPercent, 20);
+    assert.equal(quota.evidenceAt, new Date(first + 500).toISOString());
+    assert.ok(quota.forecast.staleHours > 1.99, `stale ${quota.forecast.staleHours}`);
+  } finally {
+    store.close();
+  }
+});
+
 test('an undated idle session does not renew its evidence with every redraw', () => {
   const { store, now, record } = cardStore();
   try {
-    // First seen with limits in hand, so undated, and redrawing 13% since.
+    // From a helper that did not record sessions, redrawing 13% for hours.
     for (let at = now - 3 * HOUR; at <= now - MINUTE; at += 10 * MINUTE) record(at, 13, 'official-statusline');
     const quota = store.getQuota('claude', store.getSettings(), now);
     assert.equal(quota.evidenceAt, new Date(now - 3 * HOUR).toISOString());
@@ -237,10 +264,11 @@ function cardStore() {
   const store = new UsageStore(':memory:', os.tmpdir());
   const now = Date.now();
   const resetsAt = new Date(now + 4 * 24 * HOUR).toISOString();
-  const record = (at, usedPercent, provenance, fetchedAfter = null) => store.recordObservation({
+  const time = (value) => (value == null ? null : new Date(value).toISOString());
+  const record = (at, usedPercent, provenance, fetchedAfter = null, seenSince = null) => store.recordObservation({
     sourceId: 'claude', bucketId: 'seven_day', bucketName: 'Weekly', observedAt: new Date(at).toISOString(),
     usedPercent, remainingPercent: 100 - usedPercent, resetsAt, windowMinutes: 10_080, planType: null,
-    provenance, confidence: 1, metadata: {}, fetchedAfter: fetchedAfter == null ? null : new Date(fetchedAfter).toISOString(),
+    provenance, confidence: 1, metadata: {}, fetchedAfter: time(fetchedAfter), seenSince: time(seenSince),
   });
   return { store, now, record };
 }

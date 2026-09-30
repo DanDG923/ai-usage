@@ -417,6 +417,7 @@ class UsageStore {
         confidence REAL NOT NULL DEFAULT 1,
         metadata_json TEXT NOT NULL DEFAULT '{}',
         fetched_after TEXT,
+        seen_since TEXT,
         UNIQUE(source_id, bucket_id, observed_at),
         FOREIGN KEY(source_id) REFERENCES sources(id)
       );
@@ -474,14 +475,16 @@ class UsageStore {
         imported_at TEXT NOT NULL
       );
       -- Each Claude Code session the status-line helper has seen: its latest
-      -- redraw, and the fetch its limits came from, so the next redraw of the
-      -- same limits can be dated by that fetch rather than by itself.
+      -- redraw, the fetch its limits came from, and the first redraw that
+      -- showed them, so the next redraw of the same limits can be dated by
+      -- that fetch rather than by itself.
       CREATE TABLE IF NOT EXISTS statusline_sessions (
         session_id TEXT PRIMARY KEY,
         seen_at TEXT NOT NULL,
         api_ms REAL,
         limits_json TEXT NOT NULL DEFAULT '{}',
-        fetched_after TEXT
+        fetched_after TEXT,
+        seen_since TEXT
       ) WITHOUT ROWID;
       CREATE TABLE IF NOT EXISTS backups (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -504,6 +507,9 @@ class UsageStore {
     // Earlier status-line readings stay undated; nothing recorded their fetch.
     const quotaColumns = new Set(this.prepare('PRAGMA table_info(quota_observations)').all().map((row) => row.name));
     if (!quotaColumns.has('fetched_after')) this.db.exec('ALTER TABLE quota_observations ADD COLUMN fetched_after TEXT;');
+    if (!quotaColumns.has('seen_since')) this.db.exec('ALTER TABLE quota_observations ADD COLUMN seen_since TEXT;');
+    const sessionColumns = new Set(this.prepare('PRAGMA table_info(statusline_sessions)').all().map((row) => row.name));
+    if (!sessionColumns.has('seen_since')) this.db.exec('ALTER TABLE statusline_sessions ADD COLUMN seen_since TEXT;');
     if (!usageColumns.has('project')) {
       // Project attribution is read from the same local transcripts as the
       // token counts. Rescanning them once fills the new column in place.
@@ -932,11 +938,15 @@ class UsageStore {
     }
     // Only a status-line reading is dated by the fetch its session made; see
     // the Claude inbox import. Every other reading is evidence of its own time.
-    let fetchedAfter = null;
-    if (observation.fetchedAfter != null && provenance === 'official-statusline') {
-      fetchedAfter = validIso(observation.fetchedAfter, 'Fetch time');
-      if (Date.parse(fetchedAfter) > Date.parse(observedAt)) throw new Error('Limits cannot be fetched after the reading that shows them.');
-    }
+    // `seenSince` is the session's first redraw showing the same limits.
+    const statusLineTime = (value, label) => {
+      if (value == null || provenance !== 'official-statusline') return null;
+      const at = validIso(value, label);
+      if (Date.parse(at) > Date.parse(observedAt)) throw new Error('Limits cannot be fetched after the reading that shows them.');
+      return at;
+    };
+    const fetchedAfter = statusLineTime(observation.fetchedAfter, 'Fetch time');
+    const seenSince = statusLineTime(observation.seenSince, 'First redraw time');
     if (observation.sourceId === 'codex' && observation.bucketId !== 'codex:weekly'
       && Number(observation.windowMinutes || 0) >= 10_000
       && observation.metadata?.limitId === 'codex'
@@ -953,8 +963,8 @@ class UsageStore {
     this.prepare(`
       INSERT INTO quota_observations(
         source_id, bucket_id, bucket_name, observed_at, used_percent, remaining_percent,
-        resets_at, window_minutes, plan_type, provenance, confidence, metadata_json, fetched_after
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        resets_at, window_minutes, plan_type, provenance, confidence, metadata_json, fetched_after, seen_since
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(source_id, bucket_id, observed_at) DO UPDATE SET
         bucket_name = excluded.bucket_name,
         used_percent = excluded.used_percent,
@@ -966,7 +976,9 @@ class UsageStore {
         confidence = excluded.confidence,
         metadata_json = excluded.metadata_json,
         fetched_after = CASE WHEN excluded.provenance = 'official-statusline' AND quota_observations.provenance = 'official-statusline'
-          THEN COALESCE(excluded.fetched_after, quota_observations.fetched_after) ELSE excluded.fetched_after END
+          THEN COALESCE(excluded.fetched_after, quota_observations.fetched_after) ELSE excluded.fetched_after END,
+        seen_since = CASE WHEN excluded.provenance = 'official-statusline' AND quota_observations.provenance = 'official-statusline'
+          THEN COALESCE(excluded.seen_since, quota_observations.seen_since) ELSE excluded.seen_since END
     `).run(
       observation.sourceId,
       observation.bucketId,
@@ -981,6 +993,7 @@ class UsageStore {
       confidence,
       JSON.stringify(observation.metadata || {}),
       fetchedAfter,
+      seenSince,
     );
     this.prepare(`UPDATE sources SET last_observation_at = ?
       WHERE id = ? AND (last_observation_at IS NULL OR last_observation_at < ?)`)
@@ -2359,8 +2372,8 @@ class UsageStore {
     const insertObservation = this.prepare(`
       INSERT OR IGNORE INTO quota_observations(
         source_id, bucket_id, bucket_name, observed_at, used_percent, remaining_percent,
-        resets_at, window_minutes, plan_type, provenance, confidence, metadata_json, fetched_after
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        resets_at, window_minutes, plan_type, provenance, confidence, metadata_json, fetched_after, seen_since
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const insertEvent = this.prepare(`
       INSERT INTO usage_events(
@@ -2480,14 +2493,15 @@ class UsageStore {
           if (!metadata) throw unreadable();
           // A backup from before readings were dated, or an unusable date,
           // restores the reading undated rather than not at all.
-          const fetchedMs = provenance === 'official-statusline' && typeof row.fetched_after === 'string'
-            ? Date.parse(row.fetched_after) : Number.NaN;
-          const fetchedAfter = Number.isFinite(fetchedMs) && fetchedMs <= Date.parse(observedAt) ? iso(fetchedMs) : null;
+          const statusLineTime = (value) => {
+            const ms = provenance === 'official-statusline' && typeof value === 'string' ? Date.parse(value) : Number.NaN;
+            return Number.isFinite(ms) && ms <= Date.parse(observedAt) ? iso(ms) : null;
+          };
           counts.observations += insertObservation.run(
             row.source_id, row.bucket_id, typeof row.bucket_name === 'string' ? row.bucket_name : null,
             observedAt, usedPercent, remainingPercent, resetsAt,
             windowMinutes, planType, provenance, confidence,
-            JSON.stringify(metadata), fetchedAfter,
+            JSON.stringify(metadata), statusLineTime(row.fetched_after), statusLineTime(row.seen_since),
           ).changes;
         } catch (error) {
           // Database errors may roll back the transaction. Continuing after

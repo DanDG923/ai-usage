@@ -60,15 +60,19 @@ function statusLineLimits(rateLimits) {
 // and its limits change only with one. A redraw that shows a new response was
 // therefore fetched after the session's previous redraw; one that shows the
 // same limits keeps that date. A window Claude Code drops at its reset is not
-// a response. A session first seen with limits in hand cannot be dated (it
-// began before the helper recorded sessions); every session's opening redraw
-// has none, because limits arrive with its first response.
+// a response. Every redraw of one fetch also carries the first redraw that
+// showed it (`seenSince`), which bounds the fetch from the other side. A
+// session first seen with limits in hand cannot be dated (it began before the
+// helper recorded sessions), but its redraws still share that first redraw,
+// so an idle session cannot renew its own evidence. Every session's opening
+// redraw has no limits, because they arrive with its first response.
 function datedStatusLineFetch(store, payload, capturedAt) {
+  const undated = { fetchedAfter: null, seenSince: null };
   const sessionId = typeof payload.session_id === 'string' ? payload.session_id.trim() : '';
-  if (!sessionId) return null;
+  if (!sessionId) return undated;
   const apiMs = typeof payload.api_ms === 'number' && Number.isFinite(payload.api_ms) ? payload.api_ms : null;
   const limits = statusLineLimits(payload.rate_limits);
-  const previous = store.prepare('SELECT seen_at, api_ms, limits_json, fetched_after FROM statusline_sessions WHERE session_id = ?').get(sessionId);
+  const previous = store.prepare('SELECT seen_at, api_ms, limits_json, fetched_after, seen_since FROM statusline_sessions WHERE session_id = ?').get(sessionId);
   let before = {};
   try { before = previous ? JSON.parse(previous.limits_json) : {}; } catch { /* Undated below. */ }
   const sameLimits = (a, b) => Object.keys(a).length === Object.keys(b).length
@@ -77,19 +81,29 @@ function datedStatusLineFetch(store, payload, capturedAt) {
   // if nothing has changed since, and cannot move the session backwards.
   if (previous && capturedAt <= previous.seen_at) {
     const same = sameLimits(limits, before) && apiMs === previous.api_ms;
-    return same && previous.fetched_after && previous.fetched_after <= capturedAt ? previous.fetched_after : null;
+    const shared = (value) => (same && value && value <= capturedAt ? value : null);
+    return { fetchedAfter: shared(previous.fetched_after), seenSince: shared(previous.seen_since) };
   }
   let fetchedAfter = null;
-  if (previous && Object.keys(limits).length) {
-    const newResponse = (apiMs != null && previous.api_ms != null && apiMs > previous.api_ms)
-      || Object.entries(limits).some(([key, value]) => before[key]?.[0] !== value[0] || before[key]?.[1] !== value[1]);
-    fetchedAfter = newResponse ? previous.seen_at : previous.fetched_after;
+  let seenSince = null;
+  if (Object.keys(limits).length) {
+    const newResponse = previous && ((apiMs != null && previous.api_ms != null && apiMs > previous.api_ms)
+      || Object.entries(limits).some(([key, value]) => before[key]?.[0] !== value[0] || before[key]?.[1] !== value[1]));
+    if (newResponse) {
+      fetchedAfter = previous.seen_at;
+      seenSince = capturedAt;
+    } else if (previous) {
+      fetchedAfter = previous.fetched_after;
+      seenSince = previous.seen_since;
+    } else {
+      seenSince = capturedAt;
+    }
   }
-  store.prepare(`INSERT INTO statusline_sessions(session_id, seen_at, api_ms, limits_json, fetched_after) VALUES (?, ?, ?, ?, ?)
+  store.prepare(`INSERT INTO statusline_sessions(session_id, seen_at, api_ms, limits_json, fetched_after, seen_since) VALUES (?, ?, ?, ?, ?, ?)
     ON CONFLICT(session_id) DO UPDATE SET seen_at = excluded.seen_at, api_ms = excluded.api_ms,
-      limits_json = excluded.limits_json, fetched_after = excluded.fetched_after`)
-    .run(sessionId, capturedAt, apiMs, JSON.stringify(limits), fetchedAfter);
-  return fetchedAfter;
+      limits_json = excluded.limits_json, fetched_after = excluded.fetched_after, seen_since = excluded.seen_since`)
+    .run(sessionId, capturedAt, apiMs, JSON.stringify(limits), fetchedAfter, seenSince);
+  return { fetchedAfter, seenSince };
 }
 
 function importClaudeInboxFile(store, inboxPath, state = null) {
@@ -134,7 +148,8 @@ function importClaudeInboxFile(store, inboxPath, state = null) {
       // would make the next unchanged redraw look like a new response.
       const limitsShaped = payload.rate_limits == null
         || (typeof payload.rate_limits === 'object' && !Array.isArray(payload.rate_limits));
-      const fetchedAfter = capturedAt && limitsShaped ? datedStatusLineFetch(store, payload, capturedAt) : null;
+      const { fetchedAfter, seenSince } = capturedAt && limitsShaped
+        ? datedStatusLineFetch(store, payload, capturedAt) : { fetchedAfter: null, seenSince: null };
       if (!capturedAt || !payload.rate_limits || typeof payload.rate_limits !== 'object' || Array.isArray(payload.rate_limits)) {
         result.rejectedRecords += 1;
         continue;
@@ -170,6 +185,7 @@ function importClaudeInboxFile(store, inboxPath, state = null) {
             confidence: 1,
             metadata: { model, sharedWithOverall: isFable },
             fetchedAfter,
+            seenSince,
           });
         } catch (error) {
           if (error?.code) throw error;
@@ -656,7 +672,7 @@ function uninstallClaudeHelper() {
 // can make Claude neither current here nor a failed Refresh successful. Each
 // window is as recent as its evidence (`evidence_at`), not its latest redraw.
 function latestPlanUsageReading(store, nowMs, graceMs) {
-  const rows = store.prepare(`SELECT id, bucket_id, observed_at, resets_at, window_minutes, used_percent, remaining_percent, provenance, fetched_after
+  const rows = store.prepare(`SELECT id, bucket_id, observed_at, resets_at, window_minutes, used_percent, remaining_percent, provenance, fetched_after, seen_since
     FROM quota_observations WHERE source_id = 'claude' AND observed_at <= ? AND observed_at >= ? ORDER BY observed_at ASC, id ASC`)
     .all(new Date(nowMs + QUOTA_CLOCK_SKEW_MS).toISOString(), new Date(nowMs - 8 * 24 * 60 * 60 * 1000).toISOString());
   const buckets = new Map();

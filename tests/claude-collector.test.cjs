@@ -735,16 +735,18 @@ test('each status-line reading is dated by the fetch its session made, not by it
     line(210, 'session-b', 9_000, { seven_day: 25 }), // first seen with limits in hand
     line(300, null, null, { seven_day: 25 }), // a helper that did not record sessions
   ].join('\n')}\n`, 'utf8');
-  const dates = () => Object.fromEntries(store.prepare(`SELECT bucket_id, observed_at, fetched_after FROM quota_observations
-    ORDER BY observed_at, bucket_id`).all().map((row) => [`${row.bucket_id}@${(Date.parse(row.observed_at) - base) / 1000}`, row.fetched_after]));
+  // Each reading: [fetched after, first redraw of the same limits].
+  const dates = () => Object.fromEntries(store.prepare(`SELECT bucket_id, observed_at, fetched_after, seen_since FROM quota_observations
+    ORDER BY observed_at, bucket_id`).all().map((row) => [`${row.bucket_id}@${(Date.parse(row.observed_at) - base) / 1000}`,
+    [row.fetched_after, row.seen_since]]));
   const expected = {
-    'five_hour@5': at(0), 'seven_day@5': at(0),
-    'five_hour@65': at(0), 'seven_day@65': at(0),
-    'five_hour@125': at(65), 'seven_day@125': at(65),
-    'seven_day@185': at(65),
-    'seven_day@210': null,
-    'seven_day@245': at(185),
-    'seven_day@300': null,
+    'five_hour@5': [at(0), at(5)], 'seven_day@5': [at(0), at(5)],
+    'five_hour@65': [at(0), at(5)], 'seven_day@65': [at(0), at(5)],
+    'five_hour@125': [at(65), at(125)], 'seven_day@125': [at(65), at(125)],
+    'seven_day@185': [at(65), at(125)],
+    'seven_day@210': [null, at(210)],
+    'seven_day@245': [at(185), at(245)],
+    'seven_day@300': [null, null],
   };
   try {
     assert.equal(importClaudeInbox(store, inbox).observations, 10);
@@ -793,19 +795,22 @@ test('a restored reading keeps its fetch date, and only a status-line reading ha
   withStore((store) => {
     const observedAt = new Date(Date.now() - 60 * 60_000).toISOString();
     const resetsAt = new Date(Date.now() + 86_400_000).toISOString();
-    const row = (bucketId, provenance, fetchedAfter) => ({ source_id: 'claude', bucket_id: bucketId, observed_at: observedAt,
-      used_percent: 20, remaining_percent: 80, resets_at: resetsAt, window_minutes: 10_080, provenance, fetched_after: fetchedAfter });
+    const row = (bucketId, provenance, fetchedAfter, seenSince = fetchedAfter) => ({ source_id: 'claude', bucket_id: bucketId,
+      observed_at: observedAt, used_percent: 20, remaining_percent: 80, resets_at: resetsAt, window_minutes: 10_080, provenance,
+      fetched_after: fetchedAfter, seen_since: seenSince });
     const earlier = new Date(Date.parse(observedAt) - 30 * 60_000).toISOString();
     const later = new Date(Date.parse(observedAt) + 60_000).toISOString();
     store.restoreFromExport({ schemaVersion: 1, observations: [
       row('dated', 'official-statusline', earlier),
+      row('first-seen', 'official-statusline', undefined, earlier),
       row('from-the-future', 'official-statusline', later),
       row('provider', 'official-claude-usage', earlier),
       row('old-backup', 'official-statusline', undefined),
     ] });
-    const restored = Object.fromEntries(store.prepare('SELECT bucket_id, fetched_after FROM quota_observations').all()
-      .map((entry) => [entry.bucket_id, entry.fetched_after]));
-    assert.deepEqual(restored, { dated: earlier, 'from-the-future': null, provider: null, 'old-backup': null });
+    const restored = Object.fromEntries(store.prepare('SELECT bucket_id, fetched_after, seen_since FROM quota_observations').all()
+      .map((entry) => [entry.bucket_id, [entry.fetched_after, entry.seen_since]]));
+    assert.deepEqual(restored, { dated: [earlier, earlier], 'first-seen': [null, earlier], 'from-the-future': [null, null],
+      provider: [null, null], 'old-backup': [null, null] });
     assert.throws(() => store.recordObservation({ sourceId: 'claude', bucketId: 'live', observedAt, resetsAt,
       usedPercent: 20, windowMinutes: 10_080, provenance: 'official-statusline', fetchedAfter: later }), /cannot be fetched after/);
   });

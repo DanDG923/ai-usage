@@ -281,12 +281,16 @@ function normaliseObservation(row) {
   if (row[PREPARED]) return row[PREPARED];
   const windowMinutes = row.windowMinutes ?? row.window_minutes;
   const fetchedAfter = row.fetchedAfter ?? row.fetched_after;
+  const seenSince = row.seenSince ?? row.seen_since;
   return {
     [NORMALISED]: true,
     observedAt: new Date(row.observedAt ?? row.observed_at).getTime(),
     // The earliest moment a status-line reading's limits can have been
     // fetched; null for a provider read or a reading the collector could not date.
     fetchedAfter: fetchedAfter == null ? null : new Date(fetchedAfter).getTime(),
+    // The first redraw in which its session showed the same limits: the fetch
+    // was no later. Kept for readings that cannot be dated from below.
+    seenSince: seenSince == null ? null : new Date(seenSince).getTime(),
     resetsAt: new Date(row.resetsAt ?? row.resets_at).getTime(),
     usedPercent: Number(row.usedPercent ?? row.used_percent),
     remainingPercent: Number(row.remainingPercent ?? row.remaining_percent),
@@ -394,16 +398,18 @@ function restatesSessionLimits(row) {
 // A status-line reading carries the limits its session last fetched, so the
 // collector dates it by that fetch where it can; the redraw that recorded it
 // proves nothing newer. An undated redraw (its session was first seen with
-// limits in hand, or the helper did not record sessions) can be no newer than
-// the first of the unbroken undated redraws showing its figure, so it takes
-// that time: an idle session must not renew its evidence every minute. A
-// provider read stands for itself.
+// limits in hand) can be no newer than its session's first redraw of the
+// same limits (`seenSince`), so it takes that time: an idle session must not
+// renew its evidence every minute. A reading from a helper that did not record
+// sessions has neither, and takes the first of the unbroken run of such
+// readings showing its figure. A provider read stands for itself.
 function evidenceTimes(rows) {
   const parsed = rows.map(normaliseObservation);
   let run = null;
   return parsed.map((row) => {
     if (!restatesSessionLimits(row)) return row.observedAt;
     if (Number.isFinite(row.fetchedAfter)) return Math.min(row.fetchedAfter, row.observedAt);
+    if (Number.isFinite(row.seenSince)) return Math.min(row.seenSince, row.observedAt);
     if (!run || Math.abs(run.resetsAt - row.resetsAt) > RESET_TOLERANCE_MS
       || Math.abs(run.used - usedPercentOf(row)) > STALE_RESTATEMENT_MARGIN) {
       run = { resetsAt: row.resetsAt, used: usedPercentOf(row), from: row.observedAt };
@@ -506,9 +512,11 @@ function withoutStaleRestatements(rows, { nowMs = Date.now(), freshReadGraceMs =
       return true;
     }
     // Undated: its fetch cannot be ordered against the newest evidence, a
-    // provider read or a dated session's fetch alike.
+    // provider read or a dated session's fetch alike, so around a reset only
+    // a later window gets through, as for fetches that cannot be ordered.
     const newestUsed = newest && usedPercentOf(newest.reading);
-    if (!sameReset(newest?.reading) || used >= newestUsed - STALE_RESTATEMENT_MARGIN) return true;
+    if (newest && !sameReset(newest.reading)) return reading.resetsAt > newest.reading.resetsAt;
+    if (!newest || used >= newestUsed - STALE_RESTATEMENT_MARGIN) return true;
     const after = nextFresh[index];
     if (after) return sameReset(after) && usedPercentOf(after) < newestUsed - STALE_RESTATEMENT_MARGIN;
     const graceMs = Math.max(freshReadGraceMs, freshnessLimitHours({ windowMinutes: reading.windowMinutes }) * HOUR_MS);
