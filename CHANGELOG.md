@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.0.54 — 30 September 2026
+
+- Date every Claude status-line reading by when its Claude Code session last fetched the limits, not by when the status line was redrawn. An idle session redraws the limits it fetched hours ago every minute, so those redraws no longer replace a newer **Refresh** on the Claude card (a week read at 13% no longer turns into 1% two hours later), no longer make Claude or Fable look freshly read, and no longer count as a successful **Refresh**. When a session that is in use sees the week refilled after your last **Refresh**, the card now shows it at once instead of two hours later. The forecast and its learned pace, the remaining-token estimate and the Fable estimate follow the same dates. To tell fetches apart, the status-line helper now also keeps each session's random identifier and its total time waiting for API responses; it still stores no paths, prompts or costs. A reading whose fetch cannot be dated (from an earlier helper version, or from a session already open when the helper is enabled or updated) is still shown, but no longer marks Claude or Fable as current.
+- Handle a weekly allowance that Claude refills early. A status-line redraw of the week it replaced no longer returns to the Claude card, the new week's pace counts from when the refill was fetched, and a figure the old week reached no longer makes the new week look freshly read.
+- Keep Claude marked out of date after a **Refresh** that succeeds but returns no allowance at all, instead of letting the next automatic collection bring an older reading back as current.
+- Stop repeated status-line redraws from counting as quiet days in the Claude forecast, where they diluted the learned night-time pace.
+- Import Codex usage from threads you archive. Work written just before you archived a thread was missed, and a thread started and archived between two collections was missed entirely. Archived and unarchived logs keep their place, so nothing is counted twice.
+- Name Claude's separate weekly limits, such as "Opus · weekly", instead of calling each one "weekly allowance", and label next week's reset with its day.
+- Keep the Claude and Fable figures honest in more places: plans without a Fable allowance no longer wait for Fable readings, the Fable card and the planner apply the same reserve, the "above its safe pace" note follows your pace-risk setting, and an empty period no longer claims every category is priced.
+- Keep **Refresh** unavailable until a refresh finishes, recover from a first load that storage refused, and keep cost figures updating after a period read fails.
+- Reopen the window after **Restart** from Settings or an update recovery when the app was started at sign-in, reload a dashboard whose page crashed, and bring back a window left on a disconnected monitor.
+- Export CSV by the same local calendar days as the dashboard, without holding the whole ledger in memory, and keep backups working after the Backups folder is deleted. Restoring an older `.sqlite` backup no longer resets settings that version did not have.
+- Read status-line helper paths with non-ASCII characters in the profile folder correctly, and stop skipping readings after the helper rotates its inbox.
+- Save whole-number settings as whole numbers, keep a free-reset expiry you are retyping, date an edited price by your local day, and list the same models in the pricing table and its Settings count.
+- Keep the planner from letting a hidden window release its page while a reserve save is still pending.
+- Release the storage worker when it is idle, so the app uses less memory between backups.
+- Show refresh results with source names, round unusual refresh intervals to minutes, and read the last minute before a full day as "1 day 0h".
+- Keep the provenance label in **Activity → Source evidence** clear of the current figure.
+- Preserve local usage history, settings, observations, and backups during an in-place update.
+
 ## 1.0.53 — 29 September 2026
 
 - Keep the local Fable estimate inside the current Claude allowance cycle. When Claude refills the weekly allowance before it updates the reset time, the estimate now starts again with the new cycle instead of ignoring its use, and use from before the refill no longer carries into it. A recorded allowance change is no longer mistaken for a refill, and a stale status-line reading no longer lowers the Fable ceiling.
