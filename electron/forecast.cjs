@@ -1179,8 +1179,11 @@ function collapseReadings(rows, nowMs) {
   let previous = null, run = 0, previousDay;
   for (const row of rows) {
     const day = localDayKey(new Date(row.observedAt));
+    // Redraws of one fetch collapse; a different fetch of the same figure is
+    // kept, since a newer one confirms the figure later than the others.
     const same = previous && day === previousDay && (row.observedAt <= nowMs) === (previous.observedAt <= nowMs)
-      && ['sourceId', 'bucketId', 'usedPercent', 'remainingPercent', 'resetsAt', 'windowMinutes', 'provenance', 'resetEvidence', 'allowanceScaled']
+      && ['sourceId', 'bucketId', 'usedPercent', 'remainingPercent', 'resetsAt', 'windowMinutes', 'provenance', 'resetEvidence',
+        'allowanceScaled', 'fetchedAfter', 'seenSince']
         .every((field) => Object.is(row[field], previous[field]));
     run = same ? run + 1 : 1;
     if (run > 2 && row.observedAt - result[result.length - 2].observedAt <= COVERAGE_GAP_MS) {

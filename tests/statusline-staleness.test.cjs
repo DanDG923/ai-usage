@@ -321,6 +321,23 @@ test('a rise is learned up to its fetch, not its later first redraw', () => {
   assert.deepEqual(redrawn, read);
 });
 
+test('compaction keeps a newer fetch that confirms a figure among redraws of an older one', () => {
+  // An idle session redraws the 10% it fetched at 07:00 every ten minutes;
+  // another session confirms 10% with a fresh fetch at 16:00; a read at
+  // 17:00 shows 20%. The rise belongs to the hour after the confirmation.
+  const rows = [reading('2026-09-22T08:00:00.000Z', 10, 'official-claude-usage')];
+  for (let at = Date.parse('2026-09-22T08:10:00.000Z'); at <= Date.parse('2026-09-22T19:50:00.000Z'); at += 10 * MINUTE) {
+    rows.push({ ...reading(at, 10, 'official-statusline'), fetchedAfter: '2026-09-22T07:00:00.000Z', seenSince: '2026-09-22T07:01:00.000Z' });
+  }
+  rows.push({ ...reading('2026-09-22T16:00:05.000Z', 10, 'official-statusline'), fetchedAfter: '2026-09-22T16:00:00.000Z', seenSince: '2026-09-22T16:00:05.000Z' });
+  rows.push(reading('2026-09-22T17:00:00.000Z', 20, 'official-claude-usage'));
+  rows.sort((a, b) => Date.parse(a.observedAt) - Date.parse(b.observedAt));
+  const pick = ({ recentPace, workingPace, safePace, expectedRemaining, learnedSamples }) => ({ recentPace, workingPace, safePace, expectedRemaining, learnedSamples });
+  // Active from 16:00 local, so where the rise is placed decides its phase.
+  const options = { now: '2026-09-22T20:00:00.000Z', schedule: { activeDays: [0, 1, 2, 3, 4, 5, 6], startHour: 16, endHour: 22 } };
+  assert.deepEqual(pick(forecastQuota(rows, { ...options, compactReadings: true })), pick(forecastQuota(rows, options)));
+});
+
 test('a rise fetched on a normal day counts though first redrawn on an ignored one', () => {
   // The rise is fetched at 23:30 local on the 22nd and first drawn at 00:30
   // on the 23rd, a date the forecast is told to ignore.
