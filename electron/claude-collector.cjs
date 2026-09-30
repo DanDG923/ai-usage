@@ -6,7 +6,7 @@ const path = require('node:path');
 const { findClaudeBinary, providerHome } = require('./provider-executable.cjs');
 const { createClaudeAgentSdkUsagePort } = require('./claude-agent-usage.cjs');
 const { createFableUsageTracker, providerReadingFresh } = require('./fable-tracker.cjs');
-const { QUOTA_CLOCK_SKEW_MS, validQuotaTime } = require('./quota-time.cjs');
+const { MAX_QUOTA_RESET_AHEAD_MS, QUOTA_CLOCK_SKEW_MS, validQuotaTime } = require('./quota-time.cjs');
 const { isProviderProvenance } = require('./quota-provenance.mjs');
 const { deriveFableEstimate } = require('./fable-projection.cjs');
 const { evidenceTimes, freshReadGraceFor, latestEvidenceAt, withoutStaleRestatements } = require('./forecast.cjs');
@@ -41,27 +41,33 @@ function laterIso(left, right) {
   return Date.parse(right) > Date.parse(left) ? right : left;
 }
 
-// Whether a payload's limits can all be read: absent (a session's opening
-// redraw), or an object whose every window is absent or has a reading and a
-// reset. An unreadable window would count as dropped, and the next redraw
-// showing it again as a new response.
-function wellFormedLimits(rateLimits) {
-  if (rateLimits == null) return true;
-  if (typeof rateLimits !== 'object' || Array.isArray(rateLimits)) return false;
-  return Object.values(rateLimits).every((limit) => limit == null || (typeof limit === 'object' && !Array.isArray(limit)
-    && limit.used_percentage != null && Number.isFinite(Number(limit.used_percentage)) && epochToIso(limit.resets_at) != null));
+// A window's reading and reset as the store would record them, or null for
+// one it would reject: not an object, no reading, a reading outside 0–100
+// (a spend limit can pass 100), or a reset out of range.
+const UNREADABLE = 'unreadable';
+function recordableWindow(limit, capturedAt) {
+  if (!limit || typeof limit !== 'object' || Array.isArray(limit) || limit.used_percentage == null) return null;
+  const used = Number(limit.used_percentage);
+  const resetsAt = epochToIso(limit.resets_at);
+  if (!Number.isFinite(used) || used < 0 || used > 100 || !resetsAt) return null;
+  const ahead = Date.parse(resetsAt) - Date.parse(capturedAt);
+  return ahead >= -5 * 60_000 && ahead <= MAX_QUOTA_RESET_AHEAD_MS ? [used, resetsAt] : null;
 }
 
-// Each window's reading and reset, by window name, to tell one response's
-// limits from the next.
-function statusLineLimits(rateLimits) {
+// Each window, by name, to tell one response's limits from the next. A
+// window the store would reject is kept as unreadable rather than dropped:
+// it tells nothing about a response, and must not make the next redraw that
+// shows it readable again look like a new one.
+function statusLineLimits(rateLimits, capturedAt) {
   const limits = {};
   if (!rateLimits || typeof rateLimits !== 'object' || Array.isArray(rateLimits)) return limits;
   for (const [key, limit] of Object.entries(rateLimits)) {
-    if (limit && typeof limit === 'object') limits[key] = [limit.used_percentage ?? null, limit.resets_at ?? null];
+    if (limit != null) limits[key] = recordableWindow(limit, capturedAt) ?? UNREADABLE;
   }
   return limits;
 }
+const readableWindow = (value) => Array.isArray(value);
+const sameWindow = (a, b) => (readableWindow(a) && readableWindow(b) ? a[0] === b[0] && a[1] === b[1] : a === b);
 
 // Claude Code redraws its status line after each response and, at the
 // interval the helper is installed with, every minute in between, always
@@ -82,12 +88,12 @@ function datedStatusLineFetch(store, payload, capturedAt) {
   const sessionId = typeof payload.session_id === 'string' ? payload.session_id.trim() : '';
   if (!sessionId) return undated;
   const apiMs = typeof payload.api_ms === 'number' && Number.isFinite(payload.api_ms) ? payload.api_ms : null;
-  const limits = statusLineLimits(payload.rate_limits);
+  const limits = statusLineLimits(payload.rate_limits, capturedAt);
   const previous = store.prepare('SELECT seen_at, api_ms, limits_json, fetched_after, seen_since FROM statusline_sessions WHERE session_id = ?').get(sessionId);
   let before = {};
   try { before = previous ? JSON.parse(previous.limits_json) : {}; } catch { /* Undated below. */ }
   const sameLimits = (a, b) => Object.keys(a).length === Object.keys(b).length
-    && Object.entries(a).every(([key, value]) => b[key]?.[0] === value[0] && b[key]?.[1] === value[1]);
+    && Object.entries(a).every(([key, value]) => key in b && sameWindow(value, b[key]));
   // A line imported again, or late: it shares the session's latest fetch only
   // if nothing has changed since, and cannot move the session backwards.
   if (previous && capturedAt <= previous.seen_at) {
@@ -98,8 +104,11 @@ function datedStatusLineFetch(store, payload, capturedAt) {
   let fetchedAfter = null;
   let seenSince = null;
   if (Object.keys(limits).length) {
+    // A readable window that is new, or that changed from a readable one, came
+    // with a response; one that was unreadable before shows nothing either way.
     const newResponse = previous && ((apiMs != null && previous.api_ms != null && apiMs > previous.api_ms)
-      || Object.entries(limits).some(([key, value]) => before[key]?.[0] !== value[0] || before[key]?.[1] !== value[1]));
+      || Object.entries(limits).some(([key, value]) => readableWindow(value)
+        && (!(key in before) || (readableWindow(before[key]) && !sameWindow(value, before[key])))));
     if (newResponse) {
       fetchedAfter = previous.seen_at;
       seenSince = capturedAt;
@@ -154,11 +163,12 @@ function importClaudeInboxFile(store, inboxPath, state = null) {
       }
       const capturedAt = epochToIso(payload.ai_usage_captured_at || payload.captured_at || stat.mtimeMs);
       // Every redraw with a time advances its session, including a session's
-      // opening redraw, which has no limits yet. A redraw with unreadable
-      // limits leaves the session alone: read as fewer limits, it would make
-      // the next unchanged redraw look like a new response. Its readable
-      // windows are still recorded, undated.
-      const { fetchedAfter, seenSince } = capturedAt && wellFormedLimits(payload.rate_limits)
+      // opening redraw, which has no limits yet. A limits value that is not an
+      // object is rejected below without touching the session: read as no
+      // limits, it would make the next unchanged redraw look like a new response.
+      const limitsShaped = payload.rate_limits == null
+        || (typeof payload.rate_limits === 'object' && !Array.isArray(payload.rate_limits));
+      const { fetchedAfter, seenSince } = capturedAt && limitsShaped
         ? datedStatusLineFetch(store, payload, capturedAt) : { fetchedAfter: null, seenSince: null };
       if (!capturedAt || !payload.rate_limits || typeof payload.rate_limits !== 'object' || Array.isArray(payload.rate_limits)) {
         result.rejectedRecords += 1;

@@ -781,15 +781,19 @@ test('a malformed limits line is rejected without making the next redraw look fr
     line(95, 2_588, [1, 2]),
     line(110, 2_588, { seven_day: [] }),
     line(115, 2_588, { seven_day: { used_percentage: 24 } }),
-    // Partly readable: its good window is recorded, but undated.
+    // Readings the store would reject: past 100%, and a reset 40 days away.
+    line(116, 2_588, { seven_day: { used_percentage: 101, resets_at: weekReset } }),
+    line(117, 2_588, { seven_day: { used_percentage: 24, resets_at: new Date(base + 40 * 86_400_000).toISOString() } }),
+    // Partly readable: its good window is recorded, from the same fetch.
     line(120, 2_588, { ...limits, five_hour: [] }),
     line(125, 2_588, limits),
   ].join('\n')}\n`, 'utf8');
   try {
     const result = importClaudeInbox(store, inbox);
-    assert.equal(result.rejectedRecords, 3, 'the opening redraw and both malformed lines');
+    assert.equal(result.rejectedRecords, 5, 'the opening redraw, both malformed lines and both rejected readings');
+    // No unreadable window made a later unchanged redraw look freshly fetched.
     assert.deepEqual(store.prepare('SELECT observed_at, fetched_after FROM quota_observations ORDER BY observed_at').all()
-      .map((row) => [row.observed_at, row.fetched_after]), [[at(5), at(0)], [at(120), null], [at(125), at(0)]]);
+      .map((row) => [row.observed_at, row.fetched_after]), [[at(5), at(0)], [at(120), at(0)], [at(125), at(0)]]);
   } finally {
     store.close();
   }
