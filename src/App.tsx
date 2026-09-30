@@ -12,7 +12,7 @@ import { Settings, type SettingsActions } from './components/Settings';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { snapshotAtTime } from './snapshot-time';
 import { readDashboardView, saveDashboardView } from './dashboard-view';
-import { formatInt } from './lib';
+import { formatInt, sourceLabel } from './lib';
 import { applyThemeAttribute } from './theme';
 import type { ProviderId } from './provider-view';
 import type { ManualObservation, PriceRow, Settings as SettingsType, Snapshot } from './types';
@@ -217,9 +217,9 @@ export default function App() {
       setNotice(
         `${
           failures.length
-            ? `Refresh completed with ${failures.map(([source]) => source).join(' and ')} unavailable. Check Sources for details.`
+            ? `Refresh completed with ${failures.map(([source]) => sourceLabel(source)).join(' and ')} unavailable. Check Sources for details.`
             : warnings.length
-              ? `Refresh completed using fallback data for ${warnings.map(([source]) => source).join(' and ')}. Check Sources for details.`
+              ? `Refresh completed using fallback data for ${warnings.map(([source]) => sourceLabel(source)).join(' and ')}. Check Sources for details.`
               : 'All supported local sources refreshed.'
         }${backup}`,
       );

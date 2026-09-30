@@ -413,6 +413,7 @@ test('reset distance under a day shows hours and minutes like the provider does'
   assert.equal(lib.resetDistance(new Date(now + 10_000).toISOString()), '1 min');
   assert.equal(lib.resetDistance(new Date(now + 59.8 * 60_000).toISOString()), '1h 0m');
   assert.equal(lib.resetDistance(new Date(now + 47.6 * 3_600_000).toISOString()), '2 days 0h');
+  assert.equal(lib.resetDistance(new Date(now + 24 * 3_600_000 - 20_000).toISOString()), '1 day 0h', 'never "24h 0m"');
 });
 
 test('Spark limits are separate from the main Pro allowance and do not look like Codex sessions', () => {

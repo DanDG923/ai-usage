@@ -45,9 +45,10 @@ export function BrandMark() {
   );
 }
 
-function refreshCadence(minutes: number) {
+/** The collection schedule in words. The menu offers whole hours, but a restored setting can hold any minutes. */
+export function refreshCadence(minutes: number) {
   if (!(minutes > 0)) return 'manual refresh';
-  if (minutes >= 60) return `auto every ${minutes / 60 === 1 ? 'hour' : `${minutes / 60} hours`}`;
+  if (minutes >= 60 && minutes % 60 === 0) return `auto every ${minutes === 60 ? 'hour' : `${minutes / 60} hours`}`;
   return `auto every ${minutes} min`;
 }
 
