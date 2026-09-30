@@ -215,7 +215,7 @@ async function collectFromAppServer(store, binary, {
   }
 }
 
-function listSessionFiles(root, cutoffMs, legacyFiles = new Set()) {
+function listSessionFiles(root, cutoffMs, legacyFiles = new Set(), movedLegacyNames = new Set()) {
   if (!fs.existsSync(root)) return [];
   const result = [];
   const stack = [root];
@@ -230,7 +230,8 @@ function listSessionFiles(root, cutoffMs, legacyFiles = new Set()) {
       else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
         try {
           const stat = fs.statSync(fullPath);
-          if (stat.mtimeMs >= cutoffMs || legacyFiles.has(path.resolve(fullPath).toLowerCase())) result.push({ fullPath, stat });
+          if (stat.mtimeMs >= cutoffMs || legacyFiles.has(path.resolve(fullPath).toLowerCase())
+            || movedLegacyNames.has(entry.name.toLowerCase())) result.push({ fullPath, stat });
         } catch { /* Session rotation can remove a file between calls. */ }
       }
     }
@@ -444,6 +445,27 @@ function collisionMigration(store, lines, initialState, { checkCollisions, check
   return { blocked, backupNeeded };
 }
 
+const normalizedPath = (filePath) => path.resolve(filePath).replaceAll('\\', '/').toLowerCase();
+
+// Archiving a thread in Codex moves its rollout from sessions/ to
+// archived_sessions/, and unarchiving moves it back. It is the same log, so it
+// keeps its cursor: whatever was appended before the move is still imported,
+// and nothing already imported is read again. Rollout names carry their start
+// time and session id, so a cursor under the other folder for a file that is no
+// longer there is this log's. A copy whose original is still in place is not.
+function movedRolloutCursor(store, fullPath, prefixes) {
+  const target = normalizedPath(fullPath);
+  const name = `/${path.basename(target)}`;
+  const rows = store.prepare(`SELECT file_path FROM imported_files
+    WHERE substr(lower(replace(file_path, char(92), '/')), -?) = ?`).all(name.length, name);
+  for (const { file_path: candidate } of rows) {
+    const normalized = normalizedPath(candidate);
+    if (normalized === target || !prefixes.some((prefix) => normalized.startsWith(prefix))) continue;
+    if (!fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
 // A Codex rollout log carries its session id, working directory, and model in
 // earlier lines than the token counts that need them. That context is kept in
 // the import cursor's state so an appended chunk can be parsed on its own.
@@ -455,20 +477,29 @@ function importLocalSessions(store, days = 120) {
     return { importedFiles: 0, events: 0, observations: 0, rejected: 0, lastRejection: null,
       duplicateEvents: 0, reconciledEvents: 0, reconciliationBackup: null, readErrors: 0, lastReadError: null };
   }
-  const root = path.join(home, 'sessions');
+  // Live threads, and threads archived in Codex, which keep their rollout.
+  const roots = [path.join(home, 'sessions'), path.join(home, 'archived_sessions')];
+  const prefixes = roots.map((root) => `${normalizedPath(root)}/`);
   // The live scan has a lookback, but a one-time accounting repair must also
   // reach older ledger records whose original, previously imported logs still
   // exist. Do not expand collection to brand-new ancient transcripts.
-  const rootPrefix = `${path.resolve(root).replaceAll('\\', '/').toLowerCase()}/`;
-  const legacyFiles = new Set(store.prepare(`SELECT file_path FROM imported_files
+  const legacyQuery = store.prepare(`SELECT file_path FROM imported_files
     WHERE substr(lower(replace(file_path, char(92), '/')), 1, ?) = ?
       AND CASE WHEN json_valid(state_json) THEN
         COALESCE(json_extract(state_json, '$.accountingVersion'), 0) != 1
         OR COALESCE(json_extract(state_json, '$.agentAttributionVersion'), 0) != 1
         OR COALESCE(json_extract(state_json, '$.eventKeyVersion'), 0) != 1
-        ELSE 1 END`).all(rootPrefix.length, rootPrefix)
-    .map((row) => path.resolve(row.file_path).toLowerCase()));
-  const files = listSessionFiles(root, Date.now() - days * 24 * 60 * 60 * 1000, legacyFiles);
+        ELSE 1 END`);
+  const legacyRows = prefixes.flatMap((prefix) => legacyQuery.all(prefix.length, prefix));
+  const legacyFiles = new Set(legacyRows.map((row) => path.resolve(row.file_path).toLowerCase()));
+  // Archiving or unarchiving keeps a log's old modification time, so a legacy
+  // log past the lookback must keep its exemption under its new folder, or its
+  // cursor is never adopted and its rows never repaired. As in
+  // movedRolloutCursor, the name is this log's only once its original is gone.
+  const movedLegacyNames = new Set(legacyRows.filter((row) => !fs.existsSync(row.file_path))
+    .map((row) => path.basename(row.file_path).toLowerCase()));
+  const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
+  const files = roots.flatMap((root) => listSessionFiles(root, cutoffMs, legacyFiles, movedLegacyNames));
   let importedFiles = 0;
   let events = 0;
   let observations = 0;
@@ -483,11 +514,22 @@ function importLocalSessions(store, days = 120) {
   let lastReadError = null;
 
   for (const { fullPath, stat } of files) {
-    const previous = store.getImportedFile(fullPath);
+    let previous = store.getImportedFile(fullPath);
+    const movedFrom = previous ? null : movedRolloutCursor(store, fullPath, prefixes);
+    if (movedFrom) previous = store.getImportedFile(movedFrom);
     const currentCursor = previous?.state?.agentAttributionVersion === 1 && previous.state.accountingVersion === 1
       && previous.state.eventKeyVersion === 1;
     const plan = planIncrementalRead(currentCursor ? previous : null, stat);
-    if (!plan) continue;
+    if (!plan) {
+      // Moved with nothing new: the cursor follows the log to its new place.
+      if (movedFrom) {
+        store.transaction(() => {
+          store.markImportedFile(fullPath, stat.mtimeMs, stat.size, previous.state);
+          store.forgetImportedFile(movedFrom);
+        });
+      }
+      continue;
+    }
     // A cursor written before context was stored cannot resume mid-file.
     const resumable = plan.resumed && previous?.state && typeof previous.state === 'object';
     const startOffset = resumable ? plan.startOffset : 0;
@@ -590,6 +632,7 @@ function importLocalSessions(store, days = 120) {
           state.keptRateLimits = { ...state.keptRateLimits, [limitId]: { ...state.keptRateLimits[limitId], at: Date.parse(entry.timestamp) } };
         }
         store.markImportedFile(fullPath, stat.mtimeMs, startOffset + chunk.consumedBytes, state);
+        if (movedFrom) store.forgetImportedFile(movedFrom);
       });
       importedFiles += 1;
     } catch (error) {

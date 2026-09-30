@@ -2514,8 +2514,11 @@ class UsageStore {
         // source log's migration cursor was already completed. Recheck those
         // logs on the next scan using the collector's source proof and safety
         // backup; do not delete restored evidence here or disturb Claude cursors.
+        // A Codex cursor is also known by its state, which only Codex writes, so
+        // an archived rollout or a CODEX_HOME outside the profile is rechecked too.
         this.prepare(`UPDATE imported_files SET state_json = json_remove(state_json, '$.accountingVersion')
-          WHERE lower(replace(file_path, char(92), '/')) LIKE '%/.codex/sessions/%.jsonl'
+          WHERE (lower(replace(file_path, char(92), '/')) LIKE '%/.codex/sessions/%.jsonl'
+              OR CASE WHEN json_valid(state_json) THEN json_type(state_json, '$.eventKeyVersion') END IS NOT NULL)
             AND CASE WHEN json_valid(state_json) THEN json_type(state_json, '$.accountingVersion') END IS NOT NULL`).run();
       }
       if (restoredClaudeEvents) {
