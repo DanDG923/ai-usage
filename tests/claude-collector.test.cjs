@@ -763,6 +763,32 @@ test('each status-line reading is dated by the fetch its session made, not by it
   }
 });
 
+test('a malformed limits line is rejected without making the next redraw look freshly fetched', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-statusline-malformed-'));
+  const store = new UsageStore(path.join(root, 'test.sqlite'), path.join(root, 'Backups'));
+  const inbox = path.join(root, 'inbox.jsonl');
+  const base = Date.now() - 60 * 60_000;
+  const at = (seconds) => new Date(base + seconds * 1000).toISOString();
+  const weekReset = new Date(base + 3 * 86_400_000).toISOString();
+  const line = (seconds, apiMs, rateLimits) => JSON.stringify({ ai_usage_captured_at: at(seconds), session_id: 'session-a', api_ms: apiMs, rate_limits: rateLimits });
+  const limits = { seven_day: { used_percentage: 24, resets_at: weekReset } };
+  fs.writeFileSync(inbox, `${[
+    line(0, 0, null),
+    line(5, 2_588, limits),
+    line(65, 2_588, 'garbled'),
+    line(95, 2_588, [1, 2]),
+    line(125, 2_588, limits),
+  ].join('\n')}\n`, 'utf8');
+  try {
+    const result = importClaudeInbox(store, inbox);
+    assert.equal(result.rejectedRecords, 3, 'the opening redraw and both malformed lines');
+    assert.deepEqual(store.prepare('SELECT observed_at, fetched_after FROM quota_observations ORDER BY observed_at').all()
+      .map((row) => [row.observed_at, row.fetched_after]), [[at(5), at(0)], [at(125), at(0)]]);
+  } finally {
+    store.close();
+  }
+});
+
 test('a restored reading keeps its fetch date, and only a status-line reading has one', () => {
   withStore((store) => {
     const observedAt = new Date(Date.now() - 60 * 60_000).toISOString();

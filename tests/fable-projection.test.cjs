@@ -165,6 +165,24 @@ test('a plan-less status-line row newer than the SDK reading cannot switch the p
   assert.equal(pro.store.getTraySnapshot(NOW).fableApplies, false);
 });
 
+test('an idle redraw of the overall figure does not move the projection boundary past later Fable activity', (t) => {
+  const estimate = (withRedraw) => {
+    const context = fixture(t);
+    fableWeek(context);
+    // Fable is used after the last overall read; the tail projects it.
+    context.usage('f2', NOW - 30 * 60_000, 'claude-fable-5', 1_000_000);
+    // An idle session then redraws the 20% it fetched before that activity.
+    if (withRedraw) {
+      context.overall(NOW - 5 * 60_000, 20, { planType: null, provenance: 'official-statusline', metadata: {},
+        fetchedAfter: iso(NOW - 62 * 60_000) });
+    }
+    return projectFableAllowance(context.store, NOW).usedPercent;
+  };
+  const without = estimate(false);
+  assert.ok(without > 20.5, `the tail adds the later activity (${without})`);
+  assert.ok(Math.abs(estimate(true) - without) < 1e-9, 'the redraw changes nothing');
+});
+
 test('the series carries one point per overall step plus the current estimate', (t) => {
   const context = fixture(t);
   context.overall(NOW - 25 * HOUR, 10);

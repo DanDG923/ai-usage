@@ -8,7 +8,7 @@
 // rows to go stale, so there is nothing to rescale, retire or discard.
 
 const { createAllowanceScaler } = require('./allowance-changes.cjs');
-const { clusterByWindow, normaliseObservation, restatesSessionLimits, withoutStaleRestatements } = require('./forecast.cjs');
+const { clusterByWindow, latestEvidenceAt, normaliseObservation, restatesSessionLimits, withoutStaleRestatements } = require('./forecast.cjs');
 const { OFFICIAL_PROVENANCES } = require('./quota-provenance.mjs');
 
 // Every input is bounded by the projection's own clock. A reading dated
@@ -324,7 +324,10 @@ function computeProjection(store, nowMs, { freshReadGraceMs } = {}) {
   const cycleStartMs = cycles.length > 1 ? new Date(readings[0].observed_at).getTime() : windowStartMs;
   const overallWindow = readings.at(-1) ?? latest;
   const overallUsed = usedOf(overallWindow);
-  const overallObservedMs = new Date(overallWindow.observed_at).getTime();
+  // The overall figure holds as of its evidence, not its latest redraw: an
+  // idle session re-records limits it fetched earlier, and Fable activity
+  // since that fetch is still unaccounted for.
+  const overallObservedMs = latestEvidenceAt(readings.length ? readings : [latest]);
   if (!Number.isFinite(overallUsed) || !Number.isFinite(overallObservedMs)) {
     return { derived: false, reason: 'invalid-overall-reading' };
   }
@@ -337,7 +340,10 @@ function computeProjection(store, nowMs, { freshReadGraceMs } = {}) {
     .find((row) => row && new Date(row.observed_at).getTime() >= cycleStartMs
       && Math.abs(new Date(row.resets_at).getTime() - resetMs) <= 60_000) || null;
   const baseUsed = anchor ? usedOf(anchor) : 0;
-  const baseAtMs = anchor ? new Date(anchor.observed_at).getTime() : cycleStartMs;
+  // Likewise the anchor's figure holds as of its own evidence.
+  const baseAtMs = anchor ? Math.max(cycleStartMs, latestEvidenceAt(
+    officialBetween(store, 'claude-fable', FABLE_BUCKET, new Date(cycleStartMs).toISOString(), nowMs)
+      .filter((row) => Math.abs(new Date(row.resets_at).getTime() - resetMs) <= 60_000))) : cycleStartMs;
 
   // Structural ceiling at the timestamp of the latest overall observation.
   // Activity after that instant is deliberately added outside the ceiling.
@@ -401,7 +407,7 @@ function computeProjection(store, nowMs, { freshReadGraceMs } = {}) {
     // The tail starts wherever bounded evidence ends: after the last overall
     // reading, but never before the anchor — value the anchor already includes
     // must not be projected a second time.
-    const tailFromMs = Math.max(new Date(readings.at(-1).observed_at).getTime(), baseAtMs);
+    const tailFromMs = Math.max(overallObservedMs, baseAtMs);
     const tailResult = allowancePressure(store, 'fable', new Date(tailFromMs).toISOString(), new Date(nowMs).toISOString());
     if (!tailResult.complete) return { derived: false, reason: 'insufficient-activity-coverage' };
     tail = ratePerPressure != null ? ratePerPressure * tailResult.pressure : 0;

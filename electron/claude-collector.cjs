@@ -129,8 +129,12 @@ function importClaudeInboxFile(store, inboxPath, state = null) {
       }
       const capturedAt = epochToIso(payload.ai_usage_captured_at || payload.captured_at || stat.mtimeMs);
       // Every redraw with a time advances its session, including a session's
-      // opening redraw, which has no limits yet.
-      const fetchedAfter = capturedAt ? datedStatusLineFetch(store, payload, capturedAt) : null;
+      // opening redraw, which has no limits yet. A malformed limits value is
+      // rejected below without touching the session: read as "no limits", it
+      // would make the next unchanged redraw look like a new response.
+      const limitsShaped = payload.rate_limits == null
+        || (typeof payload.rate_limits === 'object' && !Array.isArray(payload.rate_limits));
+      const fetchedAfter = capturedAt && limitsShaped ? datedStatusLineFetch(store, payload, capturedAt) : null;
       if (!capturedAt || !payload.rate_limits || typeof payload.rate_limits !== 'object' || Array.isArray(payload.rate_limits)) {
         result.rejectedRecords += 1;
         continue;
