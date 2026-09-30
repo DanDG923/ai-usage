@@ -395,3 +395,52 @@ test('a restore rechecks archived and relocated Codex logs as well as live ones,
   assert.equal(store.getImportedFile(relocated).state.accountingVersion, undefined);
   assert.equal(store.getImportedFile(transcript).state.accountingVersion, 1);
 });
+
+// An archived log keeps its old modification time. A legacy cursor must keep
+// its lookback exemption at the new place, or the repair never reaches it.
+function repairsOldLogArchivedBeforeItsRepair(t, invalidate) {
+  const { root, store, write } = fixture(t);
+  const records = [tokenRecord(1), tokenRecord(2)];
+  const live = write(`.codex/sessions/2026/03/01/${rollout(6)}`, [...context, ...records]);
+  const old = new Date(now - 200 * 86400000);
+  fs.utimesSync(live, old, old);
+  invalidate(store, live, records);
+  const untracked = write(`.codex/archived_sessions/${rollout(7)}`, [...context, tokenRecord(3, 2)]);
+  fs.utimesSync(untracked, old, old);
+  const archived = path.join(root, '.codex', 'archived_sessions', rollout(6));
+  fs.renameSync(live, archived);
+  const result = importLocalSessions(store);
+  assert.equal(result.importedFiles, 1);
+  assert.equal(result.reconciledEvents, 1);
+  assert.ok(result.reconciliationBackup, 'the repair is backed up first');
+  assert.equal(codexRows(store), 1);
+  assert.equal(store.getImportedFile(archived).state.accountingVersion, 1);
+  assert.equal(store.getImportedFile(live), null);
+  assert.equal(store.getImportedFile(untracked), null, 'an untracked old log stays outside the lookback');
+  assert.equal(importLocalSessions(store).importedFiles, 0, 'the archived log needs no repeated repair');
+}
+
+test('an old log archived before its legacy repair is repaired from the archive', (t) => {
+  repairsOldLogArchivedBeforeItsRepair(t, (store, live, records) => {
+    records.forEach((record) => seedOldEvent(store, record));
+    legacyCursor(store, live);
+  });
+});
+
+test('an old log archived after a restore invalidated its cursor is repaired from the archive', (t) => {
+  repairsOldLogArchivedBeforeItsRepair(t, (store, live, records) => {
+    // Imported back when it was recent, then an older backup restores a
+    // duplicate row and invalidates the current cursor.
+    assert.equal(importLocalSessions(store, 365).events, 1);
+    const duplicate = records[1];
+    const usage = duplicate.payload.info.last_token_usage;
+    store.restoreFromExport({ schemaVersion: 1, usageEvents: [{ event_key: `codex:session-a:${duplicate.timestamp}`,
+      source_id: 'codex', occurred_at: duplicate.timestamp, session_id: 'session-a', model: 'gpt-5.6-sol',
+      project: 'C:\\synthetic', input_tokens: usage.input_tokens, cached_input_tokens: usage.cached_input_tokens,
+      cache_write_input_tokens: 0, cache_write_5m_input_tokens: 0, cache_write_1h_input_tokens: 0,
+      output_tokens: usage.output_tokens, reasoning_output_tokens: usage.reasoning_output_tokens,
+      metadata_json: JSON.stringify({ source: 'codex-session-log' }) }] });
+    assert.equal(codexRows(store), 2);
+    assert.equal(store.getImportedFile(live).state.accountingVersion, undefined);
+  });
+});

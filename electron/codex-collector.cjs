@@ -215,7 +215,7 @@ async function collectFromAppServer(store, binary, {
   }
 }
 
-function listSessionFiles(root, cutoffMs, legacyFiles = new Set()) {
+function listSessionFiles(root, cutoffMs, legacyFiles = new Set(), movedLegacyNames = new Set()) {
   if (!fs.existsSync(root)) return [];
   const result = [];
   const stack = [root];
@@ -230,7 +230,8 @@ function listSessionFiles(root, cutoffMs, legacyFiles = new Set()) {
       else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
         try {
           const stat = fs.statSync(fullPath);
-          if (stat.mtimeMs >= cutoffMs || legacyFiles.has(path.resolve(fullPath).toLowerCase())) result.push({ fullPath, stat });
+          if (stat.mtimeMs >= cutoffMs || legacyFiles.has(path.resolve(fullPath).toLowerCase())
+            || movedLegacyNames.has(entry.name.toLowerCase())) result.push({ fullPath, stat });
         } catch { /* Session rotation can remove a file between calls. */ }
       }
     }
@@ -489,10 +490,16 @@ function importLocalSessions(store, days = 120) {
         OR COALESCE(json_extract(state_json, '$.agentAttributionVersion'), 0) != 1
         OR COALESCE(json_extract(state_json, '$.eventKeyVersion'), 0) != 1
         ELSE 1 END`);
-  const legacyFiles = new Set(prefixes.flatMap((prefix) => legacyQuery.all(prefix.length, prefix))
-    .map((row) => path.resolve(row.file_path).toLowerCase()));
+  const legacyRows = prefixes.flatMap((prefix) => legacyQuery.all(prefix.length, prefix));
+  const legacyFiles = new Set(legacyRows.map((row) => path.resolve(row.file_path).toLowerCase()));
+  // Archiving or unarchiving keeps a log's old modification time, so a legacy
+  // log past the lookback must keep its exemption under its new folder, or its
+  // cursor is never adopted and its rows never repaired. As in
+  // movedRolloutCursor, the name is this log's only once its original is gone.
+  const movedLegacyNames = new Set(legacyRows.filter((row) => !fs.existsSync(row.file_path))
+    .map((row) => path.basename(row.file_path).toLowerCase()));
   const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
-  const files = roots.flatMap((root) => listSessionFiles(root, cutoffMs, legacyFiles));
+  const files = roots.flatMap((root) => listSessionFiles(root, cutoffMs, legacyFiles, movedLegacyNames));
   let importedFiles = 0;
   let events = 0;
   let observations = 0;
