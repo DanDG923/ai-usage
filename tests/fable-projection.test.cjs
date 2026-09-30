@@ -201,6 +201,46 @@ test('a status-line figure bounds calibration at its fetch, as a read at that mo
   assert.ok(Math.abs(redrawn.usedPercent - read.usedPercent) < 1e-9, `${redrawn.usedPercent} vs ${read.usedPercent}`);
 });
 
+test('an older restatement of the mark cannot reach a step back before the reading that set it', (t) => {
+  // Opus is used before the week reads 10%; only Fable after it.
+  const project = (restate) => {
+    const context = fixture(t);
+    context.usage('opus', NOW - 20 * HOUR, 'claude-opus-5', 2_000_000);
+    context.overall(NOW - 10 * HOUR, 10);
+    // An idle session redraws the 10% it fetched long before that reading.
+    if (restate) {
+      context.overall(NOW - 5 * HOUR, 10, { planType: null, provenance: 'official-statusline', metadata: {},
+        fetchedAfter: iso(NOW - 30 * HOUR) });
+    }
+    context.usage('fable', NOW - 3 * HOUR, 'claude-fable-5', 2_000_000);
+    context.overall(NOW - HOUR, 20);
+    return projectFableAllowance(context.store, NOW).usedPercent;
+  };
+  const plain = project(false);
+  assert.ok(Math.abs(plain - 20) < 0.01, `the step is all Fable (${plain})`);
+  assert.ok(Math.abs(project(true) - plain) < 1e-9, 'the restatement changes nothing');
+});
+
+test('a newer dated fetch of the same Fable figure bounds the next rise, as a read would', (t) => {
+  const project = (confirm) => {
+    const context = fixture(t);
+    context.overall(NOW - 25 * HOUR, 10);
+    context.fable(NOW - 20 * HOUR, 10);
+    context.usage('before', NOW - 15 * HOUR, 'claude-fable-5', 2_000_000);
+    confirm(context);
+    context.usage('during', NOW - 4 * HOUR, 'claude-fable-5', 2_000_000);
+    context.fable(NOW - HOUR, 20);
+    context.overall(NOW - HOUR, 20);
+    context.usage('after', NOW - 30 * 60_000, 'claude-fable-5', 2_000_000);
+    return projectFableAllowance(context.store, NOW);
+  };
+  const read = project((context) => context.fable(NOW - 8 * HOUR, 10));
+  const fetched = project((context) => context.fable(NOW - 7 * HOUR, 10,
+    { planType: null, provenance: 'official-statusline', metadata: {}, fetchedAfter: iso(NOW - 8 * HOUR) }));
+  assert.equal(read.method, 'fable-anchor-pair');
+  assert.ok(Math.abs(fetched.usedPercent - read.usedPercent) < 1e-9, `${fetched.usedPercent} vs ${read.usedPercent}`);
+});
+
 test('the series carries one point per overall step plus the current estimate', (t) => {
   const context = fixture(t);
   context.overall(NOW - 25 * HOUR, 10);

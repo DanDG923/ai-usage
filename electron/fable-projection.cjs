@@ -147,6 +147,13 @@ function allowancePressure(store, modelLike, sinceIso, untilIso) {
 // share an allowance cycle — a delta across a reset or a replenishment is
 // meaningless — but a rate learned in one cycle carries into the next,
 // because it is a property of pricing and caps, not the week.
+// Whether a reading shows its figure held at its evidence moment: a read, or
+// a dated status-line fetch. An undated redraw is known only to be no newer
+// than its session's first redraw, so it cannot confirm a figure later.
+function confirmsFigure(row) {
+  return !restatesSessionLimits(row) || Number.isFinite(normaliseObservation(row).fetchedAfter);
+}
+
 function fablePairCalibration(store, nowMs, usedOf = rawUsedPercent, freshReadGraceMs) {
   const sinceIso = new Date(nowMs - 21 * 24 * 60 * 60 * 1000).toISOString();
   let deltaSum = 0;
@@ -160,8 +167,9 @@ function fablePairCalibration(store, nowMs, usedOf = rawUsedPercent, freshReadGr
     // Consumption is only a new high-water mark within the cycle. A backward
     // move is a correction or a mistyped reading, and the rebound after it
     // returns to use already counted. Each rise is measured from the latest
-    // reading that confirmed the mark; a status-line repeat of it only
-    // restates what a session fetched earlier, so it cannot bound the rise.
+    // reading that confirmed the mark: a read, or a newer dated fetch. An
+    // older or undated status-line repeat only restates what a session
+    // fetched earlier, so it cannot bound the rise.
     let highWater = NaN;
     let from = null;
     for (const after of readings) {
@@ -177,7 +185,7 @@ function fablePairCalibration(store, nowMs, usedOf = rawUsedPercent, freshReadGr
       // by less than the provider's rounding precision. Treating them as a
       // measured zero rate would freeze every later estimate.
       if (used === highWater) {
-        if (!restatesSessionLimits(after)) from = after;
+        if (confirmsFigure(after) && moments.get(after) > moments.get(from)) from = after;
         continue;
       }
       const delta = used - highWater;
@@ -207,9 +215,12 @@ function fableStepsFromOverall(store, readings, fromMs, toMs, usedOf = rawUsedPe
   // Each step is bounded by its readings' evidence, as the tail after them
   // is, so activity between a fetch and its later redraw counts once.
   const moments = evidenceTimes(readings);
+  // The latest moment the high-water figure is known to have held; each step
+  // is measured from there. An older restatement of the mark redrawn later
+  // must not reach back before it, and only a read or a dated fetch confirms it.
+  let markMs = moments[0];
   for (let index = 1; index < readings.length; index += 1) {
     const after = readings[index];
-    const beforeMs = moments[index - 1];
     const atMs = moments[index];
     const at = new Date(atMs).toISOString();
     // Provider percentages jitter and correct backwards. Consumption is only a
@@ -218,7 +229,9 @@ function fableStepsFromOverall(store, readings, fromMs, toMs, usedOf = rawUsedPe
     const afterUsed = usedOf(after);
     if (!Number.isFinite(afterUsed) || !Number.isFinite(highWater)) continue;
     const priorHighWater = highWater;
+    const beforeMs = markMs;
     highWater = Math.max(highWater, afterUsed);
+    if (afterUsed > priorHighWater || (afterUsed === priorHighWater && confirmsFigure(after))) markMs = Math.max(markMs, atMs);
     // Readings before an anchor still establish the high-water baseline, even
     // though their movement is already included in that anchor.
     if (!(atMs > fromMs) || atMs > toMs) continue;
