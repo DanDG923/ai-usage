@@ -418,13 +418,23 @@ function fetchMomentOf(row) {
 // takes the first such reading of its window that showed the same figure:
 // two idle sessions redrawing different figures in turn renew neither. A
 // provider read stands for itself.
-function evidenceTimes(rows) {
+// `known` asks instead how current each figure is known to be, which decides
+// whether it is fresh. The first redraw only bounds an undated fetch from
+// above: the session may have fetched those limits at any point in the window
+// they show, so the figure is known only from that window's start.
+function evidenceTimes(rows, { known = false } = {}) {
   const parsed = rows.map(normaliseObservation);
   const firstShown = [];
   return parsed.map((row) => {
     if (!restatesSessionLimits(row)) return row.observedAt;
     if (Number.isFinite(row.fetchedAfter)) return Math.min(row.fetchedAfter, row.observedAt);
-    if (Number.isFinite(row.seenSince)) return Math.min(row.seenSince, row.observedAt);
+    if (Number.isFinite(row.seenSince)) {
+      const firstRedraw = Math.min(row.seenSince, row.observedAt);
+      if (!known) return firstRedraw;
+      // A window of unknown length is no longer than a reset may lie ahead.
+      const windowMs = row.windowMinutes > 0 ? row.windowMinutes * 60_000 : MAX_QUOTA_RESET_AHEAD_MS;
+      return Math.min((Number.isFinite(row.resetsAt) ? row.resetsAt : firstRedraw) - windowMs, firstRedraw);
+    }
     const used = usedPercentOf(row);
     let first = firstShown.find((entry) => Math.abs(entry.resetsAt - row.resetsAt) <= RESET_TOLERANCE_MS
       && Math.abs(entry.used - used) <= STALE_RESTATEMENT_MARGIN);
@@ -440,11 +450,12 @@ function evidenceTimes(rows) {
 // among the readings of its window that show the same value. An idle session
 // redrawing a value it fetched hours ago is only as current as that fetch,
 // unless a newer read agrees with it. Readings must be in time order.
-function latestEvidenceAt(rows) {
+// `known` as for `evidenceTimes`.
+function latestEvidenceAt(rows, options = {}) {
   const parsed = rows.map(normaliseObservation);
   const current = parsed.at(-1);
   if (!current) return null;
-  const times = evidenceTimes(parsed);
+  const times = evidenceTimes(parsed, options);
   let at = times.at(-1);
   parsed.forEach((row, index) => {
     if (Math.abs(row.resetsAt - current.resetsAt) <= RESET_TOLERANCE_MS
@@ -995,10 +1006,16 @@ function forecastQuotaWithLearning(observations, options = {}, dayWeights = null
   const observed = visibleRows
     .map((row) => ({ at: row.observedAt, remaining: clamp(Number.isFinite(row.remainingPercent) ? row.remainingPercent : 100 - row.usedPercent, 0, 100) }));
   // The current value is as old as its evidence, not its latest redraw. The
-  // caller may have measured that before compacting away a newer read.
-  const evidenceMs = options.evidence?.observedAt === current.observedAt && Number.isFinite(options.evidence.at)
+  // caller may have measured that before compacting away a newer read. Use
+  // since then is caught up from where the figure is placed, but it is only
+  // as fresh as it is known to be: an undated redraw may carry a fetch from
+  // anywhere in its window.
+  const measured = options.evidence?.observedAt === current.observedAt;
+  const evidenceMs = measured && Number.isFinite(options.evidence.at)
     ? Math.min(options.evidence.at, current.observedAt) : latestEvidenceAt(normalised);
-  const staleHours = Math.max(0, (nowMs - evidenceMs) / HOUR_MS);
+  const knownMs = measured && Number.isFinite(options.evidence.known)
+    ? Math.min(options.evidence.known, current.observedAt) : latestEvidenceAt(normalised, { known: true });
+  const staleHours = Math.max(0, (nowMs - knownMs) / HOUR_MS);
   if (!Number.isFinite(resetMs) || resetMs <= nowMs) return unknownForecast({ expired: true, observed, staleHours });
 
   const remaining = Number.isFinite(current.remainingPercent) ? current.remainingPercent : 100 - current.usedPercent;
@@ -1209,7 +1226,8 @@ function forecastQuota(observations, options = {}) {
     const current = normalised.at(-1);
     // A compacted run keeps its latest reading, which may redraw an older
     // fetch than a reading the run drops, so the evidence is measured first.
-    if (current) learningOptions = { ...options, evidence: { observedAt: current.observedAt, at: latestEvidenceAt(normalised) } };
+    if (current) learningOptions = { ...options, evidence: { observedAt: current.observedAt, at: latestEvidenceAt(normalised),
+      known: latestEvidenceAt(normalised, { known: true }) } };
     normalised = collapseReadings(normalised.filter((row) => row === current || row.observedAt >= nowMs - FORECAST_LOOKBACK_MS), nowMs);
   }
   const rows = normalised;

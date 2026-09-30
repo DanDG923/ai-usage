@@ -207,10 +207,37 @@ test('undated sessions redrawing different figures each keep their own first red
     }
     const quota = store.getQuota('claude', store.getSettings(), now);
     assert.equal(quota.usedPercent, 20);
-    assert.equal(quota.evidenceAt, new Date(first + 500).toISOString());
-    assert.ok(quota.forecast.staleHours > 1.99, `stale ${quota.forecast.staleHours}`);
+    const rows = store.prepare('SELECT * FROM quota_observations ORDER BY observed_at').all();
+    assert.equal(latestEvidenceAt(rows), first + 500, 'the 20% is placed no later than its first redraw');
+    // Neither session's fetch is known, only that it fell in this week.
+    const weekStart = Date.parse(quota.resetsAt) - 7 * 24 * HOUR;
+    assert.equal(quota.evidenceAt, new Date(weekStart).toISOString());
+    assert.ok(Math.abs(quota.forecast.staleHours - (now - weekStart) / HOUR) < 1e-6, `stale ${quota.forecast.staleHours}`);
   } finally {
     store.close();
+  }
+});
+
+test('a figure no known fetch supports is caught up from its first redraw but is not fresh', () => {
+  // Redrawn for an hour by a session first seen with limits in hand, and the
+  // same redraws had that session's opening redraw shown the fetch.
+  const first = Date.parse('2026-09-23T20:25:00.000Z');
+  const redraws = (dated) => Array.from({ length: 60 }, (_, index) => ({
+    ...reading(first + index * MINUTE, 14, 'official-statusline'),
+    ...(dated ? { fetchedAfter: new Date(first - 5_000).toISOString() } : { seenSince: new Date(first).toISOString() }),
+  }));
+  const reads = [reading('2026-09-22T21:07:40.000Z', 13, 'official-claude-usage')];
+  for (const compactReadings of [false, true]) {
+    const options = { now: NOW, schedule: SCHEDULE, compactReadings };
+    const undated = forecastQuota([...reads, ...redraws(false)], options);
+    const dated = forecastQuota([...reads, ...redraws(true)], options);
+    // Use since the fetch is caught up from the first redraw, not the week's start…
+    assert.ok(Math.abs(undated.estimatedCurrentRemaining - dated.estimatedCurrentRemaining) < 0.1,
+      `${undated.estimatedCurrentRemaining} vs ${dated.estimatedCurrentRemaining}`);
+    // …but only a known fetch makes the figure current.
+    assert.ok(dated.staleHours < 1.1, `dated ${dated.staleHours}`);
+    assert.ok(Math.abs(undated.staleHours - (Date.parse(NOW) - (Date.parse(RESET) - 7 * 24 * HOUR)) / HOUR) < 1e-6,
+      `undated ${undated.staleHours}`);
   }
 });
 
@@ -398,6 +425,30 @@ function cardStore() {
   });
   return { store, now, record };
 }
+
+test('a status-line reading keeps its fetch when imported again, but another session’s redraw never inherits it', () => {
+  const { store, now, record } = cardStore();
+  const stored = (at) => store.prepare(`SELECT used_percent, fetched_after, seen_since FROM quota_observations
+    WHERE bucket_id = 'seven_day' AND observed_at = ?`).get(new Date(at).toISOString());
+  try {
+    record(now - HOUR, 30, 'official-claude-usage');
+    // A working session fetched 31% just before this redraw; the same line
+    // read again from a re-read inbox can no longer be dated.
+    const at = now - 2 * MINUTE;
+    record(at, 31, 'official-statusline', at - 5_000, at);
+    record(at, 31, 'official-statusline');
+    assert.deepEqual({ ...stored(at) }, { used_percent: 31, fetched_after: new Date(at - 5_000).toISOString(), seen_since: new Date(at).toISOString() });
+    // In the same millisecond, a session first seen with limits in hand
+    // redraws the 12% it fetched days ago.
+    record(at, 12, 'official-statusline', null, at);
+    assert.deepEqual({ ...stored(at) }, { used_percent: 12, fetched_after: null, seen_since: new Date(at).toISOString() });
+    const quota = store.getQuota('claude', store.getSettings(), now);
+    assert.equal(quota.usedPercent, 30, 'the undated 12% is not a replenishment the working session fetched');
+    assert.equal(quota.provenance, 'official-claude-usage');
+  } finally {
+    store.close();
+  }
+});
 
 test('a card replaces a provider read with a lower status-line reading only when its session fetched it later', () => {
   const { store, now, record } = cardStore();

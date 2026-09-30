@@ -228,6 +228,17 @@ test('remaining tokens age from when the latest figure was fetched, not from a s
   assert.equal(fetched.remainingAsOf, iso(NOW + 24.5 * HOUR));
 });
 
+test('a redraw from a session first seen with limits in hand does not renew remaining tokens', () => {
+  // A day and an hour later, a session the helper never saw open redraws 40%:
+  // fetched at some point this week, perhaps before the last provider reading.
+  const undated = estimateTokenCapacity(fixture({ nowMs: NOW + 25 * HOUR, observations: [...fixture().observations,
+    observation(NOW + 25 * HOUR, 40, { provenance: 'official-statusline', plan_type: null, seen_since: iso(NOW + 25 * HOUR - 60_000) })] }));
+  assert.equal(undated.status, 'available');
+  assert.equal(undated.weeklyTokens, 10_000_000);
+  assert.equal(undated.remainingTokens, null, 'the figure is known only from the last provider reading, over a day ago');
+  assert.ok(undated.warnings.some((warning) => /over 24 hours old/.test(warning)));
+});
+
 test('an unconfirmed replenishment suppresses old official remaining even while its reset timestamp is unchanged', () => {
   const input = fixture();
   input.observations = input.observations.map((row, index) => ({ ...row, used_percent: 50 + index * 10,

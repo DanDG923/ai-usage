@@ -693,7 +693,9 @@ function uninstallClaudeHelper() {
 // Readings are judged as the card shows them: a lower status-line reading
 // that restates limits a session fetched earlier is held back there, so it
 // can make Claude neither current here nor a failed Refresh successful. Each
-// window is as recent as its evidence (`evidence_at`), not its latest redraw.
+// window is as recent as its evidence (`evidence_at`), not its latest redraw,
+// and a redraw from a session first seen with limits in hand is known only
+// from the start of the window it shows.
 function latestPlanUsageReading(store, nowMs, graceMs) {
   const rows = store.prepare(`SELECT id, bucket_id, observed_at, resets_at, window_minutes, used_percent, remaining_percent, provenance, fetched_after, seen_since
     FROM quota_observations WHERE source_id = 'claude' AND observed_at <= ? AND observed_at >= ? ORDER BY observed_at ASC, id ASC`)
@@ -714,8 +716,8 @@ function latestPlanUsageReading(store, nowMs, graceMs) {
     const planReadMs = planUsageRead ? Date.parse(planUsageRead.observed_at) : null;
     if (planReadMs != null) lastPlanUsageReadMs = Math.max(lastPlanUsageReadMs ?? -Infinity, planReadMs);
     if (accepted.length) {
-      latest.set(bucketId, { ...accepted.at(-1), evidence_at: new Date(latestEvidenceAt(accepted)).toISOString(),
-        own_evidence_at: new Date(evidenceTimes(accepted).at(-1)).toISOString(), plan_read_ms: planReadMs });
+      latest.set(bucketId, { ...accepted.at(-1), evidence_at: new Date(latestEvidenceAt(accepted, { known: true })).toISOString(),
+        own_evidence_at: new Date(evidenceTimes(accepted, { known: true }).at(-1)).toISOString(), plan_read_ms: planReadMs });
     }
   }
   // A window the latest plan-usage read did not return (a model or app limit

@@ -253,21 +253,22 @@ function getLastCurrentOfficial(store, nowMs) {
   // was read recently: a provider figure is dated by provider readings alone.
   const chosen = accepted.at(-1);
   const evidence = isProviderProvenance(chosen.provenance)
-    ? latestEvidenceAt(accepted.filter((row) => isProviderProvenance(row.provenance))) : Date.parse(chosen.observed_at);
+    ? latestEvidenceAt(accepted.filter((row) => isProviderProvenance(row.provenance)), { known: true }) : Date.parse(chosen.observed_at);
   // Its own fetch as well, for the Refresh fallback, which must not borrow an
   // earlier read's time.
   const latest = { ...chosen, evidence_at: new Date(evidence).toISOString(),
-    own_evidence_at: new Date(evidenceTimes(accepted).at(-1)).toISOString() };
+    own_evidence_at: new Date(evidenceTimes(accepted, { known: true }).at(-1)).toISOString() };
   const window = { row: latest, bucketId: latest.bucket_id, observedAt: latest.observed_at, resetsAt: latest.resets_at,
     windowMinutes: latest.window_minutes, provenance: latest.provenance, metadata: {} };
   return selectDisplayedWindows([window], { nowMs }).active[0]?.row ?? null;
 }
 
-// A stored reading's own fetch: a status-line redraw can re-record limits its
-// session fetched hours earlier. `own_evidence_at` when the caller judged it
-// among its window's readings; alone, an undated redraw is its own run.
+// A stored reading's own fetch, as far as it is known: a status-line redraw
+// can re-record limits its session fetched hours earlier, and an undated one
+// is known only from the start of its window. `own_evidence_at` when the
+// caller judged it among its window's readings.
 function ownFetchMs(row) {
-  return row.own_evidence_at ? Date.parse(row.own_evidence_at) : evidenceTimes([row])[0];
+  return row.own_evidence_at ? Date.parse(row.own_evidence_at) : evidenceTimes([row], { known: true })[0];
 }
 
 // The moment a stored reading's value is evidence of: `evidence_at` when the

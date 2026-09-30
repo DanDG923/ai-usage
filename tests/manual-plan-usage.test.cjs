@@ -885,7 +885,38 @@ test('an idle session first seen with limits in hand is not new evidence for a f
   const claude = source('claude');
   assert.equal(store.prepare('SELECT COUNT(*) AS count FROM quota_observations WHERE fetched_after IS NOT NULL').get().count, 0);
   assert.equal(claude.metadata.planUsage.lastRequest.succeeded, false, 'a redraw a minute ago shows no fetch that recent');
-  assert.equal(store.getQuota('claude', store.getSettings(), nowMs).evidenceAt, new Date(nowMs - 180 * MINUTE).toISOString());
+  // The limits are known to hold only from the start of the week they show.
+  assert.equal(store.getQuota('claude', store.getSettings(), nowMs).evidenceAt, new Date(nowMs - 4 * 1440 * MINUTE).toISOString());
+});
+
+test('an automatic collection does not count a session first seen with limits in hand as a recent read', async (t) => {
+  const { refreshClaude, created } = collectorWithPortSpy();
+  const { root, store, source } = collectorFixture(t);
+  const nowMs = Date.now() - 15 * MINUTE;
+  const weekReset = new Date(nowMs + 3 * 1440 * MINUTE).toISOString();
+  // The helper was just installed; an open session redraws the 20% it
+  // fetched at some point this week.
+  const inbox = path.join(root, 'inbox.jsonl');
+  const line = (at, session, apiMs, used) => JSON.stringify({ ai_usage_captured_at: new Date(at).toISOString(),
+    session_id: session, api_ms: apiMs, rate_limits: used == null ? null : { seven_day: { used_percentage: used, resets_at: weekReset } } });
+  fs.writeFileSync(inbox, `${line(nowMs - 30_000, 'already-open', 9_000, 20)}\n`);
+  await refreshClaude(store, inbox, { activityReader: quietActivity, clock: () => new Date(nowMs) });
+  assert.equal(created.reduce((sum, port) => sum + port.reads, 0), 0, 'an automatic collection reads no plan usage');
+  let claude = source('claude');
+  assert.equal(claude.status, 'stale', 'a redraw thirty seconds ago proves no fetch this recent');
+  const weekStart = nowMs - 4 * 1440 * MINUTE;
+  assert.ok(claude.status_detail.includes(`(${readingLabel(weekStart)}) is still active but out of date`), claude.status_detail);
+  let card = store.getQuota('claude', store.getSettings(), nowMs);
+  assert.equal(card.evidenceAt, new Date(weekStart).toISOString());
+  assert.ok(card.forecast.staleHours > 95, `stale ${card.forecast.staleHours}`);
+
+  // A session seen opening dates its fetch, and that is a recent read.
+  fs.appendFileSync(inbox, `${line(nowMs + 30_000, 'new-session', 0, null)}\n${line(nowMs + 60_000, 'new-session', 1_200, 20)}\n`);
+  await refreshClaude(store, inbox, { activityReader: quietActivity, clock: () => new Date(nowMs + 90_000) });
+  claude = source('claude');
+  assert.equal(claude.status, 'connected');
+  card = store.getQuota('claude', store.getSettings(), nowMs + 90_000);
+  assert.equal(card.evidenceAt, new Date(nowMs + 30_000).toISOString());
 });
 
 test('a single redraw from a session first seen with limits in hand is not new evidence for a failed Refresh', async (t) => {

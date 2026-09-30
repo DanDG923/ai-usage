@@ -959,7 +959,12 @@ class UsageStore {
     // Values and provenance describe one reading and must be replaced together.
     // A generated estimate cannot displace a same-time official anchor. A
     // status-line line imported again (a re-read inbox) may no longer be
-    // datable; it keeps the date its first import found.
+    // datable; it keeps the date its first import found. Another session's
+    // redraw in the same millisecond is a different reading and never
+    // inherits a fetch that was not its own.
+    const sameStatusLineReading = `excluded.provenance = 'official-statusline' AND quota_observations.provenance = 'official-statusline'
+          AND excluded.used_percent IS quota_observations.used_percent AND excluded.resets_at IS quota_observations.resets_at
+          AND excluded.window_minutes IS quota_observations.window_minutes`;
     this.prepare(`
       INSERT INTO quota_observations(
         source_id, bucket_id, bucket_name, observed_at, used_percent, remaining_percent,
@@ -975,9 +980,9 @@ class UsageStore {
         provenance = excluded.provenance,
         confidence = excluded.confidence,
         metadata_json = excluded.metadata_json,
-        fetched_after = CASE WHEN excluded.provenance = 'official-statusline' AND quota_observations.provenance = 'official-statusline'
+        fetched_after = CASE WHEN ${sameStatusLineReading}
           THEN COALESCE(excluded.fetched_after, quota_observations.fetched_after) ELSE excluded.fetched_after END,
-        seen_since = CASE WHEN excluded.provenance = 'official-statusline' AND quota_observations.provenance = 'official-statusline'
+        seen_since = CASE WHEN ${sameStatusLineReading}
           THEN COALESCE(excluded.seen_since, quota_observations.seen_since) ELSE excluded.seen_since END
     `).run(
       observation.sourceId,
@@ -1228,7 +1233,7 @@ class UsageStore {
         observedAt: latest.observed_at,
         // When this value was last known to hold. A status-line redraw is
         // recorded now but may carry limits its session fetched hours ago.
-        evidenceAt: iso(latestEvidenceAt(observations)),
+        evidenceAt: iso(latestEvidenceAt(observations, { known: true })),
         usedPercent: latest.used_percent,
         remainingPercent: latest.remaining_percent,
         resetsAt: latest.resets_at,

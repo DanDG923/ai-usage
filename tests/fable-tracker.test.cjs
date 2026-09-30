@@ -216,6 +216,30 @@ test('a status-line fallback whose fetch is unknown does not stand in for a fail
   assert.notEqual(result.health.officialSource, 'connected');
 }));
 
+test('an automatic refresh does not count a redraw whose fetch is unknown as a recent reading', async () => withStore(async (store) => {
+  const record = (observedAt, bounds) => store.recordObservation({
+    sourceId: 'claude-fable', bucketId: 'fable_seven_day', bucketName: 'Fable 5 weekly',
+    observedAt, usedPercent: 47, resetsAt: RESET, windowMinutes: 10_080, planType: 'max', provenance: 'official-statusline', ...bounds,
+  });
+  const automatic = () => createFableUsageTracker({
+    store, clock: () => new Date(NOW), usagePort: null,
+    activityReader: { import: async () => ({ filesFound: 0, usageEvents: 0, fableEvents: 0 }) },
+  }).refresh();
+  // First seen with limits in hand a minute ago: fetched at some point this week.
+  record('2026-08-30T17:59:00.000Z', { seenSince: '2026-08-30T17:59:00.000Z' });
+  let result = await automatic();
+  assert.equal(result.health.state, 'stale');
+  assert.equal(result.health.officialSource, 'not-requested');
+  assert.equal(result.allowance.evidenceAt, new Date(Date.parse(RESET) - 7 * 24 * 60 * 60 * 1000).toISOString());
+
+  // A session seen opening dates the same figure's fetch.
+  record('2026-08-30T17:59:30.000Z', { fetchedAfter: '2026-08-30T17:58:40.000Z' });
+  result = await automatic();
+  assert.equal(result.health.state, 'current');
+  assert.equal(result.health.officialSource, 'connected');
+  assert.equal(result.allowance.evidenceAt, '2026-08-30T17:58:40.000Z');
+}));
+
 test('invalid provider schema fails closed instead of fabricating a Fable percentage', async () => withStore(async (store) => {
   const tracker = createFableUsageTracker({
     store,

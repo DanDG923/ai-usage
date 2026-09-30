@@ -78,7 +78,7 @@ function excludedIntervals(dates) {
   return (before, after) => ranges.some((range) => range.start <= after && range.end > before);
 }
 
-function normalizeObservation(row, sourceId, bucketId, scope, nowMs, evidence) {
+function normalizeObservation(row, sourceId, bucketId, scope, nowMs, evidence, known) {
   if (!row || row.source_id !== sourceId || row.bucket_id !== bucketId || row.window_minutes !== 10_080) return null;
   const prepared = normaliseObservation(row);
   const at = prepared.observedAt, reset = prepared.resetsAt, used = row.used_percent;
@@ -92,7 +92,7 @@ function normalizeObservation(row, sourceId, bucketId, scope, nowMs, evidence) {
     || (sourceId === 'codex' && metadata.limitId != null && metadata.limitId !== 'codex')) return null;
   return { at, reset, used, plan: typeof row.plan_type === 'string' ? row.plan_type.trim().toLowerCase() || null : null,
     official: OFFICIAL_PROVENANCES.has(row.provenance), manual: row.provenance === 'manual-official',
-    provenance: row.provenance, evidence: Math.min(at, evidence.get(row) ?? at) };
+    provenance: row.provenance, evidence: Math.min(at, evidence.get(row) ?? at), known: Math.min(at, known.get(row) ?? at) };
 }
 
 function normalizeEvent(row, scope, nowMs) {
@@ -167,8 +167,10 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
   const ordered = (Array.isArray(observations) ? observations : []).filter((row) => row && typeof row === 'object')
     .sort((a, b) => (normaliseObservation(a).observedAt || 0) - (normaliseObservation(b).observedAt || 0));
   const evidence = new Map(evidenceTimes(ordered).map((at, index) => [ordered[index], at]));
+  // How current each figure is known to be, which decides whether it is fresh.
+  const known = new Map(evidenceTimes(ordered, { known: true }).map((at, index) => [ordered[index], at]));
   const allReadings = (Array.isArray(observations) ? observations : [])
-    .map((row) => normalizeObservation(row, sourceId, bucketId, scope, nowMs, evidence)).filter(Boolean)
+    .map((row) => normalizeObservation(row, sourceId, bucketId, scope, nowMs, evidence, known)).filter(Boolean)
     .map((row) => {
       // A share of the allowance in force when the figure was fetched.
       const scale = scaler ? scaler(row.evidence) : 1;
@@ -358,7 +360,7 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
   // a status-line redraw re-records limits its session fetched earlier, unless
   // a newer reading of the same window shows the same figure.
   const evidenceAt = readings.reduce((latest, row) => (Math.abs(row.reset - latestOfficial.reset) <= RESET_TOLERANCE_MS
-    && Math.abs(row.used - latestOfficial.used) <= 0.5 ? Math.max(latest, row.evidence) : latest), latestOfficial.evidence);
+    && Math.abs(row.used - latestOfficial.used) <= 0.5 ? Math.max(latest, row.known) : latest), latestOfficial.known);
   if (unconfirmedRebase) result.warnings.push('A newer non-official reading suggests the allowance was reset; remaining tokens need a fresh official reading.');
   else if (!currentMatches) result.warnings.push('The current allowance window has no matching official reading; remaining tokens are unavailable.');
   else if (latestOfficial.reset <= nowMs) result.warnings.push('The latest official allowance has expired; remaining tokens need a fresh reading.');
