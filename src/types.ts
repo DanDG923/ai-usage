@@ -112,6 +112,12 @@ export type QuotaWindow = {
   bucketId: string;
   bucketName: string;
   observedAt: string;
+  /**
+   * When the value was last known to hold. A status-line redraw is observed
+   * when it is drawn but can carry limits its session fetched hours earlier.
+   * Absent from older snapshots, where it is the observation time.
+   */
+  evidenceAt?: string;
   usedPercent: number;
   remainingPercent: number;
   resetsAt: string;

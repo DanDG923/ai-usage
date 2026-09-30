@@ -866,8 +866,11 @@ export function ProviderDetail({
               <Row label="Reading">{provenanceLabel(view.provenance)}</Row>
               <Row label="Last reading">
                 {view.current ? (
-                  <time dateTime={view.current.observedAt} title={shortDate(view.current.observedAt)}>
-                    {relativeTime(view.current.observedAt, nowMs)}
+                  <time
+                    dateTime={view.current.evidenceAt ?? view.current.observedAt}
+                    title={shortDate(view.current.evidenceAt ?? view.current.observedAt)}
+                  >
+                    {relativeTime(view.current.evidenceAt ?? view.current.observedAt, nowMs)}
                   </time>
                 ) : (
                   'None yet'

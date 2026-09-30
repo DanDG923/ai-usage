@@ -1,6 +1,7 @@
 'use strict';
 
 const { createAllowanceScaler } = require('./allowance-changes.cjs');
+const { freshnessLimitHours } = require('./dashboard-decision.cjs');
 const { OFFICIAL_PROVENANCES, isOfficialProvenance } = require('./quota-provenance.mjs');
 const { MAX_QUOTA_RESET_AHEAD_MS, QUOTA_CLOCK_SKEW_MS, FORECAST_LOOKBACK_MS, validQuotaTime } = require('./quota-time.cjs');
 
@@ -279,9 +280,13 @@ function normaliseObservation(row) {
   if (row[NORMALISED]) return row;
   if (row[PREPARED]) return row[PREPARED];
   const windowMinutes = row.windowMinutes ?? row.window_minutes;
+  const fetchedAfter = row.fetchedAfter ?? row.fetched_after;
   return {
     [NORMALISED]: true,
     observedAt: new Date(row.observedAt ?? row.observed_at).getTime(),
+    // The earliest moment a status-line reading's limits can have been
+    // fetched; null for a provider read or a reading the collector could not date.
+    fetchedAfter: fetchedAfter == null ? null : new Date(fetchedAfter).getTime(),
     resetsAt: new Date(row.resetsAt ?? row.resets_at).getTime(),
     usedPercent: Number(row.usedPercent ?? row.used_percent),
     remainingPercent: Number(row.remainingPercent ?? row.remaining_percent),
@@ -385,23 +390,53 @@ function restatesSessionLimits(row) {
   return row.provenance === 'official-statusline';
 }
 
-// A status-line reading lower than the provider's last fresh read for the same
-// reset is either a session restating limits it fetched earlier or the first
-// sign of an early replenishment. Left in, stale restatements read as a
-// replenishment followed by the same usage spent again: one 12% rise was
-// learned eight times over as late-night use. The provider's next fresh read
-// tells the two apart. If it still shows the earlier usage, nothing was
-// replenished and the lower reading was stale; if it shows the drop as well,
-// the replenishment was real and the status line saw it first. Until that read
-// arrives the lower reading is held back, but only while the provider can
-// still be expected to answer. Once it has been silent for the grace period,
-// the status line is the best evidence left, so a genuine early reset still
-// reaches the card. Readings must be in time order; status-line readings
-// before any fresh read are kept because nothing yet shows them to be stale.
+// The moment a reading's value is evidence of. A status-line reading carries
+// the limits its session last fetched, so the collector dates it by that fetch
+// where it can; the redraw that recorded it proves nothing newer. A provider
+// read, or a status-line reading that could not be dated, stands for itself.
+function evidenceTimeOf(row) {
+  return restatesSessionLimits(row) && Number.isFinite(row.fetchedAfter) ? row.fetchedAfter : row.observedAt;
+}
+
+// When the latest reading's value was last known to hold: the newest evidence
+// among the readings of its window that show the same value. An idle session
+// redrawing a value it fetched hours ago is only as current as that fetch,
+// unless a newer read agrees with it. Readings must be in time order.
+function latestEvidenceAt(rows) {
+  const parsed = rows.map(normaliseObservation);
+  const current = parsed.at(-1);
+  if (!current) return null;
+  let at = evidenceTimeOf(current);
+  for (const row of parsed) {
+    if (Math.abs(row.resetsAt - current.resetsAt) <= RESET_TOLERANCE_MS
+      && Math.abs(usedPercentOf(row) - usedPercentOf(current)) <= STALE_RESTATEMENT_MARGIN) {
+      at = Math.max(at, evidenceTimeOf(row));
+    }
+  }
+  return Math.min(at, current.observedAt);
+}
+
+// A status-line reading lower than newer evidence for the same reset is either
+// a session restating limits it fetched earlier or the first sign of an early
+// replenishment. Left in, stale restatements read as a replenishment followed
+// by the same usage spent again: one 12% rise was learned eight times over as
+// late-night use, and an idle session's 1% replaced a 13% provider read on the
+// card until the next Refresh.
+// A dated reading is judged by its fetch. Fetched after the newest evidence,
+// it is the newest evidence, a drop included, so an early replenishment a
+// working session sees reaches the card at once. Fetched before, it stands
+// only where it agrees with what is known since. When the two fetches cannot
+// be ordered, a higher value is the later use and a lower one is held back.
+// An undated reading (from a helper that did not record sessions) waits for
+// the provider's next read to confirm or contradict it. It is believed without
+// one only after the provider has been silent past the window's freshness
+// limit, when the card already calls the provider's reading out of date.
+// Readings must be in time order; readings before any evidence are kept
+// because nothing yet shows them to be stale.
 const STALE_RESTATEMENT_MARGIN = 0.5;
 const FRESH_READ_GRACE_MS = 2 * HOUR_MS;
-// How long a lower status-line reading waits for the provider's next read to
-// confirm or contradict it: two refreshes, and never less than two hours.
+// The least an undated lower reading waits for the provider's next read: two
+// refreshes, and never less than two hours.
 function freshReadGraceFor(settings) {
   const minutes = Number(settings.refreshIntervalMinutes);
   return Math.max(FRESH_READ_GRACE_MS, minutes > 0 ? 2 * minutes * 60_000 : 0);
@@ -414,18 +449,41 @@ function withoutStaleRestatements(rows, { nowMs = Date.now(), freshReadGraceMs =
     if (!restatesSessionLimits(parsed[index])) next = parsed[index];
   }
   let fresh = null;
+  // The newest evidence so far, and the span its fetch is known to lie in.
+  let newest = null;
+  // Every redraw of one fetch carries its date. The first of them bounds the
+  // fetch from above; the later ones were recorded after it anyway.
+  const firstCarrier = new Map();
   return rows.filter((row, index) => {
     const reading = parsed[index];
+    const used = usedPercentOf(reading);
     if (!restatesSessionLimits(reading)) {
       fresh = reading;
+      newest = { reading, from: reading.observedAt, to: reading.observedAt };
       return true;
     }
     const sameReset = (other) => other && Math.abs(other.resetsAt - reading.resetsAt) <= RESET_TOLERANCE_MS;
+    if (Number.isFinite(reading.fetchedAfter)) {
+      if (!firstCarrier.has(reading.fetchedAfter)) firstCarrier.set(reading.fetchedAfter, reading.observedAt);
+      const own = { reading, from: reading.fetchedAfter, to: firstCarrier.get(reading.fetchedAfter) };
+      if (!newest || own.from > newest.to) {
+        newest = own;
+        return true;
+      }
+      const newestUsed = usedPercentOf(newest.reading);
+      if (own.to < newest.from) return sameReset(newest.reading) && Math.abs(used - newestUsed) <= STALE_RESTATEMENT_MARGIN;
+      if (!sameReset(newest.reading) || used > newestUsed + STALE_RESTATEMENT_MARGIN) {
+        newest = own;
+        return true;
+      }
+      return used >= newestUsed - STALE_RESTATEMENT_MARGIN;
+    }
     const freshUsed = fresh && usedPercentOf(fresh);
-    if (!sameReset(fresh) || usedPercentOf(reading) >= freshUsed - STALE_RESTATEMENT_MARGIN) return true;
+    if (!sameReset(fresh) || used >= freshUsed - STALE_RESTATEMENT_MARGIN) return true;
     const after = nextFresh[index];
     if (after) return sameReset(after) && usedPercentOf(after) < freshUsed - STALE_RESTATEMENT_MARGIN;
-    return nowMs - fresh.observedAt > freshReadGraceMs;
+    const graceMs = Math.max(freshReadGraceMs, freshnessLimitHours({ windowMinutes: reading.windowMinutes }) * HOUR_MS);
+    return nowMs - fresh.observedAt > graceMs;
   });
 }
 
@@ -840,7 +898,11 @@ function forecastQuotaWithLearning(observations, options = {}, dayWeights = null
   const visibleRows = firstVisible < 0 ? currentCluster.rows.slice(-1) : currentCluster.rows.slice(Math.max(0, firstVisible - 1));
   const observed = visibleRows
     .map((row) => ({ at: row.observedAt, remaining: clamp(Number.isFinite(row.remainingPercent) ? row.remainingPercent : 100 - row.usedPercent, 0, 100) }));
-  const staleHours = Math.max(0, (nowMs - current.observedAt) / HOUR_MS);
+  // The current value is as old as its evidence, not its latest redraw. The
+  // caller may have measured that before compacting away a newer read.
+  const evidenceMs = options.evidence?.observedAt === current.observedAt && Number.isFinite(options.evidence.at)
+    ? Math.min(options.evidence.at, current.observedAt) : latestEvidenceAt(normalised);
+  const staleHours = Math.max(0, (nowMs - evidenceMs) / HOUR_MS);
   if (!Number.isFinite(resetMs) || resetMs <= nowMs) return unknownForecast({ expired: true, observed, staleHours });
 
   const remaining = Number.isFinite(current.remainingPercent) ? current.remainingPercent : 100 - current.usedPercent;
@@ -856,11 +918,11 @@ function forecastQuotaWithLearning(observations, options = {}, dayWeights = null
   }
   const { samples, modelSamples, rates, sustainableOffSchedulePace, recent, globalRate, anchor, windowPace } = model;
 
-  const catchUp = buildSeries(remaining, remaining, current.observedAt, nowMs, schedule, samples, rates);
+  const catchUp = buildSeries(remaining, remaining, evidenceMs, nowMs, schedule, samples, rates);
   if (!catchUp) return unknownForecast({ observed, staleHours });
   const estimatedCurrent = catchUp.expected.at(-1)?.remaining ?? remaining;
   const heavyCurrent = catchUp.heavy.at(-1)?.remaining ?? remaining;
-  const future = buildSeries(estimatedCurrent, heavyCurrent, nowMs, resetMs, schedule, samples, rates, current.observedAt);
+  const future = buildSeries(estimatedCurrent, heavyCurrent, nowMs, resetMs, schedule, samples, rates, evidenceMs);
   if (!future) return unknownForecast({ observed, staleHours });
   const expectedRemaining = future.expected.at(-1)?.remaining ?? estimatedCurrent;
   const heavyRemaining = future.heavy.at(-1)?.remaining ?? heavyCurrent;
@@ -1041,18 +1103,22 @@ function forecastQuota(observations, options = {}) {
   const nowMs = options.now != null ? new Date(options.now).getTime() : Date.now();
   let normalised = withoutStaleRestatements(rescaleObservations(observations.map(normaliseObservation), options)
     .sort((a, b) => a.observedAt - b.observedAt), { nowMs, freshReadGraceMs: options.freshReadGraceMs });
+  let learningOptions = options;
   if (options.compactReadings) {
     normalised = normalised.filter((row) => validQuotaTime(row.observedAt, row.resetsAt, row.windowMinutes, nowMs))
       .sort((a, b) => a.observedAt - b.observedAt);
     const current = normalised.at(-1);
+    // A compacted run keeps its latest reading, which may redraw an older
+    // fetch than a reading the run drops, so the evidence is measured first.
+    if (current) learningOptions = { ...options, evidence: { observedAt: current.observedAt, at: latestEvidenceAt(normalised) } };
     normalised = collapseReadings(normalised.filter((row) => row === current || row.observedAt >= nowMs - FORECAST_LOOKBACK_MS), nowMs);
   }
   const rows = normalised;
-  const ordinary = forecastQuotaWithLearning(rows, options);
+  const ordinary = forecastQuotaWithLearning(rows, learningOptions);
   if (ordinary.expired || ordinary.expectedRemaining == null) return ordinary;
   const adjustment = earlyResetAdjustment(rows, options, nowMs);
   if (!adjustment) return ordinary;
-  const adjusted = forecastQuotaWithLearning(rows, options,
+  const adjusted = forecastQuotaWithLearning(rows, learningOptions,
     new Map(adjustment.dates.map((day) => [day, adjustment.weight])));
   // Normal-day expectations use the reduced influence. The heavier scenario
   // keeps the complete observed workload, and can never be more optimistic
@@ -1071,4 +1137,4 @@ function forecastQuota(observations, options = {}) {
     series: { ...adjusted.series, heavy }, resetAdjustment: adjustment };
 }
 
-module.exports = { activeHoursBetween, clusterByWindow, sameWindowDrift, normaliseObservation, prepareObservation, deriveLearningSamples, exhaustionTime, forecastQuota, forecastState, freshReadGraceFor, percentile, restatesSessionLimits, withoutStaleRestatements };
+module.exports = { activeHoursBetween, clusterByWindow, sameWindowDrift, normaliseObservation, prepareObservation, deriveLearningSamples, evidenceTimeOf, exhaustionTime, forecastQuota, forecastState, freshReadGraceFor, latestEvidenceAt, percentile, restatesSessionLimits, withoutStaleRestatements };

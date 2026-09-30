@@ -697,7 +697,7 @@ test('the helper doubles every PowerShell single-quote character in its inbox pa
 
 test('generated helper writes BOM-free UTF-8 and rotates before appending', () => {
   const helper = makeHelperScript('C:\\Temp\\ai-usage\\inbox.jsonl');
-  assert.match(helper, /AI_USAGE_HELPER_VERSION=1\.0\.4/);
+  assert.match(helper, /AI_USAGE_HELPER_VERSION=1\.0\.5/);
   assert.match(helper, /Move-Item/);
   assert.match(helper, /UTF8Encoding\(\$false\)/);
   assert.match(helper, /AppendAllText/);
@@ -705,7 +705,11 @@ test('generated helper writes BOM-free UTF-8 and rotates before appending', () =
   assert.match(helper, /\$safe\s*=\s*\[ordered\]@\{/);
   assert.match(helper, /\$line\s*=\s*\$safe\s*\|\s*ConvertTo-Json/);
   assert.doesNotMatch(helper, /\$line\s*=\s*\$data\s*\|\s*ConvertTo-Json/);
-  assert.doesNotMatch(helper, /session_id|transcript_path|workspace|cwd/i);
+  // The session id (a random id the transcript import already records) and
+  // the session's API time date each reading's fetch. Nothing else is kept.
+  assert.match(helper, /session_id = \$data\.session_id/);
+  assert.match(helper, /api_ms = \$data\.cost\.total_api_duration_ms/);
+  assert.doesNotMatch(helper, /transcript_path|workspace|cwd|total_cost|total_duration_ms/i);
 });
 
 test('distinct Fable allowance windows do not overwrite one another', () => {

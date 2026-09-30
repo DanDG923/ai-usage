@@ -9,6 +9,7 @@ const FABLE_BUCKET_ID = 'fable_seven_day';
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const { OFFICIAL_PROVENANCES, isProviderProvenance } = require('./quota-provenance.mjs');
 const { freshnessLimitHours } = require('./dashboard-decision.cjs');
+const { evidenceTimeOf, normaliseObservation } = require('./forecast.cjs');
 const { PROVIDER_WINDOW_DESCRIPTORS } = require('./claude-window-descriptors.cjs');
 
 function isRecord(value) {
@@ -248,12 +249,19 @@ function getLastCurrentOfficial(store, nowMs) {
   return selectDisplayedWindows([window], { nowMs }).active[0]?.row ?? null;
 }
 
+// The moment a stored reading's value is evidence of: `evidence_at` when the
+// caller measured it against the rest of the window, or else the reading's own
+// fetch (a status-line redraw can re-record limits fetched hours earlier).
+function readingEvidenceMs(row) {
+  return row.evidence_at ? Date.parse(row.evidence_at) : evidenceTimeOf(normaliseObservation(row));
+}
+
 // Whether a provider reading (the SDK or the status line, never a manual
 // entry) is recent enough to stand as current evidence on a refresh that did
 // not ask the provider. The rule is the dashboard verdict's own.
 function providerReadingFresh(row, nowMs) {
   if (!row || !isProviderProvenance(row.provenance)) return false;
-  const ageMs = nowMs - Date.parse(row.observed_at);
+  const ageMs = nowMs - readingEvidenceMs(row);
   return ageMs >= -QUOTA_CLOCK_SKEW_MS
     && ageMs <= freshnessLimitHours({ windowMinutes: row.window_minutes }) * 60 * 60 * 1000;
 }
@@ -385,11 +393,13 @@ function createFableUsageTracker({ store, usagePort, activityReader, clock = () 
     }
 
     const cached = getLastCurrentOfficial(store, nowMs);
+    // A redraw this refresh imported stands in for the provider only if its
+    // session fetched the limits in the last few minutes.
     const freshStatuslineFallback = Boolean(cached
       && fallbackObservedAt
       && cached.provenance === 'official-statusline'
       && cached.observed_at === fallbackObservedAt
-      && nowMs - Date.parse(fallbackObservedAt) <= 5 * 60_000
+      && nowMs - readingEvidenceMs(cached) <= 5 * 60_000
       && Date.parse(fallbackObservedAt) <= nowMs + QUOTA_CLOCK_SKEW_MS);
     let allowance;
     let officialSource;

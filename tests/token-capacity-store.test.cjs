@@ -150,9 +150,10 @@ test('token capacity follows a held-back status-line reading once the grace lets
     const settings = store.getSettings();
     const held = store.getQuota('claude', settings, start + 30 * 60_000);
     assert.equal(held.usedPercent, 40);
-    // Past the grace the card takes the lower reading with nothing written;
-    // the capacity beside it must agree with a store that never cached.
-    const later = start + 2 * HOUR + 5 * 60_000;
+    // The reading is undated, so it waits out the weekly window's freshness
+    // limit of a day. Then the card takes it with nothing written; the
+    // capacity beside it must agree with a store that never cached.
+    const later = start + 24 * HOUR + 5 * 60_000;
     const accepted = store.getQuota('claude', settings, later);
     assert.equal(accepted.usedPercent, 25);
     const uncached = new UsageStore(path.join(directory, 'usage.sqlite'), directory);

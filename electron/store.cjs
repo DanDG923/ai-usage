@@ -8,7 +8,7 @@ const { isOfficialWindow, selectDisplayedWindows } = require('./quota-selection.
 const { FABLE_BUCKET, FABLE_BUCKET_NAME, projectFableAllowance } = require('./fable-projection.cjs');
 const { applySharedPool } = require('./fable-shared-pool.cjs');
 const { codexQuotaLabel } = require('./codex-quota-label.cjs');
-const { forecastQuota, freshReadGraceFor, normaliseObservation, prepareObservation, clusterByWindow, withoutStaleRestatements } = require('./forecast.cjs');
+const { forecastQuota, freshReadGraceFor, latestEvidenceAt, normaliseObservation, prepareObservation, clusterByWindow, withoutStaleRestatements } = require('./forecast.cjs');
 const { TaskUsage } = require('./task-usage.cjs');
 const { estimateTokenCapacity, LOOKBACK_MS: TOKEN_CAPACITY_LOOKBACK_MS, STALENESS_MS: TOKEN_CAPACITY_STALENESS_MS } = require('./token-capacity.cjs');
 const { MAX_QUOTA_RESET_AHEAD_MS, QUOTA_CLOCK_SKEW_MS, FORECAST_LOOKBACK_MS, validQuotaTime } = require('./quota-time.cjs');
@@ -414,6 +414,7 @@ class UsageStore {
         provenance TEXT NOT NULL,
         confidence REAL NOT NULL DEFAULT 1,
         metadata_json TEXT NOT NULL DEFAULT '{}',
+        fetched_after TEXT,
         UNIQUE(source_id, bucket_id, observed_at),
         FOREIGN KEY(source_id) REFERENCES sources(id)
       );
@@ -470,6 +471,16 @@ class UsageStore {
         size_bytes INTEGER NOT NULL,
         imported_at TEXT NOT NULL
       );
+      -- Each Claude Code session the status-line helper has seen: its latest
+      -- redraw, and the fetch its limits came from, so the next redraw of the
+      -- same limits can be dated by that fetch rather than by itself.
+      CREATE TABLE IF NOT EXISTS statusline_sessions (
+        session_id TEXT PRIMARY KEY,
+        seen_at TEXT NOT NULL,
+        api_ms REAL,
+        limits_json TEXT NOT NULL DEFAULT '{}',
+        fetched_after TEXT
+      ) WITHOUT ROWID;
       CREATE TABLE IF NOT EXISTS backups (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         created_at TEXT NOT NULL,
@@ -488,6 +499,9 @@ class UsageStore {
     if (!usageColumns.has('project')) this.db.exec('ALTER TABLE usage_events ADD COLUMN project TEXT;');
     const importColumns = new Set(this.prepare('PRAGMA table_info(imported_files)').all().map((row) => row.name));
     if (!importColumns.has('state_json')) this.db.exec('ALTER TABLE imported_files ADD COLUMN state_json TEXT;');
+    // Earlier status-line readings stay undated; nothing recorded their fetch.
+    const quotaColumns = new Set(this.prepare('PRAGMA table_info(quota_observations)').all().map((row) => row.name));
+    if (!quotaColumns.has('fetched_after')) this.db.exec('ALTER TABLE quota_observations ADD COLUMN fetched_after TEXT;');
     if (!usageColumns.has('project')) {
       // Project attribution is read from the same local transcripts as the
       // token counts. Rescanning them once fills the new column in place.
@@ -914,6 +928,13 @@ class UsageStore {
     if (Math.abs(usedPercent + remainingPercent - 100) > 0.1) {
       throw new Error('Usage and remaining percentages must sum to 100.');
     }
+    // Only a status-line reading is dated by the fetch its session made; see
+    // the Claude inbox import. Every other reading is evidence of its own time.
+    let fetchedAfter = null;
+    if (observation.fetchedAfter != null && provenance === 'official-statusline') {
+      fetchedAfter = validIso(observation.fetchedAfter, 'Fetch time');
+      if (Date.parse(fetchedAfter) > Date.parse(observedAt)) throw new Error('Limits cannot be fetched after the reading that shows them.');
+    }
     if (observation.sourceId === 'codex' && observation.bucketId !== 'codex:weekly'
       && Number(observation.windowMinutes || 0) >= 10_000
       && observation.metadata?.limitId === 'codex'
@@ -924,12 +945,14 @@ class UsageStore {
         WHERE source_id = 'codex' AND bucket_id IN ('manual-weekly', 'codex:weekly')`).run();
     }
     // Values and provenance describe one reading and must be replaced together.
-    // A generated estimate cannot displace a same-time official anchor.
+    // A generated estimate cannot displace a same-time official anchor. A
+    // status-line line imported again (a re-read inbox) may no longer be
+    // datable; it keeps the date its first import found.
     this.prepare(`
       INSERT INTO quota_observations(
         source_id, bucket_id, bucket_name, observed_at, used_percent, remaining_percent,
-        resets_at, window_minutes, plan_type, provenance, confidence, metadata_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        resets_at, window_minutes, plan_type, provenance, confidence, metadata_json, fetched_after
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(source_id, bucket_id, observed_at) DO UPDATE SET
         bucket_name = excluded.bucket_name,
         used_percent = excluded.used_percent,
@@ -939,7 +962,9 @@ class UsageStore {
         plan_type = excluded.plan_type,
         provenance = excluded.provenance,
         confidence = excluded.confidence,
-        metadata_json = excluded.metadata_json
+        metadata_json = excluded.metadata_json,
+        fetched_after = CASE WHEN excluded.provenance = 'official-statusline' AND quota_observations.provenance = 'official-statusline'
+          THEN COALESCE(excluded.fetched_after, quota_observations.fetched_after) ELSE excluded.fetched_after END
     `).run(
       observation.sourceId,
       observation.bucketId,
@@ -953,6 +978,7 @@ class UsageStore {
       provenance || 'official',
       confidence,
       JSON.stringify(observation.metadata || {}),
+      fetchedAfter,
     );
     this.prepare(`UPDATE sources SET last_observation_at = ?
       WHERE id = ? AND (last_observation_at IS NULL OR last_observation_at < ?)`)
@@ -1185,6 +1211,9 @@ class UsageStore {
             ? FABLE_BUCKET_NAME
             : latest.bucket_name || bucketId,
         observedAt: latest.observed_at,
+        // When this value was last known to hold. A status-line redraw is
+        // recorded now but may carry limits its session fetched hours ago.
+        evidenceAt: iso(latestEvidenceAt(observations)),
         usedPercent: latest.used_percent,
         remainingPercent: latest.remaining_percent,
         resetsAt: latest.resets_at,
@@ -2328,8 +2357,8 @@ class UsageStore {
     const insertObservation = this.prepare(`
       INSERT OR IGNORE INTO quota_observations(
         source_id, bucket_id, bucket_name, observed_at, used_percent, remaining_percent,
-        resets_at, window_minutes, plan_type, provenance, confidence, metadata_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        resets_at, window_minutes, plan_type, provenance, confidence, metadata_json, fetched_after
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const insertEvent = this.prepare(`
       INSERT INTO usage_events(
@@ -2447,11 +2476,16 @@ class UsageStore {
             ? null : typeof row.plan_type === 'string' ? row.plan_type : null;
           const metadata = quotaMetadata(row.metadata_json ?? {});
           if (!metadata) throw unreadable();
+          // A backup from before readings were dated, or an unusable date,
+          // restores the reading undated rather than not at all.
+          const fetchedMs = provenance === 'official-statusline' && typeof row.fetched_after === 'string'
+            ? Date.parse(row.fetched_after) : Number.NaN;
+          const fetchedAfter = Number.isFinite(fetchedMs) && fetchedMs <= Date.parse(observedAt) ? iso(fetchedMs) : null;
           counts.observations += insertObservation.run(
             row.source_id, row.bucket_id, typeof row.bucket_name === 'string' ? row.bucket_name : null,
             observedAt, usedPercent, remainingPercent, resetsAt,
             windowMinutes, planType, provenance, confidence,
-            JSON.stringify(metadata),
+            JSON.stringify(metadata), fetchedAfter,
           ).changes;
         } catch (error) {
           // Database errors may roll back the transaction. Continuing after

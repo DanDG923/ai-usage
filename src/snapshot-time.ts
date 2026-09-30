@@ -75,7 +75,10 @@ export function snapshotAtTime(snapshot: Snapshot, nowMs: number): Snapshot {
       forecast: {
         ...entry.forecast,
         expired: entry.forecast.expired || Date.parse(entry.resetsAt) <= nowMs,
-        staleHours: Math.max(entry.forecast.staleHours ?? 0, (nowMs - Date.parse(entry.observedAt)) / 3_600_000),
+        staleHours: Math.max(
+          entry.forecast.staleHours ?? 0,
+          (nowMs - Date.parse(entry.evidenceAt ?? entry.observedAt)) / 3_600_000,
+        ),
       },
     };
   };
