@@ -486,7 +486,9 @@ function latestEvidenceAt(rows, options = {}) {
 // newest evidence, whether a provider read or a dated session's fetch. A
 // lower one waits for the provider's next read to confirm or contradict it,
 // and is believed without one only once that evidence is past the window's
-// freshness limit, when the card already calls it out of date.
+// freshness limit, when the card already calls it out of date. So does one
+// showing an earlier window than a read or a dated fetch: it may restate the
+// window an early replenishment replaced as well as show a corrected reset.
 // Readings must be in time order; readings before any evidence are kept
 // because nothing yet shows them to be stale.
 const STALE_RESTATEMENT_MARGIN = 0.5;
@@ -558,8 +560,17 @@ function withoutStaleRestatements(rows, { nowMs = Date.now(), freshReadGraceMs =
     const newestUsed = newest && usedPercentOf(newest.reading);
     const undated = () => ({ reading, from: -Infinity,
       to: Number.isFinite(reading.seenSince) ? Math.min(reading.seenSince, reading.observedAt) : reading.observedAt });
+    // Held back until the provider's next read confirms or contradicts it.
+    const confirmedLater = (confirms) => {
+      const after = nextFresh[index];
+      if (after) return confirms(after);
+      const graceMs = Math.max(freshReadGraceMs, freshnessLimitHours({ windowMinutes: reading.windowMinutes }) * HOUR_MS);
+      return nowMs - newest.to > graceMs;
+    };
     if (newest && !sameReset(newest.reading)) {
       if (endedBefore(newest.reading)) return false;
+      // Two undated readings cannot be ordered either, so the later redraw stands.
+      if (reading.resetsAt < newest.reading.resetsAt && Number.isFinite(newest.from)) return confirmedLater(sameReset);
       newest = undated();
       return true;
     }
@@ -568,10 +579,7 @@ function withoutStaleRestatements(rows, { nowMs = Date.now(), freshReadGraceMs =
       return true;
     }
     if (used >= newestUsed - STALE_RESTATEMENT_MARGIN) return true;
-    const after = nextFresh[index];
-    if (after) return sameReset(after) && usedPercentOf(after) < newestUsed - STALE_RESTATEMENT_MARGIN;
-    const graceMs = Math.max(freshReadGraceMs, freshnessLimitHours({ windowMinutes: reading.windowMinutes }) * HOUR_MS);
-    return nowMs - newest.to > graceMs;
+    return confirmedLater((after) => sameReset(after) && usedPercentOf(after) < newestUsed - STALE_RESTATEMENT_MARGIN);
   });
 }
 

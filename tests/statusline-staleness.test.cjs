@@ -218,6 +218,26 @@ test('undated sessions redrawing different figures each keep their own first red
   }
 });
 
+test('an undated redraw of the window an early replenishment replaced does not return to the card', () => {
+  const inWindow = (at, used, provenance, resetsAt) => ({ ...reading(at, used, provenance), resetsAt });
+  const oldReset = '2026-09-24T08:00:00.000Z';
+  const newReset = '2026-09-30T10:00:00.000Z';
+  // A Refresh reads 60% of a week ending tomorrow; the next reads 1% of a new
+  // week, replenished early; an idle session then redraws the old 60%.
+  const replenished = [inWindow('2026-09-23T08:00:00.000Z', 60, 'official-claude-usage', oldReset),
+    inWindow('2026-09-23T10:00:00.000Z', 1, 'official-claude-usage', newReset),
+    inWindow('2026-09-23T11:00:00.000Z', 60, 'official-statusline', oldReset)];
+  const nowMs = Date.parse('2026-09-23T11:30:00.000Z');
+  assert.deepEqual(times(withoutStaleRestatements(replenished, { nowMs })), [['08:00', 60], ['10:00', 1]]);
+  // A reset corrected to the earlier time is kept once a read confirms it.
+  const corrected = [...replenished, inWindow('2026-09-23T11:15:00.000Z', 2, 'official-claude-usage', oldReset)];
+  assert.deepEqual(times(withoutStaleRestatements(corrected, { nowMs })), [['08:00', 60], ['10:00', 1], ['11:00', 60], ['11:15', 2]]);
+  // Two undated readings cannot be ordered, so the later redraw still stands.
+  const undated = [inWindow('2026-09-23T10:00:00.000Z', 1, 'official-statusline', newReset),
+    inWindow('2026-09-23T11:00:00.000Z', 60, 'official-statusline', oldReset)];
+  assert.equal(withoutStaleRestatements(undated, { nowMs }).length, 2);
+});
+
 test('an early replenishment a session fetched starts the new window at that fetch, not its redraw', () => {
   // A Refresh read 40%; the allowance was then replenished early. A working
   // session idle since 09:00 fetched the new 1% and redrew it at 12:00.
