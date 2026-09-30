@@ -256,6 +256,23 @@ test('an undated redraw of the window an early replenishment replaced does not r
   assert.equal(withoutStaleRestatements(undated, { nowMs }).length, 2);
 });
 
+test('a dated redraw of the replaced window, fetched around the read of the new one, waits for a read', () => {
+  const inWindow = (at, used, provenance, resetsAt, bounds = {}) => ({ ...reading(at, used, provenance), resetsAt, ...bounds });
+  const oldReset = '2026-09-24T08:00:00.000Z';
+  const newReset = '2026-09-30T10:00:00.000Z';
+  // A session last redrew at 09:55, fetched the old week's 60% at some point
+  // before its 10:30 redraw; a Refresh at 10:00 read 1% of a new week.
+  const replenished = [inWindow('2026-09-23T08:00:00.000Z', 60, 'official-claude-usage', oldReset),
+    inWindow('2026-09-23T10:00:00.000Z', 1, 'official-claude-usage', newReset),
+    inWindow('2026-09-23T10:30:00.000Z', 60, 'official-statusline', oldReset,
+      { fetchedAfter: '2026-09-23T09:55:00.000Z', seenSince: '2026-09-23T10:30:00.000Z' })];
+  const nowMs = Date.parse('2026-09-23T11:00:00.000Z');
+  assert.deepEqual(times(withoutStaleRestatements(replenished, { nowMs })), [['08:00', 60], ['10:00', 1]]);
+  // A read of the earlier reset confirms it was corrected.
+  const corrected = [...replenished, inWindow('2026-09-23T10:45:00.000Z', 61, 'official-claude-usage', oldReset)];
+  assert.deepEqual(times(withoutStaleRestatements(corrected, { nowMs })), [['08:00', 60], ['10:00', 1], ['10:30', 60], ['10:45', 61]]);
+});
+
 test('an early replenishment a session fetched starts the new window at that fetch, not its redraw', () => {
   // A Refresh read 40%; the allowance was then replenished early. A working
   // session idle since 09:00 fetched the new 1% and redrew it at 12:00.

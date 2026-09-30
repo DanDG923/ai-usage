@@ -541,6 +541,14 @@ function withoutStaleRestatements(rows, { nowMs = Date.now(), freshReadGraceMs =
     // This reading's window had already ended when it was drawn, and newer
     // evidence shows the window after it.
     const endedBefore = (other) => reading.resetsAt < other.resetsAt && reading.resetsAt <= reading.observedAt;
+    // Held back until the provider's next read confirms or contradicts it, or
+    // until the newest evidence is past the window's freshness limit.
+    const confirmedLater = (confirms) => {
+      const after = nextFresh[index];
+      if (after) return confirms(after);
+      const graceMs = Math.max(freshReadGraceMs, freshnessLimitHours({ windowMinutes: reading.windowMinutes }) * HOUR_MS);
+      return nowMs - newest.to > graceMs;
+    };
     if (Number.isFinite(reading.fetchedAfter)) {
       if (!firstCarrier.has(reading.fetchedAfter)) firstCarrier.set(reading.fetchedAfter, reading.observedAt);
       const own = { reading, from: reading.fetchedAfter,
@@ -553,9 +561,11 @@ function withoutStaleRestatements(rows, { nowMs = Date.now(), freshReadGraceMs =
       if (own.to < newest.from) return sameReset(newest.reading) && Math.abs(used - newestUsed) <= STALE_RESTATEMENT_MARGIN;
       // Around a reset, a redraw can still carry the window that just ended;
       // of two fetches from around the same time, the later window is newer.
-      // A reset corrected to an earlier time still ahead is not an ended window.
+      // An earlier one still ahead may be a corrected reset or the window an
+      // early replenishment replaced, so it waits for a read as undated ones do.
       if (!sameReset(newest.reading)) {
         if (endedBefore(newest.reading)) return false;
+        if (reading.resetsAt < newest.reading.resetsAt) return confirmedLater(sameReset);
         newest = own;
         return true;
       }
@@ -578,13 +588,6 @@ function withoutStaleRestatements(rows, { nowMs = Date.now(), freshReadGraceMs =
     const newestUsed = newest && usedPercentOf(newest.reading);
     const undated = () => ({ reading, from: -Infinity,
       to: Number.isFinite(reading.seenSince) ? Math.min(reading.seenSince, reading.observedAt) : reading.observedAt });
-    // Held back until the provider's next read confirms or contradicts it.
-    const confirmedLater = (confirms) => {
-      const after = nextFresh[index];
-      if (after) return confirms(after);
-      const graceMs = Math.max(freshReadGraceMs, freshnessLimitHours({ windowMinutes: reading.windowMinutes }) * HOUR_MS);
-      return nowMs - newest.to > graceMs;
-    };
     if (newest && !sameReset(newest.reading)) {
       if (endedBefore(newest.reading)) return false;
       // Two undated readings cannot be ordered either, so the later redraw stands.
