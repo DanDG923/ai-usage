@@ -476,7 +476,11 @@ function withoutStaleRestatements(rows, { nowMs = Date.now(), freshReadGraceMs =
         newest = own;
         return true;
       }
-      return used >= newestUsed - STALE_RESTATEMENT_MARGIN;
+      if (used < newestUsed - STALE_RESTATEMENT_MARGIN) return false;
+      // An agreeing fetch from around the same time shows the value held as
+      // late as either fetch, so a drop must be newer than both to count.
+      newest = { reading: newest.reading, from: Math.max(newest.from, own.from), to: Math.max(newest.to, own.to) };
+      return true;
     }
     const freshUsed = fresh && usedPercentOf(fresh);
     if (!sameReset(fresh) || used >= freshUsed - STALE_RESTATEMENT_MARGIN) return true;

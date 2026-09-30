@@ -145,6 +145,18 @@ test('fetches that cannot be ordered let a rise through and hold a drop back', (
     fetched('2026-09-22T20:01:10.000Z', 10, '2026-09-22T20:00:30.000Z'),
   ];
   assert.deepEqual(times(withoutStaleRestatements(rows, { nowMs: Date.parse('2026-09-22T20:05:00.000Z') })), [['20:00', 10], ['20:01', 11]]);
+  // A second session agrees with the first from a fetch that may be later.
+  // A third session's drop, fetched after the first but not provably after
+  // the second, is held back too.
+  const three = [
+    fetched('2026-09-22T20:00:10.000Z', 10, '2026-09-22T20:00:00.000Z'),
+    fetched('2026-09-22T20:00:40.000Z', 10, '2026-09-22T20:00:05.000Z'),
+    fetched('2026-09-22T20:00:50.000Z', 2, '2026-09-22T20:00:20.000Z'),
+  ];
+  assert.deepEqual(withoutStaleRestatements(three, { nowMs: Date.parse('2026-09-22T20:05:00.000Z') }).map((row) => row.usedPercent), [10, 10]);
+  // Fetched after both, the drop is the newest evidence.
+  const later = [...three.slice(0, 2), fetched('2026-09-22T20:01:30.000Z', 2, '2026-09-22T20:00:45.000Z')];
+  assert.deepEqual(withoutStaleRestatements(later, { nowMs: Date.parse('2026-09-22T20:05:00.000Z') }).map((row) => row.usedPercent), [10, 10, 2]);
 });
 
 test('interleaved stale status-line readings neither reset the window nor add late-night use', () => {

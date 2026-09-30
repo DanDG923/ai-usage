@@ -836,3 +836,30 @@ test('an idle session’s redraw cannot make Claude current or a failed Refresh 
   assert.equal(claude.metadata.planUsage.lastRequest.succeeded, true);
   assert.equal(claude.status, 'connected');
 });
+
+test('an idle redraw that agrees with a recent Refresh is still not new evidence for a failed one', async (t) => {
+  const { refreshClaude } = collectorWithPortSpy();
+  const { root, store, source } = collectorFixture(t);
+  const nowMs = Date.now() - 15 * MINUTE;
+  const weekReset = new Date(nowMs + 3 * 1440 * MINUTE).toISOString();
+  // A Refresh two minutes ago read 20%.
+  store.recordObservation({ sourceId: 'claude', bucketId: 'seven_day', bucketName: 'Weekly',
+    observedAt: new Date(nowMs - 2 * MINUTE).toISOString(), usedPercent: 20, remainingPercent: 80, resetsAt: weekReset,
+    windowMinutes: 10_080, provenance: 'official-claude-usage', confidence: 1, metadata: {} });
+  // An idle session that fetched the same 20% a day and a half ago redraws it.
+  const inbox = path.join(root, 'inbox.jsonl');
+  const fetchedAt = nowMs - 36 * 60 * MINUTE;
+  fs.writeFileSync(inbox, `${[
+    { ai_usage_captured_at: new Date(fetchedAt).toISOString(), session_id: 'idle-session', api_ms: 0, rate_limits: null },
+    ...[fetchedAt + 5_000, nowMs - 30_000].map((at) => ({ ai_usage_captured_at: new Date(at).toISOString(),
+      session_id: 'idle-session', api_ms: 2_500, rate_limits: { seven_day: { used_percentage: 20, resets_at: weekReset } } })),
+  ].map((line) => JSON.stringify(line)).join('\n')}\n`);
+  const rateLimited = { read: async () => { throw Object.assign(new Error('HTTP 429'), { code: 'rate_limited' }); } };
+  await refreshClaude(store, inbox, { readPlanUsage: true, usagePort: rateLimited, activityReader: quietActivity, clock: () => new Date(nowMs) });
+  const claude = source('claude');
+  assert.equal(claude.metadata.statusLine.claudeObservations, 2, 'this collection imported the redraw');
+  // The card is current through the earlier Refresh, but this one failed.
+  assert.equal(store.getQuota('claude', store.getSettings(), nowMs).evidenceAt, new Date(nowMs - 2 * MINUTE).toISOString());
+  assert.equal(claude.metadata.planUsage.lastRequest.succeeded, false);
+  assert.doesNotMatch(claude.status_detail, /evidence was refreshed/);
+});
