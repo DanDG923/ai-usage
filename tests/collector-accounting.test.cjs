@@ -332,3 +332,115 @@ test('diagnostics time sequential imports and timestamp allowance readings after
   assert.equal(result.health.activityDurationMs, 20);
   assert.equal(result.refreshedAt, new Date(baseline + 120).toISOString());
 });
+
+const rollout = (serial) => `rollout-2026-09-29T10-00-00-0199a0c1-0000-7000-8000-00000000000${serial}.jsonl`;
+const codexRows = (store) => store.prepare("SELECT COUNT(*) AS count FROM usage_events WHERE source_id = 'codex'").get().count;
+
+test('a thread archived in Codex keeps its cursor, so work written before the move is imported once', (t) => {
+  const { root, store, write } = fixture(t);
+  const live = write(`.codex/sessions/2026/09/29/${rollout(1)}`, [...context, tokenRecord(1, 1)]);
+  assert.equal(importLocalSessions(store).events, 1);
+  // More work, then Archive in Codex before the next refresh: the rollout
+  // moves to archived_sessions with its unread tail.
+  fs.appendFileSync(live, `${[tokenRecord(2, 2), tokenRecord(3, 3)].map(JSON.stringify).join('\n')}\n`);
+  const archived = path.join(root, '.codex', 'archived_sessions', rollout(1));
+  fs.mkdirSync(path.dirname(archived), { recursive: true });
+  fs.renameSync(live, archived);
+  const result = importLocalSessions(store);
+  assert.equal(result.events, 2, 'only the tail is read');
+  assert.equal(result.reconciliationBackup, null, 'a moved log needs no safety backup');
+  assert.equal(codexRows(store), 3);
+  assert.equal(store.getImportedFile(live), null);
+  assert.ok(store.getImportedFile(archived));
+  assert.equal(importLocalSessions(store).importedFiles, 0);
+  // Unarchiving moves it back unchanged; the cursor follows and nothing repeats.
+  fs.renameSync(archived, live);
+  assert.equal(importLocalSessions(store).events, 0);
+  assert.ok(store.getImportedFile(live));
+  assert.equal(store.getImportedFile(archived), null);
+  assert.equal(codexRows(store), 3);
+});
+
+test('a thread started and archived between two refreshes is imported from the archive', (t) => {
+  const { store, write } = fixture(t);
+  write(`.codex/archived_sessions/${rollout(2)}`, [...context, tokenRecord(1, 1), tokenRecord(2, 2)]);
+  assert.equal(importLocalSessions(store).events, 2);
+  assert.equal(codexRows(store), 2);
+});
+
+test('a copy of a rollout does not take the cursor of an original that is still in place', (t) => {
+  const { root, store, write } = fixture(t);
+  const live = write(`.codex/sessions/2026/09/29/${rollout(3)}`, [...context, tokenRecord(1, 1)]);
+  importLocalSessions(store);
+  const copy = path.join(root, '.codex', 'archived_sessions', rollout(3));
+  fs.mkdirSync(path.dirname(copy), { recursive: true });
+  fs.copyFileSync(live, copy);
+  importLocalSessions(store);
+  assert.ok(store.getImportedFile(live), 'the original keeps its cursor');
+  assert.equal(codexRows(store), 1, 'the copy adds nothing');
+});
+
+test('a restore rechecks archived and relocated Codex logs as well as live ones, and leaves Claude alone', (t) => {
+  const { root, store, write } = fixture(t);
+  const archived = write(`.codex/archived_sessions/${rollout(4)}`, [...context, tokenRecord(1, 1)]);
+  importLocalSessions(store);
+  // A cursor under a CODEX_HOME outside the profile, and a Claude transcript cursor.
+  const relocated = path.join(root, 'elsewhere', 'sessions', rollout(5));
+  store.markImportedFile(relocated, 1, 1, { sessionId: 'session-b', agentAttributionVersion: 1, accountingVersion: 1, eventKeyVersion: 1 });
+  const transcript = path.join(root, '.claude', 'projects', 'demo', 'session.jsonl');
+  store.markImportedFile(transcript, 1, 1, { collector: 'claude-transcript', agentAttributionVersion: 1, accountingVersion: 1 });
+  store.restoreFromExport({ schemaVersion: 1, usageEvents: [{ event_key: 'codex:restored:1', source_id: 'codex',
+    occurred_at: timestamp(5), input_tokens: 1, output_tokens: 1 }] });
+  assert.equal(store.getImportedFile(archived).state.accountingVersion, undefined);
+  assert.equal(store.getImportedFile(relocated).state.accountingVersion, undefined);
+  assert.equal(store.getImportedFile(transcript).state.accountingVersion, 1);
+});
+
+// An archived log keeps its old modification time. A legacy cursor must keep
+// its lookback exemption at the new place, or the repair never reaches it.
+function repairsOldLogArchivedBeforeItsRepair(t, invalidate) {
+  const { root, store, write } = fixture(t);
+  const records = [tokenRecord(1), tokenRecord(2)];
+  const live = write(`.codex/sessions/2026/03/01/${rollout(6)}`, [...context, ...records]);
+  const old = new Date(now - 200 * 86400000);
+  fs.utimesSync(live, old, old);
+  invalidate(store, live, records);
+  const untracked = write(`.codex/archived_sessions/${rollout(7)}`, [...context, tokenRecord(3, 2)]);
+  fs.utimesSync(untracked, old, old);
+  const archived = path.join(root, '.codex', 'archived_sessions', rollout(6));
+  fs.renameSync(live, archived);
+  const result = importLocalSessions(store);
+  assert.equal(result.importedFiles, 1);
+  assert.equal(result.reconciledEvents, 1);
+  assert.ok(result.reconciliationBackup, 'the repair is backed up first');
+  assert.equal(codexRows(store), 1);
+  assert.equal(store.getImportedFile(archived).state.accountingVersion, 1);
+  assert.equal(store.getImportedFile(live), null);
+  assert.equal(store.getImportedFile(untracked), null, 'an untracked old log stays outside the lookback');
+  assert.equal(importLocalSessions(store).importedFiles, 0, 'the archived log needs no repeated repair');
+}
+
+test('an old log archived before its legacy repair is repaired from the archive', (t) => {
+  repairsOldLogArchivedBeforeItsRepair(t, (store, live, records) => {
+    records.forEach((record) => seedOldEvent(store, record));
+    legacyCursor(store, live);
+  });
+});
+
+test('an old log archived after a restore invalidated its cursor is repaired from the archive', (t) => {
+  repairsOldLogArchivedBeforeItsRepair(t, (store, live, records) => {
+    // Imported back when it was recent, then an older backup restores a
+    // duplicate row and invalidates the current cursor.
+    assert.equal(importLocalSessions(store, 365).events, 1);
+    const duplicate = records[1];
+    const usage = duplicate.payload.info.last_token_usage;
+    store.restoreFromExport({ schemaVersion: 1, usageEvents: [{ event_key: `codex:session-a:${duplicate.timestamp}`,
+      source_id: 'codex', occurred_at: duplicate.timestamp, session_id: 'session-a', model: 'gpt-5.6-sol',
+      project: 'C:\\synthetic', input_tokens: usage.input_tokens, cached_input_tokens: usage.cached_input_tokens,
+      cache_write_input_tokens: 0, cache_write_5m_input_tokens: 0, cache_write_1h_input_tokens: 0,
+      output_tokens: usage.output_tokens, reasoning_output_tokens: usage.reasoning_output_tokens,
+      metadata_json: JSON.stringify({ source: 'codex-session-log' }) }] });
+    assert.equal(codexRows(store), 2);
+    assert.equal(store.getImportedFile(live).state.accountingVersion, undefined);
+  });
+});

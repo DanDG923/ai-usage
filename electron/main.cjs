@@ -759,8 +759,12 @@ async function collectAll({ readPlanUsage }) {
   });
   let backupError = null;
   try {
-    const backup = await databaseJobs.exclusive(() => maintenance.request('scheduled-backup'));
-    if (backup) invalidateSnapshot();
+    // Asked here first, so the storage worker is not started after every
+    // collection just to answer "not yet"; it re-checks before backing up.
+    if (store.scheduledBackupDue()) {
+      const backup = await databaseJobs.exclusive(() => maintenance.request('scheduled-backup'));
+      if (backup) invalidateSnapshot();
+    }
   } catch (error) {
     backupError = error.message;
   }

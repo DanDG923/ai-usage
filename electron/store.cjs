@@ -324,6 +324,8 @@ const ATTRIBUTION_METADATA = `CASE WHEN json_valid(metadata_json)
 
 // SQLITE_CORRUPT and SQLITE_NOTADB: the file exists but SQLite cannot read it.
 const UNREADABLE_DATABASE_CODES = new Set([11, 26]);
+// When the last scheduled backup was tried, so a failing one is retried hourly.
+const BACKUP_ATTEMPT_KEY = 'maintenance.backup-attempt';
 
 function openDatabase(databasePath) {
   const open = () => {
@@ -2548,8 +2550,11 @@ class UsageStore {
         // source log's migration cursor was already completed. Recheck those
         // logs on the next scan using the collector's source proof and safety
         // backup; do not delete restored evidence here or disturb Claude cursors.
+        // A Codex cursor is also known by its state, which only Codex writes, so
+        // an archived rollout or a CODEX_HOME outside the profile is rechecked too.
         this.prepare(`UPDATE imported_files SET state_json = json_remove(state_json, '$.accountingVersion')
-          WHERE lower(replace(file_path, char(92), '/')) LIKE '%/.codex/sessions/%.jsonl'
+          WHERE (lower(replace(file_path, char(92), '/')) LIKE '%/.codex/sessions/%.jsonl'
+              OR CASE WHEN json_valid(state_json) THEN json_type(state_json, '$.eventKeyVersion') END IS NOT NULL)
             AND CASE WHEN json_valid(state_json) THEN json_type(state_json, '$.accountingVersion') END IS NOT NULL`).run();
       }
       if (restoredClaudeEvents) {
@@ -2659,18 +2664,24 @@ class UsageStore {
     return removed;
   }
 
-  maybeCreateScheduledBackup() {
+  // Whether a scheduled backup is due, without writing anything. The window
+  // process asks this after every collection, so the storage worker is only
+  // started when there is a backup to make.
+  scheduledBackupDue(nowMs = Date.now()) {
     const frequency = this.getSettings().backupFrequency;
-    if (!frequency || frequency === 'off') return null;
+    if (!frequency || frequency === 'off') return false;
     const intervals = { daily: 24 * 60 * 60 * 1000, weekly: 7 * 24 * 60 * 60 * 1000 };
     const interval = intervals[frequency] || intervals.daily;
-    const attemptKey = 'maintenance.backup-attempt';
-    const attempt = this.prepare('SELECT value_json FROM settings WHERE key = ?').get(attemptKey);
-    if (attempt && Date.now() - Number(json(attempt.value_json, 0)) < 60 * 60_000) return null;
+    const attempt = this.prepare('SELECT value_json FROM settings WHERE key = ?').get(BACKUP_ATTEMPT_KEY);
+    if (attempt && nowMs - Number(json(attempt.value_json, 0)) < 60 * 60_000) return false;
     const latest = this.prepare('SELECT created_at FROM backups ORDER BY created_at DESC LIMIT 1').get();
-    if (latest && Date.now() - new Date(latest.created_at).getTime() < interval) return null;
+    return !(latest && nowMs - new Date(latest.created_at).getTime() < interval);
+  }
+
+  maybeCreateScheduledBackup() {
+    if (!this.scheduledBackupDue()) return null;
     this.prepare('INSERT OR REPLACE INTO settings(key, value_json, updated_at) VALUES (?, ?, ?)')
-      .run(attemptKey, JSON.stringify(Date.now()), iso());
+      .run(BACKUP_ATTEMPT_KEY, JSON.stringify(Date.now()), iso());
     return this.createBackup();
   }
 }
