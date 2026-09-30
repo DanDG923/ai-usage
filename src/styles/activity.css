@@ -92,7 +92,11 @@
 /* The artboard's grid: 1.3fr 130px 1.4fr 110px 1.6fr with 16px gutters. Each
    cell's right padding is the gutter, so the fixed columns are 146px and
    126px. A fixed-layout table cannot size a column with calc(% - px), so the
-   flexible columns step with the panel's width to keep close to 1.3 : 1.4 : 1.6. */
+   flexible columns step with the panel's width to keep close to 1.3 : 1.4 : 1.6.
+   From 900px the provenance column widens to 156px (172px with its gutter),
+   enough for the longest name, OFFICIAL CLAUDE USAGE, on one line. The room
+   comes from the provider and observation columns, which have it to spare,
+   so the tape keeps its width and its heading stays on one line. */
 .evidence-table .log-col-provider {
   width: 20%;
 }
@@ -110,18 +114,21 @@
 }
 @container evidence (min-width: 900px) {
   .evidence-table .log-col-provider {
-    width: 23%;
+    width: 21%;
   }
   .evidence-table .log-col-time {
-    width: 24.5%;
+    width: 21.5%;
+  }
+  .evidence-table .log-col-provenance {
+    width: 172px;
   }
 }
 @container evidence (min-width: 1200px) {
   .evidence-table .log-col-provider {
-    width: 24.5%;
+    width: 22.5%;
   }
   .evidence-table .log-col-time {
-    width: 26.5%;
+    width: 24.5%;
   }
 }
 
@@ -190,6 +197,14 @@
 .evidence-time small time {
   color: inherit;
   font-weight: inherit;
+}
+
+/* Where its column is narrower than the name, the provenance chip breaks onto
+   a second line inside the column rather than running under the figure. */
+.evidence-table .chip {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /* Current → expected at reset: figure, horizontal fuel tape, figure. */
