@@ -170,7 +170,8 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
   const allReadings = (Array.isArray(observations) ? observations : [])
     .map((row) => normalizeObservation(row, sourceId, bucketId, scope, nowMs, evidence)).filter(Boolean)
     .map((row) => {
-      const scale = scaler ? scaler(row.at) : 1;
+      // A share of the allowance in force when the figure was fetched.
+      const scale = scaler ? scaler(row.evidence) : 1;
       if (scale === 1) return row;
       rescaled = true;
       return { ...row, used: row.used * scale };

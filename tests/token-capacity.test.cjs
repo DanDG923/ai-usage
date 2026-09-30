@@ -198,6 +198,21 @@ test('calibration intervals run between fetches, so a later redraw moves no toke
     [read.weeklyTokens, read.weeklyRange, read.calibratedAt]);
 });
 
+test('a figure fetched before an allowance change is scaled as a share of the old allowance, whenever it is redrawn', () => {
+  // The allowance doubled 1.75 hours ago; the 20% figure was fetched before
+  // that, but first redrawn after it.
+  const capacity = (second) => estimateTokenCapacity(fixture({
+    observations: [observation(NOW - 3 * HOUR, 10), second, observation(NOW - HOUR, 30), observation(NOW, 40)],
+    events: [event(NOW - 2.5 * HOUR), event(NOW - 1.25 * HOUR), event(NOW - HOUR / 2)],
+    allowanceChanges: [{ source: 'codex', at: iso(NOW - 1.75 * HOUR), previousAllowancePercent: 50 }],
+  }));
+  const read = capacity(observation(NOW - 2 * HOUR, 20));
+  const redrawn = capacity(observation(NOW - 1.5 * HOUR, 20,
+    { provenance: 'official-statusline', plan_type: null, fetched_after: iso(NOW - 2 * HOUR) }));
+  assert.equal(read.status, 'available');
+  assert.deepEqual([redrawn.weeklyTokens, redrawn.weeklyRange, redrawn.intervals], [read.weeklyTokens, read.weeklyRange, read.intervals]);
+});
+
 test('remaining tokens age from when the latest figure was fetched, not from a status-line redraw of it', () => {
   // A day and an hour later, an idle session redraws the 40% it fetched
   // before the last provider reading.

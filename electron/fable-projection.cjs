@@ -8,7 +8,7 @@
 // rows to go stale, so there is nothing to rescale, retire or discard.
 
 const { createAllowanceScaler } = require('./allowance-changes.cjs');
-const { clusterByWindow, evidenceTimes, latestEvidenceAt, normaliseObservation, restatesSessionLimits, withoutStaleRestatements } = require('./forecast.cjs');
+const { clusterByWindow, evidenceTimes, fetchMomentOf, latestEvidenceAt, normaliseObservation, restatesSessionLimits, withoutStaleRestatements } = require('./forecast.cjs');
 const { OFFICIAL_PROVENANCES } = require('./quota-provenance.mjs');
 
 // Every input is bounded by the projection's own clock. A reading dated
@@ -272,8 +272,9 @@ function allowanceAdjustedUsed(store, nowMs) {
   if (!scaler) return rawUsedPercent;
   return (row) => {
     const used = rawUsedPercent(row);
-    const observedMs = new Date(row.observed_at).getTime();
-    return Number.isFinite(used) && Number.isFinite(observedMs) ? used * scaler(observedMs) : used;
+    // The allowance in force when the figure was fetched, not redrawn.
+    const fetchedMs = fetchMomentOf(row);
+    return Number.isFinite(used) && Number.isFinite(fetchedMs) ? used * scaler(fetchedMs) : used;
   };
 }
 

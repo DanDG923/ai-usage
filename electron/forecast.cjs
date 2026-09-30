@@ -327,7 +327,7 @@ function rescaleObservations(rows, options) {
       if (!scalers.has(key)) scalers.set(key, createAllowanceScaler(changes, sourceId, { bucketId, windowMinutes, nowMs }));
       previousSource = sourceId; previousBucket = bucketId; previousMinutes = windowMinutes; previousScaler = scalers.get(key);
     }
-    const scale = previousScaler?.(row.observedAt) ?? 1;
+    const scale = previousScaler?.(fetchMomentOf(row)) ?? 1;
     if (scale === 1 || !Number.isFinite(row.usedPercent)) return row;
     const usedPercent = row.usedPercent * scale;
     return { ...row, usedPercent, remainingPercent: 100 - usedPercent };
@@ -392,6 +392,17 @@ function addIntervalSamples(samples, before, after, schedule, nowMs, rateElapsed
 // late-night use and projected across every remaining night.
 function restatesSessionLimits(row) {
   return row.provenance === 'official-statusline';
+}
+
+// When one reading's figure was fetched, as far as that reading alone can
+// say: a provider read's own time, or a status-line reading's recorded fetch.
+// A percentage is a share of the allowance in force then, not at a redraw
+// that came after a recorded allowance change.
+function fetchMomentOf(row) {
+  const parsed = normaliseObservation(row);
+  if (!restatesSessionLimits(parsed)) return parsed.observedAt;
+  const bound = Number.isFinite(parsed.fetchedAfter) ? parsed.fetchedAfter : parsed.seenSince;
+  return Number.isFinite(bound) ? Math.min(bound, parsed.observedAt) : parsed.observedAt;
 }
 
 // The moment each reading's value is evidence of, for readings in time order.
@@ -1197,4 +1208,4 @@ function forecastQuota(observations, options = {}) {
     series: { ...adjusted.series, heavy }, resetAdjustment: adjustment };
 }
 
-module.exports = { activeHoursBetween, clusterByWindow, sameWindowDrift, normaliseObservation, prepareObservation, deriveLearningSamples, evidenceTimes, exhaustionTime, forecastQuota, forecastState, freshReadGraceFor, latestEvidenceAt, percentile, restatesSessionLimits, withoutStaleRestatements };
+module.exports = { activeHoursBetween, clusterByWindow, sameWindowDrift, normaliseObservation, prepareObservation, deriveLearningSamples, evidenceTimes, exhaustionTime, fetchMomentOf, forecastQuota, forecastState, freshReadGraceFor, latestEvidenceAt, percentile, restatesSessionLimits, withoutStaleRestatements };
