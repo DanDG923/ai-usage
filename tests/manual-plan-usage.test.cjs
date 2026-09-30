@@ -382,10 +382,13 @@ function collectorFixture(t) {
     const row = store.prepare('SELECT status, status_detail, metadata_json, last_success_at FROM sources WHERE id = ?').get(id);
     return { ...row, metadata: JSON.parse(row.metadata_json || '{}') };
   };
-  const reading = ({ sourceId = 'claude', bucketId = 'seven_day', hoursAgo, provenance = 'official-claude-usage' }) => store.recordObservation({
+  // A status-line reading is dated as the current helper dates it: its
+  // session was seen opening, just before the fetch.
+  const reading = ({ sourceId = 'claude', bucketId = 'seven_day', hoursAgo, provenance = 'official-claude-usage', dated = true }) => store.recordObservation({
     sourceId, bucketId, bucketName: 'Weekly', observedAt: new Date(Date.now() - hoursAgo * 3_600_000).toISOString(),
     usedPercent: 30, remainingPercent: 70, resetsAt: new Date(Date.now() + 3 * 86_400_000).toISOString(),
     windowMinutes: 10_080, provenance, confidence: 1, metadata: {},
+    fetchedAfter: provenance === 'official-statusline' && dated ? new Date(Date.now() - hoursAgo * 3_600_000 - 5_000).toISOString() : null,
   });
   return { root, store, source, reading };
 }
@@ -406,10 +409,12 @@ test('an automatic Claude refresh never creates or calls the usage port, yet imp
       usage: { input_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 5 } },
   })}\n`);
   const inbox = path.join(root, 'inbox.jsonl');
-  fs.writeFileSync(inbox, `${JSON.stringify({
-    ai_usage_captured_at: new Date().toISOString(),
-    rate_limits: { seven_day: { used_percentage: 22, resets_at: new Date(Date.now() + 3 * 86_400_000).toISOString() } },
-  })}\n`);
+  // A session seen opening, then redrawn with the limits its first response brought.
+  fs.writeFileSync(inbox, `${[
+    { ai_usage_captured_at: new Date(Date.now() - 10_000).toISOString(), session_id: 'working-session', api_ms: 0, rate_limits: null },
+    { ai_usage_captured_at: new Date(Date.now() - 5_000).toISOString(), session_id: 'working-session', api_ms: 1_200,
+      rate_limits: { seven_day: { used_percentage: 22, resets_at: new Date(Date.now() + 3 * 86_400_000).toISOString() } } },
+  ].map((line) => JSON.stringify(line)).join('\n')}\n`);
   const { refreshClaude, created } = collectorWithPortSpy();
   const injected = countingPort();
 
@@ -476,6 +481,22 @@ test('without a plan-usage read, Claude is judged by the age of its latest offic
     reading({ hoursAgo: 3, provenance: 'official-statusline' });
     await refreshClaude(store, path.join(store.backupDirectory, 'missing.jsonl'), { activityReader: { import: async () => ({ usageEvents: 0 }) } });
     assert.equal(source('claude').status, 'connected');
+  });
+  await t.test('a status-line reading from a helper that did not record sessions has no known fetch', async (tt) => {
+    const { store, source, reading } = collectorFixture(tt);
+    // A Refresh thirty hours ago, then the old helper, not yet rewritten,
+    // redraws a higher figure it may have fetched at any point this week.
+    reading({ hoursAgo: 30 });
+    store.recordObservation({ sourceId: 'claude', bucketId: 'seven_day', bucketName: 'Weekly',
+      observedAt: new Date(Date.now() - 60_000).toISOString(), usedPercent: 34, remainingPercent: 66,
+      resetsAt: new Date(Date.now() + 3 * 86_400_000).toISOString(), windowMinutes: 10_080,
+      provenance: 'official-statusline', confidence: 1, metadata: {} });
+    reading({ sourceId: 'claude-fable', bucketId: 'fable_seven_day', hoursAgo: 1 / 60, provenance: 'official-statusline', dated: false });
+    await refreshClaude(store, path.join(store.backupDirectory, 'missing.jsonl'), { activityReader: { import: async () => ({ usageEvents: 0 }) } });
+    assert.equal(store.getQuota('claude', store.getSettings()).usedPercent, 34, 'it is still the figure shown');
+    assert.equal(source('claude').status, 'stale');
+    assert.equal(source('claude-fable').status, 'stale');
+    assert.equal(source('claude-fable').metadata.automatic.health.officialSource, 'not-requested');
   });
   await t.test('a manual entry is not a plan-usage reading', async (tt) => {
     const { store, source, reading } = collectorFixture(tt);
@@ -546,6 +567,7 @@ const readingLabel = (value) => new Date(value).toLocaleString('en-GB', { weekda
 const WINDOW_MINUTES = { five_hour: 300, seven_day: 10_080, seven_day_opus: 10_080, seven_day_sonnet: 10_080 };
 
 // Rows as one read writes them: every window shares one observed_at.
+// A status-line read is dated as the current helper dates a working session's.
 function recordRead(store, { minutesAgo, windows, provenance = 'official-claude-usage', nowMs = Date.now() }) {
   const observedAt = new Date(nowMs - minutesAgo * MINUTE).toISOString();
   for (const [bucketId, resetInMinutes] of Object.entries(windows)) {
@@ -553,6 +575,7 @@ function recordRead(store, { minutesAgo, windows, provenance = 'official-claude-
       sourceId: 'claude', bucketId, bucketName: bucketId, observedAt, usedPercent: 30, remainingPercent: 70,
       resetsAt: new Date(nowMs + resetInMinutes * MINUTE).toISOString(), windowMinutes: WINDOW_MINUTES[bucketId],
       provenance, confidence: 1, metadata: {},
+      fetchedAfter: provenance === 'official-statusline' ? new Date(Date.parse(observedAt) - 5_000).toISOString() : null,
     });
   }
   return observedAt;
@@ -660,10 +683,11 @@ test('importing a fresh helper window still judges every active Claude window', 
       const nowMs = Date.now();
       recordRead(store, { minutesAgo, windows: { seven_day: 3 * 1440, seven_day_sonnet: 3 * 1440 }, nowMs });
       const inbox = missingInbox(store);
-      fs.writeFileSync(inbox, `${JSON.stringify({
-        ai_usage_captured_at: new Date(nowMs).toISOString(),
-        rate_limits: { seven_day: { used_percentage: 35, resets_at: new Date(nowMs + 3 * 1440 * MINUTE).toISOString() } },
-      })}\n`);
+      fs.writeFileSync(inbox, `${[
+        { ai_usage_captured_at: new Date(nowMs - 5_000).toISOString(), session_id: 'working-session', api_ms: 0, rate_limits: null },
+        { ai_usage_captured_at: new Date(nowMs).toISOString(), session_id: 'working-session', api_ms: 1_200,
+          rate_limits: { seven_day: { used_percentage: 35, resets_at: new Date(nowMs + 3 * 1440 * MINUTE).toISOString() } } },
+      ].map((line) => JSON.stringify(line)).join('\n')}\n`);
       const statuses = [];
       for (let run = 0; run < 2; run += 1) {
         const result = await refreshClaude(store, inbox, { activityReader: quietActivity, clock: () => new Date(nowMs) });

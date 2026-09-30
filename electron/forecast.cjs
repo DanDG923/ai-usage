@@ -419,30 +419,31 @@ function fetchMomentOf(row) {
 // two idle sessions redrawing different figures in turn renew neither. A
 // provider read stands for itself.
 // `known` asks instead how current each figure is known to be, which decides
-// whether it is fresh. The first redraw only bounds an undated fetch from
-// above: the session may have fetched those limits at any point in the window
-// they show, so the figure is known only from that window's start.
+// whether it is fresh. A first redraw or first showing only bounds an undated
+// fetch from above: the limits may have been fetched at any point in the
+// window they show, so the figure is known only from that window's start.
 function evidenceTimes(rows, { known = false } = {}) {
   const parsed = rows.map(normaliseObservation);
   const firstShown = [];
   return parsed.map((row) => {
     if (!restatesSessionLimits(row)) return row.observedAt;
     if (Number.isFinite(row.fetchedAfter)) return Math.min(row.fetchedAfter, row.observedAt);
-    if (Number.isFinite(row.seenSince)) {
-      const firstRedraw = Math.min(row.seenSince, row.observedAt);
-      if (!known) return firstRedraw;
-      // A window of unknown length is no longer than a reset may lie ahead.
-      const windowMs = row.windowMinutes > 0 ? row.windowMinutes * 60_000 : MAX_QUOTA_RESET_AHEAD_MS;
-      return Math.min((Number.isFinite(row.resetsAt) ? row.resetsAt : firstRedraw) - windowMs, firstRedraw);
+    let placed;
+    if (Number.isFinite(row.seenSince)) placed = Math.min(row.seenSince, row.observedAt);
+    else {
+      const used = usedPercentOf(row);
+      let first = firstShown.find((entry) => Math.abs(entry.resetsAt - row.resetsAt) <= RESET_TOLERANCE_MS
+        && Math.abs(entry.used - used) <= STALE_RESTATEMENT_MARGIN);
+      if (!first) {
+        first = { resetsAt: row.resetsAt, used, from: row.observedAt };
+        firstShown.push(first);
+      }
+      placed = first.from;
     }
-    const used = usedPercentOf(row);
-    let first = firstShown.find((entry) => Math.abs(entry.resetsAt - row.resetsAt) <= RESET_TOLERANCE_MS
-      && Math.abs(entry.used - used) <= STALE_RESTATEMENT_MARGIN);
-    if (!first) {
-      first = { resetsAt: row.resetsAt, used, from: row.observedAt };
-      firstShown.push(first);
-    }
-    return first.from;
+    if (!known) return placed;
+    // A window of unknown length is no longer than a reset may lie ahead.
+    const windowMs = row.windowMinutes > 0 ? row.windowMinutes * 60_000 : MAX_QUOTA_RESET_AHEAD_MS;
+    return Math.min((Number.isFinite(row.resetsAt) ? row.resetsAt : placed) - windowMs, placed);
   });
 }
 

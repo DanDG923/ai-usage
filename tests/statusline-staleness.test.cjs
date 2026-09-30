@@ -259,12 +259,17 @@ test('an undated idle session does not renew its evidence with every redraw', ()
   try {
     // From a helper that did not record sessions, redrawing 13% for hours.
     for (let at = now - 3 * HOUR; at <= now - MINUTE; at += 10 * MINUTE) record(at, 13, 'official-statusline');
+    const rows = () => store.prepare('SELECT * FROM quota_observations ORDER BY observed_at').all();
+    assert.equal(latestEvidenceAt(rows()), now - 3 * HOUR, 'the figure is placed no later than its first showing');
+    // Nothing says when it was fetched, only that it fell in this week.
     const quota = store.getQuota('claude', store.getSettings(), now);
-    assert.equal(quota.evidenceAt, new Date(now - 3 * HOUR).toISOString());
-    assert.ok(Math.abs(quota.forecast.staleHours - 3) < 1e-6, `stale ${quota.forecast.staleHours}`);
-    // A new figure can only follow a new response, so it starts afresh.
+    const weekStart = Date.parse(quota.resetsAt) - 7 * 24 * HOUR;
+    assert.equal(quota.evidenceAt, new Date(weekStart).toISOString());
+    assert.ok(Math.abs(quota.forecast.staleHours - (now - weekStart) / HOUR) < 1e-6, `stale ${quota.forecast.staleHours}`);
+    // A new figure is placed afresh, but its fetch is no better known.
     record(now, 14, 'official-statusline');
-    assert.equal(store.getQuota('claude', store.getSettings(), now).evidenceAt, new Date(now).toISOString());
+    assert.equal(latestEvidenceAt(rows()), now);
+    assert.equal(store.getQuota('claude', store.getSettings(), now).evidenceAt, new Date(weekStart).toISOString());
   } finally {
     store.close();
   }
