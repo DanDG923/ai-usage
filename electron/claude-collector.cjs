@@ -52,7 +52,8 @@ function statusLineLimits(rateLimits) {
   return limits;
 }
 
-// Claude Code redraws its status line every minute, and after each response,
+// Claude Code redraws its status line after each response and, at the
+// interval the helper is installed with, every minute in between, always
 // with the limits of the session's latest response. The payload does not say
 // when those limits were fetched, so an idle session re-records old limits as
 // if they were new. A session's API time grows only when a response arrives,
