@@ -1,5 +1,5 @@
 import { SOURCES, evidenceNeedsRefresh, stalePoolWindow } from '../electron/dashboard-decision.mjs';
-import { selectDisplayedWindows } from '../electron/quota-selection.mjs';
+import { isMainWindow, selectDisplayedWindows } from '../electron/quota-selection.mjs';
 import type { DashboardVerdict, Quota, QuotaWindow, Snapshot } from './types';
 
 /**
@@ -71,18 +71,27 @@ export function shortDate(value?: string | number | null) {
   return date ? SHORT_DATE.format(date) : '—';
 }
 
+/** The local calendar day as YYYY-MM-DD; toISOString() would give the UTC day. */
+export function localDateKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
 export function dayDate(value?: string | number | null) {
   if (!value) return '—';
   const date = parseDate(value);
   return date ? DAY_DATE.format(date) : '—';
 }
 
-/** "Thu 14:00" for something inside the coming week, otherwise a dated form. */
+/**
+ * "Thu 14:00" for something within six days, otherwise a dated form. Beyond
+ * six days a weekday is ambiguous: next Tuesday's reset and an hour ago on a
+ * Tuesday would both read "Tue".
+ */
 export function whenLabel(value?: string | number | null, nowMs = Date.now()) {
   if (!value) return '—';
   const date = parseDate(value);
   if (!date) return '—';
-  const withinWeek = Math.abs(date.getTime() - nowMs) < 7 * 86_400_000;
+  const withinWeek = Math.abs(date.getTime() - nowMs) < 6 * 86_400_000;
   return (withinWeek ? WEEKDAY_TIME : SHORT_DATE).format(date);
 }
 
@@ -173,13 +182,21 @@ export function quotaWindows(quota: Quota | null | undefined): QuotaWindow[] {
   return quota.windows?.length ? quota.windows : [quota];
 }
 
+/**
+ * The name of a limit that applies to one model or client rather than the whole
+ * plan, or null for a plan's own windows. Codex names these with a limit id;
+ * Claude's Opus, Sonnet and OAuth-app weeks carry only their bucket name, and
+ * without it every one of them read as the plan's "weekly allowance". Fable's
+ * own windows, whatever their bucket, are Fable's allowance, not a model limit.
+ */
 export function modelAllowanceName(window: QuotaWindow): string | null {
   const { limitId, limitName } = window.metadata || {};
-  return typeof limitId === 'string' && limitId !== 'codex'
-    ? typeof limitName === 'string' && limitName.trim()
-      ? limitName
-      : limitId
-    : null;
+  if (typeof limitId === 'string') {
+    if (limitId === 'codex') return null;
+    return typeof limitName === 'string' && limitName.trim() ? limitName : limitId;
+  }
+  if (isMainWindow(window) || /^fable/i.test(window.bucketId) || !window.bucketName?.trim()) return null;
+  return window.bucketName.replace(/\s*weekly$/i, '').trim() || null;
 }
 
 export function allowanceWindowLabel(window: QuotaWindow): string {

@@ -41,7 +41,10 @@ export function Costs({
   const unpriced = costs.unpricedModels
     .map((entry) => `${sourceLabel(entry.sourceId)} ${entry.model} (${compactNumber(entry.tokens)} tokens)`)
     .join(', ');
-  const withoutCache = Math.max(costs.withoutCache, costs.actual, 1);
+  // The "with cache" bar is drawn against the larger of the two figures. A
+  // floor of one currency unit here drew 0.05 against 0.20 at 5%, not 25%.
+  const barBase = Math.max(costs.withoutCache, costs.actual);
+  const withCacheFill = barBase > 0 ? (costs.actual / barBase) * 100 : 0;
   // Unpriced tokens are left out of every priced sum, so each one is a floor.
   // The floor and its figure stay one text node.
   const floor = costs.isLowerBound ? '≥ ' : '';
@@ -118,8 +121,14 @@ export function Costs({
           </div>
           <div>
             <dt>Recorded token price coverage</dt>
-            <dd>{priceCoverage(costs.coverage)}</dd>
-            <small>{costs.isLowerBound ? 'Some recorded models are unpriced' : 'Recorded tokens only'}</small>
+            <dd>{costs.totalTokens > 0 ? priceCoverage(costs.coverage) : '—'}</dd>
+            <small>
+              {costs.totalTokens > 0
+                ? costs.isLowerBound
+                  ? 'Some recorded models are unpriced'
+                  : 'Recorded tokens only'
+                : 'No usage in this period'}
+            </small>
           </div>
         </dl>
       </section>
@@ -152,10 +161,7 @@ export function Costs({
                 <span className="lead" aria-hidden="true" />
                 <b>{priced(costs.actual)}</b>
               </span>
-              <i
-                aria-hidden="true"
-                style={{ '--fill': `${Math.max(2, (costs.actual / withoutCache) * 100)}%` } as React.CSSProperties}
-              />
+              <i aria-hidden="true" style={{ '--fill': `${Math.max(2, withCacheFill)}%` } as React.CSSProperties} />
             </div>
             <div className="without-cache">
               <span>

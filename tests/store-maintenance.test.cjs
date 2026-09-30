@@ -201,3 +201,98 @@ test('the forecast reports when each projection runs out and honours a reserve',
   assert.ok(reserved.safePace < plain.safePace);
   assert.equal(reserved.expectedRemaining, plain.expectedRemaining);
 });
+
+test('restoring an older SQLite backup keeps the settings that backup never stored', () => withStore((store) => {
+  store.updateSettings({ claudeFreeResets: 2, softwareRendering: false, theme: 'light' });
+  const backup = store.createBackup({ exportJson: false });
+  // Make the copy look like a version that predates the newer settings and
+  // stored the desktop-notification switch under its old name.
+  const { DatabaseSync } = require('node:sqlite');
+  const old = new DatabaseSync(backup.databasePath);
+  old.exec("DELETE FROM settings WHERE key != 'theme'");
+  old.exec(`UPDATE settings SET value_json = '"dark"' WHERE key = 'theme'`);
+  old.exec("INSERT INTO settings(key, value_json, updated_at) VALUES ('notifyInApp', 'false', '2026-01-01T00:00:00Z')");
+  old.close();
+  store.updateSettings({ notifyDesktop: true });
+  const payload = store.readExport(backup.databasePath);
+  try {
+    assert.equal(store.restoreFromExport(payload).settings, 2);
+  } finally { payload.close?.(); }
+  const settings = store.getSettings();
+  assert.deepEqual([settings.theme, settings.notifyDesktop, settings.claudeFreeResets, settings.softwareRendering],
+    ['dark', false, 2, false]);
+}));
+
+test('a backup recreates a backup folder deleted while the app runs', () => withStore((store) => {
+  fs.rmSync(store.backupDirectory, { recursive: true, force: true });
+  const backup = store.createBackup({ exportJson: false });
+  assert.ok(fs.existsSync(backup.databasePath));
+}));
+
+test('the CSV export covers the local calendar days of the dashboard period, not a rolling window', () => withStore((store) => {
+  // 15:00 in London on 1 September: the 30-day period starts at local
+  // midnight on 3 August, so 20:00 on 2 August is outside it.
+  const now = Date.parse('2026-09-01T14:00:00Z');
+  store.recordUsageEvent({ eventKey: 'outside', sourceId: 'claude', occurredAt: '2026-08-02T19:00:00Z', model: 'm', inputTokens: 1 });
+  store.recordUsageEvent({ eventKey: 'inside', sourceId: 'claude', occurredAt: '2026-08-03T08:00:00Z', model: 'm', inputTokens: 1 });
+  const exported = store.exportLedgerCsv(30, now);
+  assert.equal(exported.since, '2026-08-02T23:00:00.000Z');
+  assert.equal(exported.rows, 1);
+}));
+
+test('a streamed CSV export writes in batches exactly what the returned export contains', () => withStore((store) => {
+  store.transaction(() => {
+    for (let index = 0; index < 12_000; index += 1) {
+      store.recordUsageEvent({ eventKey: `batch-${index}`, sourceId: 'claude', occurredAt: iso(NOW - DAY + index * 1000),
+        model: 'claude-opus-5-5', project: 'C:\\work\\alpha', sessionId: `session-${index % 7}`, inputTokens: 1000 + index, outputTokens: 10 });
+    }
+  });
+  const returned = store.exportLedgerCsv(30, NOW);
+  const chunks = [];
+  const streamed = store.exportLedgerCsv(30, NOW, (text) => chunks.push(text));
+  assert.ok(chunks.length > 1, `${chunks.length} batch`);
+  assert.equal(chunks.join(''), returned.csv);
+  assert.deepEqual(streamed, { rows: 12_000, since: returned.since });
+}));
+
+test('a failed CSV export leaves the chosen file untouched and no partial file behind', async () => {
+  const { createMaintenanceService } = require('../electron/maintenance-service.cjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-maint-'));
+  const filePath = path.join(root, 'ledger.csv');
+  fs.writeFileSync(filePath, 'previous export');
+  const service = createMaintenanceService({ databasePath: path.join(root, 'usage.sqlite'), backupDirectory: path.join(root, 'Backups'),
+    openStore: () => ({
+      exportLedgerCsv: (_days, _now, write) => { write('occurred_at\r\n'); throw new Error('disk full'); },
+      close() {},
+    }) });
+  await assert.rejects(service.handle({ type: 'export-csv', filePath, days: 30 }), /disk full/);
+  assert.equal(fs.readFileSync(filePath, 'utf8'), 'previous export');
+  assert.deepEqual(fs.readdirSync(root), ['ledger.csv']);
+});
+
+test('unpriced usage recorded without a model name is marked as such', () => withStore((store) => {
+  store.recordUsageEvent({ eventKey: 'no-model', sourceId: 'codex', occurredAt: iso(NOW - DAY), model: null, inputTokens: 10 });
+  store.recordUsageEvent({ eventKey: 'named', sourceId: 'codex', occurredAt: iso(NOW - DAY), model: 'mystery-model', inputTokens: 10 });
+  // A model actually named "Unknown" can be priced, so it stays apart from records with no name.
+  store.recordUsageEvent({ eventKey: 'literal', sourceId: 'codex', occurredAt: iso(NOW - DAY), model: 'Unknown', inputTokens: 5 });
+  const unpriced = store.getCostAnalytics(30, store.getSettings(), NOW).unpricedModels;
+  assert.deepEqual(unpriced.map(({ model, tokens, unnamed }) => ({ model, tokens, unnamed })).sort((a, b) => a.model.localeCompare(b.model) || a.tokens - b.tokens),
+    [{ model: 'mystery-model', tokens: 10, unnamed: undefined }, { model: 'Unknown', tokens: 5, unnamed: undefined }, { model: 'Unknown', tokens: 10, unnamed: true }]);
+}));
+
+test('a CSV export waits briefly for Windows to release the file it has just written', async (t) => {
+  const { createMaintenanceService } = require('../electron/maintenance-service.cjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-maint-'));
+  const filePath = path.join(root, 'ledger.csv');
+  const service = createMaintenanceService({ databasePath: path.join(root, 'usage.sqlite'), backupDirectory: path.join(root, 'Backups'),
+    openStore: () => ({ exportLedgerCsv: (_days, _now, write) => { write('occurred_at\r\n'); return { rows: 0, since: '' }; }, close() {} }) });
+  const rename = fs.renameSync;
+  let busy = 2;
+  t.mock.method(fs, 'renameSync', (from, to) => {
+    if (busy-- > 0) throw Object.assign(new Error('The file is in use.'), { code: 'EBUSY' });
+    return rename(from, to);
+  });
+  assert.equal((await service.handle({ type: 'export-csv', filePath, days: 30 })).rows, 0);
+  assert.equal(fs.readFileSync(filePath, 'utf8'), 'occurred_at\r\n');
+  assert.deepEqual(fs.readdirSync(root), ['ledger.csv']);
+});

@@ -131,3 +131,34 @@ test('a future observation becomes eligible exactly on time without a database w
   assert.equal(arrived.remainingAsOf, new Date(future).toISOString());
   assert.equal(arrived.remainingTokens, arrived.weeklyTokens * 0.59);
 });
+
+test('token capacity follows a held-back status-line reading once the grace lets it in', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-token-capacity-'));
+  const store = new UsageStore(path.join(directory, 'usage.sqlite'), directory);
+  try {
+    const start = Date.now() - 3 * HOUR;
+    const resetsAt = new Date(start + 3 * 24 * HOUR).toISOString();
+    for (let index = 0; index < 4; index += 1) {
+      store.recordObservation({ sourceId: 'claude', bucketId: 'seven_day', observedAt: new Date(start - (3 - index) * 12 * HOUR).toISOString(),
+        resetsAt, usedPercent: 10 + index * 10, remainingPercent: 90 - index * 10, windowMinutes: 10_080, provenance: 'official', metadata: { scope: 'overall' } });
+      if (index < 3) store.recordUsageEvent({ eventKey: `usage-${index}`, sourceId: 'claude', model: 'claude-opus-5',
+        occurredAt: new Date(start - (2.5 - index) * 12 * HOUR).toISOString(), inputTokens: 900_000, outputTokens: 100_000 });
+    }
+    // A lower status-line reading ten minutes after the last provider read.
+    store.recordObservation({ sourceId: 'claude', bucketId: 'seven_day', observedAt: new Date(start + 10 * 60_000).toISOString(),
+      resetsAt, usedPercent: 25, remainingPercent: 75, windowMinutes: 10_080, provenance: 'official-statusline', metadata: {} });
+    const settings = store.getSettings();
+    const held = store.getQuota('claude', settings, start + 30 * 60_000);
+    assert.equal(held.usedPercent, 40);
+    // Past the grace the card takes the lower reading with nothing written;
+    // the capacity beside it must agree with a store that never cached.
+    const later = start + 2 * HOUR + 5 * 60_000;
+    const accepted = store.getQuota('claude', settings, later);
+    assert.equal(accepted.usedPercent, 25);
+    const uncached = new UsageStore(path.join(directory, 'usage.sqlite'), directory);
+    try {
+      assert.equal(accepted.tokenCapacity.remainingTokens, uncached.getQuota('claude', uncached.getSettings(), later).tokenCapacity.remainingTokens);
+      assert.notEqual(accepted.tokenCapacity.remainingTokens, held.tokenCapacity.remainingTokens);
+    } finally { uncached.close(); }
+  } finally { store.close(); }
+});

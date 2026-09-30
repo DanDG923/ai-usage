@@ -11,6 +11,13 @@ let rejectSettings = false;
 let holdSettings = false;
 let heldSettings = [];
 let prepareSleep = null;
+let holdRefresh = false;
+let heldRefreshes = [];
+let refreshCalls = 0;
+// A second window starts while storage is closed: reads answer null until
+// told, then answer at once for whichever period the saved view selects.
+const declining = process.argv.includes('--decline-reads');
+let declineReads = declining;
 const page = (kind, options) => {
   const rows = snapshot.costs[kind] || [];
   const data = { rows, total: rows.length, page: options.page, pageSize: options.pageSize, totalPages: 1 };
@@ -18,6 +25,7 @@ const page = (kind, options) => {
 };
 contextBridge.exposeInMainWorld('aiUsage', {
   getSnapshot(days) {
+    if (declining) return Promise.resolve(declineReads ? null : { ...structuredClone(snapshot), costs: { ...snapshot.costs, periodDays: days } });
     if (days === 30 && !requests.length) return Promise.resolve(structuredClone(snapshot));
     return new Promise((resolve, reject) => requests.push({ days, resolve, reject }));
   },
@@ -41,7 +49,11 @@ contextBridge.exposeInMainWorld('aiUsage', {
   },
   getClaudeSetup: async () => ({ installed: true, auth: 'signed-in', dismissed: false }),
   configureClaude: async () => ({ dismissed: true }),
-  refresh: async () => { throw new Error('Deliberate refresh rejection'); },
+  refresh: async () => {
+    refreshCalls += 1;
+    if (holdRefresh) return new Promise((resolve) => heldRefreshes.push(() => resolve({ snapshot: structuredClone(snapshot), collectors: {} })));
+    throw new Error('Deliberate refresh rejection');
+  },
   onPrepareSleep(callback) { prepareSleep = callback; return () => { if (prepareSleep === callback) prepareSleep = null; }; },
 });
 contextBridge.exposeInMainWorld('testBridge', {
@@ -56,7 +68,13 @@ contextBridge.exposeInMainWorld('testBridge', {
   rejectSettings(value) { rejectSettings = value; },
   holdSettings(value) { holdSettings = value; },
   releaseSettings() { holdSettings = false; for (const resolve of heldSettings.splice(0)) resolve(); },
+  releaseFirstSetting() { heldSettings.shift()?.(); },
   heldSettings: () => heldSettings.length,
+  setSettings(patch) { snapshot.settings = { ...snapshot.settings, ...patch }; },
+  holdRefresh(value) { holdRefresh = value; },
+  releaseRefresh() { holdRefresh = false; for (const resolve of heldRefreshes.splice(0)) resolve(); },
+  refreshCalls: () => refreshCalls,
+  answerReads() { declineReads = false; },
   // What the renderer answers when the hidden window asks to release it.
   prepareSleep: () => (prepareSleep ? prepareSleep() : null),
 });

@@ -101,7 +101,7 @@ export function SessionWindows({ view, nowMs }: { view: ProviderView; nowMs: num
             <ChevronRight aria-hidden="true" />
             Separate model allowances
           </summary>
-          <p>These apply only to the named model and are separate from your main Codex allowance.</p>
+          <p>{`These apply only to the named model or client and are separate from your main ${view.name} allowance.`}</p>
           {modelWindows.map(renderWindow)}
         </details>
       )}
@@ -241,6 +241,7 @@ export function ProviderSummary({
   settings = DEFAULT_SCHEDULE,
   banked = null,
   extraUsage = null,
+  notInPlan = false,
   onOpen,
 }: {
   view: ProviderView;
@@ -250,6 +251,8 @@ export function ProviderSummary({
   banked?: BankedResets | null;
   /** Fable only: whether extra usage was on at the last Refresh. */
   extraUsage?: ExtraUsageState | null;
+  /** The provider names a plan that has no such allowance: nothing is awaited. */
+  notInPlan?: boolean;
   onOpen?: () => void;
 }) {
   const { activeDays, activeStartHour, activeEndHour } = settings;
@@ -264,12 +267,19 @@ export function ProviderSummary({
       <article className={`provider-card pnl ${view.id} unknown`} aria-label={`${view.name} allowance`}>
         <CardHead
           view={view}
-          pill={<StatePill state="unknown" label={view.expired ? 'Needs reading' : 'Learning'} />}
+          pill={
+            <StatePill
+              state="unknown"
+              label={notInPlan && !view.current ? 'Not in plan' : view.expired ? 'Needs reading' : 'Learning'}
+            />
+          }
         />
         <p className="provider-empty">
-          {view.expired
-            ? 'The last allowance window ended. Waiting for a new provider reading.'
-            : 'Waiting for the provider’s first allowance observation.'}
+          {notInPlan && !view.current
+            ? `Your current plan does not include a ${view.name} allowance.`
+            : view.expired
+              ? 'The last allowance window ended. Waiting for a new provider reading.'
+              : 'Waiting for the provider’s first allowance observation.'}
         </p>
         {view.current && last != null && (
           <>

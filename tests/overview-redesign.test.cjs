@@ -353,3 +353,9 @@ test('the Claude free-reset record is validated, saved and offered in Settings',
   snapshot.settings.showClaudeSubscription = false;
   assert.doesNotMatch(render(SubscriptionsSection, { snapshot, update: async () => true }), /claude-free-resets/);
 });
+
+test('Fable keeps its own reserve until the Claude weekly forecast is known, as the backend does', () => {
+  const pool = { status: 'applied', bindingAtReset: 'pool', share: 0.5, pool: { expectedRemaining: 40 } };
+  assert.equal(budget.forecastReserve({ sharedPool: pool }, 10), 20);
+  assert.equal(budget.forecastReserve({ sharedPool: { ...pool, pool: { expectedRemaining: null } } }, 10), 10);
+});

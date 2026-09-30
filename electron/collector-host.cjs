@@ -68,6 +68,12 @@ function createCollectorHost({ fork, modulePath, config, requestTimeoutMs = DEFA
       else entry.reject(new Error(message.error?.message || 'Collector request failed.'));
       scheduleIdle();
     });
+    // A fatal V8 error (such as running out of memory) is reported here before
+    // the exit below fails the child's requests. An EventEmitter 'error' with no
+    // listener would throw in the main process instead.
+    spawned.on('error', (type, location) => {
+      onLog(`Collector process error: ${type}${location ? ` at ${location}` : ''}.`);
+    });
     spawned.on('exit', (code) => {
       if (child === spawned) child = null;
       clearTimeout(retiring.get(spawned)?.timer);

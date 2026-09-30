@@ -42,6 +42,15 @@ export default function App() {
   // starts empty so a failed local read can never masquerade as real usage.
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [refreshing, setRefreshing] = useState(Boolean(window.aiUsage));
+  // A requested Refresh has its own flag: a period read or a pushed update
+  // clears `refreshing` when it lands, which must not re-enable Refresh while
+  // the requested collection is still running.
+  const [manualRefreshing, setManualRefreshing] = useState(false);
+  const manualRefreshInFlight = useRef(false);
+  const busy = refreshing || manualRefreshing;
+  // Whether any snapshot has been shown; before one, a declined read must not
+  // leave the loading screen waiting with no explanation.
+  const hasSnapshot = useRef(false);
   // Notices are published to the toast, not held as App state: see NoticeToast.
   const [notices] = useState(createNoticeChannel);
   const setNotice = notices.show;
@@ -53,14 +62,15 @@ export default function App() {
 
   useEffect(() => {
     return window.aiUsage?.onPrepareSleep?.(() => {
-      if (!snapshot || loadError || refreshing || dataOperation || setupRequested || tab === 'settings') return false;
+      if (!snapshot || loadError || busy || dataOperation || setupRequested || tab === 'settings') return false;
       if (document.querySelector('[role="dialog"], [aria-busy="true"], [data-keep-awake="true"]')) return false;
       return saveDashboardView({ tab, days, costQuery, provider: detail });
     });
-  }, [snapshot, loadError, refreshing, dataOperation, setupRequested, tab, days, costQuery, detail]);
+  }, [snapshot, loadError, busy, dataOperation, setupRequested, tab, days, costQuery, detail]);
 
   const commitSnapshot = useCallback((next: Snapshot | null | undefined) => {
     if (!next) return;
+    hasSnapshot.current = true;
     const matchesPeriod = next.costs.periodDays === desiredPeriod.current;
     setSnapshot((current) =>
       !matchesPeriod && current ? { ...next, costs: current.costs, desktopEstimates: current.desktopEstimates } : next,
@@ -129,7 +139,10 @@ export default function App() {
         // last snapshot is still the truth, so it is kept rather than cleared.
         if (!next) {
           desiredPeriod.current = committedPeriod.current;
-          setNotice(BUSY_NOTICE);
+          // The toast is not shown before the first snapshot; the loading
+          // screen then explains the wait and offers Try again instead.
+          if (hasSnapshot.current) setNotice(BUSY_NOTICE);
+          else setLoadError(BUSY_NOTICE);
           return;
         }
         // The selected period is committed with the data, never before it. A
@@ -142,6 +155,20 @@ export default function App() {
         desiredPeriod.current = committedPeriod.current;
         setLoadError(message);
         notices.fail(message);
+        // An earlier read that succeeded before this one failed leaves the
+        // main process on a period this window no longer shows, and its later
+        // updates would be set aside. Ask again, quietly, for the one shown.
+        const shown = committedPeriod.current;
+        if (period !== shown && hasSnapshot.current) {
+          window.aiUsage.getSnapshot(shown).then(
+            (next) => {
+              if (request !== loadRequest.current || !next) return;
+              commitSnapshot(next);
+              setLoadError('');
+            },
+            () => {},
+          );
+        }
       } finally {
         if (request === loadRequest.current) {
           pendingPeriod.current = null;
@@ -175,6 +202,9 @@ export default function App() {
       setNotice('The live collectors run in the installed desktop app.');
       return;
     }
+    if (manualRefreshInFlight.current) return;
+    manualRefreshInFlight.current = true;
+    setManualRefreshing(true);
     setRefreshing(true);
     try {
       const result = await window.aiUsage.refresh();
@@ -196,6 +226,8 @@ export default function App() {
     } catch (error) {
       failWith('Refresh did not finish.')(error);
     } finally {
+      manualRefreshInFlight.current = false;
+      setManualRefreshing(false);
       setRefreshing(false);
     }
   };
@@ -205,9 +237,9 @@ export default function App() {
   // is registered once and reads the current refresh state through a ref
   // instead of being removed and re-added on every render.
   const closeDetail = () => setDetail(null);
-  const shortcutState = useRef({ refresh, refreshing, detail, closeDetail });
+  const shortcutState = useRef({ refresh, busy, detail, closeDetail });
   useEffect(() => {
-    shortcutState.current = { refresh, refreshing, detail, closeDetail };
+    shortcutState.current = { refresh, busy, detail, closeDetail };
   });
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -232,8 +264,8 @@ export default function App() {
         return;
       }
       if (event.key === 'r' || event.key === 'R') {
-        const { refresh: run, refreshing: busy } = shortcutState.current;
-        if (window.aiUsage && !busy) void run();
+        const { refresh: run, busy: running } = shortcutState.current;
+        if (window.aiUsage && !running) void run();
       }
     };
     window.addEventListener('keydown', onKey);
@@ -540,7 +572,7 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <Header snapshot={snapshot} tab={tab} onTab={setTab} refreshing={refreshing} onRefresh={refresh} />
+      <Header snapshot={snapshot} tab={tab} onTab={setTab} refreshing={busy} onRefresh={refresh} />
       {(snapshot.settings.showClaudeSubscription !== false || setupRequested) && (
         <ClaudeSetup requested={setupRequested} onClose={() => setSetupRequested(false)} />
       )}
@@ -559,7 +591,7 @@ export default function App() {
         {tab === 'overview' && !detail && (
           <Overview
             snapshot={snapshot}
-            refreshing={refreshing}
+            refreshing={busy}
             onRefresh={refresh}
             onSetupClaude={() => setSetupRequested(true)}
             onSources={() => {

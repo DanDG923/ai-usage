@@ -61,6 +61,7 @@ function windowInsights(
   name: string,
   window: QuotaWindow,
   nowMs: number,
+  riskPace: number,
   included: string | null = null,
 ): Insight[] {
   const forecast = window.forecast;
@@ -68,7 +69,7 @@ function windowInsights(
   if (forecast.expired) return [];
   // Fable draws on this window: one event, named once, with Fable included.
   if (included) {
-    return windowInsights(provider, name, window, nowMs).map((row) => ({
+    return windowInsights(provider, name, window, nowMs, riskPace).map((row) => ({
       ...row,
       title: `${row.title}, ${included} included`,
       detail: `${row.detail} Every Claude model shares this weekly limit.`,
@@ -94,13 +95,40 @@ function windowInsights(
       },
     ];
   }
-  if (forecast.paceRatio > 1.05) {
+  // A risk pace set below 1.05 opens the note too: the verdict already calls it a risk.
+  if (forecast.paceRatio > Math.min(1.05, riskPace)) {
+    // With no safe pace left the ratio is a placeholder, not a multiple.
+    if (forecast.safePace <= 0) {
+      return [
+        {
+          tone: 'warm',
+          title: `${name} has no safe pace left`,
+          detail: 'Nothing above the reserve is left for active use before the reset.',
+          about,
+        },
+      ];
+    }
+    // Two decimals near 1×, where one would round 1.03× down to "1.0×".
+    const multiple = forecast.paceRatio.toFixed(forecast.paceRatio < 1.1 ? 2 : 1);
+    // Warm only past the pace the user treats as a risk (Settings → Alerts),
+    // the same line the verdict and its alerts use.
+    const tone = forecast.paceRatio > riskPace ? 'warm' : 'neutral';
+    if (forecast.paceRatio <= 1) {
+      return [
+        {
+          tone,
+          title: `${name} is near its safe pace`,
+          detail: `${multiple}× the sustainable pace, past the ${riskPace}× you treat as a risk.`,
+          about,
+        },
+      ];
+    }
     const reduction = Math.max(0, Math.round((1 - 1 / forecast.paceRatio) * 100));
     return [
       {
-        tone: forecast.paceRatio > 1.2 ? 'warm' : 'neutral',
+        tone,
         title: `${name} is above its safe pace`,
-        detail: `${forecast.paceRatio.toFixed(1)}× the sustainable pace. Reduce active usage by about ${reduction}% to return to plan.`,
+        detail: `${multiple}× the sustainable pace. Reduce active usage by about ${reduction}% to return to plan.`,
         about,
       },
     ];
@@ -115,16 +143,25 @@ function insights(views: ProviderView[], snapshot: Snapshot, nowMs: number): Ins
   const fable = views.find((view) => view.id === 'fable')?.current ?? null;
   const claudeWindows = views.find((view) => view.id === 'claude')?.quota?.windows ?? [];
   const host = fable ? claudeWindows.find((window) => foldsInto(fable, window)) : undefined;
+  const riskPace = Number(snapshot.settings.paceRiskThreshold) || 1.2;
   for (const view of views) {
     const forecast = view.current?.forecast;
     if (!view.current || !forecast || forecast.expired) continue;
     const folded = view.id === 'fable' && host != null;
     const included = (window: QuotaWindow) =>
       view.id === 'claude' && host?.bucketId === window.bucketId ? 'Fable' : null;
-    if (!folded) rows.push(...windowInsights(view.id, view.name, view.current, nowMs, included(view.current)));
+    if (!folded)
+      rows.push(...windowInsights(view.id, view.name, view.current, nowMs, riskPace, included(view.current)));
     for (const window of view.secondaryWindows) {
       rows.push(
-        ...windowInsights(view.id, `${view.name} ${allowanceWindowLabel(window)}`, window, nowMs, included(window)),
+        ...windowInsights(
+          view.id,
+          `${view.name} ${allowanceWindowLabel(window)}`,
+          window,
+          nowMs,
+          riskPace,
+          included(window),
+        ),
       );
     }
     if (view.stale) {
@@ -135,7 +172,11 @@ function insights(views: ProviderView[], snapshot: Snapshot, nowMs: number): Ins
       });
     }
   }
-  const missing = views.filter((view) => !view.current || view.current.forecast.expired);
+  // A plan without a Fable allowance has no Fable reading to wait for.
+  const missing = views.filter(
+    (view) =>
+      (!view.current || view.current.forecast.expired) && !(view.id === 'fable' && snapshot.fableApplies === false),
+  );
   const learning = views.filter((view) => view.current && !view.current.forecast.expired && !hasForecast(view));
   if (missing.length) {
     rows.push({
@@ -435,6 +476,7 @@ export function Overview({
               settings={snapshot.settings}
               banked={bankedResetsFor(view.id, snapshot, nowMs)}
               extraUsage={view.id === 'fable' ? extraUsageAtLastRefresh(snapshot) : null}
+              notInPlan={view.id === 'fable' && snapshot.fableApplies === false}
               onOpen={onOpenProvider ? () => onOpenProvider(view.id) : undefined}
             />
           ))}
@@ -523,8 +565,17 @@ export function Overview({
               <dt>
                 <span>Price coverage</span>
               </dt>
-              <dd className="ledger-value">{priceCoverage(snapshot.costs.coverage)}</dd>
-              <dd className="ledger-note">{unpriced ? 'of recorded tokens' : 'All tracked categories priced'}</dd>
+              {/* With no usage there is nothing to price: not 0%, and not "all priced". */}
+              <dd className="ledger-value">
+                {snapshot.costs.totalTokens > 0 ? priceCoverage(snapshot.costs.coverage) : '—'}
+              </dd>
+              <dd className="ledger-note">
+                {snapshot.costs.totalTokens > 0
+                  ? unpriced
+                    ? 'of recorded tokens'
+                    : 'All tracked categories priced'
+                  : 'No usage in this period'}
+              </dd>
             </dl>
             {value && (
               <dl className="ledger-cell">

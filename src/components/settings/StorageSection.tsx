@@ -48,7 +48,8 @@ export function StorageSection({
             min={1}
             max={365}
             step={1}
-            onCommit={(value) => update({ backupRetentionCount: Math.round(value) })}
+            integer
+            onCommit={(value) => update({ backupRetentionCount: value })}
           />
           <SettingRow
             className="backup-row"

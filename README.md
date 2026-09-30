@@ -159,7 +159,7 @@ Codex records are grouped by the recorded root turn ID (or a main thread's turn 
 
 On the next normal collection, each eligible local log is re-read once to backfill structural attribution, using the existing event keys to update rather than duplicate usage. Subsequent scans resume incrementally. Logs no longer available locally retain their existing costs and may remain unattributed. No prompts or response content are added to the ledger. The browser preview includes clearly labelled sample task breakdowns.
 
-The Details screen also groups the ledger **by project**, using the working directory each Codex or Claude session ran in, and shows **reset cycles**: the peak percentage each past allowance window reached and what that window's tokens are worth today. **Export CSV…** writes the ledger for the last 30, 90, or 365 days with the per-record API-equivalent, and **Copy summary** puts a plain-text version of every allowance on the clipboard.
+The Details screen also groups the ledger **by project**, using the working directory each Codex or Claude session ran in, and shows **reset cycles**: the peak percentage each past allowance window reached and what that window's tokens are worth today. **Export CSV…** writes the ledger for the last 30, 90, or 365 local calendar days, the same days as the dashboard's analysis period, with the per-record API-equivalent, and **Copy summary** puts a plain-text version of every allowance on the clipboard.
 
 Details also shows the **cache hit rate** (the share of prompt tokens read from cache), **recent totals** (today, the last seven days against the seven before, month to date, and a straight-line projection for the month), and **when the work happens**, an hour-by-weekday heatmap of API-equivalent cost. With monthly subscription fees entered under **Settings → Subscriptions → Monthly fees**, the Overview adds a **subscription value** figure: how many times over the period's API-equivalent value covers the fees for the same number of days. It compares; it never charges. Without fees, the Overview offers an **Add fees** link to that setting instead.
 
@@ -211,7 +211,7 @@ The database is stored under the standard Windows app-data directory for AI Usag
 
 Backups, restores, and CSV exports run in a dedicated background worker. Storage changes are queued safely, and quitting waits for active storage work to complete.
 
-**Restore from backup…** merges an export into the local database. Existing token records, observations, daily totals, and edited prices are kept. On a fresh database, saved prices replace the built-in defaults so recovery restores the original cost calculations. Settings are replaced by the export's settings. A fresh safety backup is written before the merge, and a storage failure aborts the restore immediately.
+**Restore from backup…** merges an export into the local database. Existing token records, observations, daily totals, and edited prices are kept. On a fresh database, saved prices replace the built-in defaults so recovery restores the original cost calculations. Settings are replaced by the ones the backup contains; a setting added in a later version than the backup keeps its current value. A fresh safety backup is written before the merge, and a storage failure aborts the restore immediately.
 
 Closing the window keeps the tray app running. Use **Quit** from the tray menu to exit fully.
 

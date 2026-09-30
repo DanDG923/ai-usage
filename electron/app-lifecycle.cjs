@@ -59,6 +59,19 @@ async function initializeWithVisibleFailure({ initialize, onFailure }) {
   }
 }
 
+// The bounds a released window is recreated with. Windows does not move a new
+// window that lies off every display, so bounds saved on a monitor that has
+// since been disconnected keep only their size and let the window be placed
+// afresh. A sliver at an edge is not enough to find and drag it back.
+const MIN_VISIBLE_PX = 64;
+function restorableBounds(bounds, displays) {
+  if (!bounds) return {};
+  const overlaps = (displays || []).some(({ workArea: area }) =>
+    Math.min(bounds.x + bounds.width, area.x + area.width) - Math.max(bounds.x, area.x) >= MIN_VISIBLE_PX
+    && Math.min(bounds.y + bounds.height, area.y + area.height) - Math.max(bounds.y, area.y) >= MIN_VISIBLE_PX);
+  return overlaps ? bounds : { width: bounds.width, height: bounds.height };
+}
+
 function resolveWindowTarget({ isPackaged, devUrl, filePath }) {
   if (!isPackaged && devUrl) return { kind: 'url', value: devUrl };
   return { kind: 'file', value: filePath };
@@ -96,5 +109,6 @@ module.exports = {
   initializeWithVisibleFailure,
   registerSingleInstance,
   resolveWindowTarget,
+  restorableBounds,
   revealWindow,
 };

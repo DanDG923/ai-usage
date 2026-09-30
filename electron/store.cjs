@@ -26,6 +26,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // Beyond this age, keep each local day's endpoints and peak per bucket/window.
 // Provider rebounds must not erase the maximum shown in reset-cycle history.
 const COMPACT_AFTER_MS = 60 * DAY_MS;
+// About a megabyte of ledger CSV is written at a time.
+const CSV_BATCH_CHARS = 1 << 20;
 const OPENAI_LONG_CONTEXT_THRESHOLD = 272_000;
 const OPENAI_LONG_CONTEXT_MODELS = new Set(['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
 
@@ -221,6 +223,23 @@ function backupSettings(database) {
   const settings = { ...DEFAULT_SETTINGS };
   for (const row of database.prepare('SELECT key, value_json FROM settings').iterate()) {
     if (Object.hasOwn(DEFAULT_SETTINGS, row.key)) settings[row.key] = json(row.value_json, settings[row.key]);
+  }
+  return settings;
+}
+
+// The settings a SQLite backup actually stored. A restore writes every key it
+// is given, so filling the gaps with defaults, as an export does, would reset
+// settings the backed-up version never had. A renamed key maps forward, and
+// the current name wins when a database holds both.
+const UNREADABLE = Symbol('unreadable');
+function storedSettings(database) {
+  const settings = {};
+  for (const row of database.prepare('SELECT key, value_json FROM settings').iterate()) {
+    const renamed = Object.hasOwn(SETTING_ALIASES, row.key);
+    const key = renamed ? SETTING_ALIASES[row.key] : row.key;
+    if (!Object.hasOwn(DEFAULT_SETTINGS, key) || (renamed && Object.hasOwn(settings, key))) continue;
+    const value = json(row.value_json, UNREADABLE);
+    if (value !== UNREADABLE) settings[key] = value;
   }
   return settings;
 }
@@ -1344,7 +1363,9 @@ class UsageStore {
     const allowanceChanges = settings.allowanceChanges || [];
     const key = JSON.stringify([sourceId, bucketId]);
     // Both learning settings change the estimate without touching a revision.
-    const exclusions = JSON.stringify([excludedDates, allowanceChanges]);
+    // So does the set of readings: a held-back status-line reading is let in
+    // once the provider has been silent past the grace, with nothing written.
+    const exclusions = JSON.stringify([excludedDates, allowanceChanges, observations.map((row) => row.id ?? row.observed_at)]);
     const cached = !this.db.isTransaction ? this.tokenCapacityCache.get(key) : null;
     if (cached && cached.usageRevision === evidence.revision && cached.quotaRevision === quotaRevision
       && cached.exclusions === exclusions && nowMs >= cached.evaluatedAt && nowMs < cached.expiresAt) return cached.value;
@@ -1674,11 +1695,14 @@ class UsageStore {
       totalTokens += eventTokens;
       if (cost.covered) coveredTokens += eventTokens;
       else if (eventTokens > 0) {
-        const unpricedKey = `${event.source_id}|${event.model || 'Unknown'}`;
+        // Keyed apart from any model actually named "Unknown", which can be priced.
+        const unpricedKey = event.model ? `${event.source_id}|${event.model}` : `${event.source_id}|`;
         const unpriced = unpricedModelsMap.get(unpricedKey) || {
           sourceId: event.source_id,
           model: event.model || 'Unknown',
           tokens: 0,
+          // Records without a model name: no catalogue price can apply to them.
+          ...(event.model ? {} : { unnamed: true }),
         };
         unpriced.tokens += eventTokens;
         unpricedModelsMap.set(unpricedKey, unpriced);
@@ -1967,10 +1991,12 @@ class UsageStore {
   }
 
   // Everything the Details ledger shows, as one CSV a spreadsheet can open.
-  // Token counts and the current-catalogue equivalent in USD; no prompts.
-  exportLedgerCsv(days = 90, nowMs = Date.now()) {
-    const since = iso(nowMs - days * DAY_MS);
-    const events = this.prepare('SELECT * FROM usage_events WHERE occurred_at >= ? AND occurred_at <= ? ORDER BY occurred_at ASC').all(since, iso(nowMs));
+  // Token counts and the current-catalogue equivalent in USD; no prompts. The
+  // period is the dashboard's: the last N local calendar days. Given `write`,
+  // text is handed over in batches as the ledger is read, so a long, busy
+  // period is never held in memory as one string; otherwise it is returned.
+  exportLedgerCsv(days = 90, nowMs = Date.now(), write = null) {
+    const since = iso(periodStart(days, nowMs));
     const escape = (value) => {
       const text = value == null ? '' : String(value);
       // CSV quoting alone does not stop spreadsheet formulas. Guard text at
@@ -1986,22 +2012,33 @@ class UsageStore {
     const header = ['occurred_at', 'source', 'model', 'project', 'session_id', 'input_tokens', 'cached_input_tokens',
       'cache_write_5m_input_tokens', 'cache_write_1h_input_tokens', 'output_tokens', 'reasoning_output_tokens',
       'api_equivalent_usd', 'priced'];
-    const lines = [header.join(',')];
+    const chunks = [];
+    const emit = write || ((text) => chunks.push(text));
+    let batch = `${header.join(',')}\r\n`;
+    let rows = 0;
     this.withPriceCache(() => {
+      const events = this.prepare('SELECT * FROM usage_events WHERE occurred_at >= ? AND occurred_at <= ? ORDER BY occurred_at ASC')
+        .iterate(since, iso(nowMs));
       for (const event of events) {
         const cost = this.calculateCost(event);
         let cacheWrite5m = Number(event.cache_write_5m_input_tokens || 0);
         const cacheWrite1h = Number(event.cache_write_1h_input_tokens || 0);
         if (cacheWrite5m + cacheWrite1h === 0) cacheWrite5m = Number(event.cache_write_input_tokens || 0);
-        lines.push([
+        batch += `${[
           event.occurred_at, event.source_id, event.model, event.project, event.session_id,
           event.input_tokens, event.cached_input_tokens, cacheWrite5m, cacheWrite1h,
           event.output_tokens, event.reasoning_output_tokens,
           round(cost.actualUsd, 6), cost.covered ? 'yes' : 'no',
-        ].map(escape).join(','));
+        ].map(escape).join(',')}\r\n`;
+        rows += 1;
+        if (batch.length >= CSV_BATCH_CHARS) {
+          emit(batch);
+          batch = '';
+        }
       }
     });
-    return { csv: `${lines.join('\r\n')}\r\n`, rows: events.length, since };
+    emit(batch);
+    return write ? { rows, since } : { csv: chunks.join(''), rows, since };
   }
 
   // Housekeeping after a refresh: compact old polling rows so the table stops
@@ -2024,11 +2061,14 @@ class UsageStore {
       }
       let removed = 0;
       const remove = this.prepare('DELETE FROM quota_observations WHERE id = ?');
+      // Resolved once: the first compaction after an upgrade or a restore
+      // scans all history, and a per-row zone lookup built a formatter each time.
+      const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
       for (const rows of buckets.values()) {
         for (const cluster of clusterByWindow(rows)) {
           const days = new Map();
           for (const row of cluster.rows) {
-            const day = dateKey(row.observedAt);
+            const day = dateKey(row.observedAt, timeZone);
             if (!days.has(day)) days.set(day, []);
             days.get(day).push(row);
           }
@@ -2178,6 +2218,8 @@ class UsageStore {
     const exportPath = path.join(this.backupDirectory, `ai-usage-${stamp}.aiusage.json.gz`);
     const partialDatabase = `${databasePath}.partial`, partialExport = `${exportPath}.partial`;
     let exported = options.exportJson !== false;
+    // The folder is shown in Settings and can be deleted while the app runs.
+    fs.mkdirSync(this.backupDirectory, { recursive: true });
     this.sweepPartialBackups();
     try {
       this.db.prepare('VACUUM INTO ?').run(partialDatabase);
@@ -2227,7 +2269,7 @@ class UsageStore {
       const rows = (table) => (tables.has(table) ? database.prepare(`SELECT * FROM ${table}`).iterate() : []);
       return {
         schemaVersion: 1,
-        settings: backupSettings(database),
+        settings: storedSettings(database),
         observations: rows('quota_observations'),
         usageEvents: rows('usage_events'),
         dailyUsage: rows('account_daily_usage'),

@@ -30,6 +30,7 @@ const {
   initializeWithVisibleFailure,
   registerSingleInstance,
   resolveWindowTarget,
+  restorableBounds,
   revealWindow,
   createDeadline,
   settleWithin,
@@ -65,6 +66,7 @@ let window;
 let windowIdle;
 let savedWindowBounds;
 let savedWindowMaximized = false;
+let lastDashboardReload = 0;
 let activeDashboardRequests = 0;
 let tray;
 // The tray flyout controller; its window exists only while shown or recently hidden.
@@ -185,6 +187,7 @@ function updateLog(message) {
 
 // The renderer owns the selected period, so every snapshot the main process
 // emits — refresh, settings change, price edit, backup — has to use it too.
+// Called without a valid period it changes nothing and reports the current one.
 function setPeriodDays(days) {
   const requested = Math.round(Number(days));
   if (Number.isFinite(requested) && requested >= 1 && requested <= 365) periodDays = requested;
@@ -298,7 +301,7 @@ function createWindow() {
   const chrome = CHROME[resolvedTheme()];
   window = new BrowserWindow({
     ...WINDOW_BOUNDS,
-    ...savedWindowBounds,
+    ...restorableBounds(savedWindowBounds, screen.getAllDisplays()),
     show: false,
     backgroundColor: chrome.background,
     title: 'AI Usage',
@@ -354,6 +357,23 @@ function createWindow() {
     refreshIfStale({ trigger: REFRESH_TRIGGERS.WINDOW_SHOW });
   });
   window.on('closed', () => { if (window === targetWindow) window = null; });
+  // A crashed renderer leaves a blank window that nothing else recovers. One on
+  // screen is reloaded, at most once a minute so a renderer that keeps failing
+  // cannot loop; otherwise the window is released as idle release does, and the
+  // next open builds a fresh one.
+  targetWindow.webContents.on('render-process-gone', (_event, details) => {
+    if (isQuitting || details?.reason === 'clean-exit' || targetWindow.isDestroyed()) return;
+    logRendererError(`Dashboard renderer stopped (${details?.reason || 'unknown'}).`);
+    if (targetWindow.isVisible() && Date.now() - lastDashboardReload > 60_000) {
+      lastDashboardReload = Date.now();
+      targetWindow.webContents.reload();
+      return;
+    }
+    savedWindowBounds = targetWindow.getNormalBounds();
+    savedWindowMaximized = targetWindow.isMaximized();
+    releaseDashboardMemory();
+    targetWindow.destroy();
+  });
   if (savedWindowMaximized) targetWindow.maximize();
   return window;
 }
@@ -638,7 +658,8 @@ function applySettingsEffects() {
 // or the setting means nothing. Every caller is automatic, so the trigger's
 // policy never reads Claude plan usage here.
 function refreshIfStale({ trigger, ignoreSchedule = false } = {}) {
-  if (!store || refreshRuns.running) return;
+  // The window can be shown while an update install has closed the database.
+  if (!store || storageClosing() || refreshRuns.running) return;
   if (!ignoreSchedule && !automaticCollectionEnabled()) return;
   if (Date.now() - lastRefreshAt < STALE_AFTER_MS) return;
   refreshAll(refreshOptionsFor(trigger)).catch(() => {});

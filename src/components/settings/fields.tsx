@@ -107,6 +107,7 @@ export function NumericSetting({
   max,
   step,
   suffix,
+  integer = false,
   disabled = false,
   onCommit,
   onDraftChange,
@@ -118,6 +119,8 @@ export function NumericSetting({
   max: number;
   step: number;
   suffix?: string;
+  /** Whole numbers only. A fraction is invalid rather than rounded on save, so the field never shows what was not saved. */
+  integer?: boolean;
   disabled?: boolean;
   onCommit: (value: number) => Promise<void | boolean>;
   /** The valid value being typed, or null when the draft is empty, out of range or abandoned. */
@@ -140,7 +143,13 @@ export function NumericSetting({
   }
   const inRange = (text: string) => {
     const number = Number(text);
-    return text.trim() !== '' && Number.isFinite(number) && number >= min && number <= max;
+    return (
+      text.trim() !== '' &&
+      Number.isFinite(number) &&
+      number >= min &&
+      number <= max &&
+      (!integer || Number.isInteger(number))
+    );
   };
   const parsed = Number(draft);
   const valid = inRange(draft);

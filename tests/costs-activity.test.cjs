@@ -335,3 +335,13 @@ test('reset-cycle bars carry the provider colour, mark the open window and descr
 function literal(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
+
+test('the cache saving bars keep their proportion for small totals, and an empty period has no coverage', () => {
+  const snapshot = structuredClone(demoSnapshot);
+  snapshot.costs = { ...snapshot.costs, actual: 0.05, withoutCache: 0.2 };
+  assert.match(costsPage(snapshot), /class="with-cache"[\s\S]*?--fill:25%/);
+  snapshot.costs = { ...snapshot.costs, actual: 0, withoutCache: 0, totalTokens: 0, coverage: 0, isLowerBound: false, unpricedModels: [] };
+  const empty = costsPage(snapshot);
+  assert.match(empty, /class="with-cache"[\s\S]*?--fill:2%/);
+  assert.match(text(empty), /Recorded token price coverage — No usage in this period/);
+});

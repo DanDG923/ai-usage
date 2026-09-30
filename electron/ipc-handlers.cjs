@@ -34,8 +34,16 @@ function registerIpc(context) {
   handleIpc('dashboard:get-snapshot', (_event, days = 30) => {
     // The window outlives the database handle briefly while an update installs.
     if (storageClosing()) return getCachedSnapshot()?.value ?? getPreviousSnapshot() ?? null;
+    // A failed read keeps the previous period. The renderer stays on it, and
+    // every later update would otherwise be built for the period it rejected.
+    const previous = setPeriodDays();
     setPeriodDays(days);
-    return snapshot();
+    try {
+      return snapshot();
+    } catch (error) {
+      setPeriodDays(previous);
+      throw error;
+    }
   });
   const pageOptions = (options) => (options && typeof options === 'object' ? options : {});
   handleIpc('dashboard:get-sessions', (_event, options) => (storageClosing() ? EMPTY_SESSION_PAGE : store.getSessionPage(pageOptions(options))));
@@ -46,7 +54,9 @@ function registerIpc(context) {
     const settings = store.updateSettings(patch || {});
     // The Fable estimate is projected when the snapshot is built, so a saved
     // allowance change is reflected by the very next snapshot.
-    const cheapSettings = new Set(['theme', 'notifyDesktop', 'notifyResets', 'notifyFallback', 'dailyDigest', 'dailyDigestHour', 'alertsSnoozedUntil', 'autoUpdate', 'launchAtLogin', 'refreshIntervalMinutes', 'softwareRendering']);
+    // The refresh interval is not cheap: it sets how long a lower status-line
+    // reading waits for confirmation, which the forecasts depend on.
+    const cheapSettings = new Set(['theme', 'notifyDesktop', 'notifyResets', 'notifyFallback', 'notifyDigest', 'digestHour', 'alertsSnoozedUntil', 'autoUpdate', 'launchAtLogin', 'softwareRendering']);
     const affectsSnapshot = Object.keys(patch || {}).some((key) => !cheapSettings.has(key));
     if (affectsSnapshot) invalidateSnapshot();
     applySettingsEffects();

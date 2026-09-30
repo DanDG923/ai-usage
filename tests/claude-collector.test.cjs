@@ -590,9 +590,114 @@ test('status-line rotation imports the stable old file before the new active inb
   } finally { store.close(); }
 });
 
+test('a rotation between imports restarts the live inbox even once it outgrows the old cursor', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-rotation-'));
+  const store = new UsageStore(path.join(root, 'test.sqlite'), path.join(root, 'Backups'));
+  const inbox = path.join(root, 'inbox.jsonl');
+  const at = (minute) => new Date(Date.parse('2026-08-29T10:00:00Z') + minute * 60_000).toISOString();
+  const row = (minute) => JSON.stringify({ ai_usage_captured_at: at(minute), rate_limits: { seven_day: { used_percentage: 20 + minute / 10, resets_at: '2026-09-04T12:00:00Z' } } });
+  const lines = (from, to) => Array.from({ length: to - from }, (_, index) => `${row(from + index)}\n`).join('');
+  try {
+    fs.writeFileSync(inbox, lines(0, 3), 'utf8');
+    assert.equal(importClaudeInbox(store, inbox).observations, 3);
+    // Before the next import the helper appends, rotates, and writes more to
+    // a new inbox than the old cursor covered.
+    fs.appendFileSync(inbox, lines(3, 5), 'utf8');
+    fs.renameSync(inbox, `${inbox}.rotated-202608291005000000-1`);
+    fs.writeFileSync(inbox, lines(5, 12), 'utf8');
+    const result = importClaudeInbox(store, inbox);
+    assert.equal(result.invalidRecords, 0, 'no record is read from the middle');
+    const stored = store.db.prepare("SELECT COUNT(*) AS count FROM quota_observations WHERE source_id = 'claude'").get().count;
+    assert.equal(stored, 12, 'every reading of both files is kept');
+    assert.equal(importClaudeInbox(store, inbox).snapshots, 0, 'the restarted inbox keeps an ordinary cursor afterwards');
+  } finally { store.close(); }
+});
+
+test('a refresh between a rotation and the new inbox still restarts that inbox', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-rotation-'));
+  const store = new UsageStore(path.join(root, 'test.sqlite'), path.join(root, 'Backups'));
+  const inbox = path.join(root, 'inbox.jsonl');
+  const at = (minute) => new Date(Date.parse('2026-08-29T10:00:00Z') + minute * 60_000).toISOString();
+  const row = (minute) => JSON.stringify({ ai_usage_captured_at: at(minute), rate_limits: { seven_day: { used_percentage: 20 + minute / 10, resets_at: '2026-09-04T12:00:00Z' } } });
+  const lines = (from, to) => Array.from({ length: to - from }, (_, index) => `${row(from + index)}\n`).join('');
+  try {
+    fs.writeFileSync(inbox, lines(0, 3), 'utf8');
+    importClaudeInbox(store, inbox);
+    // The helper has moved the old inbox but not yet written the new one.
+    fs.renameSync(inbox, `${inbox}.rotated-202608291005000000-1`);
+    importClaudeInbox(store, inbox);
+    fs.writeFileSync(inbox, lines(3, 10), 'utf8');
+    assert.equal(importClaudeInbox(store, inbox).invalidRecords, 0, 'no record is read from the middle');
+    assert.equal(store.db.prepare("SELECT COUNT(*) AS count FROM quota_observations WHERE source_id = 'claude'").get().count, 10);
+  } finally { store.close(); }
+});
+
+test('a rotated file that keeps failing to import restarts the live inbox once, not every refresh', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-rotation-'));
+  const store = new UsageStore(path.join(root, 'test.sqlite'), path.join(root, 'Backups'));
+  const inbox = path.join(root, 'inbox.jsonl');
+  const at = (minute) => new Date(Date.parse('2026-08-29T10:00:00Z') + minute * 60_000).toISOString();
+  const row = (minute) => JSON.stringify({ ai_usage_captured_at: at(minute),
+    rate_limits: { seven_day: { used_percentage: 20 + minute, resets_at: '2026-09-04T12:00:00Z' } } });
+  // Storage fails on the rotated file's reading every time, as the collector
+  // storage-failure tests inject it, so that file never gets a cursor.
+  const record = store.recordObservation;
+  store.recordObservation = function (observation) {
+    if (observation.observedAt === at(0)) throw Object.assign(new Error('database is locked'), { code: 'ERR_SQLITE_ERROR' });
+    return record.call(this, observation);
+  };
+  try {
+    fs.writeFileSync(`${inbox}.rotated-202608291005000000-1`, `${row(0)}\n`, 'utf8');
+    fs.writeFileSync(inbox, `${row(1)}\n${row(2)}\n`, 'utf8');
+    const first = importClaudeInbox(store, inbox);
+    assert.equal(first.readErrors, 1);
+    assert.ok(first.bytesRead > 0);
+    const second = importClaudeInbox(store, inbox);
+    assert.equal(second.readErrors, 1);
+    assert.equal(second.bytesRead, 0, 'the unchanged live inbox is not read again');
+  } finally {
+    store.recordObservation = record;
+    store.close();
+  }
+});
+
+test('a failed reset of the live cursor keeps the rotated file for the next refresh', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-rotation-'));
+  const store = new UsageStore(path.join(root, 'test.sqlite'), path.join(root, 'Backups'));
+  const inbox = path.join(root, 'inbox.jsonl');
+  const rotated = `${inbox}.rotated-202608291005000000-1`;
+  const at = (minute) => new Date(Date.parse('2026-08-29T10:00:00Z') + minute * 60_000).toISOString();
+  const row = (minute) => JSON.stringify({ ai_usage_captured_at: at(minute), rate_limits: { seven_day: { used_percentage: 20 + minute / 10, resets_at: '2026-09-04T12:00:00Z' } } });
+  const lines = (from, to) => Array.from({ length: to - from }, (_, index) => `${row(from + index)}\n`).join('');
+  const forget = store.forgetImportedFile;
+  try {
+    fs.writeFileSync(inbox, lines(0, 3), 'utf8');
+    importClaudeInbox(store, inbox);
+    fs.renameSync(inbox, rotated);
+    fs.writeFileSync(inbox, lines(3, 10), 'utf8');
+    // A one-off storage failure while the live cursor is being reset.
+    store.forgetImportedFile = function () {
+      store.forgetImportedFile = forget;
+      throw Object.assign(new Error('database is locked'), { code: 'ERR_SQLITE_BUSY' });
+    };
+    assert.equal(importClaudeInbox(store, inbox).readErrors, 1);
+    assert.equal(fs.existsSync(rotated), true, 'the only sign of the rotation is kept');
+    assert.equal(importClaudeInbox(store, inbox).invalidRecords, 0, 'the retry restarts the new inbox');
+    assert.equal(store.db.prepare("SELECT COUNT(*) AS count FROM quota_observations WHERE source_id = 'claude'").get().count, 10);
+  } finally {
+    store.forgetImportedFile = forget;
+    store.close();
+  }
+});
+
+test('the helper doubles every PowerShell single-quote character in its inbox path', () => {
+  const helper = makeHelperScript("C:\\Users\\O\u2019Brien\\AppData\\Roaming\\ai-usage\\Bob's inbox.jsonl");
+  assert.ok(helper.includes("$target = 'C:\\Users\\O\u2019\u2019Brien\\AppData\\Roaming\\ai-usage\\Bob''s inbox.jsonl'"));
+});
+
 test('generated helper writes BOM-free UTF-8 and rotates before appending', () => {
   const helper = makeHelperScript('C:\\Temp\\ai-usage\\inbox.jsonl');
-  assert.match(helper, /AI_USAGE_HELPER_VERSION=1\.0\.3/);
+  assert.match(helper, /AI_USAGE_HELPER_VERSION=1\.0\.4/);
   assert.match(helper, /Move-Item/);
   assert.match(helper, /UTF8Encoding\(\$false\)/);
   assert.match(helper, /AppendAllText/);
@@ -791,6 +896,8 @@ test('helper installation preserves prior status line outside Claude settings', 
   try {
     const result = installClaudeHelper(path.join(root, 'inbox.jsonl'));
     const settings = JSON.parse(fs.readFileSync(result.settingsPath, 'utf8'));
+    // Windows PowerShell 5.1 reads a script without a byte-order mark as ANSI.
+    assert.deepEqual([...fs.readFileSync(path.join(claude, 'ai-usage-statusline.ps1')).subarray(0, 3)], [0xef, 0xbb, 0xbf]);
     assert.equal(settings.aiUsagePreviousStatusLine, undefined);
     assert.match(settings.statusLine.command, /ai-usage-statusline\.ps1/);
     assert.equal(result.previousStatusLinePreserved, true);

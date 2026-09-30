@@ -32,6 +32,28 @@ app.whenReady().then(async () => {
   await evaluate(() => window.testBridge.push(window.testBridge.fixture()));
   await new Promise((resolve) => setTimeout(resolve, 100));
   assert.equal(await evaluate(() => [...document.querySelectorAll('.period-switch button')].find((button) => button.getAttribute('aria-pressed') === 'true').textContent.includes('90')), true, 'old push cannot undo selected period');
+  // A superseded read that succeeds, then a newer one that fails, leave the
+  // main process on a period this window does not show: it asks again.
+  const period = (days) => window.webContents.executeJavaScript(`[...document.querySelectorAll('.period-switch button')].find((button) => button.textContent === '${days}d').click()`);
+  await period(30);
+  await period(7);
+  await until(() => window.testBridge.requests().includes(7));
+  await evaluate(() => { window.testBridge.resolve(30); window.testBridge.reject(7); });
+  await until(() => window.testBridge.requests().at(-1) === 90);
+  assert.equal(await evaluate(() => [...document.querySelectorAll('.period-switch button')].find((button) => button.getAttribute('aria-pressed') === 'true').textContent), '90d');
+  await evaluate(() => document.querySelector('[aria-label="Dismiss message"]')?.click());
+  // A pushed update landing during a Refresh must not re-enable Refresh.
+  await evaluate(() => { window.testBridge.holdRefresh(true); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'r' })); });
+  await until(() => window.testBridge.refreshCalls() === 1);
+  await evaluate(() => { const next = window.testBridge.fixture(); next.costs.periodDays = 90; window.testBridge.push(next); });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(await evaluate(() => document.querySelector('button[aria-keyshortcuts="R"]').disabled), true, 'Refresh stays disabled while it runs');
+  await evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'r' })));
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(await evaluate(() => window.testBridge.refreshCalls()), 1, 'a second Refresh is not started');
+  await evaluate(() => window.testBridge.releaseRefresh());
+  await until(() => !document.querySelector('button[aria-keyshortcuts="R"]').disabled);
+  await evaluate(() => document.querySelector('[aria-label="Dismiss message"]')?.click());
   await evaluate(() => document.querySelector('#tab-overview').click());
   await until(() => document.querySelectorAll('.runway-chart').length === 3);
   await evaluate(() => { const next = window.testBridge.fixture(); for (const quota of Object.values(next.quotas)) { if (!quota) continue; for (const entry of [quota, ...quota.windows]) { entry.resetsAt = new Date(Date.now() + 250).toISOString(); entry.forecast.expired = false; } } window.testBridge.push(next); });
@@ -123,6 +145,31 @@ app.whenReady().then(async () => {
   assert.equal(await evaluate(() => document.querySelector('#claude-free-resets input[type="date"]').value), '2026-10-22', 'a failed save restores the saved expiry');
   assert.match(await evaluate(() => document.querySelector('#claude-free-resets [role="alert"]').textContent), /could not be saved/);
   await evaluate(() => window.testBridge.rejectSettings(false));
+  // Retyping the saved day while an earlier save is still on its way saves it,
+  // and that earlier save landing does not put back the day typed past.
+  const typeInto = (selector, value) => window.webContents.executeJavaScript(`(() => { const input = document.querySelector(${JSON.stringify(selector)}); input.focus(); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(value)}); input.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  await evaluate(() => { window.testBridge.setSettings({ claudeFreeResets: 1, claudeFreeResetsExpireOn: '2026-10-22' }); window.testBridge.holdSettings(true); });
+  await typeInto('#claude-free-resets input[type="date"]', '2026-10-01');
+  await until(() => window.testBridge.heldSettings() === 1);
+  await typeInto('#claude-free-resets input[type="date"]', '2026-10-22');
+  await until(() => window.testBridge.heldSettings() === 2);
+  // The earlier save lands, and its snapshot renders, while the later one waits.
+  await evaluate(() => window.testBridge.releaseFirstSetting());
+  await until(() => window.testBridge.fixture().settings.claudeFreeResetsExpireOn === '2026-10-01');
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(await evaluate(() => document.querySelector('#claude-free-resets input[type="date"]').value), '2026-10-22', 'an earlier save landing does not put back a day typed past');
+  await evaluate(() => window.testBridge.releaseSettings());
+  await until(() => window.testBridge.fixture().settings.claudeFreeResetsExpireOn === '2026-10-22');
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(await evaluate(() => document.querySelector('#claude-free-resets input[type="date"]').value), '2026-10-22', 'the day typed last is kept');
+  // A whole-number setting marks a fraction invalid and puts the saved value back without saving it.
+  await typeInto('#claude-free-resets input[type="number"]', '2.5');
+  await until(() => document.querySelector('#claude-free-resets input[type="number"]').getAttribute('aria-invalid') === 'true');
+  // An offscreen window never holds focus, so leave the field as React sees it.
+  await evaluate(() => document.querySelector('#claude-free-resets input[type="number"]').dispatchEvent(new FocusEvent('focusout', { bubbles: true })));
+  await until(() => document.querySelector('#claude-free-resets input[type="number"]').value === '1');
+  assert.equal(await evaluate(() => window.testBridge.fixture().settings.claudeFreeResets), 1);
+  assert.equal(await evaluate(() => Boolean(document.querySelector('#claude-free-resets [role="alert"]'))), false, 'no save was attempted');
   if (process.env.AI_USAGE_RENDERER_QA_DIRECTORY) {
     const capture = async (name) => { await new Promise((resolve) => setTimeout(resolve, 400)); window.webContents.invalidate(); await new Promise((resolve) => setTimeout(resolve, 200)); fs.writeFileSync(path.join(process.env.AI_USAGE_RENDERER_QA_DIRECTORY, name), (await window.webContents.capturePage()).toPNG()); };
     fs.mkdirSync(process.env.AI_USAGE_RENDERER_QA_DIRECTORY, { recursive: true });
@@ -171,7 +218,25 @@ app.whenReady().then(async () => {
     await new Promise((resolve) => setTimeout(resolve, 200));
     fs.writeFileSync(path.join(process.env.AI_USAGE_RENDERER_QA_DIRECTORY, 'renderer-costs-light-900.png'), (await window.webContents.capturePage()).toPNG());
   }
-  console.log('RENDERER_DOM_PASS: pushes, retained tasks, periods, reset timer, currency, settings navigation and search, keyboard focus and alerts');
+  // A window opened while an update has closed storage explains the wait and
+  // can try again, rather than loading indefinitely.
+  const waiting = new BrowserWindow({ show: false, width: 1280, height: 900,
+    webPreferences: { preload: path.join(__dirname, 'renderer-dom-preload.cjs'), contextIsolation: true, sandbox: false, backgroundThrottling: false, offscreen: true,
+      additionalArguments: ['--decline-reads'] } });
+  const inWaiting = (fn) => waiting.webContents.executeJavaScript(`(${fn.toString()})()`);
+  await waiting.loadURL(process.env.AI_USAGE_RENDERER_URL);
+  for (let attempt = 0; !(await inWaiting(() => document.querySelector('.state-panel.is-error button'))); attempt++) {
+    if (attempt > 100) throw new Error('The declined first read left the loading screen without a retry.');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.match(await inWaiting(() => document.querySelector('.state-panel').textContent), /finishing an update/);
+  await inWaiting(() => { window.testBridge.answerReads(); document.querySelector('.state-panel.is-error button').click(); });
+  for (let attempt = 0; !(await inWaiting(() => document.querySelector('#tab-costs'))); attempt++) {
+    if (attempt > 100) throw new Error('Try again did not load the dashboard.');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  waiting.destroy();
+  console.log('RENDERER_DOM_PASS: pushes, retained tasks, periods, reset timer, refresh state, currency, settings navigation and search, keyboard focus and alerts, declined first read');
   app.exit(0);
  } catch (error) { console.error(error); app.exit(1); }
 }).catch((error) => { console.error(error); app.exit(1); });
