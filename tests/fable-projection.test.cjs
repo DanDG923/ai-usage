@@ -317,6 +317,25 @@ test('readings dated ahead of the projection clock wait for their own timestamp'
   assert.equal(projectFableAllowance(anchored.store, NOW + 6 * 60_000).anchored, true);
 });
 
+test('a replenished cycle starts when its first figure was fetched, not first redrawn', (t) => {
+  // The refill shows as 0% from a fetch 20 hours ago; Fable is used before
+  // a status line first redraws that 0%, an hour after the fetch.
+  const project = (refill) => {
+    const context = fixture(t);
+    context.overall(NOW - 30 * HOUR, 49);
+    context.overall(NOW - 28 * HOUR, 50);
+    refill(context);
+    context.usage('new-cycle', NOW - 19.5 * HOUR, 'claude-fable-5', 5_000_000);
+    context.overall(NOW - HOUR, 5);
+    return projectFableAllowance(context.store, NOW);
+  };
+  const read = project((context) => context.overall(NOW - 20 * HOUR, 0));
+  const redrawn = project((context) => context.overall(NOW - 19 * HOUR, 0,
+    { planType: null, provenance: 'official-statusline', metadata: {}, fetchedAfter: iso(NOW - 20 * HOUR) }));
+  assert.ok(Math.abs(read.usedPercent - 10) < 0.01, `five new points, all Fable: ${read.usedPercent}`);
+  assert.equal(redrawn.usedPercent, read.usedPercent);
+});
+
 test('a replenishment before the reset timestamp moves restarts the projection with the new cycle', (t) => {
   const context = fixture(t);
   context.overall(NOW - 30 * HOUR, 49);

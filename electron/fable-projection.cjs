@@ -341,7 +341,9 @@ function computeProjection(store, nowMs, { freshReadGraceMs } = {}) {
       .filter((row) => Math.abs(new Date(row.resets_at).getTime() - resetMs) <= 60_000),
     nowMs, freshReadGraceMs, usedOf);
   const readings = cycles.at(-1) ?? [];
-  const cycleStartMs = cycles.length > 1 ? new Date(readings[0].observed_at).getTime() : windowStartMs;
+  // A replenished cycle starts when its first reading's figure was fetched,
+  // not when that figure was first redrawn.
+  const cycleStartMs = cycles.length > 1 ? evidenceTimes(readings)[0] : windowStartMs;
   const overallWindow = readings.at(-1) ?? latest;
   const overallUsed = usedOf(overallWindow);
   // The overall figure holds as of its evidence, not its latest redraw: an

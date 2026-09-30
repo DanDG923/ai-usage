@@ -4,7 +4,7 @@ require('./setup.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const os = require('node:os');
-const { deriveLearningSamples, forecastQuota, withoutStaleRestatements } = require('../electron/forecast.cjs');
+const { deriveLearningSamples, forecastQuota, latestEvidenceAt, withoutStaleRestatements } = require('../electron/forecast.cjs');
 const { UsageStore } = require('../electron/store.cjs');
 
 const MINUTE = 60_000;
@@ -212,6 +212,19 @@ test('undated sessions redrawing different figures each keep their own first red
   } finally {
     store.close();
   }
+});
+
+test('legacy readings from two sessions redrawing in turn renew neither figure', () => {
+  // From before the helper recorded sessions: one session shows 13% and
+  // another 1%, each redrawing its own figure every minute for two hours.
+  const first = Date.parse('2026-09-23T10:00:00.000Z');
+  const rows = [];
+  for (let minute = 0; minute < 120; minute += 1) {
+    rows.push(reading(first + minute * MINUTE, 13, 'official-statusline'));
+    rows.push(reading(first + minute * MINUTE + 30_000, 1, 'official-statusline'));
+  }
+  assert.equal(latestEvidenceAt(rows), first + 30_000, 'the 1% is no newer than its first showing');
+  assert.equal(latestEvidenceAt(rows.slice(0, -1)), first, 'nor is the 13%');
 });
 
 test('an undated idle session does not renew its evidence with every redraw', () => {

@@ -414,20 +414,25 @@ function fetchMomentOf(row) {
 // limits in hand) can be no newer than its session's first redraw of the
 // same limits (`seenSince`), so it takes that time: an idle session must not
 // renew its evidence every minute. A reading from a helper that did not record
-// sessions has neither, and takes the first of the unbroken run of such
-// readings showing its figure. A provider read stands for itself.
+// sessions has neither and cannot be told from another session's, so it
+// takes the first such reading of its window that showed the same figure:
+// two idle sessions redrawing different figures in turn renew neither. A
+// provider read stands for itself.
 function evidenceTimes(rows) {
   const parsed = rows.map(normaliseObservation);
-  let run = null;
+  const firstShown = [];
   return parsed.map((row) => {
     if (!restatesSessionLimits(row)) return row.observedAt;
     if (Number.isFinite(row.fetchedAfter)) return Math.min(row.fetchedAfter, row.observedAt);
     if (Number.isFinite(row.seenSince)) return Math.min(row.seenSince, row.observedAt);
-    if (!run || Math.abs(run.resetsAt - row.resetsAt) > RESET_TOLERANCE_MS
-      || Math.abs(run.used - usedPercentOf(row)) > STALE_RESTATEMENT_MARGIN) {
-      run = { resetsAt: row.resetsAt, used: usedPercentOf(row), from: row.observedAt };
+    const used = usedPercentOf(row);
+    let first = firstShown.find((entry) => Math.abs(entry.resetsAt - row.resetsAt) <= RESET_TOLERANCE_MS
+      && Math.abs(entry.used - used) <= STALE_RESTATEMENT_MARGIN);
+    if (!first) {
+      first = { resetsAt: row.resetsAt, used, from: row.observedAt };
+      firstShown.push(first);
     }
-    return run.from;
+    return first.from;
   });
 }
 
