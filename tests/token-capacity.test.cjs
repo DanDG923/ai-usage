@@ -183,6 +183,21 @@ test('expired, stale and newer derived-only reset anchors hide remaining tokens 
   assert.notEqual(estimateTokenCapacity(fixture({ nowMs: NOW + DAY })).remainingTokens, null, 'exactly 24h remains eligible');
 });
 
+test('remaining tokens age from when the latest figure was fetched, not from a status-line redraw of it', () => {
+  // A day and an hour later, an idle session redraws the 40% it fetched
+  // before the last provider reading.
+  const redraw = (fetchedAfter) => observation(NOW + 25 * HOUR, 40,
+    { provenance: 'official-statusline', plan_type: null, fetched_after: iso(fetchedAfter) });
+  const idle = estimateTokenCapacity(fixture({ nowMs: NOW + 25 * HOUR, observations: [...fixture().observations, redraw(NOW - 2 * HOUR)] }));
+  assert.equal(idle.status, 'available');
+  assert.equal(idle.remainingTokens, null, 'the figure was last known over a day ago');
+  assert.ok(idle.warnings.some((warning) => /over 24 hours old/.test(warning)));
+  // The same session, fetching again half an hour earlier, still sees 40%.
+  const fetched = estimateTokenCapacity(fixture({ nowMs: NOW + 25 * HOUR, observations: [...fixture().observations, redraw(NOW + 24.5 * HOUR)] }));
+  assert.equal(fetched.remainingTokens, 6_000_000);
+  assert.equal(fetched.remainingAsOf, iso(NOW + 24.5 * HOUR));
+});
+
 test('an unconfirmed replenishment suppresses old official remaining even while its reset timestamp is unchanged', () => {
   const input = fixture();
   input.observations = input.observations.map((row, index) => ({ ...row, used_percent: 50 + index * 10,

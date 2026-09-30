@@ -2,7 +2,7 @@
 
 const { createAllowanceScaler } = require('./allowance-changes.cjs');
 const { FORECAST_LOOKBACK_MS } = require('./quota-time.cjs');
-const { normaliseObservation } = require('./forecast.cjs');
+const { evidenceTimeOf, normaliseObservation } = require('./forecast.cjs');
 const { OFFICIAL_PROVENANCES: CALIBRATION_PROVENANCES } = require('./quota-provenance.mjs');
 
 const DAY_MS = 86_400_000;
@@ -92,7 +92,7 @@ function normalizeObservation(row, sourceId, bucketId, scope, nowMs) {
     || (sourceId === 'codex' && metadata.limitId != null && metadata.limitId !== 'codex')) return null;
   return { at, reset, used, plan: typeof row.plan_type === 'string' ? row.plan_type.trim().toLowerCase() || null : null,
     official: OFFICIAL_PROVENANCES.has(row.provenance), manual: row.provenance === 'manual-official',
-    provenance: row.provenance };
+    provenance: row.provenance, evidence: Math.min(at, evidenceTimeOf(prepared)) };
 }
 
 function normalizeEvent(row, scope, nowMs) {
@@ -346,15 +346,20 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
   }
   const currentMatches = latestAny && Math.abs(latestAny.reset - latestOfficial.reset) <= RESET_TOLERANCE_MS
     && (!latestAny.plan || !latestOfficial.plan || latestAny.plan === latestOfficial.plan);
+  // The latest official figure is as current as its evidence, as on the card:
+  // a status-line redraw re-records limits its session fetched earlier, unless
+  // a newer reading of the same window shows the same figure.
+  const evidenceAt = readings.reduce((latest, row) => (Math.abs(row.reset - latestOfficial.reset) <= RESET_TOLERANCE_MS
+    && Math.abs(row.used - latestOfficial.used) <= 0.5 ? Math.max(latest, row.evidence) : latest), latestOfficial.evidence);
   if (unconfirmedRebase) result.warnings.push('A newer non-official reading suggests the allowance was reset; remaining tokens need a fresh official reading.');
   else if (!currentMatches) result.warnings.push('The current allowance window has no matching official reading; remaining tokens are unavailable.');
   else if (latestOfficial.reset <= nowMs) result.warnings.push('The latest official allowance has expired; remaining tokens need a fresh reading.');
-  else if (nowMs - latestOfficial.at > STALENESS_MS) result.warnings.push('The latest official reading is over 24 hours old; remaining tokens need a fresh reading.');
+  else if (nowMs - evidenceAt > STALENESS_MS) result.warnings.push('The latest official reading is over 24 hours old; remaining tokens need a fresh reading.');
   else {
     const remaining = (100 - latestOfficial.used) / 100;
     result.remainingTokens = roundedTokens(capacity * remaining);
     result.remainingRange = { low: roundedTokens(low * remaining, 'floor'), high: roundedTokens(high * remaining, 'ceil') };
-    result.remainingAsOf = new Date(latestOfficial.at).toISOString();
+    result.remainingAsOf = new Date(evidenceAt).toISOString();
   }
   return result;
 }
