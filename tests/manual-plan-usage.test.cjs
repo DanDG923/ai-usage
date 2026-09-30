@@ -863,3 +863,34 @@ test('an idle redraw that agrees with a recent Refresh is still not new evidence
   assert.equal(claude.metadata.planUsage.lastRequest.succeeded, false);
   assert.doesNotMatch(claude.status_detail, /evidence was refreshed/);
 });
+
+test('Fable is judged by the newest read of its figure, not by an idle redraw of it', async (t) => {
+  const { refreshClaude } = collectorWithPortSpy();
+  const nowMs = Date.now() - 15 * MINUTE;
+  const resetsAt = new Date(nowMs + 3 * 1440 * MINUTE).toISOString();
+  const fable = (store, at, provenance, fetchedAfter = null) => store.recordObservation({ sourceId: 'claude-fable',
+    bucketId: 'fable_seven_day', bucketName: 'Fable weekly', observedAt: new Date(at).toISOString(), usedPercent: 30,
+    remainingPercent: 70, resetsAt, windowMinutes: 10_080, provenance, confidence: 1, metadata: {},
+    fetchedAfter: fetchedAfter == null ? null : new Date(fetchedAfter).toISOString() });
+  // An idle session fetched 30% a day and a half ago and has redrawn it every
+  // minute since; more than fifty redraws follow the reading that matters.
+  const idle = (store) => {
+    for (let at = nowMs - 90 * MINUTE; at <= nowMs - MINUTE; at += MINUTE) fable(store, at, 'official-statusline', nowMs - 36 * 60 * MINUTE);
+  };
+  await t.test('a Refresh two hours ago that read the same figure keeps Fable current', async (tt) => {
+    const { store, source } = collectorFixture(tt);
+    fable(store, nowMs - 120 * MINUTE, 'official-claude-usage');
+    idle(store);
+    await refreshClaude(store, missingInbox(store), { activityReader: quietActivity, clock: () => new Date(nowMs) });
+    const fableSource = source('claude-fable');
+    assert.equal(fableSource.status, 'connected');
+    assert.equal(fableSource.metadata.automatic.allowance.evidenceAt, new Date(nowMs - 120 * MINUTE).toISOString());
+    assert.ok(fableSource.status_detail.includes(readingLabel(nowMs - 120 * MINUTE)), fableSource.status_detail);
+  });
+  await t.test('with only the idle redraws, Fable is out of date', async (tt) => {
+    const { store, source } = collectorFixture(tt);
+    idle(store);
+    await refreshClaude(store, missingInbox(store), { activityReader: quietActivity, clock: () => new Date(nowMs) });
+    assert.equal(source('claude-fable').status, 'stale');
+  });
+});

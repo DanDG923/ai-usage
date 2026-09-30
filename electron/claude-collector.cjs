@@ -862,7 +862,7 @@ async function refreshClaude(store, inboxPath, options = {}) {
   }, { scanSucceeded: claudeScanSucceeded });
   const fableAuto = fableDerived.derived;
   const providerCurrent = hasProviderScopedFable && fableTracking.health.officialSource === 'connected'
-    && !failedSince(fableTracking.allowance.observedAt);
+    && !failedSince(fableTracking.allowance.evidenceAt ?? fableTracking.allowance.observedAt);
   const providerStale = hasProviderScopedFable && !providerCurrent;
   const fableStatus = !activityCurrent ? 'degraded'
     : providerCurrent ? 'connected'
@@ -871,7 +871,7 @@ async function refreshClaude(store, inboxPath, options = {}) {
         : fableObserved ? 'observing'
           : fableTracking.activity.requests ? 'activity-only' : 'waiting';
   const fableEvents = `${fableTracking.activity.requests} local Fable usage event${fableTracking.activity.requests === 1 ? '' : 's'}`;
-  const fableReadAt = hasProviderScopedFable ? readingTime(fableTracking.allowance.observedAt) : null;
+  const fableReadAt = hasProviderScopedFable ? readingTime(fableTracking.allowance.evidenceAt ?? fableTracking.allowance.observedAt) : null;
   const fableDetail = !activityCurrent
     ? `${providerCurrent ? 'The official model-scoped Fable allowance is current, but' : readPlanUsage ? 'The allowance check completed, but' : 'Plan usage is read only when you press Refresh, and'} the actual local activity import failed; previously tracked counts are retained. ${fableTracking.health.detail || ''}`
     : providerCurrent && !readPlanUsage

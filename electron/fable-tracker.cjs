@@ -9,7 +9,7 @@ const FABLE_BUCKET_ID = 'fable_seven_day';
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const { OFFICIAL_PROVENANCES, isProviderProvenance } = require('./quota-provenance.mjs');
 const { freshnessLimitHours } = require('./dashboard-decision.cjs');
-const { evidenceTimeOf, normaliseObservation } = require('./forecast.cjs');
+const { evidenceTimeOf, freshReadGraceFor, latestEvidenceAt, normaliseObservation, withoutStaleRestatements } = require('./forecast.cjs');
 const { PROVIDER_WINDOW_DESCRIPTORS } = require('./claude-window-descriptors.cjs');
 
 function isRecord(value) {
@@ -234,26 +234,37 @@ function recordProviderWindows(store, normalized, observedAt) {
 // chooses it: a bucket collapses to its latest usable reading first, and
 // only then does window-level precedence apply. Ranking every historical
 // reading of the bucket instead let an older provider reading outrank a
-// newer manual correction the card was already showing.
+// newer manual correction the card was already showing. The card also holds
+// back a stale status-line restatement and dates its figure by the newest
+// reading that shows it (`evidence_at`), so this reads the week the same way:
+// an idle session redraws every minute, and fifty rows can be under an hour.
 function getLastCurrentOfficial(store, nowMs) {
   const placeholders = OFFICIAL_PROVENANCES.map(() => '?').join(', ');
-  const latest = store.prepare(`
+  const rows = store.prepare(`
     SELECT * FROM quota_observations
-    WHERE source_id = ? AND bucket_id = ? AND provenance IN (${placeholders}) AND observed_at <= ?
-    ORDER BY observed_at DESC, id DESC LIMIT 50
-  `).all(FABLE_SOURCE_ID, FABLE_BUCKET_ID, ...OFFICIAL_PROVENANCES, new Date(nowMs + QUOTA_CLOCK_SKEW_MS).toISOString())
-    .find((row) => validQuotaTime(Date.parse(row.observed_at), Date.parse(row.resets_at), row.window_minutes, nowMs));
-  if (!latest) return null;
+    WHERE source_id = ? AND bucket_id = ? AND provenance IN (${placeholders}) AND observed_at <= ? AND observed_at >= ?
+    ORDER BY observed_at ASC, id ASC
+  `).all(FABLE_SOURCE_ID, FABLE_BUCKET_ID, ...OFFICIAL_PROVENANCES, new Date(nowMs + QUOTA_CLOCK_SKEW_MS).toISOString(),
+    new Date(nowMs - 8 * 24 * 60 * 60 * 1000).toISOString())
+    .filter((row) => validQuotaTime(Date.parse(row.observed_at), Date.parse(row.resets_at), row.window_minutes, nowMs));
+  const accepted = withoutStaleRestatements(rows, { nowMs, freshReadGraceMs: freshReadGraceFor(store.getSettings()) });
+  if (!accepted.length) return null;
+  const latest = { ...accepted.at(-1), evidence_at: new Date(latestEvidenceAt(accepted)).toISOString() };
   const window = { row: latest, bucketId: latest.bucket_id, observedAt: latest.observed_at, resetsAt: latest.resets_at,
     windowMinutes: latest.window_minutes, provenance: latest.provenance, metadata: {} };
   return selectDisplayedWindows([window], { nowMs }).active[0]?.row ?? null;
 }
 
+// A stored reading's own fetch: a status-line redraw can re-record limits its
+// session fetched hours earlier.
+function ownFetchMs(row) {
+  return evidenceTimeOf(normaliseObservation(row));
+}
+
 // The moment a stored reading's value is evidence of: `evidence_at` when the
-// caller measured it against the rest of the window, or else the reading's own
-// fetch (a status-line redraw can re-record limits fetched hours earlier).
+// caller measured it against the rest of the window, or else its own fetch.
 function readingEvidenceMs(row) {
-  return row.evidence_at ? Date.parse(row.evidence_at) : evidenceTimeOf(normaliseObservation(row));
+  return row.evidence_at ? Date.parse(row.evidence_at) : ownFetchMs(row);
 }
 
 // Whether a provider reading (the SDK or the status line, never a manual
@@ -273,6 +284,8 @@ function allowanceFromRow(row) {
     remainingPercent: row.remaining_percent,
     resetsAt: row.resets_at,
     observedAt: row.observed_at,
+    // When the figure was last known to hold, which the status text quotes.
+    evidenceAt: new Date(readingEvidenceMs(row)).toISOString(),
     source: row.provenance === 'official-claude-usage'
       ? 'claude-usage-model-scoped'
       : row.provenance === 'official-statusline'
@@ -394,12 +407,13 @@ function createFableUsageTracker({ store, usagePort, activityReader, clock = () 
 
     const cached = getLastCurrentOfficial(store, nowMs);
     // A redraw this refresh imported stands in for the provider only if its
-    // session fetched the limits in the last few minutes.
+    // own session fetched the limits in the last few minutes; an earlier read
+    // that agrees with it is not new evidence from this refresh.
     const freshStatuslineFallback = Boolean(cached
       && fallbackObservedAt
       && cached.provenance === 'official-statusline'
       && cached.observed_at === fallbackObservedAt
-      && nowMs - readingEvidenceMs(cached) <= 5 * 60_000
+      && nowMs - ownFetchMs(cached) <= 5 * 60_000
       && Date.parse(fallbackObservedAt) <= nowMs + QUOTA_CLOCK_SKEW_MS);
     let allowance;
     let officialSource;
