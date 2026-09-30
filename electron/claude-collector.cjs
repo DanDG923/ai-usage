@@ -166,9 +166,12 @@ function importClaudeInboxFile(store, inboxPath, state = null) {
       // opening redraw, which has no limits yet. A limits value that is not an
       // object is rejected below without touching the session: read as no
       // limits, it would make the next unchanged redraw look like a new response.
+      // So is a capture further ahead than the store accepts (a clock set back
+      // since): every later redraw would look older than it until then.
       const limitsShaped = payload.rate_limits == null
         || (typeof payload.rate_limits === 'object' && !Array.isArray(payload.rate_limits));
-      const { fetchedAfter, seenSince } = capturedAt && limitsShaped
+      const capturable = capturedAt && Date.parse(capturedAt) <= Date.now() + QUOTA_CLOCK_SKEW_MS;
+      const { fetchedAfter, seenSince } = capturable && limitsShaped
         ? datedStatusLineFetch(store, payload, capturedAt) : { fetchedAfter: null, seenSince: null };
       if (!capturedAt || !payload.rate_limits || typeof payload.rate_limits !== 'object' || Array.isArray(payload.rate_limits)) {
         result.rejectedRecords += 1;
@@ -717,8 +720,9 @@ function latestPlanUsageReading(store, nowMs, graceMs) {
   // A window the latest plan-usage read did not return (a model or app limit
   // the provider stopped reporting) keeps its older row until it resets, and
   // Refresh cannot renew it, so it does not decide whether Claude is current.
+  // A later redraw renews it only with a fetch no older than that read.
   const active = [...latest.values()].filter((row) => Date.parse(row.resets_at) > nowMs
-    && (lastPlanUsageReadMs == null || Date.parse(row.observed_at) >= lastPlanUsageReadMs));
+    && (lastPlanUsageReadMs == null || Date.parse(row.own_evidence_at) >= lastPlanUsageReadMs));
   if (!active.length) return { lastReadAt: null, staleReadAt: null, fresh: false, windows: [] };
   const lastReadAt = active.reduce((last, row) => laterIso(last, row.evidence_at), null);
   // The oldest reading that is out of date, which the stale detail quotes.

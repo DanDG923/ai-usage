@@ -614,6 +614,14 @@ test('a window the latest plan-usage read did not return does not keep Claude st
   });
   await refreshClaude(store, missingInbox(store), { activityReader: quietActivity });
   assert.equal(source('claude').status, 'connected');
+  // An idle session then redraws that window from a fetch older than the read:
+  // the redraw is newer, but it does not renew the window.
+  store.recordObservation({ sourceId: 'claude', bucketId: 'seven_day_opus', bucketName: 'seven_day_opus',
+    observedAt: new Date().toISOString(), usedPercent: 30, remainingPercent: 70,
+    resetsAt: new Date(Date.now() + 100 * 60 * MINUTE).toISOString(), windowMinutes: 10_080, provenance: 'official-statusline',
+    confidence: 1, metadata: {}, fetchedAfter: new Date(Date.now() - 30 * 60 * MINUTE).toISOString() });
+  await refreshClaude(store, missingInbox(store), { activityReader: quietActivity });
+  assert.equal(source('claude').status, 'connected');
 });
 
 test('the stale detail quotes the oldest out-of-date reading, not the newest', async (t) => {

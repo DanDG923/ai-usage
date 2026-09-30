@@ -765,6 +765,31 @@ test('each status-line reading is dated by the fetch its session made, not by it
   }
 });
 
+test('a line captured too far ahead does not hold its session back', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-statusline-future-'));
+  const store = new UsageStore(path.join(root, 'test.sqlite'), path.join(root, 'Backups'));
+  const inbox = path.join(root, 'inbox.jsonl');
+  const base = Date.now() - 60 * 60_000;
+  const at = (seconds) => new Date(base + seconds * 1000).toISOString();
+  const weekReset = new Date(base + 3 * 86_400_000).toISOString();
+  const line = (seconds, apiMs, used) => JSON.stringify({ ai_usage_captured_at: at(seconds), session_id: 'session-a', api_ms: apiMs,
+    rate_limits: used == null ? null : { seven_day: { used_percentage: used, resets_at: weekReset } } });
+  fs.writeFileSync(inbox, `${[
+    line(0, 0, null),
+    line(5, 1_000, 24),
+    // Written while the clock ran two hours fast, then corrected.
+    line(3 * 3600, 1_000, 24),
+    line(600, 2_000, 25),
+  ].join('\n')}\n`, 'utf8');
+  try {
+    importClaudeInbox(store, inbox);
+    assert.deepEqual(store.prepare('SELECT observed_at, fetched_after FROM quota_observations ORDER BY observed_at').all()
+      .map((row) => [row.observed_at, row.fetched_after]), [[at(5), at(0)], [at(600), at(5)]]);
+  } finally {
+    store.close();
+  }
+});
+
 test('a malformed limits line is rejected without making the next redraw look freshly fetched', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-statusline-malformed-'));
   const store = new UsageStore(path.join(root, 'test.sqlite'), path.join(root, 'Backups'));

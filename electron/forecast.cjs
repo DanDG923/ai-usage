@@ -602,6 +602,10 @@ function deriveLearningSamples(observations, schedule, nowMs, excludedDates = []
       latest = after;
     } else if (!restatesSessionLimits(after)) {
       latest = after;
+    } else if (Number.isFinite(after.fetchedAfter) && after.fetchedAfter > latest.observedAt) {
+      // A status-line fetch newer than the latest confirmation proves the
+      // figure still held then, as a read would; an idle redraw proves nothing.
+      latest = { ...after, observedAt: Math.min(after.fetchedAfter, after.observedAt) };
     }
   }
   // anchor and latest only ever diverge within one chained window, so the

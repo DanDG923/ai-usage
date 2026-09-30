@@ -260,6 +260,24 @@ test('interleaved stale status-line readings neither reset the window nor add la
   assert.ok(mixed.series.observed.every((point) => point.remaining >= 83));
 });
 
+test('a newer dated fetch of an unchanged figure places the next increase as a read would', () => {
+  // 10% at 10:00 local, the same 10% confirmed at 18:00, then 20% at 19:00.
+  const learn = (confirmation) => deriveLearningSamples([
+    reading('2026-09-22T09:00:00.000Z', 10, 'official-claude-usage'),
+    confirmation,
+    reading('2026-09-22T18:00:00.000Z', 20, 'official-claude-usage'),
+  ], SCHEDULE, Date.parse(NOW)).map(({ weight: _weight, ...sample }) => sample);
+  const read = learn(reading('2026-09-22T17:00:00.000Z', 10, 'official-claude-usage'));
+  const confirmed = learn(fetched10('2026-09-22T17:01:00.000Z', '2026-09-22T17:00:00.000Z'));
+  const redrawn = learn(fetched10('2026-09-22T17:01:00.000Z', '2026-09-22T08:00:00.000Z'));
+  assert.deepEqual(confirmed, read);
+  assert.notDeepEqual(redrawn, read, 'a redraw of an older fetch confirms nothing');
+});
+
+function fetched10(observedAt, fetchedAfter) {
+  return { ...reading(observedAt, 10, 'official-statusline'), fetchedAfter };
+}
+
 test('an unchanged status-line reading does not pin the next increase to its own time', () => {
   // The session last changed to 1% at 18:10 local; the 12% rise is first seen by a
   // fresh read at 22:07 local. Its phase must follow the span since 18:10, which
