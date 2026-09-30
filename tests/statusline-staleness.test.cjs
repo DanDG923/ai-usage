@@ -211,6 +211,22 @@ test('an undated idle session does not renew its evidence with every redraw', ()
   }
 });
 
+test('an undated rise raises the mark a later undated drop must answer to', () => {
+  // Two sessions first seen with limits in hand, after a Refresh read 10%:
+  // one shows 20%, the other then 15%. The 20% proves more was used.
+  const rows = [
+    reading('2026-09-22T10:00:00.000Z', 10, 'official-claude-usage'),
+    reading('2026-09-22T10:05:00.000Z', 20, 'official-statusline'),
+    reading('2026-09-22T10:06:00.000Z', 15, 'official-statusline'),
+  ];
+  const used = (kept) => kept.map((row) => row.usedPercent);
+  assert.deepEqual(used(withoutStaleRestatements(rows, { nowMs: Date.parse('2026-09-22T12:00:00.000Z') })), [10, 20]);
+  assert.deepEqual(used(withoutStaleRestatements(rows.slice(1), { nowMs: Date.parse('2026-09-22T12:00:00.000Z') })), [20],
+    'with no provider read as well');
+  // Only once the 20% is a day old, with nothing newer, is the 15% believed.
+  assert.equal(withoutStaleRestatements(rows, { nowMs: Date.parse('2026-09-23T10:10:00.000Z') }).at(-1).usedPercent, 15);
+});
+
 test('fetches that cannot be ordered let a rise through and hold a drop back', () => {
   // Each fetch is known only to lie between two redraws, and these overlap.
   const rows = [

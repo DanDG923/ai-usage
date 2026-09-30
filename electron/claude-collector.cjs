@@ -41,6 +41,17 @@ function laterIso(left, right) {
   return Date.parse(right) > Date.parse(left) ? right : left;
 }
 
+// Whether a payload's limits can all be read: absent (a session's opening
+// redraw), or an object whose every window is absent or has a reading and a
+// reset. An unreadable window would count as dropped, and the next redraw
+// showing it again as a new response.
+function wellFormedLimits(rateLimits) {
+  if (rateLimits == null) return true;
+  if (typeof rateLimits !== 'object' || Array.isArray(rateLimits)) return false;
+  return Object.values(rateLimits).every((limit) => limit == null || (typeof limit === 'object' && !Array.isArray(limit)
+    && limit.used_percentage != null && Number.isFinite(Number(limit.used_percentage)) && epochToIso(limit.resets_at) != null));
+}
+
 // Each window's reading and reset, by window name, to tell one response's
 // limits from the next.
 function statusLineLimits(rateLimits) {
@@ -143,12 +154,11 @@ function importClaudeInboxFile(store, inboxPath, state = null) {
       }
       const capturedAt = epochToIso(payload.ai_usage_captured_at || payload.captured_at || stat.mtimeMs);
       // Every redraw with a time advances its session, including a session's
-      // opening redraw, which has no limits yet. A malformed limits value is
-      // rejected below without touching the session: read as "no limits", it
-      // would make the next unchanged redraw look like a new response.
-      const limitsShaped = payload.rate_limits == null
-        || (typeof payload.rate_limits === 'object' && !Array.isArray(payload.rate_limits));
-      const { fetchedAfter, seenSince } = capturedAt && limitsShaped
+      // opening redraw, which has no limits yet. A redraw with unreadable
+      // limits leaves the session alone: read as fewer limits, it would make
+      // the next unchanged redraw look like a new response. Its readable
+      // windows are still recorded, undated.
+      const { fetchedAfter, seenSince } = capturedAt && wellFormedLimits(payload.rate_limits)
         ? datedStatusLineFetch(store, payload, capturedAt) : { fetchedAfter: null, seenSince: null };
       if (!capturedAt || !payload.rate_limits || typeof payload.rate_limits !== 'object' || Array.isArray(payload.rate_limits)) {
         result.rejectedRecords += 1;

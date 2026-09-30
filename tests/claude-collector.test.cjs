@@ -779,13 +779,17 @@ test('a malformed limits line is rejected without making the next redraw look fr
     line(5, 2_588, limits),
     line(65, 2_588, 'garbled'),
     line(95, 2_588, [1, 2]),
+    line(110, 2_588, { seven_day: [] }),
+    line(115, 2_588, { seven_day: { used_percentage: 24 } }),
+    // Partly readable: its good window is recorded, but undated.
+    line(120, 2_588, { ...limits, five_hour: [] }),
     line(125, 2_588, limits),
   ].join('\n')}\n`, 'utf8');
   try {
     const result = importClaudeInbox(store, inbox);
     assert.equal(result.rejectedRecords, 3, 'the opening redraw and both malformed lines');
     assert.deepEqual(store.prepare('SELECT observed_at, fetched_after FROM quota_observations ORDER BY observed_at').all()
-      .map((row) => [row.observed_at, row.fetched_after]), [[at(5), at(0)], [at(125), at(0)]]);
+      .map((row) => [row.observed_at, row.fetched_after]), [[at(5), at(0)], [at(120), null], [at(125), at(0)]]);
   } finally {
     store.close();
   }

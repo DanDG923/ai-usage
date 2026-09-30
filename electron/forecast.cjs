@@ -485,6 +485,9 @@ function withoutStaleRestatements(rows, { nowMs = Date.now(), freshReadGraceMs =
       return true;
     }
     const sameReset = (other) => other && Math.abs(other.resetsAt - reading.resetsAt) <= RESET_TOLERANCE_MS;
+    // This reading's window had already ended when it was drawn, and newer
+    // evidence shows the window after it.
+    const endedBefore = (other) => reading.resetsAt < other.resetsAt && reading.resetsAt <= reading.observedAt;
     if (Number.isFinite(reading.fetchedAfter)) {
       if (!firstCarrier.has(reading.fetchedAfter)) firstCarrier.set(reading.fetchedAfter, reading.observedAt);
       const own = { reading, from: reading.fetchedAfter, to: firstCarrier.get(reading.fetchedAfter) };
@@ -496,8 +499,9 @@ function withoutStaleRestatements(rows, { nowMs = Date.now(), freshReadGraceMs =
       if (own.to < newest.from) return sameReset(newest.reading) && Math.abs(used - newestUsed) <= STALE_RESTATEMENT_MARGIN;
       // Around a reset, a redraw can still carry the window that just ended;
       // of two fetches from around the same time, the later window is newer.
+      // A reset corrected to an earlier time still ahead is not an ended window.
       if (!sameReset(newest.reading)) {
-        if (reading.resetsAt < newest.reading.resetsAt) return false;
+        if (endedBefore(newest.reading)) return false;
         newest = own;
         return true;
       }
@@ -513,10 +517,23 @@ function withoutStaleRestatements(rows, { nowMs = Date.now(), freshReadGraceMs =
     }
     // Undated: its fetch cannot be ordered against the newest evidence, a
     // provider read or a dated session's fetch alike, so around a reset only
-    // a later window gets through, as for fetches that cannot be ordered.
+    // a later window gets through, as for fetches that cannot be ordered. A
+    // later window or a higher figure is still the later use: it becomes the
+    // high-water mark a lower reading must answer to. Its fetch is known only
+    // to be no later than its session's first redraw of it.
     const newestUsed = newest && usedPercentOf(newest.reading);
-    if (newest && !sameReset(newest.reading)) return reading.resetsAt > newest.reading.resetsAt;
-    if (!newest || used >= newestUsed - STALE_RESTATEMENT_MARGIN) return true;
+    const undated = () => ({ reading, from: -Infinity,
+      to: Number.isFinite(reading.seenSince) ? Math.min(reading.seenSince, reading.observedAt) : reading.observedAt });
+    if (newest && !sameReset(newest.reading)) {
+      if (endedBefore(newest.reading)) return false;
+      newest = undated();
+      return true;
+    }
+    if (!newest || used > newestUsed + STALE_RESTATEMENT_MARGIN) {
+      newest = undated();
+      return true;
+    }
+    if (used >= newestUsed - STALE_RESTATEMENT_MARGIN) return true;
     const after = nextFresh[index];
     if (after) return sameReset(after) && usedPercentOf(after) < newestUsed - STALE_RESTATEMENT_MARGIN;
     const graceMs = Math.max(freshReadGraceMs, freshnessLimitHours({ windowMinutes: reading.windowMinutes }) * HOUR_MS);
