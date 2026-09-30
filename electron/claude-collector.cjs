@@ -9,7 +9,7 @@ const { createFableUsageTracker, providerReadingFresh } = require('./fable-track
 const { QUOTA_CLOCK_SKEW_MS, validQuotaTime } = require('./quota-time.cjs');
 const { isProviderProvenance } = require('./quota-provenance.mjs');
 const { deriveFableEstimate } = require('./fable-projection.cjs');
-const { freshReadGraceFor, latestEvidenceAt, withoutStaleRestatements } = require('./forecast.cjs');
+const { evidenceTimes, freshReadGraceFor, latestEvidenceAt, withoutStaleRestatements } = require('./forecast.cjs');
 const { IncrementalReadError, planIncrementalRead, readCompleteLines } = require('./incremental-file.cjs');
 const { epochToIso } = require('./time.cjs');
 const { claudeWindowDescriptor } = require('./claude-window-descriptors.cjs');
@@ -666,7 +666,10 @@ function latestPlanUsageReading(store, nowMs, graceMs) {
   for (const [bucketId, bucketRows] of buckets) {
     const accepted = withoutStaleRestatements(bucketRows, { nowMs, freshReadGraceMs: graceMs })
       .filter((row) => isProviderProvenance(row.provenance));
-    if (accepted.length) latest.set(bucketId, { ...accepted.at(-1), evidence_at: new Date(latestEvidenceAt(accepted)).toISOString() });
+    if (accepted.length) {
+      latest.set(bucketId, { ...accepted.at(-1), evidence_at: new Date(latestEvidenceAt(accepted)).toISOString(),
+        own_evidence_at: new Date(evidenceTimes(accepted).at(-1)).toISOString() });
+    }
     // One plan-usage read records every window it returns at the same instant.
     const planUsageRead = accepted.findLast((row) => row.provenance === 'official-claude-usage');
     if (planUsageRead) lastPlanUsageReadMs = Math.max(lastPlanUsageReadMs ?? -Infinity, Date.parse(planUsageRead.observed_at));
@@ -780,7 +783,7 @@ async function refreshClaude(store, inboxPath, options = {}) {
   // evidence may come from an earlier read that agrees with it, which is not
   // new evidence from this collection.
   const helperRefreshed = acceptedReading.fresh && acceptedReading.windows.some((row) => {
-    const ageMs = nowMs - Date.parse(row.fetched_after ?? row.observed_at);
+    const ageMs = nowMs - Date.parse(row.own_evidence_at);
     return row.provenance === 'official-statusline' && row.id > importedAfterId && ageMs >= -60_000 && ageMs <= 5 * 60_000;
   });
   const hasFreshClaudeEvidence = helperRefreshed || Number(fableTracking.provider?.overallWindowsRecorded || 0) > 0;

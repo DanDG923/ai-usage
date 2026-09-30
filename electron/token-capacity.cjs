@@ -2,7 +2,7 @@
 
 const { createAllowanceScaler } = require('./allowance-changes.cjs');
 const { FORECAST_LOOKBACK_MS } = require('./quota-time.cjs');
-const { evidenceTimeOf, normaliseObservation } = require('./forecast.cjs');
+const { evidenceTimes, normaliseObservation } = require('./forecast.cjs');
 const { OFFICIAL_PROVENANCES: CALIBRATION_PROVENANCES } = require('./quota-provenance.mjs');
 
 const DAY_MS = 86_400_000;
@@ -78,7 +78,7 @@ function excludedIntervals(dates) {
   return (before, after) => ranges.some((range) => range.start <= after && range.end > before);
 }
 
-function normalizeObservation(row, sourceId, bucketId, scope, nowMs) {
+function normalizeObservation(row, sourceId, bucketId, scope, nowMs, evidence) {
   if (!row || row.source_id !== sourceId || row.bucket_id !== bucketId || row.window_minutes !== 10_080) return null;
   const prepared = normaliseObservation(row);
   const at = prepared.observedAt, reset = prepared.resetsAt, used = row.used_percent;
@@ -92,7 +92,7 @@ function normalizeObservation(row, sourceId, bucketId, scope, nowMs) {
     || (sourceId === 'codex' && metadata.limitId != null && metadata.limitId !== 'codex')) return null;
   return { at, reset, used, plan: typeof row.plan_type === 'string' ? row.plan_type.trim().toLowerCase() || null : null,
     official: OFFICIAL_PROVENANCES.has(row.provenance), manual: row.provenance === 'manual-official',
-    provenance: row.provenance, evidence: Math.min(at, evidenceTimeOf(prepared)) };
+    provenance: row.provenance, evidence: Math.min(at, evidence.get(row) ?? at) };
 }
 
 function normalizeEvent(row, scope, nowMs) {
@@ -162,8 +162,13 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
   // and turns the step at the change into ordinary rounding.
   const scaler = createAllowanceScaler(allowanceChanges, sourceId, { bucketId, windowMinutes: 10_080, nowMs });
   let rescaled = false;
+  // When each figure was fetched, judged in time order: an undated redraw is
+  // no newer than the first of its unbroken run.
+  const ordered = (Array.isArray(observations) ? observations : []).filter((row) => row && typeof row === 'object')
+    .sort((a, b) => (normaliseObservation(a).observedAt || 0) - (normaliseObservation(b).observedAt || 0));
+  const evidence = new Map(evidenceTimes(ordered).map((at, index) => [ordered[index], at]));
   const allReadings = (Array.isArray(observations) ? observations : [])
-    .map((row) => normalizeObservation(row, sourceId, bucketId, scope, nowMs)).filter(Boolean)
+    .map((row) => normalizeObservation(row, sourceId, bucketId, scope, nowMs, evidence)).filter(Boolean)
     .map((row) => {
       const scale = scaler ? scaler(row.at) : 1;
       if (scale === 1) return row;

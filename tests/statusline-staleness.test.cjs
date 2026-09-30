@@ -151,6 +151,39 @@ test('an undated redraw cannot undercut a dated session’s newer fetch', () => 
   assert.equal(withoutStaleRestatements(rows, { nowMs: Date.parse('2026-09-23T10:30:00.000Z') }).at(-1).usedPercent, 1);
 });
 
+test('a redraw of the window that just reset does not replace the new one', () => {
+  // A Refresh a minute after the weekly reset reads the new window; an idle
+  // session then redraws the old window, from a fetch that overlaps the read.
+  const nextReset = '2026-10-05T08:00:00.000Z';
+  const rows = [
+    { ...reading('2026-09-28T08:01:00.000Z', 0, 'official-claude-usage'), resetsAt: nextReset },
+    fetched('2026-09-28T08:02:00.000Z', 40, '2026-09-28T08:00:30.000Z'),
+  ];
+  assert.deepEqual(withoutStaleRestatements(rows, { nowMs: Date.parse('2026-09-28T08:03:00.000Z') }).map((row) => row.usedPercent), [0]);
+  // The other way round, the new window's redraw is the newer evidence.
+  const turning = [
+    fetched('2026-09-28T07:59:50.000Z', 40, '2026-09-28T07:59:00.000Z'),
+    { ...fetched('2026-09-28T08:00:40.000Z', 0, '2026-09-28T07:59:30.000Z'), resetsAt: nextReset },
+  ];
+  assert.deepEqual(withoutStaleRestatements(turning, { nowMs: Date.parse('2026-09-28T08:03:00.000Z') }).map((row) => row.usedPercent), [40, 0]);
+});
+
+test('an undated idle session does not renew its evidence with every redraw', () => {
+  const { store, now, record } = cardStore();
+  try {
+    // First seen with limits in hand, so undated, and redrawing 13% since.
+    for (let at = now - 3 * HOUR; at <= now - MINUTE; at += 10 * MINUTE) record(at, 13, 'official-statusline');
+    const quota = store.getQuota('claude', store.getSettings(), now);
+    assert.equal(quota.evidenceAt, new Date(now - 3 * HOUR).toISOString());
+    assert.ok(Math.abs(quota.forecast.staleHours - 3) < 1e-6, `stale ${quota.forecast.staleHours}`);
+    // A new figure can only follow a new response, so it starts afresh.
+    record(now, 14, 'official-statusline');
+    assert.equal(store.getQuota('claude', store.getSettings(), now).evidenceAt, new Date(now).toISOString());
+  } finally {
+    store.close();
+  }
+});
+
 test('fetches that cannot be ordered let a rise through and hold a drop back', () => {
   // Each fetch is known only to lie between two redraws, and these overlap.
   const rows = [

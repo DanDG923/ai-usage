@@ -837,6 +837,28 @@ test('an idle session’s redraw cannot make Claude current or a failed Refresh 
   assert.equal(claude.status, 'connected');
 });
 
+test('an idle session first seen with limits in hand is not new evidence for a failed Refresh', async (t) => {
+  const { refreshClaude } = collectorWithPortSpy();
+  const { root, store, source } = collectorFixture(t);
+  const nowMs = Date.now() - 15 * MINUTE;
+  const weekReset = new Date(nowMs + 3 * 1440 * MINUTE).toISOString();
+  // The helper never saw this session open, so its fetch cannot be dated; it
+  // has redrawn the same 20% every ten minutes for three hours.
+  const inbox = path.join(root, 'inbox.jsonl');
+  const lines = [];
+  for (let at = nowMs - 180 * MINUTE; at <= nowMs - MINUTE; at += 10 * MINUTE) {
+    lines.push(JSON.stringify({ ai_usage_captured_at: new Date(at).toISOString(), session_id: 'already-open', api_ms: 9_000,
+      rate_limits: { seven_day: { used_percentage: 20, resets_at: weekReset } } }));
+  }
+  fs.writeFileSync(inbox, `${lines.join('\n')}\n`);
+  const rateLimited = { read: async () => { throw Object.assign(new Error('HTTP 429'), { code: 'rate_limited' }); } };
+  await refreshClaude(store, inbox, { readPlanUsage: true, usagePort: rateLimited, activityReader: quietActivity, clock: () => new Date(nowMs) });
+  const claude = source('claude');
+  assert.equal(store.prepare('SELECT COUNT(*) AS count FROM quota_observations WHERE fetched_after IS NOT NULL').get().count, 0);
+  assert.equal(claude.metadata.planUsage.lastRequest.succeeded, false, 'a redraw a minute ago shows no fetch that recent');
+  assert.equal(store.getQuota('claude', store.getSettings(), nowMs).evidenceAt, new Date(nowMs - 180 * MINUTE).toISOString());
+});
+
 test('an idle redraw that agrees with a recent Refresh is still not new evidence for a failed one', async (t) => {
   const { refreshClaude } = collectorWithPortSpy();
   const { root, store, source } = collectorFixture(t);

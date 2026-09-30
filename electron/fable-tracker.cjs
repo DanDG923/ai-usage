@@ -9,7 +9,7 @@ const FABLE_BUCKET_ID = 'fable_seven_day';
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const { OFFICIAL_PROVENANCES, isProviderProvenance } = require('./quota-provenance.mjs');
 const { freshnessLimitHours } = require('./dashboard-decision.cjs');
-const { evidenceTimeOf, freshReadGraceFor, latestEvidenceAt, normaliseObservation, withoutStaleRestatements } = require('./forecast.cjs');
+const { evidenceTimes, freshReadGraceFor, latestEvidenceAt, withoutStaleRestatements } = require('./forecast.cjs');
 const { PROVIDER_WINDOW_DESCRIPTORS } = require('./claude-window-descriptors.cjs');
 
 function isRecord(value) {
@@ -254,16 +254,20 @@ function getLastCurrentOfficial(store, nowMs) {
   const chosen = accepted.at(-1);
   const evidence = isProviderProvenance(chosen.provenance)
     ? latestEvidenceAt(accepted.filter((row) => isProviderProvenance(row.provenance))) : Date.parse(chosen.observed_at);
-  const latest = { ...chosen, evidence_at: new Date(evidence).toISOString() };
+  // Its own fetch as well, for the Refresh fallback, which must not borrow an
+  // earlier read's time.
+  const latest = { ...chosen, evidence_at: new Date(evidence).toISOString(),
+    own_evidence_at: new Date(evidenceTimes(accepted).at(-1)).toISOString() };
   const window = { row: latest, bucketId: latest.bucket_id, observedAt: latest.observed_at, resetsAt: latest.resets_at,
     windowMinutes: latest.window_minutes, provenance: latest.provenance, metadata: {} };
   return selectDisplayedWindows([window], { nowMs }).active[0]?.row ?? null;
 }
 
 // A stored reading's own fetch: a status-line redraw can re-record limits its
-// session fetched hours earlier.
+// session fetched hours earlier. `own_evidence_at` when the caller judged it
+// among its window's readings; alone, an undated redraw is its own run.
 function ownFetchMs(row) {
-  return evidenceTimeOf(normaliseObservation(row));
+  return row.own_evidence_at ? Date.parse(row.own_evidence_at) : evidenceTimes([row])[0];
 }
 
 // The moment a stored reading's value is evidence of: `evidence_at` when the

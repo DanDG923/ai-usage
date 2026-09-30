@@ -390,12 +390,26 @@ function restatesSessionLimits(row) {
   return row.provenance === 'official-statusline';
 }
 
-// The moment a reading's value is evidence of. A status-line reading carries
-// the limits its session last fetched, so the collector dates it by that fetch
-// where it can; the redraw that recorded it proves nothing newer. A provider
-// read, or a status-line reading that could not be dated, stands for itself.
-function evidenceTimeOf(row) {
-  return restatesSessionLimits(row) && Number.isFinite(row.fetchedAfter) ? row.fetchedAfter : row.observedAt;
+// The moment each reading's value is evidence of, for readings in time order.
+// A status-line reading carries the limits its session last fetched, so the
+// collector dates it by that fetch where it can; the redraw that recorded it
+// proves nothing newer. An undated redraw (its session was first seen with
+// limits in hand, or the helper did not record sessions) can be no newer than
+// the first of the unbroken undated redraws showing its figure, so it takes
+// that time: an idle session must not renew its evidence every minute. A
+// provider read stands for itself.
+function evidenceTimes(rows) {
+  const parsed = rows.map(normaliseObservation);
+  let run = null;
+  return parsed.map((row) => {
+    if (!restatesSessionLimits(row)) return row.observedAt;
+    if (Number.isFinite(row.fetchedAfter)) return Math.min(row.fetchedAfter, row.observedAt);
+    if (!run || Math.abs(run.resetsAt - row.resetsAt) > RESET_TOLERANCE_MS
+      || Math.abs(run.used - usedPercentOf(row)) > STALE_RESTATEMENT_MARGIN) {
+      run = { resetsAt: row.resetsAt, used: usedPercentOf(row), from: row.observedAt };
+    }
+    return run.from;
+  });
 }
 
 // When the latest reading's value was last known to hold: the newest evidence
@@ -406,13 +420,14 @@ function latestEvidenceAt(rows) {
   const parsed = rows.map(normaliseObservation);
   const current = parsed.at(-1);
   if (!current) return null;
-  let at = evidenceTimeOf(current);
-  for (const row of parsed) {
+  const times = evidenceTimes(parsed);
+  let at = times.at(-1);
+  parsed.forEach((row, index) => {
     if (Math.abs(row.resetsAt - current.resetsAt) <= RESET_TOLERANCE_MS
       && Math.abs(usedPercentOf(row) - usedPercentOf(current)) <= STALE_RESTATEMENT_MARGIN) {
-      at = Math.max(at, evidenceTimeOf(row));
+      at = Math.max(at, times[index]);
     }
-  }
+  });
   return Math.min(at, current.observedAt);
 }
 
@@ -426,7 +441,8 @@ function latestEvidenceAt(rows) {
 // it is the newest evidence, a drop included, so an early replenishment a
 // working session sees reaches the card at once. Fetched before, it stands
 // only where it agrees with what is known since. When the two fetches cannot
-// be ordered, a higher value is the later use and a lower one is held back.
+// be ordered, a higher value is the later use and a lower one is held back,
+// and a later reset window is newer than the one it replaced.
 // An undated reading (from a helper that did not record sessions, or a
 // session first seen with limits in hand) cannot be ordered against the
 // newest evidence, whether a provider read or a dated session's fetch. A
@@ -472,7 +488,14 @@ function withoutStaleRestatements(rows, { nowMs = Date.now(), freshReadGraceMs =
       }
       const newestUsed = usedPercentOf(newest.reading);
       if (own.to < newest.from) return sameReset(newest.reading) && Math.abs(used - newestUsed) <= STALE_RESTATEMENT_MARGIN;
-      if (!sameReset(newest.reading) || used > newestUsed + STALE_RESTATEMENT_MARGIN) {
+      // Around a reset, a redraw can still carry the window that just ended;
+      // of two fetches from around the same time, the later window is newer.
+      if (!sameReset(newest.reading)) {
+        if (reading.resetsAt < newest.reading.resetsAt) return false;
+        newest = own;
+        return true;
+      }
+      if (used > newestUsed + STALE_RESTATEMENT_MARGIN) {
         newest = own;
         return true;
       }
@@ -1143,4 +1166,4 @@ function forecastQuota(observations, options = {}) {
     series: { ...adjusted.series, heavy }, resetAdjustment: adjustment };
 }
 
-module.exports = { activeHoursBetween, clusterByWindow, sameWindowDrift, normaliseObservation, prepareObservation, deriveLearningSamples, evidenceTimeOf, exhaustionTime, forecastQuota, forecastState, freshReadGraceFor, latestEvidenceAt, percentile, restatesSessionLimits, withoutStaleRestatements };
+module.exports = { activeHoursBetween, clusterByWindow, sameWindowDrift, normaliseObservation, prepareObservation, deriveLearningSamples, evidenceTimes, exhaustionTime, forecastQuota, forecastState, freshReadGraceFor, latestEvidenceAt, percentile, restatesSessionLimits, withoutStaleRestatements };
