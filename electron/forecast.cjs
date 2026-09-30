@@ -724,11 +724,15 @@ function learnForecast({ normalised, current, currentCluster, clusters, schedule
   // more than COVERAGE_GAP_MS apart show where such a quiet day was observed,
   // and it supplies only the off-schedule hours they cover: a brief pair of
   // polls is not a fully observed day. The latest observed day is still
-  // partial and counts only once a sample learns it.
+  // partial and counts only once a sample learns it. Only an interval ending
+  // in a fresh read shows nothing was used across it: a status-line repeat
+  // restates what a session fetched earlier while other sessions, the desktop
+  // app or the web may have been spending.
   const partialDay = localDayKey(new Date(current.observedAt));
   const quietOffHours = new Map();
   const covered = normalised.filter((row) => row.observedAt >= nowMs - FORECAST_LOOKBACK_MS && !excluded(row.observedAt, row.observedAt + 1));
   for (let index = 1; index < covered.length; index += 1) {
+    if (restatesSessionLimits(covered[index])) continue;
     const before = covered[index - 1].observedAt;
     const after = covered[index].observedAt;
     if (after - before > COVERAGE_GAP_MS) continue;
