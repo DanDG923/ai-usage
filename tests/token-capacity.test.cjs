@@ -228,6 +228,20 @@ test('remaining tokens age from when the latest figure was fetched, not from a s
   assert.equal(fetched.remainingAsOf, iso(NOW + 24.5 * HOUR));
 });
 
+test('a rise whose fetch overlaps the anchor’s closes at its first redraw, not inside the next rise', () => {
+  // 10% and 20% are read; a session whose last redraw before its response was
+  // at 09:30 then fetched 30% and first redrew it at 10:30; 40% is read at noon.
+  const capacity = (third) => estimateTokenCapacity(fixture({
+    observations: [observation(NOW - 3 * HOUR, 10), observation(NOW - 2 * HOUR, 20), third, observation(NOW, 40)],
+    events: [event(NOW - 2.5 * HOUR), event(NOW - 1.75 * HOUR), event(NOW - HOUR / 2)],
+  }));
+  const read = capacity(observation(NOW - 1.5 * HOUR, 30));
+  const overlapping = capacity(observation(NOW - HOUR, 30, { provenance: 'official-statusline', plan_type: null,
+    fetched_after: iso(NOW - 2.5 * HOUR), seen_since: iso(NOW - 1.5 * HOUR) }));
+  assert.equal(read.intervals, 3);
+  assert.deepEqual([overlapping.weeklyTokens, overlapping.weeklyRange, overlapping.intervals], [read.weeklyTokens, read.weeklyRange, read.intervals]);
+});
+
 test('a redraw from a session first seen with limits in hand does not renew remaining tokens', () => {
   // A day and an hour later, a session the helper never saw open redraws 40%:
   // fetched at some point this week, perhaps before the last provider reading.

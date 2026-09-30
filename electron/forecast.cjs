@@ -154,8 +154,10 @@ function clusterByWindow(rows) {
         rows: [row],
         // When only the percentage has updated, the first near-zero reading
         // is the strongest available lower bound for the new window start.
+        // It is dated by its fetch, as the evidence ending the window's
+        // exposure is: a status-line redraw may come well after the fetch.
         observedResetAt: previous && resetTimestampUnchanged && clearAllowanceRebase(previous, row)
-          ? row.observedAt
+          ? fetchMomentOf(row)
           : null,
       });
     }

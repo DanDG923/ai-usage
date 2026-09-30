@@ -92,7 +92,20 @@ function normalizeObservation(row, sourceId, bucketId, scope, nowMs, evidence, k
     || (sourceId === 'codex' && metadata.limitId != null && metadata.limitId !== 'codex')) return null;
   return { at, reset, used, plan: typeof row.plan_type === 'string' ? row.plan_type.trim().toLowerCase() || null : null,
     official: OFFICIAL_PROVENANCES.has(row.provenance), manual: row.provenance === 'manual-official',
-    provenance: row.provenance, evidence: Math.min(at, evidence.get(row) ?? at), known: Math.min(at, known.get(row) ?? at) };
+    provenance: row.provenance, evidence: Math.min(at, evidence.get(row) ?? at), known: Math.min(at, known.get(row) ?? at),
+    // A status-line reading's first redraw of its fetch: the fetch was no later.
+    seenSince: Number.isFinite(prepared.seenSince) ? Math.min(at, prepared.seenSince) : null };
+}
+
+// Where an interval that ends on a reading closes: its fetch, or, when that
+// cannot be ordered after the interval's start, the first later moment its
+// figure is known to have been fetched by. Boundaries then only move forward,
+// so no tokens fall between intervals or into two. Null when none is later.
+function closingMs(reading, startMs) {
+  for (const at of [reading.evidence, reading.seenSince, reading.at]) {
+    if (Number.isFinite(at) && at > startMs) return at;
+  }
+  return null;
 }
 
 function normalizeEvent(row, scope, nowMs) {
@@ -240,10 +253,11 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
       anchor = after; highWater = after.used; recovering = false;
       continue;
     }
-    if (excluded(anchor.evidence, after.evidence)) {
+    const closeMs = closingMs(after, anchor.evidence);
+    if (excluded(anchor.evidence, closeMs ?? after.evidence)) {
       excludedCount += 1;
       highWater = Math.max(highWater, after.used);
-      anchor = { ...after, used: highWater };
+      anchor = { ...after, used: highWater, evidence: Math.max(anchor.evidence, closeMs ?? after.evidence) };
       recovering = after.used < highWater;
       continue;
     }
@@ -251,14 +265,14 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
       corrected = true;
       recovering = after.used <= highWater;
       highWater = Math.max(highWater, after.used);
-      anchor = { ...after, used: highWater };
+      anchor = { ...after, used: highWater, evidence: Math.max(anchor.evidence, closeMs ?? after.evidence) };
       continue;
     }
     highWater = Math.max(highWater, after.used);
     const delta = after.used - anchor.used;
-    if (delta < MIN_INTERVAL_PERCENT || after.evidence <= anchor.evidence) continue;
-    intervals.push({ before: anchor.evidence, after: after.evidence, delta, cycle, manual: anchor.manual || after.manual });
-    anchor = after;
+    if (delta < MIN_INTERVAL_PERCENT || closeMs == null) continue;
+    intervals.push({ before: anchor.evidence, after: closeMs, delta, cycle, manual: anchor.manual || after.manual });
+    anchor = { ...after, evidence: closeMs };
   }
   if (excludedCount) result.warnings.push('Intervals touching an ignored date were excluded from calibration.');
   if (corrected) result.warnings.push('Quota corrections and their recovery intervals were excluded.');

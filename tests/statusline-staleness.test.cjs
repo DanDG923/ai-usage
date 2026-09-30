@@ -218,6 +218,20 @@ test('undated sessions redrawing different figures each keep their own first red
   }
 });
 
+test('an early replenishment a session fetched starts the new window at that fetch, not its redraw', () => {
+  // A Refresh read 40%; the allowance was then replenished early. A working
+  // session idle since 09:00 fetched the new 1% and redrew it at 12:00.
+  const replenished = (row) => [reading('2026-09-23T06:00:00.000Z', 40, 'official-claude-usage'), row,
+    reading('2026-09-23T14:00:00.000Z', 4, 'official-claude-usage'), reading('2026-09-23T17:00:00.000Z', 7, 'official-claude-usage')];
+  const options = { now: '2026-09-23T17:30:00.000Z', schedule: SCHEDULE };
+  const redrawn = forecastQuota(replenished({ ...reading('2026-09-23T12:00:00.000Z', 1, 'official-statusline'),
+    fetchedAfter: '2026-09-23T09:00:00.000Z' }), options);
+  // The same figure read at the fetch's lower bound.
+  const read = forecastQuota(replenished(reading('2026-09-23T09:00:00.000Z', 1, 'official-claude-usage')), options);
+  assert.ok(read.windowPace > 0, `pace ${read.windowPace}`);
+  assert.ok(Math.abs(redrawn.windowPace - read.windowPace) < 1e-9, `${redrawn.windowPace} vs ${read.windowPace}`);
+});
+
 test('a figure no known fetch supports is caught up from its first redraw but is not fresh', () => {
   // Redrawn for an hour by a session first seen with limits in hand, and the
   // same redraws had that session's opening redraw shown the fetch.
