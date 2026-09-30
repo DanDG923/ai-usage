@@ -2,7 +2,7 @@
 
 const { createAllowanceScaler } = require('./allowance-changes.cjs');
 const { FORECAST_LOOKBACK_MS } = require('./quota-time.cjs');
-const { normaliseObservation } = require('./forecast.cjs');
+const { evidenceTimes, normaliseObservation } = require('./forecast.cjs');
 const { OFFICIAL_PROVENANCES: CALIBRATION_PROVENANCES } = require('./quota-provenance.mjs');
 
 const DAY_MS = 86_400_000;
@@ -78,7 +78,7 @@ function excludedIntervals(dates) {
   return (before, after) => ranges.some((range) => range.start <= after && range.end > before);
 }
 
-function normalizeObservation(row, sourceId, bucketId, scope, nowMs) {
+function normalizeObservation(row, sourceId, bucketId, scope, nowMs, evidence, known) {
   if (!row || row.source_id !== sourceId || row.bucket_id !== bucketId || row.window_minutes !== 10_080) return null;
   const prepared = normaliseObservation(row);
   const at = prepared.observedAt, reset = prepared.resetsAt, used = row.used_percent;
@@ -92,7 +92,23 @@ function normalizeObservation(row, sourceId, bucketId, scope, nowMs) {
     || (sourceId === 'codex' && metadata.limitId != null && metadata.limitId !== 'codex')) return null;
   return { at, reset, used, plan: typeof row.plan_type === 'string' ? row.plan_type.trim().toLowerCase() || null : null,
     official: OFFICIAL_PROVENANCES.has(row.provenance), manual: row.provenance === 'manual-official',
-    provenance: row.provenance };
+    provenance: row.provenance, evidence: Math.min(at, evidence.get(row) ?? at), known: Math.min(at, known.get(row) ?? at),
+    // A read or a dated fetch, which can show a replenishment; an undated
+    // redraw may restate older limits.
+    confirms: row.provenance !== 'official-statusline' || Number.isFinite(prepared.fetchedAfter),
+    // A status-line reading's first redraw of its fetch: the fetch was no later.
+    seenSince: Number.isFinite(prepared.seenSince) ? Math.min(at, prepared.seenSince) : null };
+}
+
+// Where an interval that ends on a reading closes: its fetch, or, when that
+// cannot be ordered after the interval's start, the first later moment its
+// figure is known to have been fetched by. Boundaries then only move forward,
+// so no tokens fall between intervals or into two. Null when none is later.
+function closingMs(reading, startMs) {
+  for (const at of [reading.evidence, reading.seenSince, reading.at]) {
+    if (Number.isFinite(at) && at > startMs) return at;
+  }
+  return null;
 }
 
 function normalizeEvent(row, scope, nowMs) {
@@ -162,10 +178,18 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
   // and turns the step at the change into ordinary rounding.
   const scaler = createAllowanceScaler(allowanceChanges, sourceId, { bucketId, windowMinutes: 10_080, nowMs });
   let rescaled = false;
+  // When each figure was fetched, judged in time order: an undated redraw is
+  // no newer than the first of its unbroken run.
+  const ordered = (Array.isArray(observations) ? observations : []).filter((row) => row && typeof row === 'object')
+    .sort((a, b) => (normaliseObservation(a).observedAt || 0) - (normaliseObservation(b).observedAt || 0));
+  const evidence = new Map(evidenceTimes(ordered).map((at, index) => [ordered[index], at]));
+  // How current each figure is known to be, which decides whether it is fresh.
+  const known = new Map(evidenceTimes(ordered, { known: true }).map((at, index) => [ordered[index], at]));
   const allReadings = (Array.isArray(observations) ? observations : [])
-    .map((row) => normalizeObservation(row, sourceId, bucketId, scope, nowMs)).filter(Boolean)
+    .map((row) => normalizeObservation(row, sourceId, bucketId, scope, nowMs, evidence, known)).filter(Boolean)
     .map((row) => {
-      const scale = scaler ? scaler(row.at) : 1;
+      // A share of the allowance in force when the figure was fetched.
+      const scale = scaler ? scaler(row.evidence) : 1;
       if (scale === 1) return row;
       rescaled = true;
       return { ...row, used: row.used * scale };
@@ -206,20 +230,22 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
   }
   const excluded = excludedIntervals(excludedDates);
   const intervals = [];
+  // Intervals run between the moments the figures were fetched, not redrawn:
+  // tokens used between a fetch and its later redraw belong to the next rise.
   let anchor = calibrationReadings[0], highWater = anchor.used, cycleReset = anchor.reset, cycle = 0, recovering = false;
   let excludedCount = 0, corrected = false, closeResets = false;
   for (const after of calibrationReadings.slice(1)) {
     // The first reset stays fixed for the entire cluster: chained small reset
     // shifts must not merge unrelated windows across a long observation gap.
     const resetChanged = Math.abs(after.reset - cycleReset) > RESET_TOLERANCE_MS;
-    const gap = after.at - anchor.at;
+    const gap = after.evidence - anchor.evidence;
     const idleRolling = anchor.used === 0 && after.used === 0 && gap > 0
       && Math.abs((after.reset - anchor.reset) - gap) <= RESET_TOLERANCE_MS + gap * 0.01;
     if (idleRolling) { anchor = after; cycleReset = after.reset; continue; }
     const rebased = highWater - after.used >= 5 && after.used <= 2;
     const pinnedAfterIdle = anchor.used === 0 && after.used > 0
-      && after.reset - WEEK_MS >= anchor.at - RESET_TOLERANCE_MS
-      && after.reset - WEEK_MS <= after.at + RESET_TOLERANCE_MS;
+      && after.reset - WEEK_MS >= anchor.evidence - RESET_TOLERANCE_MS
+      && after.reset - WEEK_MS <= after.evidence + RESET_TOLERANCE_MS;
     if (resetChanged || rebased) {
       if (resetChanged && !pinnedAfterIdle && Math.abs(after.reset - cycleReset) < DAY_MS) closeResets = true;
       anchor = after; highWater = after.used; cycleReset = after.reset; cycle += 1; recovering = false;
@@ -230,10 +256,11 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
       anchor = after; highWater = after.used; recovering = false;
       continue;
     }
-    if (excluded(anchor.at, after.at)) {
+    const closeMs = closingMs(after, anchor.evidence);
+    if (excluded(anchor.evidence, closeMs ?? after.evidence)) {
       excludedCount += 1;
       highWater = Math.max(highWater, after.used);
-      anchor = { ...after, used: highWater };
+      anchor = { ...after, used: highWater, evidence: Math.max(anchor.evidence, closeMs ?? after.evidence) };
       recovering = after.used < highWater;
       continue;
     }
@@ -241,14 +268,14 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
       corrected = true;
       recovering = after.used <= highWater;
       highWater = Math.max(highWater, after.used);
-      anchor = { ...after, used: highWater };
+      anchor = { ...after, used: highWater, evidence: Math.max(anchor.evidence, closeMs ?? after.evidence) };
       continue;
     }
     highWater = Math.max(highWater, after.used);
     const delta = after.used - anchor.used;
-    if (delta < MIN_INTERVAL_PERCENT || after.at <= anchor.at) continue;
-    intervals.push({ before: anchor.at, after: after.at, delta, cycle, manual: anchor.manual || after.manual });
-    anchor = after;
+    if (delta < MIN_INTERVAL_PERCENT || closeMs == null) continue;
+    intervals.push({ before: anchor.evidence, after: closeMs, delta, cycle, manual: anchor.manual || after.manual });
+    anchor = { ...after, evidence: closeMs };
   }
   if (excludedCount) result.warnings.push('Intervals touching an ignored date were excluded from calibration.');
   if (corrected) result.warnings.push('Quota corrections and their recovery intervals were excluded.');
@@ -309,11 +336,14 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
     result.reason = 'Learning from official usage: at least three matched intervals of 5 percentage points are needed.';
     return result;
   }
-  const referenceAt = readings.at(-1).at;
+  // Age is relative to the newest evidence, not wall time, so merely opening
+  // the dashboard later cannot alter the calibrated weekly capacity. Nor is it
+  // the last redraw, which may restate a fetch older than a later read: no
+  // interval is newer than the reference, so no weight exceeds its size.
+  const referenceAt = retained.reduce((latest, entry) => Math.max(latest, entry.after),
+    readings.reduce((latest, row) => Math.max(latest, row.evidence), -Infinity));
   for (const entry of retained) {
     const distance = mixDistance(mixOf([entry]), recentMix);
-    // Age is relative to the newest evidence, not wall time, so merely opening
-    // the dashboard later cannot alter the calibrated weekly capacity.
     entry.weight *= Math.exp(-(referenceAt - entry.after) / (21 * DAY_MS)) * Math.max(0.2, 1 - distance * 0.8);
   }
   // Even a very recent large interval cannot outweigh every other interval
@@ -346,15 +376,25 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
   }
   const currentMatches = latestAny && Math.abs(latestAny.reset - latestOfficial.reset) <= RESET_TOLERANCE_MS
     && (!latestAny.plan || !latestOfficial.plan || latestAny.plan === latestOfficial.plan);
+  // The latest official figure is as current as its evidence, as on the card:
+  // a status-line redraw re-records limits its session fetched earlier, unless
+  // a newer reading of the same window shows the same figure. A reading from
+  // before an early replenishment under the same reset belongs to the
+  // allowance it replaced.
+  let since = readings.length - 1;
+  while (since > 0 && !(readings[since].confirms && Math.abs(readings[since].reset - readings[since - 1].reset) <= RESET_TOLERANCE_MS
+    && readings[since - 1].used - readings[since].used >= 5 && readings[since].used <= 2)) since -= 1;
+  const evidenceAt = readings.slice(since).reduce((latest, row) => (Math.abs(row.reset - latestOfficial.reset) <= RESET_TOLERANCE_MS
+    && Math.abs(row.used - latestOfficial.used) <= 0.5 ? Math.max(latest, row.known) : latest), latestOfficial.known);
   if (unconfirmedRebase) result.warnings.push('A newer non-official reading suggests the allowance was reset; remaining tokens need a fresh official reading.');
   else if (!currentMatches) result.warnings.push('The current allowance window has no matching official reading; remaining tokens are unavailable.');
   else if (latestOfficial.reset <= nowMs) result.warnings.push('The latest official allowance has expired; remaining tokens need a fresh reading.');
-  else if (nowMs - latestOfficial.at > STALENESS_MS) result.warnings.push('The latest official reading is over 24 hours old; remaining tokens need a fresh reading.');
+  else if (nowMs - evidenceAt > STALENESS_MS) result.warnings.push('The latest official reading is over 24 hours old; remaining tokens need a fresh reading.');
   else {
     const remaining = (100 - latestOfficial.used) / 100;
     result.remainingTokens = roundedTokens(capacity * remaining);
     result.remainingRange = { low: roundedTokens(low * remaining, 'floor'), high: roundedTokens(high * remaining, 'ceil') };
-    result.remainingAsOf = new Date(latestOfficial.at).toISOString();
+    result.remainingAsOf = new Date(evidenceAt).toISOString();
   }
   return result;
 }

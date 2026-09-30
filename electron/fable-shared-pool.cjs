@@ -59,6 +59,12 @@ function estimated(window) {
   return Boolean(window?.forecast?.currentIsEstimated && finite(window?.forecast?.estimatedCurrentRemaining));
 }
 
+// The moment a window's figure held: a status-line redraw can carry limits
+// its session fetched long before the redraw.
+function readingMoment(window) {
+  return window.evidenceAt ?? window.observedAt;
+}
+
 // The Claude weekly window every model draws on: the subscription's own
 // seven-day allowance, not the five-hour session or a model-scoped limit.
 function weeklyPool(claudeQuota, nowMs) {
@@ -80,8 +86,8 @@ function weeklyPool(claudeQuota, nowMs) {
 // figure is built on the half share itself and is not evidence against it.
 function shareConsistent(fable, pool, share) {
   if (fable.provenance === 'derived-tokens') return true;
-  const fableAt = Date.parse(fable.observedAt);
-  const poolAt = Date.parse(pool.observedAt);
+  const fableAt = Date.parse(readingMoment(fable));
+  const poolAt = Date.parse(readingMoment(pool));
   if (!(fableAt <= poolAt + RESET_TOLERANCE_MS && poolAt - fableAt <= SAME_MOMENT_MS)) return true;
   return Number(fable.usedPercent) <= Number(pool.usedPercent) / share + SHARE_SLACK;
 }
@@ -254,7 +260,7 @@ function constrain(window, pool, options) {
       at: point.at,
       remaining: clamp(((finite(point.projected) ? point.projected : point.remaining) / share) * scale, 0, MAX_POOL_AS_FABLE),
     }));
-  const apart = Math.abs(Date.parse(window.observedAt) - Date.parse(pool.observedAt));
+  const apart = Math.abs(Date.parse(readingMoment(window)) - Date.parse(readingMoment(pool)));
   const summary = {
     status: 'applied',
     share,
@@ -293,7 +299,7 @@ function constrain(window, pool, options) {
     pool: {
       bucketId: pool.bucketId,
       bucketName: pool.bucketName,
-      observedAt: pool.observedAt,
+      observedAt: readingMoment(pool),
       resetsAt: pool.resetsAt,
       provenance: pool.provenance,
       state: poolForecast.state ?? 'unknown',
@@ -309,7 +315,7 @@ function constrain(window, pool, options) {
     },
   };
   const tokenCapacity = binding === 'pool'
-    ? cappedCapacity(window.tokenCapacity, Math.round(Number(pool.remainingPercent)) / share, pool.observedAt)
+    ? cappedCapacity(window.tokenCapacity, Math.round(Number(pool.remainingPercent)) / share, readingMoment(pool))
     : window.tokenCapacity;
   if (tokenCapacity !== window.tokenCapacity) summary.cap.tokenCapacity = window.tokenCapacity;
   const observed = combineObserved(own.series?.observed, poolForecast.series?.observed, share);

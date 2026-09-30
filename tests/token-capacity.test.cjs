@@ -183,6 +183,102 @@ test('expired, stale and newer derived-only reset anchors hide remaining tokens 
   assert.notEqual(estimateTokenCapacity(fixture({ nowMs: NOW + DAY })).remainingTokens, null, 'exactly 24h remains eligible');
 });
 
+test('calibration intervals run between fetches, so a later redraw moves no tokens between rises', () => {
+  // The week reads 20% two hours ago; tokens are then used before that figure
+  // is first redrawn, half an hour after its fetch.
+  const capacity = (second) => estimateTokenCapacity(fixture({
+    observations: [observation(NOW - 3 * HOUR, 10), second, observation(NOW - HOUR, 30), observation(NOW, 40)],
+    events: [event(NOW - 2.5 * HOUR), event(NOW - 1.75 * HOUR), event(NOW - 1.25 * HOUR, 2_000_000), event(NOW - HOUR / 2)],
+  }));
+  const read = capacity(observation(NOW - 2 * HOUR, 20));
+  const redrawn = capacity(observation(NOW - 1.5 * HOUR, 20,
+    { provenance: 'official-statusline', plan_type: null, fetched_after: iso(NOW - 2 * HOUR) }));
+  assert.equal(read.status, 'available');
+  assert.deepEqual([redrawn.weeklyTokens, redrawn.weeklyRange, redrawn.calibratedAt],
+    [read.weeklyTokens, read.weeklyRange, read.calibratedAt]);
+});
+
+test('a figure fetched before an allowance change is scaled as a share of the old allowance, whenever it is redrawn', () => {
+  // The allowance doubled 1.75 hours ago; the 20% figure was fetched before
+  // that, but first redrawn after it.
+  const capacity = (second) => estimateTokenCapacity(fixture({
+    observations: [observation(NOW - 3 * HOUR, 10), second, observation(NOW - HOUR, 30), observation(NOW, 40)],
+    events: [event(NOW - 2.5 * HOUR), event(NOW - 1.25 * HOUR), event(NOW - HOUR / 2)],
+    allowanceChanges: [{ source: 'codex', at: iso(NOW - 1.75 * HOUR), previousAllowancePercent: 50 }],
+  }));
+  const read = capacity(observation(NOW - 2 * HOUR, 20));
+  const redrawn = capacity(observation(NOW - 1.5 * HOUR, 20,
+    { provenance: 'official-statusline', plan_type: null, fetched_after: iso(NOW - 2 * HOUR) }));
+  assert.equal(read.status, 'available');
+  assert.deepEqual([redrawn.weeklyTokens, redrawn.weeklyRange, redrawn.intervals], [read.weeklyTokens, read.weeklyRange, read.intervals]);
+});
+
+test('remaining tokens age from when the latest figure was fetched, not from a status-line redraw of it', () => {
+  // A day and an hour later, an idle session redraws the 40% it fetched
+  // before the last provider reading.
+  const redraw = (fetchedAfter) => observation(NOW + 25 * HOUR, 40,
+    { provenance: 'official-statusline', plan_type: null, fetched_after: iso(fetchedAfter) });
+  const idle = estimateTokenCapacity(fixture({ nowMs: NOW + 25 * HOUR, observations: [...fixture().observations, redraw(NOW - 2 * HOUR)] }));
+  assert.equal(idle.status, 'available');
+  assert.equal(idle.remainingTokens, null, 'the figure was last known over a day ago');
+  assert.ok(idle.warnings.some((warning) => /over 24 hours old/.test(warning)));
+  // The same session, fetching again half an hour earlier, still sees 40%.
+  const fetched = estimateTokenCapacity(fixture({ nowMs: NOW + 25 * HOUR, observations: [...fixture().observations, redraw(NOW + 24.5 * HOUR)] }));
+  assert.equal(fetched.remainingTokens, 6_000_000);
+  assert.equal(fetched.remainingAsOf, iso(NOW + 24.5 * HOUR));
+});
+
+test('a rise whose fetch overlaps the anchor’s closes at its first redraw, not inside the next rise', () => {
+  // 10% and 20% are read; a session whose last redraw before its response was
+  // at 09:30 then fetched 30% and first redrew it at 10:30; 40% is read at noon.
+  const capacity = (third) => estimateTokenCapacity(fixture({
+    observations: [observation(NOW - 3 * HOUR, 10), observation(NOW - 2 * HOUR, 20), third, observation(NOW, 40)],
+    events: [event(NOW - 2.5 * HOUR), event(NOW - 1.75 * HOUR), event(NOW - HOUR / 2)],
+  }));
+  const read = capacity(observation(NOW - 1.5 * HOUR, 30));
+  const overlapping = capacity(observation(NOW - HOUR, 30, { provenance: 'official-statusline', plan_type: null,
+    fetched_after: iso(NOW - 2.5 * HOUR), seen_since: iso(NOW - 1.5 * HOUR) }));
+  assert.equal(read.intervals, 3);
+  assert.deepEqual([overlapping.weeklyTokens, overlapping.weeklyRange, overlapping.intervals], [read.weeklyTokens, read.weeklyRange, read.intervals]);
+});
+
+test('an idle redraw restating an older fetch of the latest figure does not change the calibration', () => {
+  // Seven intervals of different capacity and model, then an idle session
+  // redraws the latest 80%, its fetch dated two days before the last read.
+  const steps = [10, 20, 30, 40, 50, 60, 70, 80];
+  const observations = steps.map((used, index) => observation(NOW - (steps.length - 1 - index) * 6 * HOUR, used));
+  const events = [1, 3, 1.2, 2.5, 0.8, 1.9, 1.4].map((millions, index) =>
+    event(NOW - (steps.length - 2 - index) * 6 * HOUR - HOUR, millions * 1_000_000, { model: index % 2 ? 'gpt-5.6-sol' : 'gpt-5.6-terra' }));
+  const calibration = (value) => [value.status, value.weeklyTokens, value.weeklyRange, value.modelMix, value.tokenMix, value.intervals];
+  const read = estimateTokenCapacity(fixture({ nowMs: NOW + HOUR, observations, events }));
+  const redrawn = estimateTokenCapacity(fixture({ nowMs: NOW + HOUR, events, observations: [...observations,
+    observation(NOW + HOUR / 2, 80, { provenance: 'official-statusline', plan_type: null, fetched_after: iso(NOW - 2 * DAY) })] }));
+  assert.equal(read.status, 'available');
+  assert.deepEqual(calibration(redrawn), calibration(read));
+});
+
+test('a figure from before an early replenishment does not renew the allowance that replaced it', () => {
+  // 40% is read at noon; a read at 13:00 shows an early replenishment to 0%
+  // under the same reset; at 14:00 an undated redraw shows 40% again.
+  const statusLine = { provenance: 'official-statusline', plan_type: null };
+  const replenished = estimateTokenCapacity(fixture({ nowMs: NOW + 3 * HOUR, observations: [...fixture().observations,
+    observation(NOW + HOUR, 0), observation(NOW + 2 * HOUR, 40, { ...statusLine, seen_since: iso(NOW + 2 * HOUR) })] }));
+  assert.equal(replenished.status, 'available');
+  assert.equal(replenished.remainingTokens, null, 'the noon read of the old allowance does not date the new 40%');
+  assert.ok(replenished.warnings.some((warning) => /over 24 hours old/.test(warning)));
+});
+
+test('a redraw from a session first seen with limits in hand does not renew remaining tokens', () => {
+  // A day and an hour later, a session the helper never saw open redraws 40%:
+  // fetched at some point this week, perhaps before the last provider reading.
+  const undated = estimateTokenCapacity(fixture({ nowMs: NOW + 25 * HOUR, observations: [...fixture().observations,
+    observation(NOW + 25 * HOUR, 40, { provenance: 'official-statusline', plan_type: null, seen_since: iso(NOW + 25 * HOUR - 60_000) })] }));
+  assert.equal(undated.status, 'available');
+  assert.equal(undated.weeklyTokens, 10_000_000);
+  assert.equal(undated.remainingTokens, null, 'the figure is known only from the last provider reading, over a day ago');
+  assert.ok(undated.warnings.some((warning) => /over 24 hours old/.test(warning)));
+});
+
 test('an unconfirmed replenishment suppresses old official remaining even while its reset timestamp is unchanged', () => {
   const input = fixture();
   input.observations = input.observations.map((row, index) => ({ ...row, used_percent: 50 + index * 10,

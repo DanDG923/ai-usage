@@ -171,10 +171,11 @@ test('an upstream failure retains the last unexpired official reading and marks 
 
 test('a fresh status-line fallback from this refresh is current even when the SDK provider fails', async () => withStore(async (store) => {
   const fallbackObservedAt = '2026-08-30T17:59:00.000Z';
+  // Its session fetched the limits in the minute before this redraw.
   store.recordObservation({
     sourceId: 'claude-fable', bucketId: 'fable_seven_day', bucketName: 'Fable 5 weekly',
     observedAt: fallbackObservedAt, usedPercent: 47, resetsAt: RESET,
-    windowMinutes: 10_080, planType: 'max', provenance: 'official-statusline',
+    windowMinutes: 10_080, planType: 'max', provenance: 'official-statusline', fetchedAfter: '2026-08-30T17:58:00.000Z',
   });
   const tracker = createFableUsageTracker({
     store,
@@ -193,6 +194,50 @@ test('a fresh status-line fallback from this refresh is current even when the SD
   assert.deepEqual(providerSummary(result.provider), {
     attemptSucceeded: false, kind: 'failed', overallWindowsRecorded: 0, extraUsage: null,
   });
+}));
+
+test('a status-line fallback whose fetch is unknown does not stand in for a failed provider read', async () => withStore(async (store) => {
+  // First seen with limits in hand: redrawn a minute ago, fetched who knows when.
+  const fallbackObservedAt = '2026-08-30T17:59:00.000Z';
+  store.recordObservation({
+    sourceId: 'claude-fable', bucketId: 'fable_seven_day', bucketName: 'Fable 5 weekly',
+    observedAt: fallbackObservedAt, usedPercent: 47, resetsAt: RESET,
+    windowMinutes: 10_080, planType: 'max', provenance: 'official-statusline', seenSince: fallbackObservedAt,
+  });
+  const tracker = createFableUsageTracker({
+    store,
+    clock: () => new Date(NOW),
+    activityReader: { import: async () => ({ filesFound: 0, usageEvents: 0, fableEvents: 0 }) },
+    usagePort: { read: async () => { throw new Error('temporary upstream failure'); } },
+  });
+  const result = await tracker.refresh({ fallbackObservedAt });
+  assert.equal(result.allowance.usedPercent, 47, 'it is still the allowance shown');
+  assert.equal(result.health.state, 'stale');
+  assert.notEqual(result.health.officialSource, 'connected');
+}));
+
+test('an automatic refresh does not count a redraw whose fetch is unknown as a recent reading', async () => withStore(async (store) => {
+  const record = (observedAt, bounds) => store.recordObservation({
+    sourceId: 'claude-fable', bucketId: 'fable_seven_day', bucketName: 'Fable 5 weekly',
+    observedAt, usedPercent: 47, resetsAt: RESET, windowMinutes: 10_080, planType: 'max', provenance: 'official-statusline', ...bounds,
+  });
+  const automatic = () => createFableUsageTracker({
+    store, clock: () => new Date(NOW), usagePort: null,
+    activityReader: { import: async () => ({ filesFound: 0, usageEvents: 0, fableEvents: 0 }) },
+  }).refresh();
+  // First seen with limits in hand a minute ago: fetched at some point this week.
+  record('2026-08-30T17:59:00.000Z', { seenSince: '2026-08-30T17:59:00.000Z' });
+  let result = await automatic();
+  assert.equal(result.health.state, 'stale');
+  assert.equal(result.health.officialSource, 'not-requested');
+  assert.equal(result.allowance.evidenceAt, new Date(Date.parse(RESET) - 7 * 24 * 60 * 60 * 1000).toISOString());
+
+  // A session seen opening dates the same figure's fetch.
+  record('2026-08-30T17:59:30.000Z', { fetchedAfter: '2026-08-30T17:58:40.000Z' });
+  result = await automatic();
+  assert.equal(result.health.state, 'current');
+  assert.equal(result.health.officialSource, 'connected');
+  assert.equal(result.allowance.evidenceAt, '2026-08-30T17:58:40.000Z');
 }));
 
 test('invalid provider schema fails closed instead of fabricating a Fable percentage', async () => withStore(async (store) => {

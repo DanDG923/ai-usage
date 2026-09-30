@@ -697,7 +697,7 @@ test('the helper doubles every PowerShell single-quote character in its inbox pa
 
 test('generated helper writes BOM-free UTF-8 and rotates before appending', () => {
   const helper = makeHelperScript('C:\\Temp\\ai-usage\\inbox.jsonl');
-  assert.match(helper, /AI_USAGE_HELPER_VERSION=1\.0\.4/);
+  assert.match(helper, /AI_USAGE_HELPER_VERSION=1\.0\.5/);
   assert.match(helper, /Move-Item/);
   assert.match(helper, /UTF8Encoding\(\$false\)/);
   assert.match(helper, /AppendAllText/);
@@ -705,7 +705,148 @@ test('generated helper writes BOM-free UTF-8 and rotates before appending', () =
   assert.match(helper, /\$safe\s*=\s*\[ordered\]@\{/);
   assert.match(helper, /\$line\s*=\s*\$safe\s*\|\s*ConvertTo-Json/);
   assert.doesNotMatch(helper, /\$line\s*=\s*\$data\s*\|\s*ConvertTo-Json/);
-  assert.doesNotMatch(helper, /session_id|transcript_path|workspace|cwd/i);
+  // The session id (a random id the transcript import already records) and
+  // the session's API time date each reading's fetch. Nothing else is kept.
+  assert.match(helper, /session_id = \$data\.session_id/);
+  assert.match(helper, /api_ms = \$data\.cost\.total_api_duration_ms/);
+  assert.doesNotMatch(helper, /transcript_path|workspace|cwd|total_cost|total_duration_ms/i);
+});
+
+test('each status-line reading is dated by the fetch its session made, not by its redraw', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-statusline-dating-'));
+  const store = new UsageStore(path.join(root, 'test.sqlite'), path.join(root, 'Backups'));
+  const inbox = path.join(root, 'inbox.jsonl');
+  const base = Date.now() - 60 * 60_000;
+  const at = (seconds) => new Date(base + seconds * 1000).toISOString();
+  const fiveReset = new Date(base + 3 * 3_600_000).toISOString();
+  const weekReset = new Date(base + 3 * 86_400_000).toISOString();
+  const line = (seconds, sessionId, apiMs, windows) => JSON.stringify({
+    ai_usage_captured_at: at(seconds), ...(sessionId ? { session_id: sessionId, api_ms: apiMs } : {}),
+    rate_limits: windows && Object.fromEntries(Object.entries(windows).map(([key, used]) => [key,
+      { used_percentage: used, resets_at: key === 'five_hour' ? fiveReset : weekReset }])),
+  });
+  fs.writeFileSync(inbox, `${[
+    line(0, 'session-a', 0, null), // opens with no limits yet
+    line(5, 'session-a', 2_588, { five_hour: 2, seven_day: 24 }), // its first response
+    line(65, 'session-a', 2_588, { five_hour: 2, seven_day: 24 }), // an idle redraw
+    line(125, 'session-a', 5_000, { five_hour: 3, seven_day: 25 }), // the next response
+    line(185, 'session-a', 5_000, { seven_day: 25 }), // Claude Code drops a window at its reset: not a response
+    line(245, 'session-a', 7_000, { seven_day: 25 }), // a response that changed nothing
+    line(210, 'session-b', 9_000, { seven_day: 25 }), // first seen with limits in hand
+    line(300, null, null, { seven_day: 25 }), // a helper that did not record sessions
+  ].join('\n')}\n`, 'utf8');
+  // Each reading: [fetched after, first redraw of the same limits].
+  const dates = () => Object.fromEntries(store.prepare(`SELECT bucket_id, observed_at, fetched_after, seen_since FROM quota_observations
+    ORDER BY observed_at, bucket_id`).all().map((row) => [`${row.bucket_id}@${(Date.parse(row.observed_at) - base) / 1000}`,
+    [row.fetched_after, row.seen_since]]));
+  const expected = {
+    'five_hour@5': [at(0), at(5)], 'seven_day@5': [at(0), at(5)],
+    'five_hour@65': [at(0), at(5)], 'seven_day@65': [at(0), at(5)],
+    'five_hour@125': [at(65), at(125)], 'seven_day@125': [at(65), at(125)],
+    'seven_day@185': [at(65), at(125)],
+    'seven_day@210': [null, at(210)],
+    'seven_day@245': [at(185), at(245)],
+    'seven_day@300': [null, null],
+  };
+  try {
+    assert.equal(importClaudeInbox(store, inbox).observations, 10);
+    assert.deepEqual(dates(), expected);
+    // Reading the inbox again (after a rotation restart) keeps every date,
+    // although the replayed lines are older than each session's latest.
+    store.forgetImportedFile(inbox);
+    importClaudeInbox(store, inbox);
+    assert.deepEqual(dates(), expected);
+    // A session unseen for longer than any window lasts is forgotten.
+    store.prepare("UPDATE statusline_sessions SET seen_at = '2020-01-01T00:00:00.000Z' WHERE session_id = 'session-b'").run();
+    importClaudeInbox(store, inbox);
+    assert.deepEqual(store.prepare('SELECT session_id FROM statusline_sessions').all().map((row) => row.session_id), ['session-a']);
+  } finally {
+    store.close();
+  }
+});
+
+test('a line captured too far ahead does not hold its session back', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-statusline-future-'));
+  const store = new UsageStore(path.join(root, 'test.sqlite'), path.join(root, 'Backups'));
+  const inbox = path.join(root, 'inbox.jsonl');
+  const base = Date.now() - 60 * 60_000;
+  const at = (seconds) => new Date(base + seconds * 1000).toISOString();
+  const weekReset = new Date(base + 3 * 86_400_000).toISOString();
+  const line = (seconds, apiMs, used) => JSON.stringify({ ai_usage_captured_at: at(seconds), session_id: 'session-a', api_ms: apiMs,
+    rate_limits: used == null ? null : { seven_day: { used_percentage: used, resets_at: weekReset } } });
+  fs.writeFileSync(inbox, `${[
+    line(0, 0, null),
+    line(5, 1_000, 24),
+    // Written while the clock ran two hours fast, then corrected.
+    line(3 * 3600, 1_000, 24),
+    line(600, 2_000, 25),
+  ].join('\n')}\n`, 'utf8');
+  try {
+    importClaudeInbox(store, inbox);
+    assert.deepEqual(store.prepare('SELECT observed_at, fetched_after FROM quota_observations ORDER BY observed_at').all()
+      .map((row) => [row.observed_at, row.fetched_after]), [[at(5), at(0)], [at(600), at(5)]]);
+  } finally {
+    store.close();
+  }
+});
+
+test('a malformed limits line is rejected without making the next redraw look freshly fetched', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-statusline-malformed-'));
+  const store = new UsageStore(path.join(root, 'test.sqlite'), path.join(root, 'Backups'));
+  const inbox = path.join(root, 'inbox.jsonl');
+  const base = Date.now() - 60 * 60_000;
+  const at = (seconds) => new Date(base + seconds * 1000).toISOString();
+  const weekReset = new Date(base + 3 * 86_400_000).toISOString();
+  const line = (seconds, apiMs, rateLimits) => JSON.stringify({ ai_usage_captured_at: at(seconds), session_id: 'session-a', api_ms: apiMs, rate_limits: rateLimits });
+  const limits = { seven_day: { used_percentage: 24, resets_at: weekReset } };
+  fs.writeFileSync(inbox, `${[
+    line(0, 0, null),
+    line(5, 2_588, limits),
+    line(65, 2_588, 'garbled'),
+    line(95, 2_588, [1, 2]),
+    line(110, 2_588, { seven_day: [] }),
+    line(115, 2_588, { seven_day: { used_percentage: 24 } }),
+    // Readings the store would reject: past 100%, and a reset 40 days away.
+    line(116, 2_588, { seven_day: { used_percentage: 101, resets_at: weekReset } }),
+    line(117, 2_588, { seven_day: { used_percentage: 24, resets_at: new Date(base + 40 * 86_400_000).toISOString() } }),
+    // Partly readable: its good window is recorded, from the same fetch.
+    line(120, 2_588, { ...limits, five_hour: [] }),
+    line(125, 2_588, limits),
+  ].join('\n')}\n`, 'utf8');
+  try {
+    const result = importClaudeInbox(store, inbox);
+    assert.equal(result.rejectedRecords, 5, 'the opening redraw, both malformed lines and both rejected readings');
+    // No unreadable window made a later unchanged redraw look freshly fetched.
+    assert.deepEqual(store.prepare('SELECT observed_at, fetched_after FROM quota_observations ORDER BY observed_at').all()
+      .map((row) => [row.observed_at, row.fetched_after]), [[at(5), at(0)], [at(120), at(0)], [at(125), at(0)]]);
+  } finally {
+    store.close();
+  }
+});
+
+test('a restored reading keeps its fetch date, and only a status-line reading has one', () => {
+  withStore((store) => {
+    const observedAt = new Date(Date.now() - 60 * 60_000).toISOString();
+    const resetsAt = new Date(Date.now() + 86_400_000).toISOString();
+    const row = (bucketId, provenance, fetchedAfter, seenSince = fetchedAfter) => ({ source_id: 'claude', bucket_id: bucketId,
+      observed_at: observedAt, used_percent: 20, remaining_percent: 80, resets_at: resetsAt, window_minutes: 10_080, provenance,
+      fetched_after: fetchedAfter, seen_since: seenSince });
+    const earlier = new Date(Date.parse(observedAt) - 30 * 60_000).toISOString();
+    const later = new Date(Date.parse(observedAt) + 60_000).toISOString();
+    store.restoreFromExport({ schemaVersion: 1, observations: [
+      row('dated', 'official-statusline', earlier),
+      row('first-seen', 'official-statusline', undefined, earlier),
+      row('from-the-future', 'official-statusline', later),
+      row('provider', 'official-claude-usage', earlier),
+      row('old-backup', 'official-statusline', undefined),
+    ] });
+    const restored = Object.fromEntries(store.prepare('SELECT bucket_id, fetched_after, seen_since FROM quota_observations').all()
+      .map((entry) => [entry.bucket_id, [entry.fetched_after, entry.seen_since]]));
+    assert.deepEqual(restored, { dated: [earlier, earlier], 'first-seen': [null, earlier], 'from-the-future': [null, null],
+      provider: [null, null], 'old-backup': [null, null] });
+    assert.throws(() => store.recordObservation({ sourceId: 'claude', bucketId: 'live', observedAt, resetsAt,
+      usedPercent: 20, windowMinutes: 10_080, provenance: 'official-statusline', fetchedAfter: later }), /cannot be fetched after/);
+  });
 });
 
 test('distinct Fable allowance windows do not overwrite one another', () => {
@@ -916,13 +1057,14 @@ test('fresh status-line Fable evidence stays current when the SDK is unavailable
   const store = new UsageStore(path.join(root, 'test.sqlite'), path.join(root, 'Backups'));
   const inbox = path.join(root, 'inbox.jsonl');
   const reset = new Date(Date.now() + 4 * 86_400_000).toISOString();
-  fs.writeFileSync(inbox, `${JSON.stringify({
-    ai_usage_captured_at: new Date().toISOString(),
-    rate_limits: {
+  // A session that opened just now and has fetched its first limits.
+  fs.writeFileSync(inbox, `${[
+    { ai_usage_captured_at: new Date(Date.now() - 20_000).toISOString(), session_id: 'fresh-session', api_ms: 0, rate_limits: null },
+    { ai_usage_captured_at: new Date().toISOString(), session_id: 'fresh-session', api_ms: 1_500, rate_limits: {
       seven_day: { used_percentage: 22, resets_at: reset },
       fable_seven_day: { used_percentage: 44, resets_at: reset },
-    },
-  })}\n`);
+    } },
+  ].map((line) => JSON.stringify(line)).join('\n')}\n`);
   try {
     // Updated deliberately: plan usage is read only on an explicit user refresh now,
     // so this SDK-path test asks for one (readPlanUsage: true).

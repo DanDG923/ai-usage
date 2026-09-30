@@ -1,6 +1,7 @@
 'use strict';
 
 const { createAllowanceScaler } = require('./allowance-changes.cjs');
+const { freshnessLimitHours } = require('./dashboard-decision.cjs');
 const { OFFICIAL_PROVENANCES, isOfficialProvenance } = require('./quota-provenance.mjs');
 const { MAX_QUOTA_RESET_AHEAD_MS, QUOTA_CLOCK_SKEW_MS, FORECAST_LOOKBACK_MS, validQuotaTime } = require('./quota-time.cjs');
 
@@ -153,8 +154,10 @@ function clusterByWindow(rows) {
         rows: [row],
         // When only the percentage has updated, the first near-zero reading
         // is the strongest available lower bound for the new window start.
+        // It is dated by its fetch, as the evidence ending the window's
+        // exposure is: a status-line redraw may come well after the fetch.
         observedResetAt: previous && resetTimestampUnchanged && clearAllowanceRebase(previous, row)
-          ? row.observedAt
+          ? fetchMomentOf(row)
           : null,
       });
     }
@@ -181,10 +184,12 @@ function windowPaceOf(rows, schedule, observedResetAt = null, nowMs = Date.now()
   if (!(used >= 0)) return null;
   // Only the scheduled share of the window's usage may carry forward as an
   // active-hour pace: the projection adds off-schedule use separately, so a
-  // whole-window average would count every late-night point twice.
-  const split = splitWindowUsage(rows, schedule, nowMs, startMs, last.observedAt, used, excluded, dayWeights);
+  // whole-window average would count every late-night point twice. Exposure
+  // ends when the last figure was fetched: a later idle redraw observed nothing.
+  const endMs = latestEvidenceAt(rows);
+  const split = splitWindowUsage(rows, schedule, nowMs, startMs, endMs, used, excluded, dayWeights);
   const evidenceActiveHours = dayWeights?.size
-    ? splitWindowUsage(rows, schedule, nowMs, startMs, last.observedAt, used, excluded).activeHours : split.activeHours;
+    ? splitWindowUsage(rows, schedule, nowMs, startMs, endMs, used, excluded).activeHours : split.activeHours;
   return evidenceActiveHours >= 1 && split.activeHours > 0
     ? { pace: split.activeUsed / split.activeHours, activeHours: split.activeHours, evidenceActiveHours } : null;
 }
@@ -279,9 +284,17 @@ function normaliseObservation(row) {
   if (row[NORMALISED]) return row;
   if (row[PREPARED]) return row[PREPARED];
   const windowMinutes = row.windowMinutes ?? row.window_minutes;
+  const fetchedAfter = row.fetchedAfter ?? row.fetched_after;
+  const seenSince = row.seenSince ?? row.seen_since;
   return {
     [NORMALISED]: true,
     observedAt: new Date(row.observedAt ?? row.observed_at).getTime(),
+    // The earliest moment a status-line reading's limits can have been
+    // fetched; null for a provider read or a reading the collector could not date.
+    fetchedAfter: fetchedAfter == null ? null : new Date(fetchedAfter).getTime(),
+    // The first redraw in which its session showed the same limits: the fetch
+    // was no later. Kept for readings that cannot be dated from below.
+    seenSince: seenSince == null ? null : new Date(seenSince).getTime(),
     resetsAt: new Date(row.resetsAt ?? row.resets_at).getTime(),
     usedPercent: Number(row.usedPercent ?? row.used_percent),
     remainingPercent: Number(row.remainingPercent ?? row.remaining_percent),
@@ -318,7 +331,7 @@ function rescaleObservations(rows, options) {
       if (!scalers.has(key)) scalers.set(key, createAllowanceScaler(changes, sourceId, { bucketId, windowMinutes, nowMs }));
       previousSource = sourceId; previousBucket = bucketId; previousMinutes = windowMinutes; previousScaler = scalers.get(key);
     }
-    const scale = previousScaler?.(row.observedAt) ?? 1;
+    const scale = previousScaler?.(fetchMomentOf(row)) ?? 1;
     if (scale === 1 || !Number.isFinite(row.usedPercent)) return row;
     const usedPercent = row.usedPercent * scale;
     return { ...row, usedPercent, remainingPercent: 100 - usedPercent };
@@ -385,23 +398,121 @@ function restatesSessionLimits(row) {
   return row.provenance === 'official-statusline';
 }
 
-// A status-line reading lower than the provider's last fresh read for the same
-// reset is either a session restating limits it fetched earlier or the first
-// sign of an early replenishment. Left in, stale restatements read as a
-// replenishment followed by the same usage spent again: one 12% rise was
-// learned eight times over as late-night use. The provider's next fresh read
-// tells the two apart. If it still shows the earlier usage, nothing was
-// replenished and the lower reading was stale; if it shows the drop as well,
-// the replenishment was real and the status line saw it first. Until that read
-// arrives the lower reading is held back, but only while the provider can
-// still be expected to answer. Once it has been silent for the grace period,
-// the status line is the best evidence left, so a genuine early reset still
-// reaches the card. Readings must be in time order; status-line readings
-// before any fresh read are kept because nothing yet shows them to be stale.
+// When one reading's figure was fetched, as far as that reading alone can
+// say: a provider read's own time, or a status-line reading's recorded fetch.
+// A percentage is a share of the allowance in force then, not at a redraw
+// that came after a recorded allowance change.
+function fetchMomentOf(row) {
+  const parsed = normaliseObservation(row);
+  if (!restatesSessionLimits(parsed)) return parsed.observedAt;
+  const bound = Number.isFinite(parsed.fetchedAfter) ? parsed.fetchedAfter : parsed.seenSince;
+  return Number.isFinite(bound) ? Math.min(bound, parsed.observedAt) : parsed.observedAt;
+}
+
+// The moment each reading's value is evidence of, for readings in time order.
+// A status-line reading carries the limits its session last fetched, so the
+// collector dates it by that fetch where it can; the redraw that recorded it
+// proves nothing newer. An undated redraw (its session was first seen with
+// limits in hand) can be no newer than its session's first redraw of the
+// same limits (`seenSince`), so it takes that time: an idle session must not
+// renew its evidence every minute. A reading from a helper that did not record
+// sessions has neither and cannot be told from another session's, so it
+// takes the first such reading of its window that showed the same figure:
+// two idle sessions redrawing different figures in turn renew neither. A
+// provider read stands for itself.
+// `known` asks instead how current each figure is known to be, which decides
+// whether it is fresh. A first redraw or first showing only bounds an undated
+// fetch from above: the limits may have been fetched at any point in the
+// window they show, so the figure is known only from that window's start.
+// A figure shown before an early replenishment belongs to the allowance it
+// replaced, even where the reset timestamp is unchanged.
+function evidenceTimes(rows, { known = false } = {}) {
+  const parsed = rows.map(normaliseObservation);
+  let firstShown = [];
+  return parsed.map((row, index) => {
+    if (index > 0 && replenishedWithin(parsed[index - 1], row)) {
+      firstShown = firstShown.filter((entry) => Math.abs(entry.resetsAt - row.resetsAt) > RESET_TOLERANCE_MS);
+    }
+    if (!restatesSessionLimits(row)) return row.observedAt;
+    if (Number.isFinite(row.fetchedAfter)) return Math.min(row.fetchedAfter, row.observedAt);
+    let placed;
+    if (Number.isFinite(row.seenSince)) placed = Math.min(row.seenSince, row.observedAt);
+    else {
+      const used = usedPercentOf(row);
+      let first = firstShown.find((entry) => Math.abs(entry.resetsAt - row.resetsAt) <= RESET_TOLERANCE_MS
+        && Math.abs(entry.used - used) <= STALE_RESTATEMENT_MARGIN);
+      if (!first) {
+        first = { resetsAt: row.resetsAt, used, from: row.observedAt };
+        firstShown.push(first);
+      }
+      placed = first.from;
+    }
+    if (!known) return placed;
+    // A window of unknown length is no longer than a reset may lie ahead.
+    const windowMs = row.windowMinutes > 0 ? row.windowMinutes * 60_000 : MAX_QUOTA_RESET_AHEAD_MS;
+    return Math.min((Number.isFinite(row.resetsAt) ? row.resetsAt : placed) - windowMs, placed);
+  });
+}
+
+// An early replenishment between two readings of a window whose reset
+// timestamp did not move: a new allowance, as `clusterByWindow` reads it.
+// Only a read or a dated fetch shows one; an undated drop may be an idle
+// session restating an older figure.
+function replenishedWithin(previous, row) {
+  return (!restatesSessionLimits(row) || Number.isFinite(row.fetchedAfter))
+    && Math.abs(row.resetsAt - previous.resetsAt) <= RESET_TOLERANCE_MS && clearAllowanceRebase(previous, row);
+}
+
+// When the latest reading's value was last known to hold: the newest evidence
+// among the readings of its window that show the same value. An idle session
+// redrawing a value it fetched hours ago is only as current as that fetch,
+// unless a newer read agrees with it. The same figure from before an early
+// replenishment is no evidence for the allowance that replaced it. Readings
+// must be in time order. `known` as for `evidenceTimes`.
+function latestEvidenceAt(rows, options = {}) {
+  const parsed = rows.map(normaliseObservation);
+  const current = parsed.at(-1);
+  if (!current) return null;
+  const times = evidenceTimes(parsed, options);
+  let start = parsed.length - 1;
+  while (start > 0 && !replenishedWithin(parsed[start - 1], parsed[start])) start -= 1;
+  let at = times.at(-1);
+  for (let index = start; index < parsed.length; index += 1) {
+    const row = parsed[index];
+    if (Math.abs(row.resetsAt - current.resetsAt) <= RESET_TOLERANCE_MS
+      && Math.abs(usedPercentOf(row) - usedPercentOf(current)) <= STALE_RESTATEMENT_MARGIN) {
+      at = Math.max(at, times[index]);
+    }
+  }
+  return Math.min(at, current.observedAt);
+}
+
+// A status-line reading lower than newer evidence for the same reset is either
+// a session restating limits it fetched earlier or the first sign of an early
+// replenishment. Left in, stale restatements read as a replenishment followed
+// by the same usage spent again: one 12% rise was learned eight times over as
+// late-night use, and an idle session's 1% replaced a 13% provider read on the
+// card until the next Refresh.
+// A dated reading is judged by its fetch. Fetched after the newest evidence,
+// it is the newest evidence, a drop included, so an early replenishment a
+// working session sees reaches the card at once. Fetched before, it stands
+// only where it agrees with what is known since. When the two fetches cannot
+// be ordered, a higher value is the later use and a lower one is held back,
+// and a later reset window is newer than the one it replaced.
+// An undated reading (from a helper that did not record sessions, or a
+// session first seen with limits in hand) cannot be ordered against the
+// newest evidence, whether a provider read or a dated session's fetch. A
+// lower one waits for the provider's next read to confirm or contradict it,
+// and is believed without one only once that evidence is past the window's
+// freshness limit, when the card already calls it out of date. So does one
+// showing an earlier window than a read or a dated fetch: it may restate the
+// window an early replenishment replaced as well as show a corrected reset.
+// Readings must be in time order; readings before any evidence are kept
+// because nothing yet shows them to be stale.
 const STALE_RESTATEMENT_MARGIN = 0.5;
 const FRESH_READ_GRACE_MS = 2 * HOUR_MS;
-// How long a lower status-line reading waits for the provider's next read to
-// confirm or contradict it: two refreshes, and never less than two hours.
+// The least an undated lower reading waits for the provider's next read: two
+// refreshes, and never less than two hours.
 function freshReadGraceFor(settings) {
   const minutes = Number(settings.refreshIntervalMinutes);
   return Math.max(FRESH_READ_GRACE_MS, minutes > 0 ? 2 * minutes * 60_000 : 0);
@@ -413,20 +524,95 @@ function withoutStaleRestatements(rows, { nowMs = Date.now(), freshReadGraceMs =
     nextFresh[index] = next;
     if (!restatesSessionLimits(parsed[index])) next = parsed[index];
   }
-  let fresh = null;
+  // The newest evidence so far, and the span its fetch is known to lie in.
+  let newest = null;
+  // Every redraw of one fetch carries its session's first redraw of it
+  // (`seenSince`), which bounds the fetch from above. A dated reading without
+  // one falls back to the first reading here that carries the same date.
+  const firstCarrier = new Map();
   return rows.filter((row, index) => {
     const reading = parsed[index];
+    const used = usedPercentOf(reading);
     if (!restatesSessionLimits(reading)) {
-      fresh = reading;
+      newest = { reading, from: reading.observedAt, to: reading.observedAt };
       return true;
     }
     const sameReset = (other) => other && Math.abs(other.resetsAt - reading.resetsAt) <= RESET_TOLERANCE_MS;
-    const freshUsed = fresh && usedPercentOf(fresh);
-    if (!sameReset(fresh) || usedPercentOf(reading) >= freshUsed - STALE_RESTATEMENT_MARGIN) return true;
-    const after = nextFresh[index];
-    if (after) return sameReset(after) && usedPercentOf(after) < freshUsed - STALE_RESTATEMENT_MARGIN;
-    return nowMs - fresh.observedAt > freshReadGraceMs;
+    // This reading's window had already ended when it was drawn, and newer
+    // evidence shows the window after it.
+    const endedBefore = (other) => reading.resetsAt < other.resetsAt && reading.resetsAt <= reading.observedAt;
+    // Held back until the provider's next read confirms or contradicts it, or
+    // until the newest evidence is past the window's freshness limit.
+    const confirmedLater = (confirms) => {
+      const after = nextFresh[index];
+      if (after) return confirms(after);
+      const graceMs = Math.max(freshReadGraceMs, freshnessLimitHours({ windowMinutes: reading.windowMinutes }) * HOUR_MS);
+      return nowMs - newest.to > graceMs;
+    };
+    if (Number.isFinite(reading.fetchedAfter)) {
+      if (!firstCarrier.has(reading.fetchedAfter)) firstCarrier.set(reading.fetchedAfter, reading.observedAt);
+      const own = { reading, from: reading.fetchedAfter,
+        to: Number.isFinite(reading.seenSince) ? Math.min(reading.seenSince, reading.observedAt) : firstCarrier.get(reading.fetchedAfter) };
+      if (!newest || own.from > newest.to) {
+        newest = own;
+        return true;
+      }
+      const newestUsed = usedPercentOf(newest.reading);
+      if (own.to < newest.from) return sameReset(newest.reading) && Math.abs(used - newestUsed) <= STALE_RESTATEMENT_MARGIN;
+      // Around a reset, a redraw can still carry the window that just ended;
+      // of two fetches from around the same time, the later window is newer.
+      // An earlier one still ahead may be a corrected reset or the window an
+      // early replenishment replaced, so it waits for a read as undated ones do.
+      if (!sameReset(newest.reading)) {
+        if (endedBefore(newest.reading)) return false;
+        if (reading.resetsAt < newest.reading.resetsAt) return confirmedLater(sameReset);
+        newest = own;
+        return true;
+      }
+      if (used > newestUsed + STALE_RESTATEMENT_MARGIN) {
+        newest = own;
+        return true;
+      }
+      if (used < newestUsed - STALE_RESTATEMENT_MARGIN) return false;
+      // An agreeing fetch from around the same time shows the value held as
+      // late as either fetch, so a drop must be newer than both to count.
+      newest = { reading: newest.reading, from: Math.max(newest.from, own.from), to: Math.max(newest.to, own.to) };
+      return true;
+    }
+    // Undated: its fetch cannot be ordered against the newest evidence, a
+    // provider read or a dated session's fetch alike, so around a reset only
+    // a later window gets through, as for fetches that cannot be ordered. A
+    // later window or a higher figure is still the later use: it becomes the
+    // high-water mark a lower reading must answer to. Its fetch is known only
+    // to be no later than its session's first redraw of it.
+    const newestUsed = newest && usedPercentOf(newest.reading);
+    const undated = () => ({ reading, from: -Infinity,
+      to: Number.isFinite(reading.seenSince) ? Math.min(reading.seenSince, reading.observedAt) : reading.observedAt });
+    if (newest && !sameReset(newest.reading)) {
+      if (endedBefore(newest.reading)) return false;
+      // Two undated readings cannot be ordered either, so the later redraw stands.
+      if (reading.resetsAt < newest.reading.resetsAt && Number.isFinite(newest.from)) return confirmedLater(sameReset);
+      newest = undated();
+      return true;
+    }
+    if (!newest || used > newestUsed + STALE_RESTATEMENT_MARGIN) {
+      newest = undated();
+      return true;
+    }
+    if (used >= newestUsed - STALE_RESTATEMENT_MARGIN) return true;
+    return confirmedLater((after) => sameReset(after) && usedPercentOf(after) < newestUsed - STALE_RESTATEMENT_MARGIN);
   });
+}
+
+// When a rise in a status-line figure was fetched, as late as needed to fall
+// after the interval it closes began: its fetch's lower bound, else its
+// session's first redraw of it, else the redraw itself. A read is its own time.
+function riseMomentOf(row, startMs) {
+  if (!restatesSessionLimits(row)) return row.observedAt;
+  for (const at of [row.fetchedAfter, row.seenSince]) {
+    if (Number.isFinite(at) && at > startMs && at < row.observedAt) return at;
+  }
+  return row.observedAt;
 }
 
 function deriveLearningSamples(observations, schedule, nowMs, excludedDates = []) {
@@ -438,25 +624,36 @@ function deriveLearningSamples(observations, schedule, nowMs, excludedDates = []
   const samples = [];
   if (rows.length < 2) return samples;
 
+  // A figure an interval starts from counts from when it was fetched, as a
+  // rise does: placed at a later redraw, it would squeeze the use that follows
+  // into too few hours. Never before the interval already learned, nor back
+  // across an ignored day.
+  const fetchedAnchor = (row, notBefore = -Infinity) => {
+    const at = fetchMomentOf(row);
+    return at < row.observedAt && at > notBefore && !excluded(at, row.observedAt) ? { ...row, observedAt: at } : row;
+  };
   // Polling cadence is not evidence. Compact unchanged snapshots into one
   // quiet interval, but retain the latest unchanged reading as the lower bound
   // for the next increase so its active/off-schedule phase stays localised.
-  let anchor = rows[0];
-  let latest = rows[0];
+  let anchor = fetchedAnchor(rows[0]);
+  let latest = anchor;
   let previous = rows[0];
   for (let index = 1; index < rows.length; index += 1) {
     const after = rows[index];
+    // A rise counts from when its figure was fetched, not its later redraw,
+    // for the ignored-day check as for the sample it closes.
+    const riseAt = after.usedPercent > anchor.usedPercent ? riseMomentOf(after, latest.observedAt) : after.observedAt;
     // The smoothing span starts at the last change, not merely the previous
     // poll. Restart both anchors when it crosses an excluded day so neither
     // cumulative usage nor a quiet ignored day changes the learned rate.
-    if (excluded(anchor.observedAt, after.observedAt)) {
+    if (excluded(anchor.observedAt, riseAt)) {
       if (latest.observedAt - anchor.observedAt >= HOUR_MS) {
         addIntervalSamples(samples, anchor, latest, schedule, nowMs);
       }
       // A provider correction can dip below usage seen on the ignored day.
       // Keep that high-water mark so a later rebound is not counted again.
-      anchor = sameWindowDrift(previous, after) && after.usedPercent < anchor.usedPercent
-        ? { ...after, usedPercent: anchor.usedPercent } : after;
+      anchor = fetchedAnchor(sameWindowDrift(previous, after) && after.usedPercent < anchor.usedPercent
+        ? { ...after, usedPercent: anchor.usedPercent } : after, latest.observedAt);
       latest = anchor;
       previous = after;
       continue;
@@ -473,8 +670,8 @@ function deriveLearningSamples(observations, schedule, nowMs, excludedDates = []
       if (latest.observedAt - anchor.observedAt >= HOUR_MS) {
         addIntervalSamples(samples, anchor, latest, schedule, nowMs);
       }
-      anchor = after;
-      latest = after;
+      anchor = fetchedAnchor(after, latest.observedAt);
+      latest = anchor;
       continue;
     }
     // Provider percentages can jitter backwards within one allowance window.
@@ -485,11 +682,18 @@ function deriveLearningSamples(observations, schedule, nowMs, excludedDates = []
       // The change-to-change span already includes the quiet time for rate
       // smoothing. Use the latest unchanged reading only to localise the phase
       // and daily allocation; adding that quiet span separately would weight it twice.
-      addIntervalSamples(samples, latest, after, schedule, nowMs, (after.observedAt - anchor.observedAt) / HOUR_MS);
-      anchor = after;
-      latest = after;
+      // The rise is learned up to when its figure was fetched, not redrawn.
+      const at = riseAt;
+      const rise = at === after.observedAt ? after : { ...after, observedAt: at };
+      addIntervalSamples(samples, latest, rise, schedule, nowMs, (at - anchor.observedAt) / HOUR_MS);
+      anchor = rise;
+      latest = rise;
     } else if (!restatesSessionLimits(after)) {
       latest = after;
+    } else if (Number.isFinite(after.fetchedAfter) && after.fetchedAfter > latest.observedAt) {
+      // A status-line fetch newer than the latest confirmation proves the
+      // figure still held then, as a read would; an idle redraw proves nothing.
+      latest = { ...after, observedAt: Math.min(after.fetchedAfter, after.observedAt) };
     }
   }
   // anchor and latest only ever diverge within one chained window, so the
@@ -647,7 +851,7 @@ function exhaustionTime(series) {
   return null;
 }
 
-function learnForecast({ normalised, current, currentCluster, clusters, schedule, nowMs, excluded, dayWeights, usedNow, resetMs, fallbackRate }) {
+function learnForecast({ normalised, current, currentCluster, clusters, schedule, nowMs, excluded, dayWeights, usedNow, resetMs, fallbackRate, evidenceMs }) {
   const samples = deriveLearningSamples(normalised, schedule, nowMs, excluded).map((sample) => {
     if (!dayWeights?.size) return sample;
     const hours = sample.dailyHours.reduce((sum, entry) => sum + entry.hours, 0);
@@ -660,7 +864,8 @@ function learnForecast({ normalised, current, currentCluster, clusters, schedule
 
   // Window anchor: the provider's used-percentage covers the whole window, so
   // usage divided by the window's elapsed active hours is the strongest signal
-  // of sustainable pace. Evidence ends at the reading, never at "now".
+  // of sustainable pace. Evidence ends when the current figure was fetched,
+  // never at "now" or at an idle redraw that came after it.
   const inWindow = currentCluster.rows;
   const windowMinutes = inWindow.findLast((row) => Number.isFinite(row.windowMinutes) && row.windowMinutes > 0)?.windowMinutes;
   const anchorStartMs = Number.isFinite(currentCluster.observedResetAt)
@@ -671,7 +876,7 @@ function learnForecast({ normalised, current, currentCluster, clusters, schedule
   const anchorUsed = windowMinutes ? usedNow : Math.max(0, usedNow - usedPercentOf(inWindow[0]));
   const {
     activeHours: anchorActiveHours, offHours: anchorOffHours, activeUsed: activeAnchorUsed, offUsed: offAnchorUsed,
-  } = splitWindowUsage(inWindow, schedule, nowMs, anchorStartMs, current.observedAt, anchorUsed, excluded, dayWeights);
+  } = splitWindowUsage(inWindow, schedule, nowMs, anchorStartMs, evidenceMs, anchorUsed, excluded, dayWeights);
   const windowPace = anchorActiveHours >= 1 ? activeAnchorUsed / anchorActiveHours : null;
   const offWindowPace = anchorOffHours >= 1 ? offAnchorUsed / anchorOffHours : null;
   // After a reset the fresh window has no history of its own, so the most
@@ -840,27 +1045,37 @@ function forecastQuotaWithLearning(observations, options = {}, dayWeights = null
   const visibleRows = firstVisible < 0 ? currentCluster.rows.slice(-1) : currentCluster.rows.slice(Math.max(0, firstVisible - 1));
   const observed = visibleRows
     .map((row) => ({ at: row.observedAt, remaining: clamp(Number.isFinite(row.remainingPercent) ? row.remainingPercent : 100 - row.usedPercent, 0, 100) }));
-  const staleHours = Math.max(0, (nowMs - current.observedAt) / HOUR_MS);
+  // The current value is as old as its evidence, not its latest redraw. The
+  // caller may have measured that before compacting away a newer read. Use
+  // since then is caught up from where the figure is placed, but it is only
+  // as fresh as it is known to be: an undated redraw may carry a fetch from
+  // anywhere in its window.
+  const measured = options.evidence?.observedAt === current.observedAt;
+  const evidenceMs = measured && Number.isFinite(options.evidence.at)
+    ? Math.min(options.evidence.at, current.observedAt) : latestEvidenceAt(normalised);
+  const knownMs = measured && Number.isFinite(options.evidence.known)
+    ? Math.min(options.evidence.known, current.observedAt) : latestEvidenceAt(normalised, { known: true });
+  const staleHours = Math.max(0, (nowMs - knownMs) / HOUR_MS);
   if (!Number.isFinite(resetMs) || resetMs <= nowMs) return unknownForecast({ expired: true, observed, staleHours });
 
   const remaining = Number.isFinite(current.remainingPercent) ? current.remainingPercent : 100 - current.usedPercent;
   const usedNow = clamp(Number.isFinite(current.usedPercent) ? current.usedPercent : 100 - remaining, 0, 100);
   const learningKey = JSON.stringify([normalised.length, normalised[0].observedAt, current.observedAt, current.usedPercent,
-    dayWeights ? [...dayWeights] : null]);
+    evidenceMs, dayWeights ? [...dayWeights] : null]);
   const cachedModel = options.learningCache?.get(learningKey);
   const model = cachedModel && nowMs >= cachedModel.at && nowMs - cachedModel.at < 60_000
-    ? cachedModel.value : learnForecast({ normalised, current, currentCluster, clusters, schedule, nowMs, excluded, dayWeights, usedNow, resetMs, fallbackRate });
+    ? cachedModel.value : learnForecast({ normalised, current, currentCluster, clusters, schedule, nowMs, excluded, dayWeights, usedNow, resetMs, fallbackRate, evidenceMs });
   if (options.learningCache && model !== cachedModel?.value) {
     if (options.learningCache.size >= 4) options.learningCache.clear();
     options.learningCache.set(learningKey, { at: nowMs, value: model });
   }
   const { samples, modelSamples, rates, sustainableOffSchedulePace, recent, globalRate, anchor, windowPace } = model;
 
-  const catchUp = buildSeries(remaining, remaining, current.observedAt, nowMs, schedule, samples, rates);
+  const catchUp = buildSeries(remaining, remaining, evidenceMs, nowMs, schedule, samples, rates);
   if (!catchUp) return unknownForecast({ observed, staleHours });
   const estimatedCurrent = catchUp.expected.at(-1)?.remaining ?? remaining;
   const heavyCurrent = catchUp.heavy.at(-1)?.remaining ?? remaining;
-  const future = buildSeries(estimatedCurrent, heavyCurrent, nowMs, resetMs, schedule, samples, rates, current.observedAt);
+  const future = buildSeries(estimatedCurrent, heavyCurrent, nowMs, resetMs, schedule, samples, rates, evidenceMs);
   if (!future) return unknownForecast({ observed, staleHours });
   const expectedRemaining = future.expected.at(-1)?.remaining ?? estimatedCurrent;
   const heavyRemaining = future.heavy.at(-1)?.remaining ?? heavyCurrent;
@@ -1021,8 +1236,11 @@ function collapseReadings(rows, nowMs) {
   let previous = null, run = 0, previousDay;
   for (const row of rows) {
     const day = localDayKey(new Date(row.observedAt));
+    // Redraws of one fetch collapse; a different fetch of the same figure is
+    // kept, since a newer one confirms the figure later than the others.
     const same = previous && day === previousDay && (row.observedAt <= nowMs) === (previous.observedAt <= nowMs)
-      && ['sourceId', 'bucketId', 'usedPercent', 'remainingPercent', 'resetsAt', 'windowMinutes', 'provenance', 'resetEvidence', 'allowanceScaled']
+      && ['sourceId', 'bucketId', 'usedPercent', 'remainingPercent', 'resetsAt', 'windowMinutes', 'provenance', 'resetEvidence',
+        'allowanceScaled', 'fetchedAfter', 'seenSince']
         .every((field) => Object.is(row[field], previous[field]));
     run = same ? run + 1 : 1;
     if (run > 2 && row.observedAt - result[result.length - 2].observedAt <= COVERAGE_GAP_MS) {
@@ -1041,18 +1259,23 @@ function forecastQuota(observations, options = {}) {
   const nowMs = options.now != null ? new Date(options.now).getTime() : Date.now();
   let normalised = withoutStaleRestatements(rescaleObservations(observations.map(normaliseObservation), options)
     .sort((a, b) => a.observedAt - b.observedAt), { nowMs, freshReadGraceMs: options.freshReadGraceMs });
+  let learningOptions = options;
   if (options.compactReadings) {
     normalised = normalised.filter((row) => validQuotaTime(row.observedAt, row.resetsAt, row.windowMinutes, nowMs))
       .sort((a, b) => a.observedAt - b.observedAt);
     const current = normalised.at(-1);
+    // A compacted run keeps its latest reading, which may redraw an older
+    // fetch than a reading the run drops, so the evidence is measured first.
+    if (current) learningOptions = { ...options, evidence: { observedAt: current.observedAt, at: latestEvidenceAt(normalised),
+      known: latestEvidenceAt(normalised, { known: true }) } };
     normalised = collapseReadings(normalised.filter((row) => row === current || row.observedAt >= nowMs - FORECAST_LOOKBACK_MS), nowMs);
   }
   const rows = normalised;
-  const ordinary = forecastQuotaWithLearning(rows, options);
+  const ordinary = forecastQuotaWithLearning(rows, learningOptions);
   if (ordinary.expired || ordinary.expectedRemaining == null) return ordinary;
   const adjustment = earlyResetAdjustment(rows, options, nowMs);
   if (!adjustment) return ordinary;
-  const adjusted = forecastQuotaWithLearning(rows, options,
+  const adjusted = forecastQuotaWithLearning(rows, learningOptions,
     new Map(adjustment.dates.map((day) => [day, adjustment.weight])));
   // Normal-day expectations use the reduced influence. The heavier scenario
   // keeps the complete observed workload, and can never be more optimistic
@@ -1071,4 +1294,4 @@ function forecastQuota(observations, options = {}) {
     series: { ...adjusted.series, heavy }, resetAdjustment: adjustment };
 }
 
-module.exports = { activeHoursBetween, clusterByWindow, sameWindowDrift, normaliseObservation, prepareObservation, deriveLearningSamples, exhaustionTime, forecastQuota, forecastState, freshReadGraceFor, percentile, restatesSessionLimits, withoutStaleRestatements };
+module.exports = { activeHoursBetween, clusterByWindow, sameWindowDrift, normaliseObservation, prepareObservation, deriveLearningSamples, evidenceTimes, exhaustionTime, fetchMomentOf, forecastQuota, forecastState, freshReadGraceFor, latestEvidenceAt, percentile, restatesSessionLimits, withoutStaleRestatements };

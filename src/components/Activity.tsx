@@ -128,7 +128,11 @@ export function Activity({ snapshot, days }: { snapshot: Snapshot; days: number 
                         </span>
                       </td>
                       <td className="evidence-time">
-                        {view.current ? <ObservedAt value={view.current.observedAt} nowMs={nowMs} /> : 'Not observed'}
+                        {view.current ? (
+                          <ObservedAt value={view.current.evidenceAt ?? view.current.observedAt} nowMs={nowMs} />
+                        ) : (
+                          'Not observed'
+                        )}
                         <small>
                           {view.source?.last_success_at ? (
                             <>

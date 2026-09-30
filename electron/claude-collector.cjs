@@ -6,10 +6,10 @@ const path = require('node:path');
 const { findClaudeBinary, providerHome } = require('./provider-executable.cjs');
 const { createClaudeAgentSdkUsagePort } = require('./claude-agent-usage.cjs');
 const { createFableUsageTracker, providerReadingFresh } = require('./fable-tracker.cjs');
-const { QUOTA_CLOCK_SKEW_MS, validQuotaTime } = require('./quota-time.cjs');
+const { MAX_QUOTA_RESET_AHEAD_MS, QUOTA_CLOCK_SKEW_MS, validQuotaTime } = require('./quota-time.cjs');
 const { isProviderProvenance } = require('./quota-provenance.mjs');
 const { deriveFableEstimate } = require('./fable-projection.cjs');
-const { freshReadGraceFor, withoutStaleRestatements } = require('./forecast.cjs');
+const { evidenceTimes, freshReadGraceFor, latestEvidenceAt, withoutStaleRestatements } = require('./forecast.cjs');
 const { IncrementalReadError, planIncrementalRead, readCompleteLines } = require('./incremental-file.cjs');
 const { epochToIso } = require('./time.cjs');
 const { claudeWindowDescriptor } = require('./claude-window-descriptors.cjs');
@@ -39,6 +39,91 @@ function laterIso(left, right) {
   if (!left) return right || null;
   if (!right) return left;
   return Date.parse(right) > Date.parse(left) ? right : left;
+}
+
+// A window's reading and reset as the store would record them, or null for
+// one it would reject: not an object, no reading, a reading outside 0–100
+// (a spend limit can pass 100), or a reset out of range.
+const UNREADABLE = 'unreadable';
+function recordableWindow(limit, capturedAt) {
+  if (!limit || typeof limit !== 'object' || Array.isArray(limit) || limit.used_percentage == null) return null;
+  const used = Number(limit.used_percentage);
+  const resetsAt = epochToIso(limit.resets_at);
+  if (!Number.isFinite(used) || used < 0 || used > 100 || !resetsAt) return null;
+  const ahead = Date.parse(resetsAt) - Date.parse(capturedAt);
+  return ahead >= -5 * 60_000 && ahead <= MAX_QUOTA_RESET_AHEAD_MS ? [used, resetsAt] : null;
+}
+
+// Each window, by name, to tell one response's limits from the next. A
+// window the store would reject is kept as unreadable rather than dropped:
+// it tells nothing about a response, and must not make the next redraw that
+// shows it readable again look like a new one.
+function statusLineLimits(rateLimits, capturedAt) {
+  const limits = {};
+  if (!rateLimits || typeof rateLimits !== 'object' || Array.isArray(rateLimits)) return limits;
+  for (const [key, limit] of Object.entries(rateLimits)) {
+    if (limit != null) limits[key] = recordableWindow(limit, capturedAt) ?? UNREADABLE;
+  }
+  return limits;
+}
+const readableWindow = (value) => Array.isArray(value);
+const sameWindow = (a, b) => (readableWindow(a) && readableWindow(b) ? a[0] === b[0] && a[1] === b[1] : a === b);
+
+// Claude Code redraws its status line after each response and, at the
+// interval the helper is installed with, every minute in between, always
+// with the limits of the session's latest response. The payload does not say
+// when those limits were fetched, so an idle session re-records old limits as
+// if they were new. A session's API time grows only when a response arrives,
+// and its limits change only with one. A redraw that shows a new response was
+// therefore fetched after the session's previous redraw; one that shows the
+// same limits keeps that date. A window Claude Code drops at its reset is not
+// a response. Every redraw of one fetch also carries the first redraw that
+// showed it (`seenSince`), which bounds the fetch from the other side. A
+// session first seen with limits in hand cannot be dated (it began before the
+// helper recorded sessions), but its redraws still share that first redraw,
+// so an idle session cannot renew its own evidence. Every session's opening
+// redraw has no limits, because they arrive with its first response.
+function datedStatusLineFetch(store, payload, capturedAt) {
+  const undated = { fetchedAfter: null, seenSince: null };
+  const sessionId = typeof payload.session_id === 'string' ? payload.session_id.trim() : '';
+  if (!sessionId) return undated;
+  const apiMs = typeof payload.api_ms === 'number' && Number.isFinite(payload.api_ms) ? payload.api_ms : null;
+  const limits = statusLineLimits(payload.rate_limits, capturedAt);
+  const previous = store.prepare('SELECT seen_at, api_ms, limits_json, fetched_after, seen_since FROM statusline_sessions WHERE session_id = ?').get(sessionId);
+  let before = {};
+  try { before = previous ? JSON.parse(previous.limits_json) : {}; } catch { /* Undated below. */ }
+  const sameLimits = (a, b) => Object.keys(a).length === Object.keys(b).length
+    && Object.entries(a).every(([key, value]) => key in b && sameWindow(value, b[key]));
+  // A line imported again, or late: it shares the session's latest fetch only
+  // if nothing has changed since, and cannot move the session backwards.
+  if (previous && capturedAt <= previous.seen_at) {
+    const same = sameLimits(limits, before) && apiMs === previous.api_ms;
+    const shared = (value) => (same && value && value <= capturedAt ? value : null);
+    return { fetchedAfter: shared(previous.fetched_after), seenSince: shared(previous.seen_since) };
+  }
+  let fetchedAfter = null;
+  let seenSince = null;
+  if (Object.keys(limits).length) {
+    // A readable window that is new, or that changed from a readable one, came
+    // with a response; one that was unreadable before shows nothing either way.
+    const newResponse = previous && ((apiMs != null && previous.api_ms != null && apiMs > previous.api_ms)
+      || Object.entries(limits).some(([key, value]) => readableWindow(value)
+        && (!(key in before) || (readableWindow(before[key]) && !sameWindow(value, before[key])))));
+    if (newResponse) {
+      fetchedAfter = previous.seen_at;
+      seenSince = capturedAt;
+    } else if (previous) {
+      fetchedAfter = previous.fetched_after;
+      seenSince = previous.seen_since;
+    } else {
+      seenSince = capturedAt;
+    }
+  }
+  store.prepare(`INSERT INTO statusline_sessions(session_id, seen_at, api_ms, limits_json, fetched_after, seen_since) VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(session_id) DO UPDATE SET seen_at = excluded.seen_at, api_ms = excluded.api_ms,
+      limits_json = excluded.limits_json, fetched_after = excluded.fetched_after, seen_since = excluded.seen_since`)
+    .run(sessionId, capturedAt, apiMs, JSON.stringify(limits), fetchedAfter, seenSince);
+  return { fetchedAfter, seenSince };
 }
 
 function importClaudeInboxFile(store, inboxPath, state = null) {
@@ -77,6 +162,17 @@ function importClaudeInboxFile(store, inboxPath, state = null) {
         continue;
       }
       const capturedAt = epochToIso(payload.ai_usage_captured_at || payload.captured_at || stat.mtimeMs);
+      // Every redraw with a time advances its session, including a session's
+      // opening redraw, which has no limits yet. A limits value that is not an
+      // object is rejected below without touching the session: read as no
+      // limits, it would make the next unchanged redraw look like a new response.
+      // So is a capture further ahead than the store accepts (a clock set back
+      // since): every later redraw would look older than it until then.
+      const limitsShaped = payload.rate_limits == null
+        || (typeof payload.rate_limits === 'object' && !Array.isArray(payload.rate_limits));
+      const capturable = capturedAt && Date.parse(capturedAt) <= Date.now() + QUOTA_CLOCK_SKEW_MS;
+      const { fetchedAfter, seenSince } = capturable && limitsShaped
+        ? datedStatusLineFetch(store, payload, capturedAt) : { fetchedAfter: null, seenSince: null };
       if (!capturedAt || !payload.rate_limits || typeof payload.rate_limits !== 'object' || Array.isArray(payload.rate_limits)) {
         result.rejectedRecords += 1;
         continue;
@@ -111,6 +207,8 @@ function importClaudeInboxFile(store, inboxPath, state = null) {
             provenance: 'official-statusline',
             confidence: 1,
             metadata: { model, sharedWithOverall: isFable },
+            fetchedAfter,
+            seenSince,
           });
         } catch (error) {
           if (error?.code) throw error;
@@ -145,6 +243,10 @@ function importClaudeInbox(store, inboxPath) {
       .sort()
       .map((name) => path.join(directory, name));
   } catch { /* The inbox directory is created lazily by the helper. */ }
+  // A session unseen for longer than any window lasts has nothing left to date.
+  try {
+    store.prepare('DELETE FROM statusline_sessions WHERE seen_at < ?').run(new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString());
+  } catch { /* Pruned on a later import. */ }
   const total = emptyInboxResult();
   const numericKeys = ['snapshots', 'usageEvents', 'observations', 'claudeObservations', 'fableObservations',
     'invalidRecords', 'invalidResets', 'rejectedRecords', 'readErrors', 'bytesRead'];
@@ -394,14 +496,17 @@ function importClaudeTranscripts(store, days = 120) {
 
 
 // Bumped whenever the script changes, so installed copies are rewritten.
-const HELPER_VERSION = 'AI_USAGE_HELPER_VERSION=1.0.4';
+// The inbox keeps only what the app reads: the capture time, the model, the
+// limits, and the session id and API time that date them (a random id and a
+// duration; no path, prompt or cost).
+const HELPER_VERSION = 'AI_USAGE_HELPER_VERSION=1.0.5';
 
 function makeHelperScript(inboxPath) {
   // PowerShell ends a single-quoted string at any of its four typographic
   // single quotes as well as at ', so a profile folder such as O’Brien needs
   // every one doubled, not only the ASCII quote.
   const target = inboxPath.replace(/['\u2018\u2019\u201A\u201B]/g, '$&$&');
-  return `# ${HELPER_VERSION}\n$ErrorActionPreference = 'SilentlyContinue'\n$raw = [Console]::In.ReadToEnd()\nif ([string]::IsNullOrWhiteSpace($raw)) { exit 0 }\ntry {\n  $data = $raw | ConvertFrom-Json\n  $safeModel = [ordered]@{}\n  if ($null -ne $data.model.id) { $safeModel.id = $data.model.id }\n  if ($null -ne $data.model.display_name) { $safeModel.display_name = $data.model.display_name }\n  $safe = [ordered]@{\n    ai_usage_captured_at = [DateTime]::UtcNow.ToString('o')\n    model = $safeModel\n    rate_limits = $data.rate_limits\n  }\n  $line = $safe | ConvertTo-Json -Depth 30 -Compress\n  $target = '${target}'\n  $parent = Split-Path -Parent $target\n  New-Item -ItemType Directory -Force -Path $parent | Out-Null\n  if ((Test-Path -LiteralPath $target) -and ((Get-Item -LiteralPath $target).Length -ge ${MAX_INBOX_BYTES})) {\n    $rotated = $target + '.rotated-' + ([DateTime]::UtcNow.ToString('yyyyMMddHHmmssffff')) + '-' + $PID\n    Move-Item -LiteralPath $target -Destination $rotated -ErrorAction SilentlyContinue\n  }\n  $utf8 = New-Object System.Text.UTF8Encoding($false)\n  [System.IO.File]::AppendAllText($target, $line + [Environment]::NewLine, $utf8)\n  $parts = @()\n  if ($null -ne $data.rate_limits.five_hour.used_percentage) { $parts += ('5h: {0:N0}%' -f $data.rate_limits.five_hour.used_percentage) }\n  if ($null -ne $data.rate_limits.seven_day.used_percentage) { $parts += ('7d: {0:N0}%' -f $data.rate_limits.seven_day.used_percentage) }\n  $fable = $data.rate_limits.PSObject.Properties | Where-Object { $_.Name -match 'fable' } | Select-Object -First 1\n  if ($fable) { $parts += ('Fable: {0:N0}%' -f $fable.Value.used_percentage) }\n  $modelLabel = if ($data.model.display_name) { $data.model.display_name } else { 'Claude' }\n  if ($parts.Count -gt 0) { Write-Output ('[{0}] | {1}' -f $modelLabel, ($parts -join ' ')) } else { Write-Output ('[{0}]' -f $modelLabel) }\n} catch {\n  Write-Output '[Claude]'\n}\n`;
+  return `# ${HELPER_VERSION}\n$ErrorActionPreference = 'SilentlyContinue'\n$raw = [Console]::In.ReadToEnd()\nif ([string]::IsNullOrWhiteSpace($raw)) { exit 0 }\ntry {\n  $data = $raw | ConvertFrom-Json\n  $safeModel = [ordered]@{}\n  if ($null -ne $data.model.id) { $safeModel.id = $data.model.id }\n  if ($null -ne $data.model.display_name) { $safeModel.display_name = $data.model.display_name }\n  $safe = [ordered]@{\n    ai_usage_captured_at = [DateTime]::UtcNow.ToString('o')\n    session_id = $data.session_id\n    api_ms = $data.cost.total_api_duration_ms\n    model = $safeModel\n    rate_limits = $data.rate_limits\n  }\n  $line = $safe | ConvertTo-Json -Depth 30 -Compress\n  $target = '${target}'\n  $parent = Split-Path -Parent $target\n  New-Item -ItemType Directory -Force -Path $parent | Out-Null\n  if ((Test-Path -LiteralPath $target) -and ((Get-Item -LiteralPath $target).Length -ge ${MAX_INBOX_BYTES})) {\n    $rotated = $target + '.rotated-' + ([DateTime]::UtcNow.ToString('yyyyMMddHHmmssffff')) + '-' + $PID\n    Move-Item -LiteralPath $target -Destination $rotated -ErrorAction SilentlyContinue\n  }\n  $utf8 = New-Object System.Text.UTF8Encoding($false)\n  [System.IO.File]::AppendAllText($target, $line + [Environment]::NewLine, $utf8)\n  $parts = @()\n  if ($null -ne $data.rate_limits.five_hour.used_percentage) { $parts += ('5h: {0:N0}%' -f $data.rate_limits.five_hour.used_percentage) }\n  if ($null -ne $data.rate_limits.seven_day.used_percentage) { $parts += ('7d: {0:N0}%' -f $data.rate_limits.seven_day.used_percentage) }\n  $fable = $data.rate_limits.PSObject.Properties | Where-Object { $_.Name -match 'fable' } | Select-Object -First 1\n  if ($fable) { $parts += ('Fable: {0:N0}%' -f $fable.Value.used_percentage) }\n  $modelLabel = if ($data.model.display_name) { $data.model.display_name } else { 'Claude' }\n  if ($parts.Count -gt 0) { Write-Output ('[{0}] | {1}' -f $modelLabel, ($parts -join ' ')) } else { Write-Output ('[{0}]' -f $modelLabel) }\n} catch {\n  Write-Output '[Claude]'\n}\n`;
 }
 
 // Claude Code runs the helper with Windows PowerShell 5.1, which reads a
@@ -587,9 +692,14 @@ function uninstallClaudeHelper() {
 // not read plan usage, so this is how it judges the Claude source.
 // Readings are judged as the card shows them: a lower status-line reading
 // that restates limits a session fetched earlier is held back there, so it
-// can make Claude neither current here nor a failed Refresh successful.
-function latestPlanUsageReading(store, nowMs, graceMs) {
-  const rows = store.prepare(`SELECT id, bucket_id, observed_at, resets_at, window_minutes, used_percent, remaining_percent, provenance
+// can make Claude neither current here nor a failed Refresh successful. Each
+// window is as recent as its evidence (`evidence_at`), not its latest redraw,
+// and a redraw from a session first seen with limits in hand is known only
+// from the start of the window it shows.
+// `emptyReadMs` is a later read that succeeded without returning any window,
+// which omitted every window stored before it.
+function latestPlanUsageReading(store, nowMs, graceMs, emptyReadMs = null) {
+  const rows = store.prepare(`SELECT id, bucket_id, observed_at, resets_at, window_minutes, used_percent, remaining_percent, provenance, fetched_after, seen_since
     FROM quota_observations WHERE source_id = 'claude' AND observed_at <= ? AND observed_at >= ? ORDER BY observed_at ASC, id ASC`)
     .all(new Date(nowMs + QUOTA_CLOCK_SKEW_MS).toISOString(), new Date(nowMs - 8 * 24 * 60 * 60 * 1000).toISOString());
   const buckets = new Map();
@@ -603,26 +713,41 @@ function latestPlanUsageReading(store, nowMs, graceMs) {
   for (const [bucketId, bucketRows] of buckets) {
     const accepted = withoutStaleRestatements(bucketRows, { nowMs, freshReadGraceMs: graceMs })
       .filter((row) => isProviderProvenance(row.provenance));
-    if (accepted.length) latest.set(bucketId, accepted.at(-1));
     // One plan-usage read records every window it returns at the same instant.
     const planUsageRead = accepted.findLast((row) => row.provenance === 'official-claude-usage');
-    if (planUsageRead) lastPlanUsageReadMs = Math.max(lastPlanUsageReadMs ?? -Infinity, Date.parse(planUsageRead.observed_at));
+    const planReadMs = planUsageRead ? Date.parse(planUsageRead.observed_at) : null;
+    if (planReadMs != null) lastPlanUsageReadMs = Math.max(lastPlanUsageReadMs ?? -Infinity, planReadMs);
+    if (accepted.length) {
+      latest.set(bucketId, { ...accepted.at(-1), evidence_at: new Date(latestEvidenceAt(accepted, { known: true })).toISOString(),
+        own_evidence_at: new Date(evidenceTimes(accepted, { known: true }).at(-1)).toISOString(), plan_read_ms: planReadMs });
+    }
   }
+  if (Number.isFinite(emptyReadMs) && !(lastPlanUsageReadMs >= emptyReadMs)) lastPlanUsageReadMs = emptyReadMs;
   // A window the latest plan-usage read did not return (a model or app limit
   // the provider stopped reporting) keeps its older row until it resets, and
   // Refresh cannot renew it, so it does not decide whether Claude is current.
+  // A later redraw renews it only with a fetch no older than that read; a
+  // window the read did return stays, whatever redraws of it followed.
   const active = [...latest.values()].filter((row) => Date.parse(row.resets_at) > nowMs
-    && (lastPlanUsageReadMs == null || Date.parse(row.observed_at) >= lastPlanUsageReadMs));
+    && (lastPlanUsageReadMs == null || row.plan_read_ms === lastPlanUsageReadMs
+      || Date.parse(row.own_evidence_at) >= lastPlanUsageReadMs));
   if (!active.length) return { lastReadAt: null, staleReadAt: null, fresh: false, windows: [] };
-  const lastReadAt = active.reduce((last, row) => laterIso(last, row.observed_at), null);
+  const lastReadAt = active.reduce((last, row) => laterIso(last, row.evidence_at), null);
   // The oldest reading that is out of date, which the stale detail quotes.
   const staleReadAt = active.filter((row) => !providerReadingFresh(row, nowMs))
-    .reduce((oldest, row) => (!oldest || Date.parse(row.observed_at) < Date.parse(oldest) ? row.observed_at : oldest), null);
+    .reduce((oldest, row) => (!oldest || Date.parse(row.evidence_at) < Date.parse(oldest) ? row.evidence_at : oldest), null);
   return { lastReadAt, staleReadAt, fresh: !staleReadAt, windows: active };
 }
 
 function readingTime(value) {
   return new Date(value).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+// When a plan-usage read succeeded without returning any overall window.
+function emptyPlanUsageReadMs(request) {
+  const provider = request?.provider;
+  return provider?.attemptSucceeded === true && ['observed', 'unavailable'].includes(provider.kind)
+    && Number(provider.overallWindowsRecorded) === 0 ? Date.parse(request.at) : null;
 }
 
 // The outcome of the last plan-usage read the user asked for, which an
@@ -706,23 +831,35 @@ async function refreshClaude(store, inboxPath, options = {}) {
   const providerScanSucceeded = Boolean(fableTracking.provider?.attemptSucceeded
     && ['observed', 'unavailable'].includes(fableTracking.provider.kind));
   const activityCurrent = fableTracking.health.activitySource === 'current';
-  const acceptedReading = latestPlanUsageReading(store, nowMs, freshReadGraceFor(store.getSettings()));
+  // The last plan-usage read the user asked for: this one, or the one an
+  // earlier Refresh recorded. A read that returned no overall window at all
+  // omitted every window stored before it, as it omits any it does not return.
+  const requestAt = new Date(nowMs).toISOString();
+  const previousRequest = readPlanUsage ? null : previousPlanUsageRequest(store);
+  const emptyReadMs = emptyPlanUsageReadMs(readPlanUsage ? { at: requestAt, provider: fableTracking.provider } : previousRequest);
+  const acceptedReading = latestPlanUsageReading(store, nowMs, freshReadGraceFor(store.getSettings()), emptyReadMs);
   // A helper import stands in for the provider only when this collection
   // imported a reading the card shows, captured in the last few minutes. One
   // an earlier collection imported is not new evidence, however recent. The
   // import renews only the windows it reports, so every active window must
   // then be current, as an automatic run would judge it.
+  // An idle session's redraw is imported as a new row, but it carries limits
+  // fetched long ago, so its own fetch is what must be recent, and known to
+  // be: a session first seen with limits in hand may have fetched them long
+  // before its first redraw. The window's evidence may come from an earlier
+  // read that agrees with it, which is not new evidence from this collection.
   const helperRefreshed = acceptedReading.fresh && acceptedReading.windows.some((row) => {
-    const ageMs = nowMs - Date.parse(row.observed_at);
-    return row.provenance === 'official-statusline' && row.id > importedAfterId && ageMs >= -60_000 && ageMs <= 5 * 60_000;
+    const ageMs = nowMs - Date.parse(row.own_evidence_at);
+    return row.provenance === 'official-statusline' && row.fetched_after != null && row.id > importedAfterId
+      && ageMs >= -60_000 && ageMs <= 5 * 60_000;
   });
   const hasFreshClaudeEvidence = helperRefreshed || Number(fableTracking.provider?.overallWindowsRecorded || 0) > 0;
   // Plan usage not requested: judge the last reading by its age, and count
   // the run a success when its local work succeeded.
   const planReading = readPlanUsage ? null : acceptedReading;
   const lastRequest = readPlanUsage
-    ? { at: new Date(nowMs).toISOString(), succeeded: hasFreshClaudeEvidence || providerScanSucceeded, provider: fableTracking.provider }
-    : previousPlanUsageRequest(store);
+    ? { at: requestAt, succeeded: hasFreshClaudeEvidence || providerScanSucceeded, provider: fableTracking.provider }
+    : previousRequest;
   // A failed Refresh that no reading has since replaced.
   const failedSince = (observedAt) => !readPlanUsage && lastRequest?.succeeded === false
     && !(Date.parse(observedAt) >= Date.parse(lastRequest.at));
@@ -795,7 +932,7 @@ async function refreshClaude(store, inboxPath, options = {}) {
   }, { scanSucceeded: claudeScanSucceeded });
   const fableAuto = fableDerived.derived;
   const providerCurrent = hasProviderScopedFable && fableTracking.health.officialSource === 'connected'
-    && !failedSince(fableTracking.allowance.observedAt);
+    && !failedSince(fableTracking.allowance.evidenceAt ?? fableTracking.allowance.observedAt);
   const providerStale = hasProviderScopedFable && !providerCurrent;
   const fableStatus = !activityCurrent ? 'degraded'
     : providerCurrent ? 'connected'
@@ -804,7 +941,7 @@ async function refreshClaude(store, inboxPath, options = {}) {
         : fableObserved ? 'observing'
           : fableTracking.activity.requests ? 'activity-only' : 'waiting';
   const fableEvents = `${fableTracking.activity.requests} local Fable usage event${fableTracking.activity.requests === 1 ? '' : 's'}`;
-  const fableReadAt = hasProviderScopedFable ? readingTime(fableTracking.allowance.observedAt) : null;
+  const fableReadAt = hasProviderScopedFable ? readingTime(fableTracking.allowance.evidenceAt ?? fableTracking.allowance.observedAt) : null;
   const fableDetail = !activityCurrent
     ? `${providerCurrent ? 'The official model-scoped Fable allowance is current, but' : readPlanUsage ? 'The allowance check completed, but' : 'Plan usage is read only when you press Refresh, and'} the actual local activity import failed; previously tracked counts are retained. ${fableTracking.health.detail || ''}`
     : providerCurrent && !readPlanUsage

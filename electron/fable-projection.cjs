@@ -8,7 +8,7 @@
 // rows to go stale, so there is nothing to rescale, retire or discard.
 
 const { createAllowanceScaler } = require('./allowance-changes.cjs');
-const { clusterByWindow, normaliseObservation, restatesSessionLimits, withoutStaleRestatements } = require('./forecast.cjs');
+const { clusterByWindow, evidenceTimes, fetchMomentOf, latestEvidenceAt, normaliseObservation, restatesSessionLimits, withoutStaleRestatements } = require('./forecast.cjs');
 const { OFFICIAL_PROVENANCES } = require('./quota-provenance.mjs');
 
 // Every input is bounded by the projection's own clock. A reading dated
@@ -147,6 +147,25 @@ function allowancePressure(store, modelLike, sinceIso, untilIso) {
 // share an allowance cycle — a delta across a reset or a replenishment is
 // meaningless — but a rate learned in one cycle carries into the next,
 // because it is a property of pricing and caps, not the week.
+// Whether a reading shows its figure held at its evidence moment: a read, or
+// a dated status-line fetch. An undated redraw is known only to be no newer
+// than its session's first redraw, so it cannot confirm a figure later.
+function confirmsFigure(row) {
+  return !restatesSessionLimits(row) || Number.isFinite(normaliseObservation(row).fetchedAfter);
+}
+
+// Where an interval that ends on a rise closes: the rise's evidence, or,
+// when fetches overlap and that falls before the interval's start, the first
+// later moment the new figure is known to have been fetched by. Boundaries
+// then only move forward, so no use falls between intervals or into two.
+function riseEndMs(row, evidenceMs, startMs) {
+  const parsed = normaliseObservation(row);
+  for (const at of [evidenceMs, parsed.seenSince, parsed.observedAt]) {
+    if (Number.isFinite(at) && at > startMs) return Math.min(at, parsed.observedAt);
+  }
+  return startMs;
+}
+
 function fablePairCalibration(store, nowMs, usedOf = rawUsedPercent, freshReadGraceMs) {
   const sinceIso = new Date(nowMs - 21 * 24 * 60 * 60 * 1000).toISOString();
   let deltaSum = 0;
@@ -154,19 +173,23 @@ function fablePairCalibration(store, nowMs, usedOf = rawUsedPercent, freshReadGr
   let pairs = 0;
   const rows = officialBetween(store, 'claude-fable', FABLE_BUCKET, sinceIso, nowMs);
   for (const readings of allowanceCycles(rows, nowMs, freshReadGraceMs, usedOf)) {
+    // Each figure is bounded by its evidence, as the projection's own tail is,
+    // not by a redraw that may come well after its fetch.
+    const moments = new Map(evidenceTimes(readings).map((at, index) => [readings[index], at]));
     // Consumption is only a new high-water mark within the cycle. A backward
     // move is a correction or a mistyped reading, and the rebound after it
     // returns to use already counted. Each rise is measured from the latest
-    // reading that confirmed the mark; a status-line repeat of it only
-    // restates what a session fetched earlier, so it cannot bound the rise.
+    // reading that confirmed the mark: a read, or a newer dated fetch. An
+    // older or undated status-line repeat only restates what a session
+    // fetched earlier, so it cannot bound the rise.
     let highWater = NaN;
-    let from = null;
+    let fromMs = NaN;
     for (const after of readings) {
       const used = usedOf(after);
       if (!Number.isFinite(used)) continue;
-      if (!from) {
+      if (!Number.isFinite(fromMs)) {
         highWater = used;
-        from = after;
+        fromMs = moments.get(after);
         continue;
       }
       if (used < highWater) continue;
@@ -174,14 +197,16 @@ function fablePairCalibration(store, nowMs, usedOf = rawUsedPercent, freshReadGr
       // by less than the provider's rounding precision. Treating them as a
       // measured zero rate would freeze every later estimate.
       if (used === highWater) {
-        if (!restatesSessionLimits(after)) from = after;
+        if (confirmsFigure(after)) fromMs = Math.max(fromMs, moments.get(after));
         continue;
       }
       const delta = used - highWater;
-      const before = from;
+      const startMs = fromMs;
+      const endMs = riseEndMs(after, moments.get(after), startMs);
       highWater = used;
-      from = after;
-      const measured = allowancePressure(store, 'fable', before.observed_at, after.observed_at);
+      fromMs = Math.max(fromMs, endMs);
+      if (!(endMs > startMs)) continue;
+      const measured = allowancePressure(store, 'fable', new Date(startMs).toISOString(), new Date(endMs).toISOString());
       if (!(measured.pressure > 0) || !measured.complete) continue;
       deltaSum += delta;
       pressureSum += measured.pressure;
@@ -201,25 +226,34 @@ function fableStepsFromOverall(store, readings, fromMs, toMs, usedOf = rawUsedPe
   const steps = [];
   let rejectedCoverage = 0;
   let highWater = readings.length ? usedOf(readings[0]) : NaN;
+  // Each step is bounded by its readings' evidence, as the tail after them
+  // is, so activity between a fetch and its later redraw counts once.
+  const moments = evidenceTimes(readings);
+  // The latest moment the high-water figure is known to have held; each step
+  // is measured from there. An older restatement of the mark redrawn later
+  // must not reach back before it, and only a read or a dated fetch confirms it.
+  let markMs = moments[0];
   for (let index = 1; index < readings.length; index += 1) {
-    const before = readings[index - 1];
     const after = readings[index];
-    const atMs = new Date(after.observed_at).getTime();
     // Provider percentages jitter and correct backwards. Consumption is only a
     // new same-window high-water mark; a rebound to an already-seen value adds
     // nothing a second time.
     const afterUsed = usedOf(after);
     if (!Number.isFinite(afterUsed) || !Number.isFinite(highWater)) continue;
     const priorHighWater = highWater;
+    const beforeMs = markMs;
     highWater = Math.max(highWater, afterUsed);
+    const rise = afterUsed > priorHighWater;
+    const atMs = rise ? riseEndMs(after, moments[index], beforeMs) : moments[index];
+    const at = new Date(atMs).toISOString();
+    if (rise || (afterUsed === priorHighWater && confirmsFigure(after))) markMs = Math.max(markMs, atMs);
     // Readings before an anchor still establish the high-water baseline, even
     // though their movement is already included in that anchor.
     if (!(atMs > fromMs) || atMs > toMs) continue;
     const deltaOverall = Math.max(0, afterUsed - priorHighWater);
     if (!(deltaOverall > 0)) continue;
-    const fable = allowancePressure(store, 'fable',
-      new Date(Math.max(fromMs, new Date(before.observed_at).getTime())).toISOString(), after.observed_at);
-    const all = allowancePressure(store, null, before.observed_at, after.observed_at);
+    const fable = allowancePressure(store, 'fable', new Date(Math.max(fromMs, beforeMs)).toISOString(), at);
+    const all = allowancePressure(store, null, new Date(beforeMs).toISOString(), at);
     if (!all.complete) {
       rejectedCoverage += 1;
       continue;
@@ -227,7 +261,7 @@ function fableStepsFromOverall(store, readings, fromMs, toMs, usedOf = rawUsedPe
     if (!(all.pressure > 0)) continue;
     const share = Math.min(1, fable.pressure / all.pressure);
     steps.push({
-      at: after.observed_at,
+      at,
       deltaOverall,
       ceiling: Math.min(100, afterUsed / FABLE_ALLOWANCE_SHARE),
       share,
@@ -253,8 +287,9 @@ function allowanceAdjustedUsed(store, nowMs) {
   if (!scaler) return rawUsedPercent;
   return (row) => {
     const used = rawUsedPercent(row);
-    const observedMs = new Date(row.observed_at).getTime();
-    return Number.isFinite(used) && Number.isFinite(observedMs) ? used * scaler(observedMs) : used;
+    // The allowance in force when the figure was fetched, not redrawn.
+    const fetchedMs = fetchMomentOf(row);
+    return Number.isFinite(used) && Number.isFinite(fetchedMs) ? used * scaler(fetchedMs) : used;
   };
 }
 
@@ -321,10 +356,15 @@ function computeProjection(store, nowMs, { freshReadGraceMs } = {}) {
       .filter((row) => Math.abs(new Date(row.resets_at).getTime() - resetMs) <= 60_000),
     nowMs, freshReadGraceMs, usedOf);
   const readings = cycles.at(-1) ?? [];
-  const cycleStartMs = cycles.length > 1 ? new Date(readings[0].observed_at).getTime() : windowStartMs;
+  // A replenished cycle starts when its first reading's figure was fetched,
+  // not when that figure was first redrawn.
+  const cycleStartMs = cycles.length > 1 ? evidenceTimes(readings)[0] : windowStartMs;
   const overallWindow = readings.at(-1) ?? latest;
   const overallUsed = usedOf(overallWindow);
-  const overallObservedMs = new Date(overallWindow.observed_at).getTime();
+  // The overall figure holds as of its evidence, not its latest redraw: an
+  // idle session re-records limits it fetched earlier, and Fable activity
+  // since that fetch is still unaccounted for.
+  const overallObservedMs = latestEvidenceAt(readings.length ? readings : [latest]);
   if (!Number.isFinite(overallUsed) || !Number.isFinite(overallObservedMs)) {
     return { derived: false, reason: 'invalid-overall-reading' };
   }
@@ -337,7 +377,10 @@ function computeProjection(store, nowMs, { freshReadGraceMs } = {}) {
     .find((row) => row && new Date(row.observed_at).getTime() >= cycleStartMs
       && Math.abs(new Date(row.resets_at).getTime() - resetMs) <= 60_000) || null;
   const baseUsed = anchor ? usedOf(anchor) : 0;
-  const baseAtMs = anchor ? new Date(anchor.observed_at).getTime() : cycleStartMs;
+  // Likewise the anchor's figure holds as of its own evidence.
+  const baseAtMs = anchor ? Math.max(cycleStartMs, latestEvidenceAt(
+    officialBetween(store, 'claude-fable', FABLE_BUCKET, new Date(cycleStartMs).toISOString(), nowMs)
+      .filter((row) => Math.abs(new Date(row.resets_at).getTime() - resetMs) <= 60_000))) : cycleStartMs;
 
   // Structural ceiling at the timestamp of the latest overall observation.
   // Activity after that instant is deliberately added outside the ceiling.
@@ -401,7 +444,7 @@ function computeProjection(store, nowMs, { freshReadGraceMs } = {}) {
     // The tail starts wherever bounded evidence ends: after the last overall
     // reading, but never before the anchor — value the anchor already includes
     // must not be projected a second time.
-    const tailFromMs = Math.max(new Date(readings.at(-1).observed_at).getTime(), baseAtMs);
+    const tailFromMs = Math.max(overallObservedMs, baseAtMs);
     const tailResult = allowancePressure(store, 'fable', new Date(tailFromMs).toISOString(), new Date(nowMs).toISOString());
     if (!tailResult.complete) return { derived: false, reason: 'insufficient-activity-coverage' };
     tail = ratePerPressure != null ? ratePerPressure * tailResult.pressure : 0;

@@ -150,6 +150,17 @@ test('future allowance entries do not change forecasts or cached capacity until 
     'evaluating historical time does not apply later changes');
 });
 
+test('a figure fetched before a recorded change is rescaled even when its redraw comes after it', () => {
+  // A session fetched the boosted 20% just after midnight on the 13th and
+  // first redrew it at 07:00, after the boost ended at 06:00.
+  const observations = [...boostWeek().slice(0, -1),
+    row(local(13, 7), 20, { provenance: 'official-statusline', fetchedAfter: new Date(local(13) + 60_000).toISOString() }),
+    row(local(13, 12), 33)];
+  const rescaled = forecastQuota(observations, { now: local(13, 12), schedule, allowanceChanges: [change()] });
+  assert.equal(rescaled.series.observed.find((point) => point.at === local(13, 7)).remaining, 70,
+    'twenty boosted points are thirty of the current allowance, as for a read at the fetch');
+});
+
 test('a recorded change rescales earlier readings so the step at the change is not learned as a burst', () => {
   const observations = boostWeek();
   const options = { now: local(13, 12), schedule };

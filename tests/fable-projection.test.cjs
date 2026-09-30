@@ -165,6 +165,82 @@ test('a plan-less status-line row newer than the SDK reading cannot switch the p
   assert.equal(pro.store.getTraySnapshot(NOW).fableApplies, false);
 });
 
+test('an idle redraw of the overall figure does not move the projection boundary past later Fable activity', (t) => {
+  const estimate = (withRedraw) => {
+    const context = fixture(t);
+    fableWeek(context);
+    // Fable is used after the last overall read; the tail projects it.
+    context.usage('f2', NOW - 30 * 60_000, 'claude-fable-5', 1_000_000);
+    // An idle session then redraws the 20% it fetched before that activity.
+    if (withRedraw) {
+      context.overall(NOW - 5 * 60_000, 20, { planType: null, provenance: 'official-statusline', metadata: {},
+        fetchedAfter: iso(NOW - 62 * 60_000) });
+    }
+    return projectFableAllowance(context.store, NOW).usedPercent;
+  };
+  const without = estimate(false);
+  assert.ok(without > 20.5, `the tail adds the later activity (${without})`);
+  assert.ok(Math.abs(estimate(true) - without) < 1e-9, 'the redraw changes nothing');
+});
+
+test('a status-line figure bounds calibration at its fetch, as a read at that moment would', (t) => {
+  // Fable is used before and after the fetch that shows the week at 20%; the
+  // status line first redraws that figure two hours after the fetch.
+  const project = (step) => {
+    const context = fixture(t);
+    context.overall(NOW - 25 * HOUR, 10);
+    context.usage('a', NOW - 19 * HOUR, 'claude-fable-5', 2_000_000);
+    step(context);
+    context.usage('b', NOW - 2 * HOUR, 'claude-fable-5', 2_000_000);
+    return projectFableAllowance(context.store, NOW);
+  };
+  const read = project((context) => context.overall(NOW - 3 * HOUR, 20));
+  const redrawn = project((context) => context.overall(NOW - HOUR, 20,
+    { planType: null, provenance: 'official-statusline', metadata: {}, fetchedAfter: iso(NOW - 3 * HOUR) }));
+  assert.ok(Math.abs(read.usedPercent - 40) < 0.01, `the later use is projected once at the step's rate (${read.usedPercent})`);
+  assert.ok(Math.abs(redrawn.usedPercent - read.usedPercent) < 1e-9, `${redrawn.usedPercent} vs ${read.usedPercent}`);
+});
+
+test('an older restatement of the mark cannot reach a step back before the reading that set it', (t) => {
+  // Opus is used before the week reads 10%; only Fable after it.
+  const project = (restate) => {
+    const context = fixture(t);
+    context.usage('opus', NOW - 20 * HOUR, 'claude-opus-5', 2_000_000);
+    context.overall(NOW - 10 * HOUR, 10);
+    // An idle session redraws the 10% it fetched long before that reading.
+    if (restate) {
+      context.overall(NOW - 5 * HOUR, 10, { planType: null, provenance: 'official-statusline', metadata: {},
+        fetchedAfter: iso(NOW - 30 * HOUR) });
+    }
+    context.usage('fable', NOW - 3 * HOUR, 'claude-fable-5', 2_000_000);
+    context.overall(NOW - HOUR, 20);
+    return projectFableAllowance(context.store, NOW).usedPercent;
+  };
+  const plain = project(false);
+  assert.ok(Math.abs(plain - 20) < 0.01, `the step is all Fable (${plain})`);
+  assert.ok(Math.abs(project(true) - plain) < 1e-9, 'the restatement changes nothing');
+});
+
+test('a newer dated fetch of the same Fable figure bounds the next rise, as a read would', (t) => {
+  const project = (confirm) => {
+    const context = fixture(t);
+    context.overall(NOW - 25 * HOUR, 10);
+    context.fable(NOW - 20 * HOUR, 10);
+    context.usage('before', NOW - 15 * HOUR, 'claude-fable-5', 2_000_000);
+    confirm(context);
+    context.usage('during', NOW - 4 * HOUR, 'claude-fable-5', 2_000_000);
+    context.fable(NOW - HOUR, 20);
+    context.overall(NOW - HOUR, 20);
+    context.usage('after', NOW - 30 * 60_000, 'claude-fable-5', 2_000_000);
+    return projectFableAllowance(context.store, NOW);
+  };
+  const read = project((context) => context.fable(NOW - 8 * HOUR, 10));
+  const fetched = project((context) => context.fable(NOW - 7 * HOUR, 10,
+    { planType: null, provenance: 'official-statusline', metadata: {}, fetchedAfter: iso(NOW - 8 * HOUR) }));
+  assert.equal(read.method, 'fable-anchor-pair');
+  assert.ok(Math.abs(fetched.usedPercent - read.usedPercent) < 1e-9, `${fetched.usedPercent} vs ${read.usedPercent}`);
+});
+
 test('the series carries one point per overall step plus the current estimate', (t) => {
   const context = fixture(t);
   context.overall(NOW - 25 * HOUR, 10);
@@ -239,6 +315,48 @@ test('readings dated ahead of the projection clock wait for their own timestamp'
   anchored.fable(NOW + 5 * 60_000, 44, { provenance: 'manual-official', metadata: {} });
   assert.equal(projectFableAllowance(anchored.store, NOW).anchored, false);
   assert.equal(projectFableAllowance(anchored.store, NOW + 6 * 60_000).anchored, true);
+});
+
+test('a rise whose fetch overlaps the previous reading still closes its own interval', (t) => {
+  // Fable reads 10%, then a status line shows 20% from a fetch that may be
+  // older than that read (first redrawn half an hour later), then 30%.
+  const project = (rise) => {
+    const context = fixture(t);
+    context.overall(NOW - 25 * HOUR, 10);
+    context.fable(NOW - 10 * HOUR, 10);
+    context.usage('first', NOW - 9.75 * HOUR, 'claude-fable-5', 1_000_000);
+    rise(context);
+    context.usage('second', NOW - 5 * HOUR, 'claude-fable-5', 3_000_000);
+    context.fable(NOW - 2 * HOUR, 30);
+    context.overall(NOW - 2 * HOUR, 30);
+    context.usage('tail', NOW - HOUR, 'claude-fable-5', 1_000_000);
+    return projectFableAllowance(context.store, NOW);
+  };
+  const read = project((context) => context.fable(NOW - 9.5 * HOUR, 20));
+  const overlapping = project((context) => context.fable(NOW - 9 * HOUR, 20, { planType: null, provenance: 'official-statusline',
+    metadata: {}, fetchedAfter: iso(NOW - 11 * HOUR), seenSince: iso(NOW - 9.5 * HOUR) }));
+  assert.equal(read.method, 'fable-anchor-pair');
+  assert.equal(overlapping.measuredPairs, read.measuredPairs, 'neither rise is lost');
+  assert.ok(Math.abs(overlapping.usedPercent - read.usedPercent) < 1e-9, `${overlapping.usedPercent} vs ${read.usedPercent}`);
+});
+
+test('a replenished cycle starts when its first figure was fetched, not first redrawn', (t) => {
+  // The refill shows as 0% from a fetch 20 hours ago; Fable is used before
+  // a status line first redraws that 0%, an hour after the fetch.
+  const project = (refill) => {
+    const context = fixture(t);
+    context.overall(NOW - 30 * HOUR, 49);
+    context.overall(NOW - 28 * HOUR, 50);
+    refill(context);
+    context.usage('new-cycle', NOW - 19.5 * HOUR, 'claude-fable-5', 5_000_000);
+    context.overall(NOW - HOUR, 5);
+    return projectFableAllowance(context.store, NOW);
+  };
+  const read = project((context) => context.overall(NOW - 20 * HOUR, 0));
+  const redrawn = project((context) => context.overall(NOW - 19 * HOUR, 0,
+    { planType: null, provenance: 'official-statusline', metadata: {}, fetchedAfter: iso(NOW - 20 * HOUR) }));
+  assert.ok(Math.abs(read.usedPercent - 10) < 0.01, `five new points, all Fable: ${read.usedPercent}`);
+  assert.equal(redrawn.usedPercent, read.usedPercent);
 });
 
 test('a replenishment before the reset timestamp moves restarts the projection with the new cycle', (t) => {

@@ -382,10 +382,13 @@ function collectorFixture(t) {
     const row = store.prepare('SELECT status, status_detail, metadata_json, last_success_at FROM sources WHERE id = ?').get(id);
     return { ...row, metadata: JSON.parse(row.metadata_json || '{}') };
   };
-  const reading = ({ sourceId = 'claude', bucketId = 'seven_day', hoursAgo, provenance = 'official-claude-usage' }) => store.recordObservation({
+  // A status-line reading is dated as the current helper dates it: its
+  // session was seen opening, just before the fetch.
+  const reading = ({ sourceId = 'claude', bucketId = 'seven_day', hoursAgo, provenance = 'official-claude-usage', dated = true }) => store.recordObservation({
     sourceId, bucketId, bucketName: 'Weekly', observedAt: new Date(Date.now() - hoursAgo * 3_600_000).toISOString(),
     usedPercent: 30, remainingPercent: 70, resetsAt: new Date(Date.now() + 3 * 86_400_000).toISOString(),
     windowMinutes: 10_080, provenance, confidence: 1, metadata: {},
+    fetchedAfter: provenance === 'official-statusline' && dated ? new Date(Date.now() - hoursAgo * 3_600_000 - 5_000).toISOString() : null,
   });
   return { root, store, source, reading };
 }
@@ -406,10 +409,12 @@ test('an automatic Claude refresh never creates or calls the usage port, yet imp
       usage: { input_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 5 } },
   })}\n`);
   const inbox = path.join(root, 'inbox.jsonl');
-  fs.writeFileSync(inbox, `${JSON.stringify({
-    ai_usage_captured_at: new Date().toISOString(),
-    rate_limits: { seven_day: { used_percentage: 22, resets_at: new Date(Date.now() + 3 * 86_400_000).toISOString() } },
-  })}\n`);
+  // A session seen opening, then redrawn with the limits its first response brought.
+  fs.writeFileSync(inbox, `${[
+    { ai_usage_captured_at: new Date(Date.now() - 10_000).toISOString(), session_id: 'working-session', api_ms: 0, rate_limits: null },
+    { ai_usage_captured_at: new Date(Date.now() - 5_000).toISOString(), session_id: 'working-session', api_ms: 1_200,
+      rate_limits: { seven_day: { used_percentage: 22, resets_at: new Date(Date.now() + 3 * 86_400_000).toISOString() } } },
+  ].map((line) => JSON.stringify(line)).join('\n')}\n`);
   const { refreshClaude, created } = collectorWithPortSpy();
   const injected = countingPort();
 
@@ -476,6 +481,22 @@ test('without a plan-usage read, Claude is judged by the age of its latest offic
     reading({ hoursAgo: 3, provenance: 'official-statusline' });
     await refreshClaude(store, path.join(store.backupDirectory, 'missing.jsonl'), { activityReader: { import: async () => ({ usageEvents: 0 }) } });
     assert.equal(source('claude').status, 'connected');
+  });
+  await t.test('a status-line reading from a helper that did not record sessions has no known fetch', async (tt) => {
+    const { store, source, reading } = collectorFixture(tt);
+    // A Refresh thirty hours ago, then the old helper, not yet rewritten,
+    // redraws a higher figure it may have fetched at any point this week.
+    reading({ hoursAgo: 30 });
+    store.recordObservation({ sourceId: 'claude', bucketId: 'seven_day', bucketName: 'Weekly',
+      observedAt: new Date(Date.now() - 60_000).toISOString(), usedPercent: 34, remainingPercent: 66,
+      resetsAt: new Date(Date.now() + 3 * 86_400_000).toISOString(), windowMinutes: 10_080,
+      provenance: 'official-statusline', confidence: 1, metadata: {} });
+    reading({ sourceId: 'claude-fable', bucketId: 'fable_seven_day', hoursAgo: 1 / 60, provenance: 'official-statusline', dated: false });
+    await refreshClaude(store, path.join(store.backupDirectory, 'missing.jsonl'), { activityReader: { import: async () => ({ usageEvents: 0 }) } });
+    assert.equal(store.getQuota('claude', store.getSettings()).usedPercent, 34, 'it is still the figure shown');
+    assert.equal(source('claude').status, 'stale');
+    assert.equal(source('claude-fable').status, 'stale');
+    assert.equal(source('claude-fable').metadata.automatic.health.officialSource, 'not-requested');
   });
   await t.test('a manual entry is not a plan-usage reading', async (tt) => {
     const { store, source, reading } = collectorFixture(tt);
@@ -546,6 +567,7 @@ const readingLabel = (value) => new Date(value).toLocaleString('en-GB', { weekda
 const WINDOW_MINUTES = { five_hour: 300, seven_day: 10_080, seven_day_opus: 10_080, seven_day_sonnet: 10_080 };
 
 // Rows as one read writes them: every window shares one observed_at.
+// A status-line read is dated as the current helper dates a working session's.
 function recordRead(store, { minutesAgo, windows, provenance = 'official-claude-usage', nowMs = Date.now() }) {
   const observedAt = new Date(nowMs - minutesAgo * MINUTE).toISOString();
   for (const [bucketId, resetInMinutes] of Object.entries(windows)) {
@@ -553,6 +575,7 @@ function recordRead(store, { minutesAgo, windows, provenance = 'official-claude-
       sourceId: 'claude', bucketId, bucketName: bucketId, observedAt, usedPercent: 30, remainingPercent: 70,
       resetsAt: new Date(nowMs + resetInMinutes * MINUTE).toISOString(), windowMinutes: WINDOW_MINUTES[bucketId],
       provenance, confidence: 1, metadata: {},
+      fetchedAfter: provenance === 'official-statusline' ? new Date(Date.parse(observedAt) - 5_000).toISOString() : null,
     });
   }
   return observedAt;
@@ -614,6 +637,55 @@ test('a window the latest plan-usage read did not return does not keep Claude st
   });
   await refreshClaude(store, missingInbox(store), { activityReader: quietActivity });
   assert.equal(source('claude').status, 'connected');
+  // An idle session then redraws that window from a fetch older than the read:
+  // the redraw is newer, but it does not renew the window.
+  store.recordObservation({ sourceId: 'claude', bucketId: 'seven_day_opus', bucketName: 'seven_day_opus',
+    observedAt: new Date().toISOString(), usedPercent: 30, remainingPercent: 70,
+    resetsAt: new Date(Date.now() + 100 * 60 * MINUTE).toISOString(), windowMinutes: 10_080, provenance: 'official-statusline',
+    confidence: 1, metadata: {}, fetchedAfter: new Date(Date.now() - 30 * 60 * MINUTE).toISOString() });
+  await refreshClaude(store, missingInbox(store), { activityReader: quietActivity });
+  assert.equal(source('claude').status, 'connected');
+});
+
+test('a Refresh that returns no window at all leaves no earlier window current', async (t) => {
+  const { refreshClaude } = collectorWithPortSpy();
+  const { store, source } = collectorFixture(t);
+  const nowMs = Date.now() - 15 * MINUTE;
+  recordRead(store, { minutesAgo: 30, windows: { seven_day: 3 * 1440 }, nowMs });
+  // The next Refresh succeeds, but the provider reports no allowance windows.
+  await refreshClaude(store, missingInbox(store), {
+    readPlanUsage: true, activityReader: quietActivity, clock: () => new Date(nowMs),
+    usagePort: { read: async () => ({ subscription_type: 'max', rate_limits_available: false }) },
+  });
+  assert.equal(source('claude').metadata.planUsage.lastRequest.succeeded, true);
+  assert.equal(source('claude').status, 'stale');
+  // Automatic runs do not bring the half-hour-old window back as current.
+  await refreshClaude(store, missingInbox(store), { activityReader: quietActivity, clock: () => new Date(nowMs + MINUTE) });
+  assert.equal(source('claude').status, 'stale');
+  // A session that fetches the window after that read renews it.
+  store.recordObservation({ sourceId: 'claude', bucketId: 'seven_day', bucketName: 'seven_day',
+    observedAt: new Date(nowMs + 2 * MINUTE).toISOString(), usedPercent: 31, remainingPercent: 69,
+    resetsAt: new Date(nowMs + 3 * 1440 * MINUTE).toISOString(), windowMinutes: 10_080, provenance: 'official-statusline',
+    confidence: 1, metadata: {}, fetchedAfter: new Date(nowMs + 90_000).toISOString() });
+  await refreshClaude(store, missingInbox(store), { activityReader: quietActivity, clock: () => new Date(nowMs + 3 * MINUTE) });
+  assert.equal(source('claude').status, 'connected');
+});
+
+test('a window the latest plan-usage read returned stays, whatever redraws of it followed', async (t) => {
+  const { refreshClaude } = collectorWithPortSpy();
+  const { store, source } = collectorFixture(t);
+  const readAt = Date.now() - 10 * MINUTE;
+  const record = (at, provenance, fetchedAfter = null) => store.recordObservation({ sourceId: 'claude', bucketId: 'seven_day',
+    bucketName: 'Weekly', observedAt: new Date(at).toISOString(), usedPercent: 30, remainingPercent: 70,
+    resetsAt: new Date(Date.now() + 3 * 1440 * MINUTE).toISOString(), windowMinutes: 10_080, provenance, confidence: 1,
+    metadata: {}, fetchedAfter: fetchedAfter == null ? null : new Date(fetchedAfter).toISOString() });
+  record(readAt, 'official-claude-usage');
+  // An idle session then redraws the same 30% it fetched five hours ago.
+  record(Date.now() - MINUTE, 'official-statusline', Date.now() - 5 * 60 * MINUTE);
+  await refreshClaude(store, missingInbox(store), { activityReader: quietActivity });
+  const claude = source('claude');
+  assert.equal(claude.status, 'connected');
+  assert.equal(claude.metadata.planUsage.lastReadAt, new Date(readAt).toISOString());
 });
 
 test('the stale detail quotes the oldest out-of-date reading, not the newest', async (t) => {
@@ -635,10 +707,11 @@ test('importing a fresh helper window still judges every active Claude window', 
       const nowMs = Date.now();
       recordRead(store, { minutesAgo, windows: { seven_day: 3 * 1440, seven_day_sonnet: 3 * 1440 }, nowMs });
       const inbox = missingInbox(store);
-      fs.writeFileSync(inbox, `${JSON.stringify({
-        ai_usage_captured_at: new Date(nowMs).toISOString(),
-        rate_limits: { seven_day: { used_percentage: 35, resets_at: new Date(nowMs + 3 * 1440 * MINUTE).toISOString() } },
-      })}\n`);
+      fs.writeFileSync(inbox, `${[
+        { ai_usage_captured_at: new Date(nowMs - 5_000).toISOString(), session_id: 'working-session', api_ms: 0, rate_limits: null },
+        { ai_usage_captured_at: new Date(nowMs).toISOString(), session_id: 'working-session', api_ms: 1_200,
+          rate_limits: { seven_day: { used_percentage: 35, resets_at: new Date(nowMs + 3 * 1440 * MINUTE).toISOString() } } },
+      ].map((line) => JSON.stringify(line)).join('\n')}\n`);
       const statuses = [];
       for (let run = 0; run < 2; run += 1) {
         const result = await refreshClaude(store, inbox, { activityReader: quietActivity, clock: () => new Date(nowMs) });
@@ -749,12 +822,14 @@ test('a status-line restatement the card holds back cannot make Claude current o
     });
   }
   const inbox = path.join(root, 'inbox.jsonl');
-  const capture = (at, fiveUsed, { weekly = true } = {}) => fs.appendFileSync(inbox, `${JSON.stringify({
-    ai_usage_captured_at: new Date(at).toISOString(),
-    rate_limits: {
+  // An idle session, first seen with its 1% in hand, restates it; a working
+  // session opens and fetches 41% later on.
+  const capture = (at, fiveUsed, { weekly = true, session = 'idle-session', apiMs = 1_000, limits = true } = {}) => fs.appendFileSync(inbox, `${JSON.stringify({
+    ai_usage_captured_at: new Date(at).toISOString(), session_id: session, api_ms: apiMs,
+    rate_limits: limits ? {
       five_hour: { used_percentage: fiveUsed, resets_at: fiveReset },
       ...(weekly ? { seven_day: { used_percentage: 20, resets_at: weekReset } } : {}),
-    },
+    } : null,
   })}\n`);
   const rateLimited = { read: async () => { throw Object.assign(new Error('HTTP 429'), { code: 'rate_limited' }); } };
 
@@ -777,8 +852,10 @@ test('a status-line restatement the card holds back cannot make Claude current o
   assert.match(claude.status_detail, /The last Refresh could not read Claude plan usage \(rate_limited\)\./,
     'a held-back status-line row is not a newer reading that replaces the failed Refresh');
 
-  // A status-line reading the card accepts still stands in for the provider.
-  capture(nowMs + 150_000, 41);
+  // A status-line reading the card accepts, freshly fetched by a working
+  // session, still stands in for the provider.
+  capture(nowMs + 140_000, 0, { session: 'working-session', apiMs: 0, limits: false });
+  capture(nowMs + 150_000, 41, { session: 'working-session', apiMs: 2_000 });
   await refreshClaude(store, inbox, { readPlanUsage: true, usagePort: rateLimited, activityReader: quietActivity, clock: () => new Date(nowMs + 180_000) });
   claude = source('claude');
   assert.equal(claude.status, 'connected');
@@ -795,4 +872,179 @@ test('a status-line restatement the card holds back cannot make Claude current o
   claude = source('claude');
   assert.equal(claude.metadata.planUsage.lastRequest.succeeded, false);
   assert.doesNotMatch(claude.status_detail, /evidence was refreshed/);
+});
+
+test('an idle session’s redraw cannot make Claude current or a failed Refresh succeed; its next fetch can', async (t) => {
+  const { refreshClaude } = collectorWithPortSpy();
+  const { root, store, source } = collectorFixture(t);
+  // In the past, so every capture below is accepted as already taken.
+  const nowMs = Date.now() - 15 * MINUTE;
+  const weekReset = new Date(nowMs + 3 * 1440 * MINUTE).toISOString();
+  const inbox = path.join(root, 'inbox.jsonl');
+  const capture = (at, { apiMs, used } = {}) => fs.appendFileSync(inbox, `${JSON.stringify({
+    ai_usage_captured_at: new Date(at).toISOString(), session_id: 'idle-session', api_ms: apiMs ?? 0,
+    rate_limits: used == null ? null : { seven_day: { used_percentage: used, resets_at: weekReset } },
+  })}\n`);
+  const rateLimited = { read: async () => { throw Object.assign(new Error('HTTP 429'), { code: 'rate_limited' }); } };
+  // The session opened and fetched 20% a day and a half ago, then sat idle,
+  // its status line redrawing that 20% every minute.
+  const fetchedAt = nowMs - 36 * 60 * MINUTE;
+  capture(fetchedAt);
+  capture(fetchedAt + 5_000, { apiMs: 2_500, used: 20 });
+  capture(nowMs - 30_000, { apiMs: 2_500, used: 20 });
+  await refreshClaude(store, inbox, { activityReader: quietActivity, clock: () => new Date(nowMs) });
+  let claude = source('claude');
+  assert.equal(claude.status, 'stale', 'a redraw thirty seconds ago carries a fetch a day and a half old');
+  assert.ok(claude.status_detail.includes(`(${readingLabel(fetchedAt)}) is still active but out of date`), claude.status_detail);
+  const card = store.getQuota('claude', store.getSettings(), nowMs);
+  assert.equal(card.evidenceAt, new Date(fetchedAt).toISOString());
+  assert.ok(card.forecast.staleHours > 35, `stale ${card.forecast.staleHours}`);
+
+  capture(nowMs + 30_000, { apiMs: 2_500, used: 20 });
+  await refreshClaude(store, inbox, { readPlanUsage: true, usagePort: rateLimited, activityReader: quietActivity, clock: () => new Date(nowMs + 60_000) });
+  claude = source('claude');
+  assert.equal(claude.metadata.planUsage.lastRequest.succeeded, false, 'the redraw is not new evidence');
+  assert.equal(claude.status, 'stale');
+
+  // The session is used again: its next redraw shows a new response.
+  capture(nowMs + 90_000, { apiMs: 4_100, used: 21 });
+  await refreshClaude(store, inbox, { readPlanUsage: true, usagePort: rateLimited, activityReader: quietActivity, clock: () => new Date(nowMs + 120_000) });
+  claude = source('claude');
+  assert.equal(claude.metadata.planUsage.lastRequest.succeeded, true);
+  assert.equal(claude.status, 'connected');
+});
+
+test('an idle session first seen with limits in hand is not new evidence for a failed Refresh', async (t) => {
+  const { refreshClaude } = collectorWithPortSpy();
+  const { root, store, source } = collectorFixture(t);
+  const nowMs = Date.now() - 15 * MINUTE;
+  const weekReset = new Date(nowMs + 3 * 1440 * MINUTE).toISOString();
+  // The helper never saw this session open, so its fetch cannot be dated; it
+  // has redrawn the same 20% every ten minutes for three hours.
+  const inbox = path.join(root, 'inbox.jsonl');
+  const lines = [];
+  for (let at = nowMs - 180 * MINUTE; at <= nowMs - MINUTE; at += 10 * MINUTE) {
+    lines.push(JSON.stringify({ ai_usage_captured_at: new Date(at).toISOString(), session_id: 'already-open', api_ms: 9_000,
+      rate_limits: { seven_day: { used_percentage: 20, resets_at: weekReset } } }));
+  }
+  fs.writeFileSync(inbox, `${lines.join('\n')}\n`);
+  const rateLimited = { read: async () => { throw Object.assign(new Error('HTTP 429'), { code: 'rate_limited' }); } };
+  await refreshClaude(store, inbox, { readPlanUsage: true, usagePort: rateLimited, activityReader: quietActivity, clock: () => new Date(nowMs) });
+  const claude = source('claude');
+  assert.equal(store.prepare('SELECT COUNT(*) AS count FROM quota_observations WHERE fetched_after IS NOT NULL').get().count, 0);
+  assert.equal(claude.metadata.planUsage.lastRequest.succeeded, false, 'a redraw a minute ago shows no fetch that recent');
+  // The limits are known to hold only from the start of the week they show.
+  assert.equal(store.getQuota('claude', store.getSettings(), nowMs).evidenceAt, new Date(nowMs - 4 * 1440 * MINUTE).toISOString());
+});
+
+test('an automatic collection does not count a session first seen with limits in hand as a recent read', async (t) => {
+  const { refreshClaude, created } = collectorWithPortSpy();
+  const { root, store, source } = collectorFixture(t);
+  const nowMs = Date.now() - 15 * MINUTE;
+  const weekReset = new Date(nowMs + 3 * 1440 * MINUTE).toISOString();
+  // The helper was just installed; an open session redraws the 20% it
+  // fetched at some point this week.
+  const inbox = path.join(root, 'inbox.jsonl');
+  const line = (at, session, apiMs, used) => JSON.stringify({ ai_usage_captured_at: new Date(at).toISOString(),
+    session_id: session, api_ms: apiMs, rate_limits: used == null ? null : { seven_day: { used_percentage: used, resets_at: weekReset } } });
+  fs.writeFileSync(inbox, `${line(nowMs - 30_000, 'already-open', 9_000, 20)}\n`);
+  await refreshClaude(store, inbox, { activityReader: quietActivity, clock: () => new Date(nowMs) });
+  assert.equal(created.reduce((sum, port) => sum + port.reads, 0), 0, 'an automatic collection reads no plan usage');
+  let claude = source('claude');
+  assert.equal(claude.status, 'stale', 'a redraw thirty seconds ago proves no fetch this recent');
+  const weekStart = nowMs - 4 * 1440 * MINUTE;
+  assert.ok(claude.status_detail.includes(`(${readingLabel(weekStart)}) is still active but out of date`), claude.status_detail);
+  let card = store.getQuota('claude', store.getSettings(), nowMs);
+  assert.equal(card.evidenceAt, new Date(weekStart).toISOString());
+  assert.ok(card.forecast.staleHours > 95, `stale ${card.forecast.staleHours}`);
+
+  // A session seen opening dates its fetch, and that is a recent read.
+  fs.appendFileSync(inbox, `${line(nowMs + 30_000, 'new-session', 0, null)}\n${line(nowMs + 60_000, 'new-session', 1_200, 20)}\n`);
+  await refreshClaude(store, inbox, { activityReader: quietActivity, clock: () => new Date(nowMs + 90_000) });
+  claude = source('claude');
+  assert.equal(claude.status, 'connected');
+  card = store.getQuota('claude', store.getSettings(), nowMs + 90_000);
+  assert.equal(card.evidenceAt, new Date(nowMs + 30_000).toISOString());
+});
+
+test('a single redraw from a session first seen with limits in hand is not new evidence for a failed Refresh', async (t) => {
+  const { refreshClaude } = collectorWithPortSpy();
+  const { root, store, source } = collectorFixture(t);
+  const nowMs = Date.now() - 15 * MINUTE;
+  // The helper was just installed; an open session redraws once, thirty
+  // seconds ago, with limits it may have fetched hours before.
+  const inbox = path.join(root, 'inbox.jsonl');
+  fs.writeFileSync(inbox, `${JSON.stringify({ ai_usage_captured_at: new Date(nowMs - 30_000).toISOString(),
+    session_id: 'already-open', api_ms: 9_000,
+    rate_limits: { seven_day: { used_percentage: 20, resets_at: new Date(nowMs + 3 * 1440 * MINUTE).toISOString() } } })}\n`);
+  const rateLimited = { read: async () => { throw Object.assign(new Error('HTTP 429'), { code: 'rate_limited' }); } };
+  await refreshClaude(store, inbox, { readPlanUsage: true, usagePort: rateLimited, activityReader: quietActivity, clock: () => new Date(nowMs) });
+  assert.equal(source('claude').metadata.planUsage.lastRequest.succeeded, false);
+});
+
+test('an idle redraw that agrees with a recent Refresh is still not new evidence for a failed one', async (t) => {
+  const { refreshClaude } = collectorWithPortSpy();
+  const { root, store, source } = collectorFixture(t);
+  const nowMs = Date.now() - 15 * MINUTE;
+  const weekReset = new Date(nowMs + 3 * 1440 * MINUTE).toISOString();
+  // A Refresh two minutes ago read 20%.
+  store.recordObservation({ sourceId: 'claude', bucketId: 'seven_day', bucketName: 'Weekly',
+    observedAt: new Date(nowMs - 2 * MINUTE).toISOString(), usedPercent: 20, remainingPercent: 80, resetsAt: weekReset,
+    windowMinutes: 10_080, provenance: 'official-claude-usage', confidence: 1, metadata: {} });
+  // An idle session that fetched the same 20% a day and a half ago redraws it.
+  const inbox = path.join(root, 'inbox.jsonl');
+  const fetchedAt = nowMs - 36 * 60 * MINUTE;
+  fs.writeFileSync(inbox, `${[
+    { ai_usage_captured_at: new Date(fetchedAt).toISOString(), session_id: 'idle-session', api_ms: 0, rate_limits: null },
+    ...[fetchedAt + 5_000, nowMs - 30_000].map((at) => ({ ai_usage_captured_at: new Date(at).toISOString(),
+      session_id: 'idle-session', api_ms: 2_500, rate_limits: { seven_day: { used_percentage: 20, resets_at: weekReset } } })),
+  ].map((line) => JSON.stringify(line)).join('\n')}\n`);
+  const rateLimited = { read: async () => { throw Object.assign(new Error('HTTP 429'), { code: 'rate_limited' }); } };
+  await refreshClaude(store, inbox, { readPlanUsage: true, usagePort: rateLimited, activityReader: quietActivity, clock: () => new Date(nowMs) });
+  const claude = source('claude');
+  assert.equal(claude.metadata.statusLine.claudeObservations, 2, 'this collection imported the redraw');
+  // The card is current through the earlier Refresh, but this one failed.
+  assert.equal(store.getQuota('claude', store.getSettings(), nowMs).evidenceAt, new Date(nowMs - 2 * MINUTE).toISOString());
+  assert.equal(claude.metadata.planUsage.lastRequest.succeeded, false);
+  assert.doesNotMatch(claude.status_detail, /evidence was refreshed/);
+});
+
+test('Fable is judged by the newest read of its figure, not by an idle redraw of it', async (t) => {
+  const { refreshClaude } = collectorWithPortSpy();
+  const nowMs = Date.now() - 15 * MINUTE;
+  const resetsAt = new Date(nowMs + 3 * 1440 * MINUTE).toISOString();
+  const fable = (store, at, provenance, fetchedAfter = null) => store.recordObservation({ sourceId: 'claude-fable',
+    bucketId: 'fable_seven_day', bucketName: 'Fable weekly', observedAt: new Date(at).toISOString(), usedPercent: 30,
+    remainingPercent: 70, resetsAt, windowMinutes: 10_080, provenance, confidence: 1, metadata: {},
+    fetchedAfter: fetchedAfter == null ? null : new Date(fetchedAfter).toISOString() });
+  // An idle session fetched 30% a day and a half ago and has redrawn it every
+  // minute since; more than fifty redraws follow the reading that matters.
+  const idle = (store) => {
+    for (let at = nowMs - 90 * MINUTE; at <= nowMs - MINUTE; at += MINUTE) fable(store, at, 'official-statusline', nowMs - 36 * 60 * MINUTE);
+  };
+  await t.test('a Refresh two hours ago that read the same figure keeps Fable current', async (tt) => {
+    const { store, source } = collectorFixture(tt);
+    fable(store, nowMs - 120 * MINUTE, 'official-claude-usage');
+    idle(store);
+    await refreshClaude(store, missingInbox(store), { activityReader: quietActivity, clock: () => new Date(nowMs) });
+    const fableSource = source('claude-fable');
+    assert.equal(fableSource.status, 'connected');
+    assert.equal(fableSource.metadata.automatic.allowance.evidenceAt, new Date(nowMs - 120 * MINUTE).toISOString());
+    assert.ok(fableSource.status_detail.includes(readingLabel(nowMs - 120 * MINUTE)), fableSource.status_detail);
+  });
+  await t.test('with only the idle redraws, Fable is out of date', async (tt) => {
+    const { store, source } = collectorFixture(tt);
+    idle(store);
+    await refreshClaude(store, missingInbox(store), { activityReader: quietActivity, clock: () => new Date(nowMs) });
+    assert.equal(source('claude-fable').status, 'stale');
+  });
+  await t.test('a recent manual entry of the same figure is no provider read', async (tt) => {
+    const { store, source } = collectorFixture(tt);
+    fable(store, nowMs - 120 * MINUTE, 'manual-official');
+    idle(store);
+    await refreshClaude(store, missingInbox(store), { activityReader: quietActivity, clock: () => new Date(nowMs) });
+    const fableSource = source('claude-fable');
+    assert.equal(fableSource.status, 'stale');
+    assert.equal(fableSource.metadata.automatic.allowance.evidenceAt, new Date(nowMs - 36 * 60 * MINUTE).toISOString());
+  });
 });
