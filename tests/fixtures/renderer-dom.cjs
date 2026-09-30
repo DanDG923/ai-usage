@@ -84,6 +84,20 @@ app.whenReady().then(async () => {
   await evaluate(() => [...document.querySelectorAll('.pd-save button')].find((button) => button.textContent === 'Reset').click());
   await until(() => !document.querySelector('.pd-save'));
   assert.equal(await evaluate(() => window.testBridge.prepareSleep()), true, 'with nothing unsaved the page can be released');
+  // A pending save still refuses release after the slider returns to the saved
+  // value, which hides the unsaved-reserve block while the save runs.
+  await evaluate(() => { const slider = document.querySelector('#planner-reserve'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(slider, '25'); slider.dispatchEvent(new Event('input', { bubbles: true })); });
+  await until(() => document.querySelector('.pd-save span')?.textContent.includes('Trying 25%'));
+  await evaluate(() => { window.testBridge.holdSettings(true); [...document.querySelectorAll('.pd-save button')].find((button) => button.textContent.includes('Use 25%')).click(); });
+  await until(() => window.testBridge.heldSettings() === 1);
+  await evaluate(() => { const slider = document.querySelector('#planner-reserve'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(slider, '20'); slider.dispatchEvent(new Event('input', { bubbles: true })); });
+  await until(() => !document.querySelector('.pd-save'));
+  assert.equal(await evaluate(() => window.testBridge.prepareSleep()), false, 'a pending save refuses release without the unsaved-reserve block');
+  await evaluate(() => window.testBridge.releaseSettings());
+  await until(() => document.querySelector('.pd-save span')?.textContent === 'Trying 20%. Forecasts still use 25%.');
+  await evaluate(() => [...document.querySelectorAll('.pd-save button')].find((button) => button.textContent === 'Reset').click());
+  await until(() => !document.querySelector('.pd-save'));
+  assert.equal(await evaluate(() => window.testBridge.prepareSleep()), true);
   // Escape pressed in the slider stays with the slider; the page remains open.
   await evaluate(() => { document.querySelector('[aria-label="Dismiss message"]')?.click(); document.querySelector('#planner-reserve').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
   await new Promise((resolve) => setTimeout(resolve, 100));
