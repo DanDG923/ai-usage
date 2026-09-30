@@ -182,10 +182,12 @@ function windowPaceOf(rows, schedule, observedResetAt = null, nowMs = Date.now()
   if (!(used >= 0)) return null;
   // Only the scheduled share of the window's usage may carry forward as an
   // active-hour pace: the projection adds off-schedule use separately, so a
-  // whole-window average would count every late-night point twice.
-  const split = splitWindowUsage(rows, schedule, nowMs, startMs, last.observedAt, used, excluded, dayWeights);
+  // whole-window average would count every late-night point twice. Exposure
+  // ends when the last figure was fetched: a later idle redraw observed nothing.
+  const endMs = latestEvidenceAt(rows);
+  const split = splitWindowUsage(rows, schedule, nowMs, startMs, endMs, used, excluded, dayWeights);
   const evidenceActiveHours = dayWeights?.size
-    ? splitWindowUsage(rows, schedule, nowMs, startMs, last.observedAt, used, excluded).activeHours : split.activeHours;
+    ? splitWindowUsage(rows, schedule, nowMs, startMs, endMs, used, excluded).activeHours : split.activeHours;
   return evidenceActiveHours >= 1 && split.activeHours > 0
     ? { pace: split.activeUsed / split.activeHours, activeHours: split.activeHours, evidenceActiveHours } : null;
 }
@@ -776,7 +778,7 @@ function exhaustionTime(series) {
   return null;
 }
 
-function learnForecast({ normalised, current, currentCluster, clusters, schedule, nowMs, excluded, dayWeights, usedNow, resetMs, fallbackRate }) {
+function learnForecast({ normalised, current, currentCluster, clusters, schedule, nowMs, excluded, dayWeights, usedNow, resetMs, fallbackRate, evidenceMs }) {
   const samples = deriveLearningSamples(normalised, schedule, nowMs, excluded).map((sample) => {
     if (!dayWeights?.size) return sample;
     const hours = sample.dailyHours.reduce((sum, entry) => sum + entry.hours, 0);
@@ -789,7 +791,8 @@ function learnForecast({ normalised, current, currentCluster, clusters, schedule
 
   // Window anchor: the provider's used-percentage covers the whole window, so
   // usage divided by the window's elapsed active hours is the strongest signal
-  // of sustainable pace. Evidence ends at the reading, never at "now".
+  // of sustainable pace. Evidence ends when the current figure was fetched,
+  // never at "now" or at an idle redraw that came after it.
   const inWindow = currentCluster.rows;
   const windowMinutes = inWindow.findLast((row) => Number.isFinite(row.windowMinutes) && row.windowMinutes > 0)?.windowMinutes;
   const anchorStartMs = Number.isFinite(currentCluster.observedResetAt)
@@ -800,7 +803,7 @@ function learnForecast({ normalised, current, currentCluster, clusters, schedule
   const anchorUsed = windowMinutes ? usedNow : Math.max(0, usedNow - usedPercentOf(inWindow[0]));
   const {
     activeHours: anchorActiveHours, offHours: anchorOffHours, activeUsed: activeAnchorUsed, offUsed: offAnchorUsed,
-  } = splitWindowUsage(inWindow, schedule, nowMs, anchorStartMs, current.observedAt, anchorUsed, excluded, dayWeights);
+  } = splitWindowUsage(inWindow, schedule, nowMs, anchorStartMs, evidenceMs, anchorUsed, excluded, dayWeights);
   const windowPace = anchorActiveHours >= 1 ? activeAnchorUsed / anchorActiveHours : null;
   const offWindowPace = anchorOffHours >= 1 ? offAnchorUsed / anchorOffHours : null;
   // After a reset the fresh window has no history of its own, so the most
@@ -979,10 +982,10 @@ function forecastQuotaWithLearning(observations, options = {}, dayWeights = null
   const remaining = Number.isFinite(current.remainingPercent) ? current.remainingPercent : 100 - current.usedPercent;
   const usedNow = clamp(Number.isFinite(current.usedPercent) ? current.usedPercent : 100 - remaining, 0, 100);
   const learningKey = JSON.stringify([normalised.length, normalised[0].observedAt, current.observedAt, current.usedPercent,
-    dayWeights ? [...dayWeights] : null]);
+    evidenceMs, dayWeights ? [...dayWeights] : null]);
   const cachedModel = options.learningCache?.get(learningKey);
   const model = cachedModel && nowMs >= cachedModel.at && nowMs - cachedModel.at < 60_000
-    ? cachedModel.value : learnForecast({ normalised, current, currentCluster, clusters, schedule, nowMs, excluded, dayWeights, usedNow, resetMs, fallbackRate });
+    ? cachedModel.value : learnForecast({ normalised, current, currentCluster, clusters, schedule, nowMs, excluded, dayWeights, usedNow, resetMs, fallbackRate, evidenceMs });
   if (options.learningCache && model !== cachedModel?.value) {
     if (options.learningCache.size >= 4) options.learningCache.clear();
     options.learningCache.set(learningKey, { at: nowMs, value: model });

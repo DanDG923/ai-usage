@@ -91,6 +91,25 @@ const fetched = (observedAt, usedPercent, fetchedAfter) => ({
   fetchedAfter: typeof fetchedAfter === 'number' ? new Date(fetchedAfter).toISOString() : fetchedAfter,
 });
 
+test('idle redraws after the last fetch add no observed time to the learned pace', () => {
+  // Reads at 0%, 10% and 13%; an idle session then redraws the 13% it
+  // fetched just before the last read, every half hour until now.
+  const reads = [
+    reading('2026-09-22T08:00:00.000Z', 0, 'official-claude-usage'),
+    reading('2026-09-22T20:00:00.000Z', 10, 'official-claude-usage'),
+    reading('2026-09-23T12:00:00.000Z', 13, 'official-claude-usage'),
+  ];
+  const redraws = [];
+  for (let at = Date.parse('2026-09-23T12:30:00.000Z'); at <= Date.parse('2026-09-23T21:00:00.000Z'); at += 30 * MINUTE) {
+    redraws.push({ ...reading(at, 13, 'official-statusline'), fetchedAfter: '2026-09-23T11:55:00.000Z', seenSince: '2026-09-23T11:56:00.000Z' });
+  }
+  const pick = ({ windowPace, safePace, expectedRemaining, heavyRemaining, staleHours, state }) => ({ windowPace, safePace, expectedRemaining, heavyRemaining, staleHours, state });
+  for (const compactReadings of [false, true]) {
+    const options = { now: NOW, schedule: SCHEDULE, compactReadings };
+    assert.deepEqual(pick(forecastQuota([...reads, ...redraws], options)), pick(forecastQuota(reads, options)), `compact ${compactReadings}`);
+  }
+});
+
 test('a dated status-line reading is judged by when its session fetched it, not when it was redrawn', () => {
   // 22 September: an idle session fetched 1% at 18:10 and kept redrawing it
   // every minute, while a Refresh at 22:07 read 13%.
