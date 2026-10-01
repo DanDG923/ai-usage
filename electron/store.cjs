@@ -1926,7 +1926,13 @@ class UsageStore {
     const nextEvent = this.prepare(`SELECT occurred_at FROM usage_events
       WHERE source_id = ? AND occurred_at >= ? ${modelFilter}
       ORDER BY occurred_at ASC LIMIT 1`).get(eventSource, iso(nowMs));
+    // A stored reading dated beyond the clock-skew allowance joins its cycle
+    // once the clock comes within that allowance of it.
+    const nextReading = this.prepare(`SELECT observed_at FROM quota_observations
+      WHERE source_id = ? AND bucket_id = ? AND observed_at > ?
+      ORDER BY observed_at ASC LIMIT 1`).get(sourceId, quota.bucketId, iso(nowMs + QUOTA_CLOCK_SKEW_MS));
     const expiresAt = Math.min(nextEvent ? Date.parse(nextEvent.occurred_at) + 1 : Infinity,
+      nextReading ? Date.parse(nextReading.observed_at) - QUOTA_CLOCK_SKEW_MS : Infinity,
       ...value.filter((row) => row.current).map((row) => Date.parse(row.resetsAt)));
     this.cycleHistoryCache.delete(key);
     this.cycleHistoryCache.set(key, { at: nowMs, expiresAt, revision, value });
@@ -1943,9 +1949,18 @@ class UsageStore {
         COUNT(*) AS readings
       FROM quota_observations
       WHERE source_id = ? AND bucket_id = ?
+        -- The same recheck getQuota applies with validQuotaTime: older app
+        -- versions could store dates and windows now rejected on ingest.
+        -- Stored times are toISOString() text, so julianday reads them
+        -- exactly; rounding to whole milliseconds keeps the bounds exact.
+        AND julianday(observed_at) <= julianday(?)
+        AND CAST(ROUND((julianday(resets_at) - julianday(observed_at)) * 86400000) AS INTEGER) BETWEEN ? AND ?
+        AND (window_minutes IS NULL
+          OR (typeof(window_minutes) = 'integer' AND window_minutes BETWEEN 0 AND ?))
       GROUP BY resets_at
       ORDER BY resets_at DESC
-    `).iterate(sourceId, bucketId);
+    `).iterate(sourceId, bucketId, iso(nowMs + QUOTA_CLOCK_SKEW_MS),
+      -QUOTA_CLOCK_SKEW_MS, MAX_QUOTA_RESET_AHEAD_MS, MAX_QUOTA_RESET_AHEAD_MS / 60_000);
     // Before its first use, an idle allowance can roll its reset forward with
     // every poll. Fold those unused readings into the subsequently pinned
     // window as well as merging ordinary sub-minute timestamp jitter.
