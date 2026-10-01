@@ -51,6 +51,7 @@ let glanceMtimeMs = null
 let problem = null
 let bandOn = true
 let paneOpen = false
+let bandShown = false
 let sessionId = null
 let sequence = 0
 
@@ -136,8 +137,13 @@ async function loadGlance($) {
 
 async function pollGlance($) {
   const changed = await loadGlance($)
+  // The caution line also goes by the clock: it leaves once the app has been
+  // silent too long, with no new glance to say so.
+  const band = bandMessage(glance, Date.now()) != null
+  const bandChanged = band !== bandShown
+  bandShown = band
   // An open pane also redraws for its "updated … ago" line.
-  if (changed || paneOpen) $.ui.invalidate('ui.render')
+  if (changed || bandChanged || paneOpen) $.ui.invalidate('ui.render')
 }
 
 // Leaves a request for the app: collect now, or open the dashboard. The app
