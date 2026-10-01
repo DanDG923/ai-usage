@@ -170,7 +170,10 @@ test('fresh requests are acted on once; stale, foreign and unknown ones are only
   request('4-old.json', fresh('open', now - 10 * 60_000));
   request('5-unknown.json', fresh('delete-everything'));
   request('6-foreign.json', { ...fresh('sync'), format: 'other' });
+  // A file that never became readable is discarded once it is old.
   fs.writeFileSync(path.join(root, 'requests', '7-torn.json'), '{"format":');
+  const old = new Date(now - 60_000);
+  fs.utimesSync(path.join(root, 'requests', '7-torn.json'), old, old);
   watchers.get('requests')();
   assert.deepEqual(requests, ['sync', 'open']);
   assert.deepEqual(fs.readdirSync(path.join(root, 'requests')), []);
@@ -178,6 +181,27 @@ test('fresh requests are acted on once; stale, foreign and unknown ones are only
   request('8-sync.json', fresh('sync'));
   watchers.get('requests')();
   assert.deepEqual(requests, ['sync', 'open']);
+});
+
+test('a request still being written is kept, and acted on once it is complete', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { root, mod, requests, watchers } = setup(t);
+  await mod.install();
+  const file = path.join(root, 'requests', '1-open.json');
+  // The folder event for a new file can arrive before its content does.
+  for (const partial of ['', '{"format":"ai-usage-claude-code-request","vers']) {
+    fs.writeFileSync(file, partial);
+    watchers.get('requests')();
+    assert.deepEqual(requests, []);
+    assert.deepEqual(fs.readdirSync(path.join(root, 'requests')), ['1-open.json']);
+  }
+  fs.writeFileSync(file, JSON.stringify({
+    format: 'ai-usage-claude-code-request', version: 1, action: 'open', requested_at: new Date().toISOString(),
+  }));
+  // Retried shortly even when no further folder event arrives.
+  t.mock.timers.tick(1_000);
+  assert.deepEqual(requests, ['open']);
+  assert.deepEqual(fs.readdirSync(path.join(root, 'requests')), []);
 });
 
 test('requests left while the mod was off are never acted on', async (t) => {

@@ -33,6 +33,10 @@ const HEARTBEAT_MS = 5 * 60_000;
 const SYNC_MIN_INTERVAL_MS = 15_000;
 const READING_IMPORT_DELAY_MS = 2_000;
 const READING_IMPORT_MIN_INTERVAL_MS = 30_000;
+// The mod writes a request in place, so the folder can report it before its
+// content lands. One that does not parse is retried until it is this old.
+const TORN_REQUEST_GRACE_MS = 10_000;
+const TORN_REQUEST_RETRY_MS = 1_000;
 
 function claudeCodeModPaths(root) {
   const marketplace = path.join(root, 'marketplace');
@@ -133,6 +137,7 @@ function createClaudeCodeMod({
   let watchers = [];
   let lastSyncAt = -Infinity;
   let readingTimer = null;
+  let requestRetry = null;
   let lastReadingImportAt = -Infinity;
   let stopped = false;
 
@@ -251,17 +256,32 @@ function createClaudeCodeMod({
     let names = [];
     try { names = fs.readdirSync(paths.requests).filter((name) => name.endsWith('.json')).sort(); } catch { return; }
     const actions = new Set();
+    let writing = false;
     for (const name of names) {
       const filePath = path.join(paths.requests, name);
+      let stat;
+      try { stat = fs.statSync(filePath); } catch { continue; }
       let request = null;
       try {
-        if (fs.statSync(filePath).size <= 4096) request = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-      } catch { /* Discarded below. */ }
+        if (stat.size <= 4096) request = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      } catch { /* Still being written, or never readable: judged below. */ }
+      if (request === null && stat.size <= 4096 && Date.now() - stat.mtimeMs < TORN_REQUEST_GRACE_MS) {
+        writing = true;
+        continue;
+      }
       try { fs.unlinkSync(filePath); } catch { /* Seen again next time; actions are idempotent. */ }
       const at = Date.parse(request?.requested_at);
       if (request?.format !== REQUEST_FORMAT || request.version !== 1 || !REQUEST_ACTIONS.has(request.action)) continue;
       if (!Number.isFinite(at) || at < now() - REQUEST_TTL_MS || at > now() + REQUEST_TTL_MS) continue;
       actions.add(request.action);
+    }
+    // The write that completes a request may raise no event of its own.
+    if (writing && !requestRetry && !stopped) {
+      requestRetry = setTimeout(() => {
+        requestRetry = null;
+        takeRequests();
+      }, TORN_REQUEST_RETRY_MS);
+      requestRetry.unref?.();
     }
     if (stopped || state !== 'on') return;
     if (actions.has('sync') && now() - lastSyncAt >= SYNC_MIN_INTERVAL_MS) {
@@ -308,6 +328,8 @@ function createClaudeCodeMod({
     heartbeat = null;
     clearTimeout(readingTimer);
     readingTimer = null;
+    clearTimeout(requestRetry);
+    requestRetry = null;
   }
 
   // At launch and after an install: refresh the mod's files if the app was
