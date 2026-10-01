@@ -65,7 +65,12 @@ async function locate($) {
   } catch {
     // Not installed by the app; try the default folder.
   }
-  const appData = await $.env.get('APPDATA')
+  let appData = null
+  try {
+    appData = await $.env.get('APPDATA')
+  } catch {
+    // Refused: as not set up.
+  }
   if (!appData) return null
   const base = appData + '/ai-usage/claude-code'
   return { glance: base + '/glance.json', readings: base + '/readings', requests: base + '/requests' }
@@ -309,7 +314,11 @@ function drawPane($, e) {
 export function register(on) {
   on('session.start', async ($, e, next) => {
     paths = await locate($)
-    bandOn = (await $.store.get('band')) !== false
+    try {
+      bandOn = (await $.store.get('band')) !== false
+    } catch {
+      bandOn = true
+    }
     try {
       sessionId = await $.session.id()
     } catch {
