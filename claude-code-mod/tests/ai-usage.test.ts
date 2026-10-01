@@ -39,10 +39,11 @@ type Stubs = {
   writes?: { path: string; text: string }[]
   toasts?: string[]
   saved?: Map<string, unknown>
+  failSteps?: number[]
 }
 
 // Everything Claude Code would answer for the mod, recorded where a test checks it.
-function stub(on: any, { feed = glance('risk'), surfaces = ['terminal'], band, writes = [], toasts = [], saved = new Map() }: Stubs = {}) {
+function stub(on: any, { feed = glance('risk'), surfaces = ['terminal'], band, writes = [], toasts = [], saved = new Map(), failSteps = [] }: Stubs = {}) {
   const clock = mock.clock(on, { now: 1_000 })
   on('session.start', () => ({ cwd: '/work' }))
   on('session.id', () => ({ value: 'session-1' }))
@@ -74,6 +75,8 @@ function stub(on: any, { feed = glance('risk'), surfaces = ['terminal'], band, w
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.render', () => ({ type: 'Text', props: {}, children: ['drawn by Claude Code'] }))
   on('turn.step', async function* ($: any, e: any) {
+    // A request that fails, as on a dropped connection, delivers nothing.
+    if (failSteps.includes(e.index)) throw new Error('connection reset')
     yield { kind: 'text', index: 0, text: 'ok' }
     return { turnId: e.turnId, index: e.index, answer: 'ok', toolUses: [], stopReason: 'end_turn', usage: null }
   })
@@ -224,6 +227,37 @@ test('a reading is left only after a response, dated by the request that fetched
   await $.session.measure({ context: { window: 200_000 }, rateLimits: LIMITS(21), changed: ['rateLimits'] })
   expect(writes.length).toBe(2)
   expect(JSON.parse(writes[1].text).rate_limits.five_hour.used_percentage).toBe(21)
+})
+
+test('a request that failed does not date the next reading', async ($, on) => {
+  const { writes } = stub(on, { failSteps: [0] })
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  let failed = false
+  try {
+    await step($, 0)
+  } catch {
+    failed = true
+  }
+  expect(failed).toBe(true)
+  // Time passes before the next request, which succeeds.
+  await new Promise((resolve) => setTimeout(resolve, 25))
+  const before = Date.now()
+  await step($, 1)
+  await $.session.measure({ context: { window: 200_000 }, rateLimits: LIMITS(20), changed: ['rateLimits'] })
+  expect(writes.length).toBe(1)
+  expect(Date.parse(JSON.parse(writes[0].text).fetched_after) >= before).toBe(true)
+})
+
+test('a failed request alone leaves no reading behind', async ($, on) => {
+  const { writes } = stub(on, { failSteps: [0] })
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  try {
+    await step($, 0)
+  } catch {
+    // Expected: the request failed.
+  }
+  await $.session.measure({ context: { window: 200_000 }, rateLimits: LIMITS(20), changed: ['rateLimits'] })
+  expect(writes.length).toBe(0)
 })
 
 test('no reading without plan limits, as off a subscription', async ($, on) => {

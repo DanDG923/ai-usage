@@ -358,12 +358,19 @@ export function register(on) {
     const startedMs = Date.now()
     inFlight.set(token, startedMs)
     if (pendingSince == null) pendingSince = startedMs
+    let answered = false
     try {
       const result = yield* next(e)
+      answered = true
       responsesSinceReading += 1
       return result
     } finally {
       inFlight.delete(token)
+      // A request that failed delivered nothing to date a reading by. While no
+      // response has arrived since the last reading, the window starts again
+      // from the requests still running, so a later response is not dated by
+      // a failure that may be long past.
+      if (!answered && responsesSinceReading === 0) pendingSince = inFlight.size ? Math.min(...inFlight.values()) : null
     }
   })
 
