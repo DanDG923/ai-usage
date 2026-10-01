@@ -438,3 +438,16 @@ test('readings that arrived while their folder was not watched are imported once
   t.mock.timers.tick(2_000);
   assert.equal(readings.length, 1);
 });
+
+test('the app\'s copy is refreshed at start even while the mod is removed in Claude Code', (t) => {
+  const { root, mod } = setup(t);
+  // Removed in /plugin after an earlier version of the app installed it.
+  const plugin = path.join(root, 'marketplace', 'ai-usage');
+  fs.mkdirSync(path.join(plugin, '.claude-plugin'), { recursive: true });
+  fs.mkdirSync(path.join(plugin, 'hooks'), { recursive: true });
+  fs.copyFileSync(path.join(SOURCE, '.claude-plugin', 'plugin.json'), path.join(plugin, '.claude-plugin', 'plugin.json'));
+  fs.writeFileSync(path.join(plugin, 'hooks', 'register.js'), '// an older mod\n');
+  assert.equal(mod.start(), 'off');
+  // Installing it again from /plugin then loads this version of the mod.
+  assert.equal(read(plugin, 'hooks', 'register.js'), read(SOURCE, 'hooks', 'register.js'));
+});

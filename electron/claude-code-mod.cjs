@@ -420,7 +420,9 @@ function createClaudeCodeMod({
     // Requests are answered only while the app runs: one from before it
     // started was left while it was closed.
     ignoreRequestsBefore = now();
-    if (readState() !== 'off') {
+    // The app's copy is refreshed whenever it exists, even while the mod is
+    // removed in Claude Code's /plugin, which can install it again from it.
+    if (fs.existsSync(path.join(paths.plugin, '.claude-plugin', 'plugin.json'))) {
       try {
         if (writeModFiles()) log('Claude Code mod files updated; Claude Code loads them at its next session.');
       } catch (error) {
