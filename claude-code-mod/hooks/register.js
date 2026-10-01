@@ -121,9 +121,10 @@ async function loadGlance($) {
     // Unreadable this time; the next check tries again.
   }
   // A copy that does not parse keeps the last good one on screen, and is read
-  // again at the next check; with none to keep, the pane says why it is empty.
+  // again at the next check; with none to keep, or once the kept one is too
+  // old to show the app running, the pane says why.
   if (!parsed) {
-    if (glance || problem === UNREADABLE) return false
+    if ((glance && appRunning(glance, Date.now())) || problem === UNREADABLE) return false
     problem = UNREADABLE
     return true
   }
@@ -148,7 +149,7 @@ async function ask($, action) {
   }
   const now = Date.now()
   if (!glance || !appRunning(glance, now)) {
-    $.ui.toast('AI Usage is not running. Start it, then try again.')
+    $.ui.toast(problem === UNREADABLE ? UNREADABLE : 'AI Usage is not running. Start it, then try again.')
     return
   }
   await $.fs.write(paths.requests + '/' + now + '-' + action + '.json', JSON.stringify(requestRecord(action, now)) + '\n')
