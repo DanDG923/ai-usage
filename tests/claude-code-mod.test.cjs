@@ -63,6 +63,8 @@ function setup(t, options = {}) {
 }
 
 const read = (...parts) => fs.readFileSync(path.join(...parts), 'utf8');
+// Real time passing, so a request's time falls clearly before or after the app's cut-off.
+const pause = () => new Promise((resolve) => setTimeout(resolve, 15));
 
 test('installing copies the mod into a local catalogue and installs it with Claude Code', async (t) => {
   const { root, mod, claude } = setup(t);
@@ -124,6 +126,8 @@ test('a mod turned back on in Claude Code is followed without restarting the app
   claude.settings.enabledPlugins[PLUGIN_ID] = true;
   t.mock.timers.tick(60_000);
   assert.deepEqual([...watchers.keys()].sort(), ['readings', 'requests']);
+  // Asked after the app has seen the mod on again.
+  await pause();
   fs.writeFileSync(path.join(root, 'requests', '1-open.json'), JSON.stringify({
     format: 'ai-usage-claude-code-request', version: 1, action: 'open', requested_at: new Date().toISOString(),
   }));
@@ -378,4 +382,29 @@ test('a folder that could not be watched is watched at the next check', async (t
   assert.deepEqual([...watchers.keys()], ['readings']);
   t.mock.timers.tick(60_000);
   assert.deepEqual([...watchers.keys()].sort(), ['readings', 'requests']);
+});
+
+test('a request left between seeing the mod off and seeing it on again is not acted on', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const { root, mod, claude, requests, watchers } = setup(t, { enabled: false });
+  fs.mkdirSync(path.join(mod.paths.plugin, '.claude-plugin'), { recursive: true });
+  fs.copyFileSync(path.join(SOURCE, '.claude-plugin', 'plugin.json'), path.join(mod.paths.plugin, '.claude-plugin', 'plugin.json'));
+  fs.mkdirSync(path.join(root, 'requests'), { recursive: true });
+  const request = (name, action, at) => fs.writeFileSync(path.join(root, 'requests', name), JSON.stringify({
+    format: 'ai-usage-claude-code-request', version: 1, action, requested_at: new Date(at).toISOString(),
+  }));
+  assert.equal(mod.start(), 'disabled');
+  // After that check saw it off, a still-loaded session asks, and then the mod is turned on.
+  await pause();
+  request('1-open.json', 'open', Date.now());
+  await pause();
+  claude.settings.enabledPlugins[PLUGIN_ID] = true;
+  t.mock.timers.tick(60_000);
+  assert.deepEqual(requests, []);
+  assert.deepEqual(fs.readdirSync(path.join(root, 'requests')), []);
+  // Asked once the app has seen it on, a request is acted on.
+  await pause();
+  request('2-sync.json', 'sync', Date.now());
+  watchers.get('requests')();
+  assert.deepEqual(requests, ['sync']);
 });

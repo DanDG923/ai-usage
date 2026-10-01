@@ -149,6 +149,8 @@ function createClaudeCodeMod({
   let requestRetry = null;
   // Requests from before this moment were left while the mod was off.
   let ignoreRequestsBefore = -Infinity;
+  // The plugin state the app last saw, or null before its first look.
+  let lastSeenState = null;
   let lastReadingImportAt = -Infinity;
   let stopped = false;
 
@@ -301,6 +303,7 @@ function createClaudeCodeMod({
     // The mod may have been turned off since the last check: a session that
     // still has it loaded does not act for it.
     if (actions.size && readState() !== 'on') {
+      lastSeenState = state;
       ignoreRequestsBefore = now();
       unfollow();
       return;
@@ -381,8 +384,14 @@ function createClaudeCodeMod({
   // every few minutes rewrite the glance even without a collection, which
   // tells the mod the app is still there.
   function check() {
-    if (readState() === 'on') follow();
-    else {
+    const previous = lastSeenState;
+    lastSeenState = readState();
+    if (lastSeenState === 'on') {
+      // Turned on again since the app last saw it off: what a still-loaded
+      // session asked in between was asked while it was off.
+      if (previous != null && previous !== 'on') ignoreRequestsBefore = now();
+      follow();
+    } else {
       // A session that still has the mod loaded can ask while it is off;
       // turning it on again must not act on what it asked then.
       ignoreRequestsBefore = now();
@@ -404,6 +413,7 @@ function createClaudeCodeMod({
   function start() {
     stopped = false;
     stopWatching();
+    lastSeenState = null;
     if (readState() !== 'off') {
       try {
         if (writeModFiles()) log('Claude Code mod files updated; Claude Code loads them at its next session.');
