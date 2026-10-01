@@ -141,6 +141,8 @@ function createClaudeCodeMod({
   let lastSyncAt = -Infinity;
   let readingTimer = null;
   let requestRetry = null;
+  // Requests from before this moment were left while the mod was off.
+  let ignoreRequestsBefore = -Infinity;
   let lastReadingImportAt = -Infinity;
   let stopped = false;
 
@@ -225,6 +227,7 @@ function createClaudeCodeMod({
       throw new Error('Claude Code was not found, so the mod could not be removed from it.');
     }
     stopWatching();
+    ignoreRequestsBefore = now();
     fs.rmSync(paths.marketplace, { recursive: true, force: true });
     fs.rmSync(paths.glance, { force: true });
     lastGlance = null;
@@ -277,7 +280,7 @@ function createClaudeCodeMod({
       try { fs.unlinkSync(filePath); } catch { /* Seen again next time; actions are idempotent. */ }
       const at = Date.parse(request?.requested_at);
       if (request?.format !== REQUEST_FORMAT || request.version !== 1 || !REQUEST_ACTIONS.has(request.action)) continue;
-      if (!Number.isFinite(at) || at < now() - REQUEST_TTL_MS || at > now() + REQUEST_TTL_MS) continue;
+      if (!Number.isFinite(at) || at <= ignoreRequestsBefore || at < now() - REQUEST_TTL_MS || at > now() + REQUEST_TTL_MS) continue;
       actions.add(request.action);
     }
     // The write that completes a request may raise no event of its own.
@@ -354,7 +357,12 @@ function createClaudeCodeMod({
   // tells the mod the app is still there.
   function check() {
     if (readState() === 'on') follow();
-    else unfollow();
+    else {
+      // A session that still has the mod loaded can ask while it is off;
+      // turning it on again must not act on what it asked then.
+      ignoreRequestsBefore = now();
+      unfollow();
+    }
     if (state !== 'off' && lastGlance && now() - lastBeatAt >= HEARTBEAT_MS) {
       lastBeatAt = now();
       writeGlance({ ...lastGlance, writtenAt: new Date(lastBeatAt).toISOString() });

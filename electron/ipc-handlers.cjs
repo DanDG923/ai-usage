@@ -10,7 +10,7 @@ function registerIpc(context) {
     invalidateSnapshot, applySettingsEffects, patchSnapshotSettings, updateTray,
     publishAfterWrite, refreshClaudeOnly, log, logRendererError, installClaudeHelper,
     getInboxPath, uninstallClaudeHelper, claudeCodeMod, maintenance, dialog, getWindow, shell, app,
-    buildSummaryText, clipboard, setSnooze, updateChecker, renderingMode, renderingForced, relaunch,
+    buildSummaryText, currentView, clipboard, setSnooze, updateChecker, renderingMode, renderingForced, relaunch,
   } = context;
   handleIpc('claude-setup:status', () => claudeSetup.status());
   handleIpc('claude-setup:dismissed', () => claudeSetup.dismissed());
@@ -121,6 +121,15 @@ function registerIpc(context) {
   handleIpc('claude-code-mod:status', () => claudeCodeMod.status());
   handleIpc('claude-code-mod:install', async () => {
     const status = await claudeCodeMod.install();
+    // The first glance comes from what the app already shows, so the mod has
+    // figures even if the collection after it fails.
+    if (!storageClosing()) {
+      try {
+        await databaseJobs.run(() => claudeCodeMod.publish(currentView()));
+      } catch (error) {
+        log(`Claude Code glance after install: ${error.message}`);
+      }
+    }
     void refreshClaudeOnly().catch((error) => log(`Refresh after the Claude Code mod was installed: ${error.message}`));
     return status;
   });

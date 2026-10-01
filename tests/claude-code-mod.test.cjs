@@ -285,3 +285,46 @@ test('the release packages exactly the mod files the app installs, and the audit
   assert.throws(() => assertArchive([...base, ...mod.slice(1)]), /required application file is absent from ASAR: claude-code-mod\/\.claude-plugin\/plugin\.json/);
   assert.throws(() => assertArchive([...base, ...mod, 'claude-code-mod/tests/ai-usage.test.ts']), /mod development files are packaged/);
 });
+
+test('requests left while the mod was off are not acted on when it is turned on again', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const { root, mod, claude, requests, watchers } = setup(t, { enabled: false });
+  fs.mkdirSync(path.join(mod.paths.plugin, '.claude-plugin'), { recursive: true });
+  fs.copyFileSync(path.join(SOURCE, '.claude-plugin', 'plugin.json'), path.join(mod.paths.plugin, '.claude-plugin', 'plugin.json'));
+  fs.mkdirSync(path.join(root, 'requests'), { recursive: true });
+  mod.start();
+  const request = (name, action) => fs.writeFileSync(path.join(root, 'requests', name), JSON.stringify({
+    format: 'ai-usage-claude-code-request', version: 1, action, requested_at: new Date(Date.now() - 1_000).toISOString(),
+  }));
+  // A session that still has the mod loaded asks while it is off.
+  request('1-open.json', 'open');
+  claude.settings.enabledPlugins[PLUGIN_ID] = true;
+  t.mock.timers.tick(60_000);
+  assert.deepEqual(requests, []);
+  assert.deepEqual(fs.readdirSync(path.join(root, 'requests')), []);
+  // Once it is on, a new request (after the last time the mod was seen off) is acted on.
+  fs.writeFileSync(path.join(root, 'requests', '2-sync.json'), JSON.stringify({
+    format: 'ai-usage-claude-code-request', version: 1, action: 'sync', requested_at: new Date(Date.now() + 10).toISOString(),
+  }));
+  watchers.get('requests')();
+  assert.deepEqual(requests, ['sync']);
+});
+
+test('installing publishes the figures the app already has before the collection that follows', async () => {
+  const { registerIpc } = require('../electron/ipc-handlers.cjs');
+  const handlers = new Map();
+  const published = [];
+  const shown = { generatedAt: '2026-10-01T12:00:00.000Z', settings: {}, sources: [], quotas: {} };
+  registerIpc({
+    handleIpc: (channel, handler) => handlers.set(channel, handler),
+    storageClosing: () => false,
+    currentView: () => shown,
+    databaseJobs: { run: async (job) => job() },
+    // The collection after an install can fail; the mod still has figures.
+    refreshClaudeOnly: () => Promise.reject(new Error('collector unavailable')),
+    log: () => {},
+    claudeCodeMod: { install: async () => ({ state: 'on' }), publish: (snapshot) => published.push(snapshot) },
+  });
+  assert.deepEqual(await handlers.get('claude-code-mod:install')({}), { state: 'on' });
+  assert.deepEqual(published, [shown]);
+});
