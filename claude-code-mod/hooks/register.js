@@ -174,6 +174,12 @@ async function leaveReading($, e) {
   } catch {
     // The model only labels the reading.
   }
+  // Asked each time: /clear and /resume change the session without a new start.
+  try {
+    sessionId = await $.session.id()
+  } catch {
+    // Keeps the last id known.
+  }
   sequence += 1
   const record = readingRecord({ capturedMs, fetchedAfterMs, sessionId, model, rateLimits: e.rateLimits })
   if (!Object.keys(record.rate_limits).length) return
@@ -318,11 +324,6 @@ export function register(on) {
       bandOn = (await $.store.get('band')) !== false
     } catch {
       bandOn = true
-    }
-    try {
-      sessionId = await $.session.id()
-    } catch {
-      sessionId = null
     }
     await loadGlance($)
     $.clock.every(POLL_MS, () => pollGlance($))
