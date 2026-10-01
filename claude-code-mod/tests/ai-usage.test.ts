@@ -327,5 +327,8 @@ test('a glance this mod does not understand draws as no reading, never as number
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
   const ui = await $.ui.mount(PANE('terminal'))
   expect(await ui.find({ type: 'Text', text: /50%/ })).toBeUndefined()
-  expect(await ui.find({ type: 'Text', text: /^AI Usage has not shared any allowances yet/ })).toBeUndefined()
+  // An empty pane says why rather than showing nothing.
+  expect(await ui.find({ type: 'Text', text: /^AI Usage shared allowances this copy of the mod cannot read/ })).toBeDefined()
+  const asked = await $.command.run({ command: 'ai-usage', args: 'text' })
+  expect(asked.text).toMatch(/^AI Usage shared allowances this copy of the mod cannot read/)
 })

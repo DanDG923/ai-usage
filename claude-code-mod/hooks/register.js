@@ -37,6 +37,7 @@ const POLL_MS = 15_000
 const UNCHANGED_READING_MS = 10 * 60_000
 const NOT_SET_UP = 'AI Usage has not been connected to Claude Code on this computer. Install the mod from AI Usage → Settings → Sources.'
 const NO_GLANCE = 'AI Usage has not shared any allowances yet. Open the AI Usage app once, and they appear here.'
+const UNREADABLE = 'AI Usage shared allowances this copy of the mod cannot read. Start a new Claude Code session to load the mod that matches your AI Usage.'
 
 let paths = null
 let glance = null
@@ -98,8 +99,13 @@ async function loadGlance($) {
   } catch {
     // Unreadable this time; the next check tries again.
   }
-  // A copy that does not parse keeps the last good one on screen.
-  if (!parsed) return false
+  // A copy that does not parse keeps the last good one on screen, and is read
+  // again at the next check; with none to keep, the pane says why it is empty.
+  if (!parsed) {
+    if (glance || problem === UNREADABLE) return false
+    problem = UNREADABLE
+    return true
+  }
   glance = parsed
   glanceMtimeMs = stat.mtimeMs
   problem = null
