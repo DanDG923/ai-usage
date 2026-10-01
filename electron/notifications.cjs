@@ -268,4 +268,7 @@ function decideNotifications({ previous, current, state = emptyState(), nowMs = 
   return { notifications, state: next };
 }
 
-module.exports = { HEALTHY_SOURCE_STATUSES: HEALTHY, buildSummaryLines, buildSummaryText, buildTrayTooltip, decideNotifications, emptyState, primaryWindow };
+module.exports = {
+  HEALTHY_SOURCE_STATUSES: HEALTHY, buildSummaryLines, buildSummaryText, buildTrayTooltip, decideNotifications,
+  displayedRemaining, emptyState, isEstimated, poolLimited, primaryWindow, quotaWindows,
+};

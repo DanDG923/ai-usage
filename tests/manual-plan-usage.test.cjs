@@ -45,6 +45,7 @@ test('only the three explicit user refreshes read Claude plan usage', () => {
     'backup-restore': false,
     'manual-observation': false,
     'helper-change': false,
+    'claude-code-sync': false,
   };
   assert.deepEqual(Object.values(REFRESH_TRIGGERS).sort(), Object.keys(expected).sort(), 'every trigger is classified here');
   for (const [trigger, reads] of Object.entries(expected)) {
@@ -165,6 +166,21 @@ test('the schedule timer and every refreshIfStale trigger never read plan usage'
   // A caller that names no trigger cannot read plan usage either.
   h.run('refreshCalls.length = 0; lastRefreshAt = 0; refreshIfStale();');
   assert.deepEqual(h.calls(), [{ readPlanUsage: false }]);
+});
+
+test('the Claude Code mod never reads plan usage: its sync and its readings collect locally', () => {
+  const h = mainHarness();
+  h.run(`globalThis.claudeOnly = 0; refreshClaudeOnly = () => { claudeOnly += 1; return Promise.resolve(); };
+    globalThis.opened = []; openDashboardAt = (target) => { opened.push(target); };
+    store = { getSettings: () => ({ refreshIntervalMinutes: 15 }) }; isQuitting = false;`);
+  h.run("answerClaudeCodeRequest('sync'); answerClaudeCodeRequest('open'); answerClaudeCodeRequest('read-plan-usage');");
+  assert.deepEqual(h.calls(), [{ trigger: 'claude-code-sync', readPlanUsage: false }]);
+  assert.deepEqual(plain(h.run('opened')), [{ tab: 'overview' }]);
+  h.run('importClaudeCodeReading()');
+  assert.equal(h.run('claudeOnly'), 1);
+  // Collecting only on Refresh holds the reading until the next collection.
+  h.run('store = { getSettings: () => ({ refreshIntervalMinutes: 0 }) }; importClaudeCodeReading();');
+  assert.equal(h.run('claudeOnly'), 1);
 });
 
 test('every refresh call site names its trigger', () => {

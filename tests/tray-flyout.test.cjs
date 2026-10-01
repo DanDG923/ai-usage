@@ -708,7 +708,8 @@ test('the flyout page shares the dashboard CSP, is built as its own entry and is
   for (const previewOnly of ['!dist/assets/demo-*.js', '!dist/assets/flyout-preview-*.js'])
     assert.ok(pkg.build.files.includes(previewOnly), `the release leaves out ${previewOnly.slice(1)}`);
   const entries = ['dist/index.html', 'dist/flyout.html', 'electron/main.cjs', 'electron/preload.cjs', 'electron/flyout-preload.cjs',
-    'electron/maintenance-host.cjs', 'electron/maintenance-service.cjs', 'electron/desktop-estimates.cjs', 'node_modules/@anthropic-ai/claude-agent-sdk/package.json'];
+    'electron/maintenance-host.cjs', 'electron/maintenance-service.cjs', 'electron/desktop-estimates.cjs', 'node_modules/@anthropic-ai/claude-agent-sdk/package.json',
+    'claude-code-mod/.claude-plugin/plugin.json', 'claude-code-mod/hooks/hooks.json', 'claude-code-mod/hooks/register.js', 'claude-code-mod/hooks/view.js'];
   assert.doesNotThrow(() => assertArchive(entries));
   for (const required of ['dist/flyout.html', 'electron/flyout-preload.cjs']) {
     assert.throws(() => assertArchive(entries.filter((entry) => entry !== required)), /required application file/);

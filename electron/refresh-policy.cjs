@@ -6,8 +6,8 @@
 // SDK. Anthropic's Consumer Terms bar automated access to a Claude
 // subscription, so that read happens only when the user explicitly asks for a
 // refresh. Everything else the app collects on its own — the local transcript
-// import, the status-line inbox and Codex — never contacts Anthropic and stays
-// automatic.
+// import, the status-line inbox, the Claude Code mod's readings and Codex —
+// never contacts Anthropic and stays automatic.
 //
 // Every refresh names its trigger. Only the triggers listed as user requests
 // read plan usage; any other trigger, including one this table does not know,
@@ -29,6 +29,9 @@ const REFRESH_TRIGGERS = Object.freeze({
   // Claude setup also goes through refreshClaudeOnly, so it never reads plan usage.
   MANUAL_OBSERVATION: 'manual-observation',
   HELPER_CHANGE: 'helper-change',
+  // "Sync now" in the Claude Code mod: a person asks, but from inside Claude
+  // Code, which already holds the plan limits; the app collects locally only.
+  CLAUDE_CODE_SYNC: 'claude-code-sync',
 });
 
 const USER_REQUESTED_TRIGGERS = new Set([

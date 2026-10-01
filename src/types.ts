@@ -518,6 +518,10 @@ export type Bridge = {
       helperScriptRemoved: boolean;
     };
   }>;
+  /** The AI Usage mod for Claude Code: whether it is installed, and installing or removing it. */
+  getClaudeCodeMod(): Promise<ClaudeCodeModStatus>;
+  installClaudeCodeMod(): Promise<ClaudeCodeModStatus>;
+  uninstallClaudeCodeMod(): Promise<ClaudeCodeModStatus>;
   /** `exportPath` is null when the ledger is too large for a restorable export. */
   createBackup(): Promise<{ snapshot?: Snapshot; result: { databasePath: string; exportPath: string | null } }>;
   restoreBackup(): Promise<{
@@ -603,6 +607,14 @@ declare global {
     aiUsageFlyout?: FlyoutBridge;
   }
 }
+
+/** `disabled`: installed, then turned off in Claude Code's own /plugin. */
+export type ClaudeCodeModStatus = {
+  state: 'on' | 'disabled' | 'off';
+  busy: boolean;
+  pluginId: string;
+  marketplace: string;
+};
 
 export type ClaudeSetupStatus = {
   installed: boolean;

@@ -11,7 +11,7 @@ const { isProviderProvenance } = require('./quota-provenance.mjs');
 const { deriveFableEstimate } = require('./fable-projection.cjs');
 const { evidenceTimes, freshReadGraceFor, latestEvidenceAt, withoutStaleRestatements } = require('./forecast.cjs');
 const { IncrementalReadError, planIncrementalRead, readCompleteLines } = require('./incremental-file.cjs');
-const { epochToIso } = require('./time.cjs');
+const { asIso, epochToIso } = require('./time.cjs');
 const { claudeWindowDescriptor } = require('./claude-window-descriptors.cjs');
 
 const MAX_INBOX_BYTES = 2 * 1024 * 1024;
@@ -126,6 +126,60 @@ function datedStatusLineFetch(store, payload, capturedAt) {
   return { fetchedAfter, seenSince };
 }
 
+// Records every window of one status-line payload (a helper redraw or a
+// Claude Code mod reading) as official status-line observations, dated by the
+// fetch that delivered them, and counts them into `result`.
+function recordStatusLineLimits(store, payload, capturedAt, { fetchedAfter, seenSince }, result, extraMetadata = {}) {
+  const model = payload.model?.id || payload.model?.display_name || 'claude-unknown';
+  const limits = payload.rate_limits;
+  for (const [key, limit] of Object.entries(limits)) {
+    if (!limit || limit.used_percentage == null || limit.resets_at == null) continue;
+    const isFable = key.toLowerCase().includes('fable');
+    const sourceId = isFable ? 'claude-fable' : 'claude';
+    const descriptor = claudeWindowDescriptor(key);
+    const minutes = isFable ? 10_080 : descriptor.windowMinutes;
+    const bucketName = isFable ? 'Fable weekly' : descriptor.bucketName;
+    const resetsAt = epochToIso(limit.resets_at);
+    if (!resetsAt) {
+      result.invalidResets += 1;
+      continue;
+    }
+    try {
+      store.recordObservation({
+        sourceId,
+        bucketId: isFable && ['fable_seven_day', 'fable_weekly'].includes(key.toLowerCase()) ? 'fable_seven_day' : isFable ? `fable:${key}` : key,
+        bucketName,
+        observedAt: capturedAt,
+        usedPercent: Number(limit.used_percentage),
+        remainingPercent: 100 - Number(limit.used_percentage),
+        resetsAt,
+        windowMinutes: minutes,
+        // The documented status-line payload has no subscription/seat type.
+        // Exact percentages are official; a Max-plan assertion would not be.
+        planType: null,
+        provenance: 'official-statusline',
+        confidence: 1,
+        metadata: { model, sharedWithOverall: isFable, ...extraMetadata },
+        fetchedAfter,
+        seenSince,
+      });
+    } catch (error) {
+      if (error?.code) throw error;
+      result.rejectedRecords += 1;
+      continue;
+    }
+    result.observations += 1;
+    result.latestObservationAt = laterIso(result.latestObservationAt, capturedAt);
+    if (isFable) {
+      result.fableObservations += 1;
+      result.latestFableObservedAt = laterIso(result.latestFableObservedAt, capturedAt);
+    } else {
+      result.claudeObservations += 1;
+      result.latestClaudeObservedAt = laterIso(result.latestClaudeObservedAt, capturedAt);
+    }
+  }
+}
+
 function importClaudeInboxFile(store, inboxPath, state = null) {
   if (!fs.existsSync(inboxPath)) return emptyInboxResult();
   let stat;
@@ -177,54 +231,7 @@ function importClaudeInboxFile(store, inboxPath, state = null) {
         result.rejectedRecords += 1;
         continue;
       }
-      const model = payload.model?.id || payload.model?.display_name || 'claude-unknown';
-      const limits = payload.rate_limits;
-      for (const [key, limit] of Object.entries(limits)) {
-        if (!limit || limit.used_percentage == null || limit.resets_at == null) continue;
-        const isFable = key.toLowerCase().includes('fable');
-        const sourceId = isFable ? 'claude-fable' : 'claude';
-        const descriptor = claudeWindowDescriptor(key);
-        const minutes = isFable ? 10_080 : descriptor.windowMinutes;
-        const bucketName = isFable ? 'Fable weekly' : descriptor.bucketName;
-        const resetsAt = epochToIso(limit.resets_at);
-        if (!resetsAt) {
-          result.invalidResets += 1;
-          continue;
-        }
-        try {
-          store.recordObservation({
-            sourceId,
-            bucketId: isFable && ['fable_seven_day', 'fable_weekly'].includes(key.toLowerCase()) ? 'fable_seven_day' : isFable ? `fable:${key}` : key,
-            bucketName,
-            observedAt: capturedAt,
-            usedPercent: Number(limit.used_percentage),
-            remainingPercent: 100 - Number(limit.used_percentage),
-            resetsAt,
-            windowMinutes: minutes,
-            // The documented status-line payload has no subscription/seat type.
-            // Exact percentages are official; a Max-plan assertion would not be.
-            planType: null,
-            provenance: 'official-statusline',
-            confidence: 1,
-            metadata: { model, sharedWithOverall: isFable },
-            fetchedAfter,
-            seenSince,
-          });
-        } catch (error) {
-          if (error?.code) throw error;
-          result.rejectedRecords += 1;
-          continue;
-        }
-        result.observations += 1;
-        result.latestObservationAt = laterIso(result.latestObservationAt, capturedAt);
-        if (isFable) {
-          result.fableObservations += 1;
-          result.latestFableObservedAt = laterIso(result.latestFableObservedAt, capturedAt);
-        } else {
-          result.claudeObservations += 1;
-          result.latestClaudeObservedAt = laterIso(result.latestClaudeObservedAt, capturedAt);
-        }
-      }
+      recordStatusLineLimits(store, payload, capturedAt, { fetchedAfter, seenSince }, result);
     }
     // Never rewrite the live helper file: doing so can race an in-flight append.
     // The durable byte cursor keeps refresh work incremental without risking data.
@@ -295,6 +302,92 @@ function importClaudeInbox(store, inboxPath) {
     }
   }
   return total;
+}
+
+// The Claude Code mod (claude-code-mod/) leaves one small file per reading:
+// the limits a Claude Code session holds just after a response delivered
+// them, and when the request for that response began. Unlike a status-line
+// redraw, which cannot tell a new response from an idle repeat, a reading is
+// written only after a response, so it carries its own fetch window.
+const CLAUDE_CODE_READING_FORMAT = 'ai-usage-claude-code-reading';
+const MAX_CLAUDE_CODE_READING_BYTES = 64 * 1024;
+const MAX_CLAUDE_CODE_READINGS = 2_000;
+// A request streams for minutes at most. A fetch window wider than this is
+// not one request's, so the reading is kept undated rather than misdated.
+const MAX_CLAUDE_CODE_FETCH_MS = 30 * 60_000;
+// A file that does not parse may still be being written; it is retried until
+// it is this old, then discarded.
+const TORN_READING_GRACE_MS = 60_000;
+
+function claudeCodeReadingDating(payload, capturedAt) {
+  const fetchedAfter = asIso(payload.fetched_after);
+  const span = fetchedAfter ? Date.parse(capturedAt) - Date.parse(fetchedAfter) : Number.NaN;
+  return span >= 0 && span <= MAX_CLAUDE_CODE_FETCH_MS
+    ? { fetchedAfter, seenSince: capturedAt }
+    : { fetchedAfter: null, seenSince: capturedAt };
+}
+
+function mergeInboxResult(total, result) {
+  for (const [key, value] of Object.entries(result)) {
+    if (typeof value === 'number') total[key] = (total[key] || 0) + value;
+  }
+  total.latestObservationAt = laterIso(total.latestObservationAt, result.latestObservationAt);
+  total.latestClaudeObservedAt = laterIso(total.latestClaudeObservedAt, result.latestClaudeObservedAt);
+  total.latestFableObservedAt = laterIso(total.latestFableObservedAt, result.latestFableObservedAt);
+  return total;
+}
+
+function importClaudeCodeReadings(store, directory, { nowMs = Date.now() } = {}) {
+  const result = emptyInboxResult({ files: 0 });
+  if (!directory) return result;
+  let names;
+  try {
+    // Of a backlog, the newest first: they are what makes Claude current. The
+    // rest wait for the collections that follow.
+    names = fs.readdirSync(directory).filter((name) => name.endsWith('.json')).sort().slice(-MAX_CLAUDE_CODE_READINGS);
+  } catch (error) {
+    // The mod creates the folder with its first reading.
+    return error?.code === 'ENOENT' ? result : emptyInboxResult({ files: 0, readErrors: 1 });
+  }
+  for (const name of names) {
+    const filePath = path.join(directory, name);
+    let text;
+    let stat;
+    try {
+      stat = fs.statSync(filePath);
+      if (!stat.isFile()) continue;
+      text = stat.size > MAX_CLAUDE_CODE_READING_BYTES ? null : fs.readFileSync(filePath, 'utf8');
+    } catch {
+      result.readErrors += 1;
+      continue;
+    }
+    let payload = null;
+    try { payload = text == null ? null : JSON.parse(text.replace(/^﻿/, '')); } catch { /* Judged below. */ }
+    if (payload === null && text != null && nowMs - stat.mtimeMs < TORN_READING_GRACE_MS) continue;
+    result.files += 1;
+    const capturedAt = payload && typeof payload === 'object' ? asIso(payload.captured_at) : null;
+    const shaped = payload && payload.format === CLAUDE_CODE_READING_FORMAT && payload.version === 1
+      && capturedAt && payload.rate_limits && typeof payload.rate_limits === 'object' && !Array.isArray(payload.rate_limits);
+    try {
+      if (!shaped) {
+        result.invalidRecords += 1;
+      } else if (Date.parse(capturedAt) > nowMs + QUOTA_CLOCK_SKEW_MS) {
+        result.rejectedRecords += 1;
+      } else {
+        // Counted only once the reading's windows are stored together.
+        const recorded = emptyInboxResult({ snapshots: 1 });
+        store.transaction(() => recordStatusLineLimits(store, payload, capturedAt,
+          claudeCodeReadingDating(payload, capturedAt), recorded, { channel: 'claude-code-mod' }));
+        mergeInboxResult(result, recorded);
+      }
+    } catch {
+      // Storage failed: keep the file so a later collection retries it.
+      result.readErrors += 1;
+      continue;
+    }
+    try { fs.unlinkSync(filePath); } catch { /* Imported again next time; observations are upserted. */ }
+  }
+  return result;
 }
 
 function listTranscriptFiles(root, cutoffMs, legacyFiles = new Set()) {
@@ -781,6 +874,13 @@ async function refreshClaude(store, inboxPath, options = {}) {
     // prevent the primary SDK read or the independent transcript import.
     statusLine = emptyInboxResult({ readErrors: 1, error: error.message });
   }
+  // Readings the Claude Code mod left, each dated by the request that fetched it.
+  let claudeCodeReadings;
+  try {
+    claudeCodeReadings = importClaudeCodeReadings(store, options.claudeCodeReadingsDirectory);
+  } catch (error) {
+    claudeCodeReadings = emptyInboxResult({ files: 0, readErrors: 1, error: error.message });
+  }
   const usagePort = !readPlanUsage ? null : options.usagePort || createClaudeAgentSdkUsagePort({
     // Reuse this refresh's discovery result so the SDK launches precisely the
     // external Claude binary whose presence the source status reports.
@@ -794,7 +894,7 @@ async function refreshClaude(store, inboxPath, options = {}) {
   });
   const fableTracking = await fableTracker.refresh({
     signal: options.signal,
-    fallbackObservedAt: statusLine.latestFableObservedAt,
+    fallbackObservedAt: laterIso(statusLine.latestFableObservedAt, claudeCodeReadings.latestFableObservedAt),
   });
   // One reading of the clock for every time check below, so an injected
   // clock governs the whole status and no probe falls back to wall time.
@@ -925,6 +1025,7 @@ async function refreshClaude(store, inboxPath, options = {}) {
     binary,
     inboxPath,
     statusLine,
+    claudeCodeReadings,
     transcripts,
     helperInstalled,
     helperUpdated,
@@ -978,8 +1079,8 @@ async function refreshClaude(store, inboxPath, options = {}) {
       refreshedAt: fableTracking.refreshedAt,
     },
   }, { scanSucceeded: fableScanSucceeded });
-  return { binary, statusLine, transcripts, helperInstalled, helperUpdated, fableObserved, fableDerived, fableTracking,
+  return { binary, statusLine, claudeCodeReadings, transcripts, helperInstalled, helperUpdated, fableObserved, fableDerived, fableTracking,
     ...(!activityCurrent ? { warning: fableTracking.health.detail || 'Local transcript activity is incomplete.' } : {}) };
 }
 
-module.exports = { deriveFableEstimate, epochToIso, findClaudeBinary, importClaudeInbox, importClaudeTranscripts, installClaudeHelper, isClaudeHelperInstalled, makeHelperScript, refreshClaude, uninstallClaudeHelper };
+module.exports = { CLAUDE_CODE_READING_FORMAT, deriveFableEstimate, epochToIso, findClaudeBinary, helperPaths, importClaudeCodeReadings, importClaudeInbox, importClaudeTranscripts, readClaudeSettings, installClaudeHelper, isClaudeHelperInstalled, makeHelperScript, refreshClaude, uninstallClaudeHelper };

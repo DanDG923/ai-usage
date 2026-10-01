@@ -367,6 +367,30 @@ export default function App() {
     }
   };
 
+  const claudeCodeMod = async (action: 'status' | 'install' | 'uninstall') => {
+    const bridge = window.aiUsage;
+    if (!bridge) return null;
+    try {
+      if (action === 'status') return await bridge.getClaudeCodeMod();
+      const status = action === 'install' ? await bridge.installClaudeCodeMod() : await bridge.uninstallClaudeCodeMod();
+      setNotice(
+        action === 'install'
+          ? 'Claude Code mod installed. Start a new Claude Code session, or run /reload-plugins in an open one, then type /ai-usage.'
+          : 'Claude Code mod removed. Open Claude Code sessions drop it when they next start.',
+      );
+      return status;
+    } catch (error) {
+      failWith(
+        action === 'install'
+          ? 'The Claude Code mod could not be installed.'
+          : action === 'uninstall'
+            ? 'The Claude Code mod could not be removed.'
+            : 'The Claude Code mod could not be checked.',
+      )(error);
+      return null;
+    }
+  };
+
   const backup = async () => {
     if (!window.aiUsage || dataOperation) return;
     setDataOperation('backup');
@@ -520,6 +544,7 @@ export default function App() {
     onPrice: price,
     onInstallClaude: installClaude,
     onUninstallClaude: uninstallClaude,
+    onClaudeCodeMod: claudeCodeMod,
     onBackup: backup,
     onRestore: restore,
     onOpenBackups: openBackups,

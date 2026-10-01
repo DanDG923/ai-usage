@@ -8,7 +8,8 @@ const {
 } = require('electron');
 const { UsageStore, DEFAULT_SETTINGS } = require('./store.cjs');
 const { readStartupPreferences } = require('./startup-preferences.cjs');
-const { installClaudeHelper, uninstallClaudeHelper, isClaudeHelperInstalled } = require('./claude-collector.cjs');
+const { helperPaths, installClaudeHelper, isClaudeHelperInstalled, readClaudeSettings, uninstallClaudeHelper } = require('./claude-collector.cjs');
+const { createClaudeCodeMod } = require('./claude-code-mod.cjs');
 const { createClaudeSetup } = require('./claude-setup.cjs');
 const { createCollectorHost, createInlineCollectorHost } = require('./collector-host.cjs');
 const { createCollectorService } = require('./collector-service.cjs');
@@ -77,6 +78,7 @@ let collectors;
 let maintenance;
 let updateChecker;
 let claudeSetup;
+let claudeCodeMod = null;
 let refreshTimer;
 let lastRefreshAt = 0;
 let isQuitting = false;
@@ -124,6 +126,12 @@ function loadAppIcon() {
 
 function getInboxPath() {
   return path.join(app.getPath('userData'), 'inbox', 'claude-statusline.jsonl');
+}
+
+// The Claude Code mod's folder: its installed copy, the glance it draws, and
+// the readings and requests it leaves for the app.
+function claudeCodeRoot() {
+  return path.join(process.env.AI_USAGE_TEST_ROOT || app.getPath('userData'), 'claude-code');
 }
 
 function notificationStatePath() {
@@ -542,6 +550,8 @@ let trayMenuSnoozed = null;
 function updateTray(current) {
   if (!tray) return;
   pushFlyout(current);
+  // The Claude Code mod draws what the tray shows, from the same snapshot.
+  claudeCodeMod?.publish(current);
   const state = current?.dashboardVerdict?.state || 'unknown';
   if (state !== trayState) {
     trayState = state;
@@ -685,6 +695,7 @@ function createCollectors() {
     databasePath: store.databasePath,
     backupDirectory: store.backupDirectory,
     inboxPath: getInboxPath(),
+    claudeCodeReadingsDirectory: path.join(claudeCodeRoot(), 'readings'),
   };
   const inline = process.env.AI_USAGE_INLINE_COLLECTORS === '1' || typeof utilityProcess?.fork !== 'function';
   if (inline) return createInlineCollectorHost(createCollectorService(config));
@@ -713,6 +724,21 @@ function publishAfterWrite(current, { push = true } = {}) {
     showNotifications(current);
   } catch { /* Notification decisions must never fail a refresh. */ }
   previousSnapshot = current;
+}
+
+// What the Claude Code mod asks for. "Sync now" is a local collection: the
+// session asking already holds the plan limits, so nothing reads plan usage.
+function answerClaudeCodeRequest(action) {
+  if (isQuitting || !store || storageClosing()) return;
+  if (action === 'sync') refreshAll(refreshOptionsFor(REFRESH_TRIGGERS.CLAUDE_CODE_SYNC)).catch(() => {});
+  else if (action === 'open') openDashboardAt({ tab: 'overview' });
+}
+
+// A reading the mod left is imported straight away, as the status-line inbox
+// is on a schedule, unless the person collects only when they refresh.
+function importClaudeCodeReading() {
+  if (isQuitting || !store || storageClosing() || !automaticCollectionEnabled()) return;
+  void refreshClaudeOnly().catch((error) => log(`Import after a Claude Code reading: ${error.message}`));
 }
 
 // Every caller passes refreshOptionsFor(trigger). Claude plan usage is read
@@ -887,7 +913,7 @@ function registerIpc() {
     handleIpc, claudeSetup, storageClosing, getPreviousSnapshot: () => lastFullSnapshot,
     getCachedSnapshot: () => cachedSnapshot, setPeriodDays, snapshot, EMPTY_SESSION_PAGE,
     store, refreshAll, databaseJobs, invalidateSnapshot, applySettingsEffects, patchSnapshotSettings,
-    updateTray, publishAfterWrite, refreshClaudeOnly, log, logRendererError, installClaudeHelper, getInboxPath,
+    updateTray, publishAfterWrite, refreshClaudeOnly, log, logRendererError, installClaudeHelper, getInboxPath, claudeCodeMod,
     uninstallClaudeHelper, maintenance, dialog, getWindow: () => window, shell, app,
     buildSummaryText, currentView, clipboard, setSnooze, updateChecker, renderingMode, renderingForced,
     relaunch: () => {
@@ -919,6 +945,7 @@ function stopForShutdown() {
   // Its snapshot, refresh and snooze all need the storage that is closing.
   trayFlyout?.destroy();
   claudeSetup?.cancel();
+  claudeCodeMod?.stop();
   clearInterval(refreshTimer);
   clearTimeout(snoozeTimer);
   clearTimeout(resumeTimer);
@@ -980,6 +1007,7 @@ async function prepareUpdateInstall() {
     if (quitRequestedDuringUpdate) { app.quit(); throw Object.assign(new Error("Update cancelled while quitting."), { code: "UPDATE_BACKUP_FAILED" }); }
     collectors = createCollectors();
     applySettingsEffects();
+    claudeCodeMod?.start();
     throw Object.assign(new Error('Update safety backup failed.'), { code: 'UPDATE_BACKUP_FAILED' });
   }
   if (quitRequestedDuringUpdate) {
@@ -1052,6 +1080,16 @@ if (isPrimaryInstance) {
         helperInstalled: isClaudeHelperInstalled,
         environment: launchEnvironment,
       });
+      claudeCodeMod = createClaudeCodeMod({
+        root: claudeCodeRoot(),
+        sourceDirectory: path.join(__dirname, '..', 'claude-code-mod'),
+        readClaudeSettings: () => readClaudeSettings(helperPaths().settingsPath),
+        appVersion: app.getVersion(),
+        environment: launchEnvironment,
+        onRequest: answerClaudeCodeRequest,
+        onReading: importClaudeCodeReading,
+        log,
+      });
       collectors = createCollectors();
       notificationState = loadNotificationState();
       updateChecker = createUpdateChecker({
@@ -1078,6 +1116,7 @@ if (isPrimaryInstance) {
       applyTheme(store.getSettings().theme);
       if (!process.argv.includes('--hidden')) showMainWindow();
       createTray();
+      claudeCodeMod.start();
       updateTray(currentView());
       if (store.recoveredFrom) {
         log(`Storage: unreadable database moved to ${store.recoveredFrom}.`);

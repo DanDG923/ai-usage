@@ -3,7 +3,14 @@ import type { ReactNode } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import '../settings.css';
-import type { ManualObservation, PriceRow, Settings as SettingsType, Snapshot, UpdateStatus } from '../types';
+import type {
+  ClaudeCodeModStatus,
+  ManualObservation,
+  PriceRow,
+  Settings as SettingsType,
+  Snapshot,
+  UpdateStatus,
+} from '../types';
 import { AlertsSection } from './settings/AlertsSection';
 import { AppearanceSection } from './settings/AppearanceSection';
 import { DiagnosticsSection } from './settings/DiagnosticsSection';
@@ -38,6 +45,8 @@ export type SettingsActions = {
   onPrice: (row: PriceRow) => Promise<void>;
   onInstallClaude: () => Promise<void>;
   onUninstallClaude: () => Promise<void>;
+  /** Null in the browser preview, or when the step failed (the failure is shown as a notice). */
+  onClaudeCodeMod: (action: 'status' | 'install' | 'uninstall') => Promise<ClaudeCodeModStatus | null>;
   onBackup: () => Promise<void>;
   onRestore: () => Promise<void>;
   onOpenBackups: () => Promise<void>;
@@ -285,6 +294,7 @@ export function Settings({
                 update={update}
                 onInstallClaude={actions.onInstallClaude}
                 onUninstallClaude={actions.onUninstallClaude}
+                onClaudeCodeMod={actions.onClaudeCodeMod}
               />,
             )}
             {slot('forecast', <ForecastSection snapshot={snapshot} update={update} />)}

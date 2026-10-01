@@ -1,6 +1,7 @@
 import { AlertOctagon, AlertTriangle, CheckCircle2, CircleDashed, type LucideIcon } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { HEALTHY_SOURCE_STATUSES, shortDate } from '../../lib';
-import type { Settings, Snapshot } from '../../types';
+import type { ClaudeCodeModStatus, Settings, Snapshot } from '../../types';
 import { SelectSetting, SettingBlock, SettingColumns, SettingRow, SettingsSection } from './fields';
 
 export function sourceMark(id: string) {
@@ -32,18 +33,109 @@ export function SourceStatus({ status }: { status: string }) {
   );
 }
 
+type ClaudeCodeModAction = (action: 'status' | 'install' | 'uninstall') => Promise<ClaudeCodeModStatus | null>;
+
+// As the source cards state a collector: an icon and a word in the status colour.
+const MOD_STATE: Record<'on' | 'disabled', { tone: SourceTone; Icon: LucideIcon; text: string }> = {
+  on: { tone: 'ok', Icon: CheckCircle2, text: 'installed · loads in new sessions' },
+  disabled: { tone: 'caution', Icon: AlertTriangle, text: 'turned off in Claude Code’s /plugin' },
+};
+
+/**
+ * The AI Usage mod for Claude Code: installed through the person's own Claude
+ * Code, and checked when the section is shown rather than with every snapshot.
+ */
+export function ClaudeCodeModSetting({ onClaudeCodeMod }: { onClaudeCodeMod: ClaudeCodeModAction }) {
+  const [status, setStatus] = useState<ClaudeCodeModStatus | null>(null);
+  const [checked, setChecked] = useState(false);
+  const [pending, setPending] = useState<'install' | 'uninstall' | null>(null);
+  // The dashboard rebuilds its actions with every snapshot; the check runs once per visit.
+  const act = useRef(onClaudeCodeMod);
+  useEffect(() => {
+    act.current = onClaudeCodeMod;
+  });
+  useEffect(() => {
+    let live = true;
+    void act.current('status').then((next) => {
+      if (!live) return;
+      setStatus(next);
+      setChecked(true);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+  const change = async (action: 'install' | 'uninstall') => {
+    if (pending) return;
+    setPending(action);
+    try {
+      const next = await act.current(action);
+      // A failed step is reported as a notice; the row then shows Claude Code's real state.
+      setStatus(next ?? (await act.current('status')));
+    } finally {
+      setPending(null);
+    }
+  };
+  const state = status?.state ?? 'off';
+  const shown = state === 'off' ? null : MOD_STATE[state];
+  return (
+    <SettingRow
+      label="Claude Code mod"
+      description={
+        <>
+          Shows these allowances in Claude Code: <code>/ai-usage</code> opens them beside the conversation, and a
+          caution line appears above the prompt while one needs attention. Claude Code also passes on the plan limits it
+          already receives, so Claude stays current here between Refreshes. No API use, and nothing is added to your
+          conversations. Needs Claude Code 2.1.287 or later.
+          {shown && (
+            <span className="source-status claude-code-mod-state" data-tone={shown.tone}>
+              <shown.Icon aria-hidden="true" />
+              {shown.text}
+            </span>
+          )}
+          {checked && !status && <span className="setting-note">Available in the installed desktop app.</span>}
+        </>
+      }
+    >
+      {state === 'on' ? (
+        <button
+          type="button"
+          className="btn"
+          aria-busy={pending ? 'true' : undefined}
+          disabled={!status || Boolean(pending)}
+          onClick={() => void change('uninstall')}
+        >
+          {pending === 'uninstall' ? 'Removing…' : 'Remove mod'}
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="btn"
+          aria-busy={pending ? 'true' : undefined}
+          disabled={!status || Boolean(pending)}
+          onClick={() => void change('install')}
+        >
+          {pending === 'install' ? 'Installing…' : state === 'disabled' ? 'Turn on mod' : 'Install mod'}
+        </button>
+      )}
+    </SettingRow>
+  );
+}
+
 export function SourcesSection({
   snapshot,
   update,
   onInstallClaude,
   onUninstallClaude,
   onSetupClaude,
+  onClaudeCodeMod,
 }: {
   snapshot: Snapshot;
   update: (patch: Partial<Settings>) => Promise<void | boolean>;
   onInstallClaude: () => Promise<void>;
   onUninstallClaude: () => Promise<void>;
   onSetupClaude: () => void;
+  onClaudeCodeMod: ClaudeCodeModAction;
 }) {
   return (
     <SettingsSection
@@ -104,6 +196,7 @@ export function SourcesSection({
               Set up Claude
             </button>
           </SettingRow>
+          <ClaudeCodeModSetting onClaudeCodeMod={onClaudeCodeMod} />
         </div>
         <div className="setting-col">
           <SelectSetting
