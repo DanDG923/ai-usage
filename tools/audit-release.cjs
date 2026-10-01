@@ -43,6 +43,11 @@ function assertArchive(entries) {
     'electron/maintenance-service.cjs',
     'electron/desktop-estimates.cjs',
     'node_modules/@anthropic-ai/claude-agent-sdk/package.json',
+    // The Claude Code mod the app installs (electron/claude-code-mod.cjs MOD_FILES).
+    'claude-code-mod/.claude-plugin/plugin.json',
+    'claude-code-mod/hooks/hooks.json',
+    'claude-code-mod/hooks/register.js',
+    'claude-code-mod/hooks/view.js',
   ];
   for (const entry of required) {
     if (!entries.includes(entry)) fail(`required application file is absent from ASAR: ${entry}`);
@@ -53,6 +58,9 @@ function assertArchive(entries) {
 
   const bundledClaude = entries.filter((entry) => /(^|\/)node_modules\/@anthropic-ai\/claude-agent-sdk-win32-/i.test(entry));
   if (bundledClaude.length) fail('the optional bundled Claude executable is packaged');
+
+  const modDevelopment = entries.filter((entry) => /^claude-code-mod\/(?:tests|\.claude-plugin\/types)(?:\/|$)|^claude-code-mod\/tsconfig\.json$/.test(entry));
+  if (modDevelopment.length) fail(`Claude Code mod development files are packaged: ${modDevelopment.join(', ')}`);
 
   const previewOnly = entries.filter((entry) => /^dist\/assets\/(?:demo|flyout-preview)-/.test(entry));
   if (previewOnly.length) fail(`browser-preview demo code is packaged: ${previewOnly.join(', ')}`);

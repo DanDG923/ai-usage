@@ -3,7 +3,6 @@ import { expect, mock, test } from 'claude-code/testing'
 // Run with `claude plugin test` from claude-code-mod/ (npm run test:mod).
 
 const APPDATA = 'C:/Users/test/AppData/Roaming'
-const BASE = APPDATA + '/ai-usage/claude-code'
 const HOUR = 3_600_000
 
 function glance(state: string, overrides: Record<string, unknown> = {}) {
@@ -75,6 +74,7 @@ function stub(on: any, { feed = glance('risk'), surfaces = ['terminal'], band, w
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.render', () => ({ type: 'Text', props: {}, children: ['drawn by Claude Code'] }))
   on('turn.step', async function* ($: any, e: any) {
+    yield { kind: 'text', index: 0, text: 'ok' }
     return { turnId: e.turnId, index: e.index, answer: 'ok', toolUses: [], stopReason: 'end_turn', usage: null }
   })
   return { clock, writes, toasts, saved }

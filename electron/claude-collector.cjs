@@ -1081,4 +1081,4 @@ async function refreshClaude(store, inboxPath, options = {}) {
     ...(!activityCurrent ? { warning: fableTracking.health.detail || 'Local transcript activity is incomplete.' } : {}) };
 }
 
-module.exports = { CLAUDE_CODE_READING_FORMAT, deriveFableEstimate, epochToIso, findClaudeBinary, importClaudeCodeReadings, importClaudeInbox, importClaudeTranscripts, installClaudeHelper, isClaudeHelperInstalled, makeHelperScript, refreshClaude, uninstallClaudeHelper };
+module.exports = { CLAUDE_CODE_READING_FORMAT, deriveFableEstimate, epochToIso, findClaudeBinary, helperPaths, importClaudeCodeReadings, importClaudeInbox, importClaudeTranscripts, readClaudeSettings, installClaudeHelper, isClaudeHelperInstalled, makeHelperScript, refreshClaude, uninstallClaudeHelper };

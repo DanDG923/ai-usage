@@ -9,7 +9,7 @@ function registerIpc(context) {
     setPeriodDays, snapshot, EMPTY_SESSION_PAGE, store, refreshAll, databaseJobs,
     invalidateSnapshot, applySettingsEffects, patchSnapshotSettings, updateTray,
     publishAfterWrite, refreshClaudeOnly, log, logRendererError, installClaudeHelper,
-    getInboxPath, uninstallClaudeHelper, maintenance, dialog, getWindow, shell, app,
+    getInboxPath, uninstallClaudeHelper, claudeCodeMod, maintenance, dialog, getWindow, shell, app,
     buildSummaryText, clipboard, setSnooze, updateChecker, renderingMode, renderingForced, relaunch,
   } = context;
   handleIpc('claude-setup:status', () => claudeSetup.status());
@@ -116,6 +116,15 @@ function registerIpc(context) {
     void refreshClaudeOnly().catch((error) => log(`Refresh after helper change: ${error.message}`));
     return { result };
   });
+  // The Claude Code mod. Installing runs the user's own `claude plugin`
+  // commands; the collection after it writes the first glance.
+  handleIpc('claude-code-mod:status', () => claudeCodeMod.status());
+  handleIpc('claude-code-mod:install', async () => {
+    const status = await claudeCodeMod.install();
+    void refreshClaudeOnly().catch((error) => log(`Refresh after the Claude Code mod was installed: ${error.message}`));
+    return status;
+  });
+  handleIpc('claude-code-mod:uninstall', () => claudeCodeMod.uninstall());
   handleIpc('dashboard:create-backup', () => databaseJobs.exclusive(async () => {
     const result = await maintenance.request('create-backup');
     invalidateSnapshot();
