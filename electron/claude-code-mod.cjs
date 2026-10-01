@@ -294,7 +294,15 @@ function createClaudeCodeMod({
       }, TORN_REQUEST_RETRY_MS);
       requestRetry.unref?.();
     }
-    if (stopped || state !== 'on') return;
+    if (stopped) return;
+    // The mod may have been turned off since the last check: a session that
+    // still has it loaded does not act for it.
+    if (actions.size && readState() !== 'on') {
+      ignoreRequestsBefore = now();
+      unfollow();
+      return;
+    }
+    if (state !== 'on') return;
     if (actions.has('sync') && now() - lastSyncAt >= SYNC_MIN_INTERVAL_MS) {
       lastSyncAt = now();
       onRequest('sync');

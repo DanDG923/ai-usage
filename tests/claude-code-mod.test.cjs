@@ -344,3 +344,17 @@ test('installing publishes the figures the app already has before the collection
   assert.deepEqual(await handlers.get('claude-code-mod:install')({}), { state: 'on' });
   assert.deepEqual(published, [shown]);
 });
+
+test('a request written after the mod is turned off is not acted on, even before the next check', async (t) => {
+  const { root, mod, claude, requests, watchers } = setup(t);
+  await mod.install();
+  // Turned off in /plugin; a session that still has the mod loaded asks at once.
+  claude.settings.enabledPlugins[PLUGIN_ID] = false;
+  fs.writeFileSync(path.join(root, 'requests', '1-open.json'), JSON.stringify({
+    format: 'ai-usage-claude-code-request', version: 1, action: 'open', requested_at: new Date().toISOString(),
+  }));
+  watchers.get('requests')();
+  assert.deepEqual(requests, []);
+  assert.deepEqual(fs.readdirSync(path.join(root, 'requests')), []);
+  assert.equal(watchers.size, 0);
+});
