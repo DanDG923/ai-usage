@@ -104,6 +104,30 @@ test('a mod turned off in Claude Code is turned back on by installing again', as
   assert.equal(claude.calls.at(-1), `plugin enable ${PLUGIN_ID} --scope user`);
 });
 
+test('a mod turned back on in Claude Code is followed without restarting the app', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const { root, mod, claude, requests, watchers } = setup(t, { enabled: false });
+  fs.mkdirSync(path.join(mod.paths.plugin, '.claude-plugin'), { recursive: true });
+  fs.copyFileSync(path.join(SOURCE, '.claude-plugin', 'plugin.json'), path.join(mod.paths.plugin, '.claude-plugin', 'plugin.json'));
+  assert.equal(mod.start(), 'disabled');
+  assert.equal(watchers.size, 0);
+  // The glance stays current while the mod is off, ready for when it is on again.
+  mod.publish({ settings: {}, sources: [], quotas: {}, generatedAt: new Date().toISOString() });
+  assert.ok(fs.existsSync(path.join(root, 'glance.json')));
+  claude.settings.enabledPlugins[PLUGIN_ID] = true;
+  t.mock.timers.tick(60_000);
+  assert.deepEqual([...watchers.keys()].sort(), ['readings', 'requests']);
+  fs.writeFileSync(path.join(root, 'requests', '1-open.json'), JSON.stringify({
+    format: 'ai-usage-claude-code-request', version: 1, action: 'open', requested_at: new Date().toISOString(),
+  }));
+  watchers.get('requests')();
+  assert.deepEqual(requests, ['open']);
+  // Turned off again, its folders are no longer followed.
+  claude.settings.enabledPlugins[PLUGIN_ID] = false;
+  t.mock.timers.tick(60_000);
+  assert.equal(watchers.size, 0);
+});
+
 test('a refused install reports Claude Code\'s own message', async (t) => {
   const { mod } = setup(t, { failures: { 'plugin install': { message: 'Plugin not found in marketplace.' } } });
   await assert.rejects(mod.install(), /Claude Code could not install the mod\. Plugin not found in marketplace\./);

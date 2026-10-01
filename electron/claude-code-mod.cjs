@@ -30,6 +30,8 @@ const REQUEST_ACTIONS = new Set(['sync', 'open']);
 // closed is not a reason to open the dashboard at the next launch.
 const REQUEST_TTL_MS = 2 * 60_000;
 const HEARTBEAT_MS = 5 * 60_000;
+// Claude Code's /plugin can turn the mod off and on while the app runs.
+const STATE_CHECK_MS = 60_000;
 const SYNC_MIN_INTERVAL_MS = 15_000;
 const READING_IMPORT_DELAY_MS = 2_000;
 const READING_IMPORT_MIN_INTERVAL_MS = 30_000;
@@ -133,7 +135,8 @@ function createClaudeCodeMod({
   let busy = false;
   let state = 'off';
   let lastGlance = null;
-  let heartbeat = null;
+  let checker = null;
+  let lastBeatAt = -Infinity;
   let watchers = [];
   let lastSyncAt = -Infinity;
   let readingTimer = null;
@@ -238,15 +241,17 @@ function createClaudeCodeMod({
   }
 
   // Called after every publish. The glance is written only while the mod is
-  // on, so an app without it leaves nothing behind.
+  // installed, so an app without it leaves nothing behind; one turned off in
+  // Claude Code keeps it current for when it is turned on again.
   function publish(snapshot) {
-    if (stopped || state !== 'on' || !snapshot) return;
+    if (stopped || state === 'off' || !snapshot) return;
     try {
       lastGlance = buildGlance(snapshot, { nowMs: now(), appVersion });
     } catch (error) {
       log(`Claude Code glance could not be built: ${error.message}`);
       return;
     }
+    lastBeatAt = now();
     writeGlance(lastGlance);
   }
 
@@ -319,17 +324,41 @@ function createClaudeCodeMod({
     }
   }
 
-  function stopWatching() {
+  // The mod's folders are followed only while it is on.
+  function follow() {
+    if (watchers.length) return;
+    watchFolder(paths.requests, () => takeRequests());
+    watchFolder(paths.readings, () => readingLanded());
+    takeRequests();
+  }
+
+  function unfollow() {
     for (const watcher of watchers) {
       try { watcher.close(); } catch { /* Already closed. */ }
     }
     watchers = [];
-    clearInterval(heartbeat);
-    heartbeat = null;
     clearTimeout(readingTimer);
     readingTimer = null;
     clearTimeout(requestRetry);
     requestRetry = null;
+  }
+
+  function stopWatching() {
+    unfollow();
+    clearInterval(checker);
+    checker = null;
+  }
+
+  // Every minute: follow the mod being turned on or off in Claude Code, and
+  // every few minutes rewrite the glance even without a collection, which
+  // tells the mod the app is still there.
+  function check() {
+    if (readState() === 'on') follow();
+    else unfollow();
+    if (state !== 'off' && lastGlance && now() - lastBeatAt >= HEARTBEAT_MS) {
+      lastBeatAt = now();
+      writeGlance({ ...lastGlance, writtenAt: new Date(lastBeatAt).toISOString() });
+    }
   }
 
   // At launch and after an install: refresh the mod's files if the app was
@@ -343,17 +372,10 @@ function createClaudeCodeMod({
     } catch (error) {
       log(`Claude Code mod files could not be updated: ${error.message}`);
     }
-    if (state !== 'on') return state;
-    watchFolder(paths.requests, () => takeRequests());
-    watchFolder(paths.readings, () => readingLanded());
-    takeRequests();
-    // While the app runs, the glance is rewritten every few minutes even
-    // without a collection, which tells the mod the app is still there.
-    heartbeat = setInterval(() => {
-      if (readState() !== 'on') return;
-      if (lastGlance) writeGlance({ ...lastGlance, writtenAt: new Date(now()).toISOString() });
-    }, HEARTBEAT_MS);
-    heartbeat.unref?.();
+    lastBeatAt = now();
+    check();
+    checker = setInterval(check, STATE_CHECK_MS);
+    checker.unref?.();
     return state;
   }
 
