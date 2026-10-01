@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.56 — 1 October 2026
+
+- Bring your allowances into Claude Code with the new AI Usage mod. Install it from **Settings → Sources → Claude Code mod**; it needs Claude Code 2.1.287 or later and works in the terminal and in the desktop app's Code tab. Type `/ai-usage` to open the tray flyout's figures beside the conversation, with the verdict, a fuel tape for each subscription, the forecast at reset and shorter windows such as the five-hour session. In the pane, `s` collects now, `o` opens the dashboard and `c` turns the caution line on or off; `/ai-usage text` prints the same figures where Claude Code draws nothing.
+- Show a caution line above Claude Code's prompt while an allowance is on watch, at risk or critical, unless alerts are snoozed. It stays out of the way while everything is on track or AI Usage is not running.
+- Keep Claude current between Refreshes while you work in Claude Code. After each response, the mod passes on the plan limits that response reported, dated by the request that fetched them, and AI Usage imports them within seconds while automatic collection is on, then at most every two minutes. AI Usage still reads plan usage itself only when you press **Refresh**, and **Sync now** in the mod is a local collection.
+- The mod uses no API and none of your allowance: it calls no model, makes no network request and adds nothing to your conversations. Remove it from the same setting, or turn it off in Claude Code's `/plugin`; app updates refresh it in place. Mods are new in Claude Code, so their behaviour may change between Claude Code releases.
+- Preserve local usage history, settings, observations, and backups during an in-place update.
+
 ## 1.0.55 — 1 October 2026
 
 - Add built-in GPT-6.1 Sol API-equivalent pricing: $2 input, $0.10 cached input, $2.50 cache writes and $10 output per million tokens, with the long-context rates above 272,000 input tokens, using official rates verified on 1 October 2026. Codex work on GPT-6.1 Sol was unpriced until now; existing records are priced when the catalogue loads, and saved custom prices are kept.
