@@ -250,7 +250,7 @@ test('a reading that lands is imported shortly after, and the import\'s own remo
   assert.equal(readings.length, 1);
   fs.unlinkSync(path.join(root, 'readings', '1.json'));
   watchers.get('readings')();
-  t.mock.timers.tick(60_000);
+  t.mock.timers.tick(2 * 60_000);
   assert.equal(readings.length, 1);
 });
 

@@ -34,7 +34,9 @@ const HEARTBEAT_MS = 5 * 60_000;
 const STATE_CHECK_MS = 60_000;
 const SYNC_MIN_INTERVAL_MS = 15_000;
 const READING_IMPORT_DELAY_MS = 2_000;
-const READING_IMPORT_MIN_INTERVAL_MS = 30_000;
+// Each import is a whole Claude collection, so a busy session's readings
+// are gathered into one every couple of minutes.
+const READING_IMPORT_MIN_INTERVAL_MS = 2 * 60_000;
 // The mod writes a request in place, so the folder can report it before its
 // content lands. One that does not parse is retried until it is this old.
 const TORN_REQUEST_GRACE_MS = 10_000;
@@ -299,8 +301,9 @@ function createClaudeCodeMod({
     if (actions.has('open')) onRequest('open');
   }
 
-  // A new reading is imported a moment after it lands, at most twice a minute,
-  // so the dashboard and the glance follow Claude Code closely.
+  // A new reading is imported a moment after it lands, and those that follow
+  // at most every two minutes, so the dashboard and the glance follow Claude
+  // Code without a collection after every response.
   function readingLanded() {
     if (stopped || readingTimer) return;
     const wait = Math.max(READING_IMPORT_DELAY_MS, lastReadingImportAt + READING_IMPORT_MIN_INTERVAL_MS - now());
