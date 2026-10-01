@@ -139,11 +139,14 @@ async function leaveReading($, e) {
   if (!moved && responsesSinceReading === 0) return
   const capturedMs = Date.now()
   const fetchedAfterMs = pendingSince
-  // The next reading counts from the requests still running, if any.
+  const consumed = responsesSinceReading
+  // The next reading counts from the requests still running, if any. This is
+  // taken now, so a response that lands while the file is written counts there.
   pendingSince = inFlight.size ? Math.min(...inFlight.values()) : null
   responsesSinceReading = 0
   const key = limitsKey(e.rateLimits)
   if (lastReading && lastReading.key === key && capturedMs - lastReading.atMs < UNCHANGED_READING_MS) return
+  const previous = lastReading
   lastReading = { key, atMs: capturedMs }
   let model = null
   try {
@@ -154,7 +157,16 @@ async function leaveReading($, e) {
   sequence += 1
   const record = readingRecord({ capturedMs, fetchedAfterMs, sessionId, model, rateLimits: e.rateLimits })
   if (!Object.keys(record.rate_limits).length) return
-  await $.fs.write(paths.readings + '/' + readingFileName(capturedMs, sessionId, sequence), JSON.stringify(record) + '\n')
+  try {
+    await $.fs.write(paths.readings + '/' + readingFileName(capturedMs, sessionId, sequence), JSON.stringify(record) + '\n')
+  } catch (error) {
+    // Not saved, so not a reading: the next measurement writes these limits,
+    // its window reaching back to this one's start.
+    lastReading = previous
+    pendingSince = pendingSince == null ? fetchedAfterMs : Math.min(pendingSince, fetchedAfterMs)
+    responsesSinceReading += consumed
+    throw error
+  }
   // The app imports the reading and rewrites the glance a few seconds later.
   $.clock.after(6_000, () => pollGlance($))
 }

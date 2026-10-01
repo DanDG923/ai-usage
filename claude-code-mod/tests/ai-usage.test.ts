@@ -40,10 +40,12 @@ type Stubs = {
   toasts?: string[]
   saved?: Map<string, unknown>
   failSteps?: number[]
+  failWrites?: number
 }
 
 // Everything Claude Code would answer for the mod, recorded where a test checks it.
-function stub(on: any, { feed = glance('risk'), surfaces = ['terminal'], band, writes = [], toasts = [], saved = new Map(), failSteps = [] }: Stubs = {}) {
+function stub(on: any, { feed = glance('risk'), surfaces = ['terminal'], band, writes = [], toasts = [], saved = new Map(), failSteps = [], failWrites = 0 }: Stubs = {}) {
+  let writesToFail = failWrites
   const clock = mock.clock(on, { now: 1_000 })
   on('session.start', () => ({ cwd: '/work' }))
   on('session.id', () => ({ value: 'session-1' }))
@@ -64,6 +66,11 @@ function stub(on: any, { feed = glance('risk'), surfaces = ['terminal'], band, w
     ? { value: typeof feed === 'string' ? feed : JSON.stringify(feed) }
     : { deny: 'ENOENT' }))
   on('fs.write', ($: any, e: any) => {
+    // A folder that is briefly unavailable refuses the write.
+    if (writesToFail > 0) {
+      writesToFail -= 1
+      return { deny: 'EBUSY: resource busy or locked' }
+    }
     writes.push({ path: e.path, text: e.text })
     return { value: undefined }
   })
@@ -258,6 +265,21 @@ test('a failed request alone leaves no reading behind', async ($, on) => {
   }
   await $.session.measure({ context: { window: 200_000 }, rateLimits: LIMITS(20), changed: ['rateLimits'] })
   expect(writes.length).toBe(0)
+})
+
+test('a reading that could not be saved is written with the next response', async ($, on) => {
+  const { writes } = stub(on, { failWrites: 1 })
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  const before = Date.now()
+  await step($, 0)
+  await $.session.measure({ context: { window: 200_000 }, rateLimits: LIMITS(20), changed: ['rateLimits'] })
+  expect(writes.length).toBe(0)
+  // The same limits after the next response are not held back as already saved.
+  await step($, 1)
+  await $.session.measure({ context: { window: 200_000 }, rateLimits: LIMITS(20), changed: ['context'] })
+  expect(writes.length).toBe(1)
+  // Its window reaches back to the first request, which may have fetched them.
+  expect(Date.parse(JSON.parse(writes[0].text).fetched_after) <= before + 50).toBe(true)
 })
 
 test('no reading without plan limits, as off a subscription', async ($, on) => {
