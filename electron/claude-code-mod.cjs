@@ -140,7 +140,10 @@ function createClaudeCodeMod({
   let lastSnapshot = null;
   let checker = null;
   let lastBeatAt = -Infinity;
-  let watchers = [];
+  // Folder → its watcher. Each is made on its own, so one the file system
+  // refused or lost is made again at the next check.
+  const watchers = new Map();
+  const unwatchable = new Set();
   let lastSyncAt = -Infinity;
   let readingTimer = null;
   let requestRetry = null;
@@ -329,29 +332,39 @@ function createClaudeCodeMod({
     readingTimer.unref?.();
   }
 
+  // True when this call started watching the folder.
   function watchFolder(folder, listener) {
+    if (watchers.has(folder)) return false;
     try {
       const watcher = watch(folder, { persistent: false }, listener);
-      watcher.on?.('error', () => { /* A removed folder stops its watcher; start() makes a new one. */ });
-      watchers.push(watcher);
+      // A folder removed or lost stops its watcher; the next check makes a new one.
+      watcher.on?.('error', () => {
+        try { watcher.close(); } catch { /* Already closed. */ }
+        if (watchers.get(folder) === watcher) watchers.delete(folder);
+      });
+      watchers.set(folder, watcher);
+      unwatchable.delete(folder);
+      return true;
     } catch (error) {
-      log(`Claude Code mod folder could not be watched: ${error.message}`);
+      // Logged once while it keeps failing, not at every check.
+      if (!unwatchable.has(folder)) log(`Claude Code mod folder could not be watched: ${error.message}`);
+      unwatchable.add(folder);
+      return false;
     }
   }
 
   // The mod's folders are followed only while it is on.
   function follow() {
-    if (watchers.length) return;
-    watchFolder(paths.requests, () => takeRequests());
+    const requestsWatched = watchFolder(paths.requests, () => takeRequests());
     watchFolder(paths.readings, () => readingLanded());
-    takeRequests();
+    if (requestsWatched) takeRequests();
   }
 
   function unfollow() {
-    for (const watcher of watchers) {
+    for (const watcher of watchers.values()) {
       try { watcher.close(); } catch { /* Already closed. */ }
     }
-    watchers = [];
+    watchers.clear();
     clearTimeout(readingTimer);
     readingTimer = null;
     clearTimeout(requestRetry);

@@ -36,6 +36,7 @@ function setup(t, options = {}) {
   const requests = [];
   const readings = [];
   const watchers = new Map();
+  const watchErrors = new Map();
   const mod = createClaudeCodeMod({
     root,
     sourceDirectory: SOURCE,
@@ -47,12 +48,18 @@ function setup(t, options = {}) {
     onReading: () => readings.push(Date.now()),
     now: options.now ?? Date.now,
     watch: (folder, _options, listener) => {
-      watchers.set(path.basename(folder), listener);
-      return { close: () => watchers.delete(path.basename(folder)), on: () => {} };
+      const name = path.basename(folder);
+      // A watch the file system refuses once, as it can for a moment.
+      if (options.refuseWatchOnce?.delete(name)) throw new Error('EPERM: operation not permitted, watch');
+      watchers.set(name, listener);
+      return {
+        close: () => watchers.delete(name),
+        on: (event, handler) => { if (event === 'error') watchErrors.set(name, handler); },
+      };
     },
   });
   t.after(() => mod.stop());
-  return { root, mod, claude, requests, readings, watchers };
+  return { root, mod, claude, requests, readings, watchers, watchErrors };
 }
 
 const read = (...parts) => fs.readFileSync(path.join(...parts), 'utf8');
@@ -357,4 +364,18 @@ test('a request written after the mod is turned off is not acted on, even before
   assert.deepEqual(requests, []);
   assert.deepEqual(fs.readdirSync(path.join(root, 'requests')), []);
   assert.equal(watchers.size, 0);
+});
+
+test('a folder that could not be watched is watched at the next check', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const { mod, watchers, watchErrors } = setup(t, { refuseWatchOnce: new Set(['readings']) });
+  await mod.install();
+  assert.deepEqual([...watchers.keys()], ['requests']);
+  t.mock.timers.tick(60_000);
+  assert.deepEqual([...watchers.keys()].sort(), ['readings', 'requests']);
+  // A watcher that fails later, as when its folder is removed, is made again too.
+  watchErrors.get('requests')(new Error('EPERM'));
+  assert.deepEqual([...watchers.keys()], ['readings']);
+  t.mock.timers.tick(60_000);
+  assert.deepEqual([...watchers.keys()].sort(), ['readings', 'requests']);
 });
