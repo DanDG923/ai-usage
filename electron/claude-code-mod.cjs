@@ -288,7 +288,7 @@ function createClaudeCodeMod({
       try { fs.unlinkSync(filePath); } catch { /* Seen again next time; actions are idempotent. */ }
       const at = Date.parse(request?.requested_at);
       if (request?.format !== REQUEST_FORMAT || request.version !== 1 || !REQUEST_ACTIONS.has(request.action)) continue;
-      if (!Number.isFinite(at) || at <= ignoreRequestsBefore || at < now() - REQUEST_TTL_MS || at > now() + REQUEST_TTL_MS) continue;
+      if (!Number.isFinite(at) || at < ignoreRequestsBefore || at < now() - REQUEST_TTL_MS || at > now() + REQUEST_TTL_MS) continue;
       actions.add(request.action);
     }
     // The write that completes a request may raise no event of its own.
@@ -414,6 +414,9 @@ function createClaudeCodeMod({
     stopped = false;
     stopWatching();
     lastSeenState = null;
+    // Requests are answered only while the app runs: one from before it
+    // started was left while it was closed.
+    ignoreRequestsBefore = now();
     if (readState() !== 'off') {
       try {
         if (writeModFiles()) log('Claude Code mod files updated; Claude Code loads them at its next session.');

@@ -408,3 +408,19 @@ test('a request left between seeing the mod off and seeing it on again is not ac
   watchers.get('requests')();
   assert.deepEqual(requests, ['sync']);
 });
+
+test('requests left while the app was closed do nothing when it starts', async (t) => {
+  const { root, mod, claude, requests } = setup(t, { enabled: true });
+  fs.mkdirSync(path.join(mod.paths.plugin, '.claude-plugin'), { recursive: true });
+  fs.copyFileSync(path.join(SOURCE, '.claude-plugin', 'plugin.json'), path.join(mod.paths.plugin, '.claude-plugin', 'plugin.json'));
+  fs.mkdirSync(path.join(root, 'requests'), { recursive: true });
+  // Left by a session moments before the app started, while it was closed.
+  fs.writeFileSync(path.join(root, 'requests', '1-open.json'), JSON.stringify({
+    format: 'ai-usage-claude-code-request', version: 1, action: 'open', requested_at: new Date().toISOString(),
+  }));
+  await pause();
+  assert.equal(claude.settings.enabledPlugins[PLUGIN_ID], true);
+  assert.equal(mod.start(), 'on');
+  assert.deepEqual(requests, []);
+  assert.deepEqual(fs.readdirSync(path.join(root, 'requests')), []);
+});
