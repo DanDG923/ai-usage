@@ -22,8 +22,8 @@ function fakeClaude({ version = '2.1.287 (Claude Code)', failures = {}, enabled 
     const command = args.slice(0, args[1] === 'marketplace' ? 3 : 2).join(' ');
     const failure = failures[command];
     if (failure) return { ok: false, stdout: `${JSON.stringify({ outcome: 'failed', ...failure })}\n` };
-    if (command === 'plugin install') settings.enabledPlugins[PLUGIN_ID] = settings.enabledPlugins[PLUGIN_ID] ?? true;
-    if (command === 'plugin enable') settings.enabledPlugins[PLUGIN_ID] = true;
+    // Installing a plugin that was turned off turns it on again (Claude Code 2.1.287).
+    if (command === 'plugin install') settings.enabledPlugins[PLUGIN_ID] = true;
     if (command === 'plugin uninstall') delete settings.enabledPlugins[PLUGIN_ID];
     return { ok: true, stdout: `${JSON.stringify({ outcome: 'ok', message: 'done' })}\n` };
   };
@@ -101,7 +101,7 @@ test('a mod turned off in Claude Code is turned back on by installing again', as
   fs.copyFileSync(path.join(SOURCE, '.claude-plugin', 'plugin.json'), path.join(mod.paths.plugin, '.claude-plugin', 'plugin.json'));
   assert.equal(mod.status().state, 'disabled');
   assert.equal((await mod.install()).state, 'on');
-  assert.equal(claude.calls.at(-1), `plugin enable ${PLUGIN_ID} --scope user`);
+  assert.equal(claude.calls.at(-1), `plugin install ${PLUGIN_ID} --scope user`);
 });
 
 test('a mod turned back on in Claude Code is followed without restarting the app', async (t) => {

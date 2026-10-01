@@ -211,9 +211,6 @@ function createClaudeCodeMod({
     writeModFiles();
     await claude(binary, ['plugin', 'marketplace', 'add', paths.marketplace], 'Claude Code could not add the AI Usage plugins.');
     await claude(binary, ['plugin', 'install', PLUGIN_ID, '--scope', 'user'], 'Claude Code could not install the mod.');
-    if (readState() === 'disabled') {
-      await claude(binary, ['plugin', 'enable', PLUGIN_ID, '--scope', 'user'], 'Claude Code could not turn the mod on.');
-    }
     if (readState() !== 'on') throw new Error('Claude Code did not record the mod as installed. Try again.');
     start();
     log('Claude Code mod installed.');
