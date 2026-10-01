@@ -359,8 +359,11 @@ function createClaudeCodeMod({
   // The mod's folders are followed only while it is on.
   function follow() {
     const requestsWatched = watchFolder(paths.requests, () => takeRequests());
-    watchFolder(paths.readings, () => readingLanded());
+    const readingsWatched = watchFolder(paths.readings, () => readingLanded());
+    // A folder watched afresh reports nothing already in it, so what arrived
+    // while it was not watched is taken now.
     if (requestsWatched) takeRequests();
+    if (readingsWatched) readingLanded();
   }
 
   function unfollow() {

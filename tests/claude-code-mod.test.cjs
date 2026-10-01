@@ -424,3 +424,17 @@ test('requests left while the app was closed do nothing when it starts', async (
   assert.deepEqual(requests, []);
   assert.deepEqual(fs.readdirSync(path.join(root, 'requests')), []);
 });
+
+test('readings that arrived while their folder was not watched are imported once it is again', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval', 'setTimeout'] });
+  const { root, mod, readings, watchErrors } = setup(t);
+  await mod.install();
+  t.mock.timers.tick(2_000);
+  assert.equal(readings.length, 0);
+  // The watcher fails, and a reading lands before the next check makes a new one.
+  watchErrors.get('readings')(new Error('EPERM'));
+  fs.writeFileSync(path.join(root, 'readings', '1.json'), '{}');
+  t.mock.timers.tick(60_000);
+  t.mock.timers.tick(2_000);
+  assert.equal(readings.length, 1);
+});
