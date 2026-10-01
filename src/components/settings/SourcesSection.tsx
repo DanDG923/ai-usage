@@ -35,10 +35,10 @@ export function SourceStatus({ status }: { status: string }) {
 
 type ClaudeCodeModAction = (action: 'status' | 'install' | 'uninstall') => Promise<ClaudeCodeModStatus | null>;
 
-const MOD_STATE_TEXT: Record<ClaudeCodeModStatus['state'], string> = {
-  on: 'Installed. New Claude Code sessions load it; type /ai-usage there.',
-  disabled: 'Installed, but turned off in Claude Code’s /plugin.',
-  off: '',
+// As the source cards state a collector: an icon and a word in the status colour.
+const MOD_STATE: Record<'on' | 'disabled', { tone: SourceTone; Icon: LucideIcon; text: string }> = {
+  on: { tone: 'ok', Icon: CheckCircle2, text: 'installed · loads in new sessions' },
+  disabled: { tone: 'caution', Icon: AlertTriangle, text: 'turned off in Claude Code’s /plugin' },
 };
 
 /**
@@ -77,17 +77,23 @@ export function ClaudeCodeModSetting({ onClaudeCodeMod }: { onClaudeCodeMod: Cla
     }
   };
   const state = status?.state ?? 'off';
-  const note = !checked ? '' : status ? MOD_STATE_TEXT[state] : 'Available in the installed desktop app.';
+  const shown = state === 'off' ? null : MOD_STATE[state];
   return (
     <SettingRow
       label="Claude Code mod"
       description={
         <>
-          Brings these allowances into Claude Code: <code>/ai-usage</code> opens them beside the conversation, and a
-          caution line appears above the prompt while an allowance needs attention. Claude Code passes on the plan
-          limits it receives with each response, so Claude stays current here between Refreshes. It uses no API and adds
-          nothing to your conversations. Needs Claude Code 2.1.287 or later.
-          {note && <span className="setting-note"> {note}</span>}
+          Shows these allowances in Claude Code: <code>/ai-usage</code> opens them beside the conversation, and a
+          caution line appears above the prompt while one needs attention. Claude Code also passes on the plan limits it
+          already receives, so Claude stays current here between Refreshes. No API use, and nothing is added to your
+          conversations. Needs Claude Code 2.1.287 or later.
+          {shown && (
+            <span className="source-status claude-code-mod-state" data-tone={shown.tone}>
+              <shown.Icon aria-hidden="true" />
+              {shown.text}
+            </span>
+          )}
+          {checked && !status && <span className="setting-note">Available in the installed desktop app.</span>}
         </>
       }
     >

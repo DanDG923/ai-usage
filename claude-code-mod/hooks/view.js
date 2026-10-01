@@ -178,9 +178,9 @@ export function summaryText(glance, nowMs, problem = null) {
       lines.push(`  ${entry.label}: ${percentLabel(entry.remaining)} left · resets ${whenLabel(entry.resetsAt, nowMs)}`)
     }
   }
-  lines.push(running
-    ? `Updated ${relativeLabel(glance.collectedAt, nowMs)} by AI Usage.`
-    : `AI Usage is not running; these figures are from ${relativeLabel(glance.collectedAt ?? glance.writtenAt, nowMs)}.`)
+  lines.push(!running
+    ? `AI Usage is not running; these figures are from ${relativeLabel(glance.collectedAt ?? glance.writtenAt, nowMs)}.`
+    : glance.collectedAt ? `Updated ${relativeLabel(glance.collectedAt, nowMs)} by AI Usage.` : 'AI Usage has not collected yet.')
   return lines.join('\n')
 }
 

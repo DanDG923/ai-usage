@@ -720,7 +720,13 @@
 .source-status[data-tone='warning'] {
   color: var(--warning);
 }
-.source-card .source-status {
+.claude-code-mod-state,
+.settings-page .setting-description .setting-note {
+  display: flex;
+  margin-top: 8px;
+}
+.source-card .source-status,
+.claude-code-mod-state {
   font-size: var(--fs-11);
   font-weight: 700;
   letter-spacing: 0.08em;

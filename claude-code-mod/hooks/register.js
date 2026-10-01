@@ -205,13 +205,15 @@ function providerRows(elements, row, now, surface, width) {
   } else {
     // Name, figure and status in fixed columns, the tape filling the rest;
     // on a narrow pane the tape takes its own line.
-    const tapeWidth = width - 8 - 13 - 12 - 3
+    // The three fixed columns, the gaps between the four, and the two cells
+    // the pane's close mark takes from the right.
+    const tapeWidth = width - (8 + 13 + 12) - 3 - 2
     const columns = [
       Box({ width: 8, children: [name] }),
       Box({ width: 13, children: [figure] }),
     ]
     if (tapeWidth >= 8) columns.push(terminalTape(Box, Text, row, tapeWidth))
-    columns.push(Box({ width: 12, marginLeft: 1, children: [state] }))
+    columns.push(Box({ width: 12, children: [state] }))
     lines.push(Box({ flexDirection: 'row', columnGap: 1, children: columns }))
     if (tapeWidth < 8) lines.push(terminalTape(Box, Text, row, Math.max(8, width - 2)))
   }
@@ -234,7 +236,7 @@ function drawPane($, e) {
   const width = Math.max(32, Number(e.props?.bodyColumns) || 60)
   const running = glance ? appRunning(glance, now) : false
   const updated = !glance ? ''
-    : running ? `updated ${relativeLabel(glance.collectedAt, now)}`
+    : running ? (glance.collectedAt ? `updated ${relativeLabel(glance.collectedAt, now)}` : 'not collected yet')
       : `not running · from ${relativeLabel(glance.collectedAt ?? glance.writtenAt, now)}`
   const header = Box({
     flexDirection: 'row',
