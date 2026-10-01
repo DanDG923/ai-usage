@@ -137,6 +137,7 @@ function createClaudeCodeMod({
   let busy = false;
   let state = 'off';
   let lastGlance = null;
+  let lastSnapshot = null;
   let checker = null;
   let lastBeatAt = -Infinity;
   let watchers = [];
@@ -150,10 +151,11 @@ function createClaudeCodeMod({
 
   // 'on', 'disabled' (turned off in Claude Code's /plugin) or 'off'.
   function readState() {
-    let enabled;
-    try { enabled = readClaudeSettings()?.enabledPlugins?.[PLUGIN_ID]; } catch { enabled = undefined; }
     const present = fs.existsSync(path.join(paths.plugin, '.claude-plugin', 'plugin.json'));
-    state = present && enabled === true ? 'on' : present && enabled === false ? 'disabled' : 'off';
+    let enabled;
+    // Claude Code's settings are read only for a mod the app has installed.
+    try { enabled = present ? readClaudeSettings()?.enabledPlugins?.[PLUGIN_ID] : undefined; } catch { enabled = undefined; }
+    state = enabled === true ? 'on' : enabled === false ? 'disabled' : 'off';
     return state;
   }
 
@@ -249,7 +251,9 @@ function createClaudeCodeMod({
   // installed, so an app without it leaves nothing behind; one turned off in
   // Claude Code keeps it current for when it is turned on again.
   function publish(snapshot) {
-    if (stopped || state === 'off' || !snapshot) return;
+    if (stopped || !snapshot) return;
+    lastSnapshot = snapshot;
+    if (state === 'off') return;
     try {
       lastGlance = buildGlance(snapshot, { nowMs: now(), appVersion });
     } catch (error) {
@@ -366,6 +370,9 @@ function createClaudeCodeMod({
       ignoreRequestsBefore = now();
       unfollow();
     }
+    // Installed again from Claude Code's own /plugin: the glance starts from
+    // what the app last showed.
+    if (state !== 'off' && !lastGlance && lastSnapshot) publish(lastSnapshot);
     if (state !== 'off' && lastGlance && now() - lastBeatAt >= HEARTBEAT_MS) {
       lastBeatAt = now();
       writeGlance({ ...lastGlance, writtenAt: new Date(lastBeatAt).toISOString() });
@@ -373,15 +380,18 @@ function createClaudeCodeMod({
   }
 
   // At launch and after an install: refresh the mod's files if the app was
-  // updated, then follow its folders while it is on.
+  // updated, then follow its folders while it is on. The check runs even
+  // while the mod is off, since Claude Code's /plugin can install it again
+  // from the catalogue the app left.
   function start() {
     stopped = false;
     stopWatching();
-    if (readState() === 'off') return state;
-    try {
-      if (writeModFiles()) log('Claude Code mod files updated; Claude Code loads them at its next session.');
-    } catch (error) {
-      log(`Claude Code mod files could not be updated: ${error.message}`);
+    if (readState() !== 'off') {
+      try {
+        if (writeModFiles()) log('Claude Code mod files updated; Claude Code loads them at its next session.');
+      } catch (error) {
+        log(`Claude Code mod files could not be updated: ${error.message}`);
+      }
     }
     lastBeatAt = now();
     check();

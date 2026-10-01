@@ -128,6 +128,22 @@ test('a mod turned back on in Claude Code is followed without restarting the app
   assert.equal(watchers.size, 0);
 });
 
+test('a mod installed again from Claude Code after the app started without it is followed', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const { root, mod, claude, watchers } = setup(t);
+  // Removed in Claude Code's /plugin: the catalogue and the app's copy stay.
+  fs.mkdirSync(path.join(mod.paths.plugin, '.claude-plugin'), { recursive: true });
+  fs.copyFileSync(path.join(SOURCE, '.claude-plugin', 'plugin.json'), path.join(mod.paths.plugin, '.claude-plugin', 'plugin.json'));
+  assert.equal(mod.start(), 'off');
+  mod.publish({ settings: {}, sources: [], quotas: {}, generatedAt: new Date().toISOString() });
+  assert.equal(fs.existsSync(path.join(root, 'glance.json')), false);
+  claude.settings.enabledPlugins[PLUGIN_ID] = true;
+  t.mock.timers.tick(60_000);
+  assert.deepEqual([...watchers.keys()].sort(), ['readings', 'requests']);
+  // The glance starts from what the app last showed, without waiting for a collection.
+  assert.equal(JSON.parse(read(root, 'glance.json')).schema, 1);
+});
+
 test('a refused install reports Claude Code\'s own message', async (t) => {
   const { mod } = setup(t, { failures: { 'plugin install': { message: 'Plugin not found in marketplace.' } } });
   await assert.rejects(mod.install(), /Claude Code could not install the mod\. Plugin not found in marketplace\./);
