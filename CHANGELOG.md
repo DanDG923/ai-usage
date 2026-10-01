@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.55 — 1 October 2026
+
+- Add built-in GPT-6.1 Sol API-equivalent pricing: $2 input, $0.10 cached input, $2.50 cache writes and $10 output per million tokens, with the long-context rates above 272,000 input tokens, using official rates verified on 1 October 2026. Codex work on GPT-6.1 Sol was unpriced until now; existing records are priced when the catalogue loads, and saved custom prices are kept.
+- Keep readings the allowance card already ignores out of the cycle history. A reading saved by an earlier version with an impossible reset, such as one three months ahead, could appear at the top of the history as a phantom current cycle.
+- After a recorded allowance change, keep a status-line reading taken since the change on the Claude card instead of holding it back as a repeat of an earlier read of the old allowance. Claude's freshness and the Fable allowance follow the same reading.
+- Label the cost and daily-token chart axes distinctly for empty or nearly empty periods: an empty cost chart counts whole pence instead of repeating £0.00 and £0.01, a few pence of cost shows steps such as £0.025, and an empty token chart counts whole tokens.
+- Preserve local usage history, settings, observations, and backups during an in-place update.
+
 ## 1.0.54 — 30 September 2026
 
 - Date every Claude status-line reading by when its Claude Code session last fetched the limits, not by when the status line was redrawn. An idle session redraws the limits it fetched hours ago every minute, so those redraws no longer replace a newer **Refresh** on the Claude card (a week read at 13% no longer turns into 1% two hours later), no longer make Claude or Fable look freshly read, and no longer count as a successful **Refresh**. When a session that is in use sees the week refilled after your last **Refresh**, the card now shows it at once instead of two hours later. The forecast and its learned pace, the remaining-token estimate and the Fable estimate follow the same dates. To tell fetches apart, the status-line helper now also keeps each session's random identifier and its total time waiting for API responses; it still stores no paths, prompts or costs. A reading whose fetch cannot be dated (from an earlier helper version, or from a session already open when the helper is enabled or updated) is still shown, but no longer marks Claude or Fable as current.
