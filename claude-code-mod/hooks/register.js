@@ -35,6 +35,9 @@ const POLL_MS = 15_000
 // An unchanged reading is left at most this often, so a busy session keeps
 // the app's evidence current without a file after every response.
 const UNCHANGED_READING_MS = 10 * 60_000
+// A request streams for minutes at most. One still listed after this was
+// dropped without its hook being finished, and dates nothing.
+const REQUEST_LIMIT_MS = 30 * 60_000
 const NOT_SET_UP = 'AI Usage has not been connected to Claude Code on this computer. Install the mod from AI Usage → Settings → Sources.'
 const NO_GLANCE = 'AI Usage has not shared any allowances yet. Open the AI Usage app once, and they appear here.'
 const UNREADABLE = 'AI Usage shared allowances this copy of the mod cannot read. Start a new Claude Code session to load the mod that matches your AI Usage.'
@@ -54,6 +57,16 @@ const inFlight = new Map()
 let pendingSince = null
 let responsesSinceReading = 0
 let lastReading = null
+
+// When the earliest request still running began, or null with none running.
+function earliestInFlight(nowMs) {
+  let earliest = null
+  for (const [token, startedMs] of inFlight) {
+    if (nowMs - startedMs > REQUEST_LIMIT_MS) inFlight.delete(token)
+    else if (earliest == null || startedMs < earliest) earliest = startedMs
+  }
+  return earliest
+}
 
 // Where the app keeps the glance and collects readings and requests. The app
 // writes ai-usage.json beside this mod when it installs it; a copy loaded
@@ -150,7 +163,7 @@ async function leaveReading($, e) {
     // Responses that reported no limits (off a subscription) delivered none
     // to date: limits that appear later count from the requests after them.
     if (responsesSinceReading > 0) {
-      pendingSince = inFlight.size ? Math.min(...inFlight.values()) : null
+      pendingSince = earliestInFlight(Date.now())
       responsesSinceReading = 0
     }
     return
@@ -162,7 +175,7 @@ async function leaveReading($, e) {
   const consumed = responsesSinceReading
   // The next reading counts from the requests still running, if any. This is
   // taken now, so a response that lands while the file is written counts there.
-  pendingSince = inFlight.size ? Math.min(...inFlight.values()) : null
+  pendingSince = earliestInFlight(capturedMs)
   responsesSinceReading = 0
   const key = limitsKey(e.rateLimits)
   if (lastReading && lastReading.key === key && capturedMs - lastReading.atMs < UNCHANGED_READING_MS) return
@@ -394,7 +407,9 @@ export function register(on) {
     const token = {}
     const startedMs = Date.now()
     inFlight.set(token, startedMs)
-    if (pendingSince == null) pendingSince = startedMs
+    // With no response since the last reading, the window starts from the
+    // requests still running, this one included.
+    if (pendingSince == null || responsesSinceReading === 0) pendingSince = earliestInFlight(startedMs)
     let answered = false
     try {
       const result = yield* next(e)
@@ -407,7 +422,7 @@ export function register(on) {
       // response has arrived since the last reading, the window starts again
       // from the requests still running, so a later response is not dated by
       // a failure that may be long past.
-      if (!answered && responsesSinceReading === 0) pendingSince = inFlight.size ? Math.min(...inFlight.values()) : null
+      if (!answered && responsesSinceReading === 0) pendingSince = earliestInFlight(Date.now())
     }
   })
 
