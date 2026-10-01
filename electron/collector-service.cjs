@@ -24,6 +24,7 @@ function createCollectorService({
   databasePath,
   backupDirectory,
   inboxPath,
+  claudeCodeReadingsDirectory = null,
   collectors = { codex: refreshCodex, claude: refreshClaude },
   openStore = (database, backups) => new UsageStore(database, backups),
 }) {
@@ -59,7 +60,7 @@ function createCollectorService({
   const runCodex = () => queued('codex', () => collectors.codex(getStore()));
   const runClaude = (readPlanUsage) => queued(
     'claude',
-    (options) => collectors.claude(getStore(), inboxPath, { readPlanUsage: options.readPlanUsage }),
+    (options) => collectors.claude(getStore(), inboxPath, { readPlanUsage: options.readPlanUsage, claudeCodeReadingsDirectory }),
     { readPlanUsage },
   );
 

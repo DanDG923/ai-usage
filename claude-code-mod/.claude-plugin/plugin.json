@@ -1,0 +1,6 @@
+{
+  "name": "ai-usage",
+  "version": "1.0.0",
+  "description": "Shows your AI Usage allowances inside Claude Code and shares Claude Code's plan limits with the AI Usage app",
+  "author": { "name": "DanDG923" }
+}

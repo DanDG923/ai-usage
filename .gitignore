@@ -37,3 +37,7 @@ Microsoft/
 /.tmp-npm-cache/
 /.tmp-electron-cache/
 *.aiusage.json.gz
+
+# Written by Claude Code whenever it loads the mod from this folder.
+/claude-code-mod/.claude-plugin/types/
+/claude-code-mod/tsconfig.json
