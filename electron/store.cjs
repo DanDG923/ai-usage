@@ -1196,8 +1196,11 @@ class UsageStore {
       grouped.get(row.bucket_id).push(row);
     }
     // A stale status-line restatement must not become the card's current
-    // balance, a forecast reading or a token-capacity interval.
-    const restatementOptions = { nowMs, freshReadGraceMs: freshReadGraceFor(settings) };
+    // balance, a forecast reading or a token-capacity interval. Readings are
+    // compared in the allowance in force now, as the forecast compares them,
+    // or one taken after a recorded change is held back for being lower than
+    // a read of the old allowance.
+    const restatementOptions = { nowMs, freshReadGraceMs: freshReadGraceFor(settings), allowanceChanges: settings.allowanceChanges, sourceId };
     for (const [bucketId, bucketRows] of grouped) {
       grouped.set(bucketId, withoutStaleRestatements(bucketRows, restatementOptions));
     }

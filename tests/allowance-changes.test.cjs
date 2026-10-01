@@ -294,6 +294,25 @@ test('the store validates, normalizes, persists and applies allowance changes to
   assert.deepEqual(store.getQuota('claude', store.getSettings(), now).forecast, original.forecast);
 });
 
+test('the card judges a status-line reading against an earlier read in the current allowance', (t) => {
+  // A read shows 40% of an allowance a quarter the size of the one in force
+  // from 06:00: ten points of the new one. The status line's 11% after the
+  // change is newer use, not a session restating a figure the read had passed.
+  const store = fixture(t);
+  store.updateSettings({ activeStartHour: 0, activeEndHour: 24, allowanceChanges: [change({ previousAllowancePercent: 25 })] });
+  for (const [at, usedPercent, provenance] of [[local(13, 5), 40, 'official'], [local(13, 7), 11, 'official-statusline']]) {
+    store.recordObservation({ ...row(new Date(at).toISOString(), usedPercent, { provenance }),
+      resetsAt: new Date(RESET).toISOString(), bucketName: 'Weekly' });
+  }
+  const now = local(13, 8);
+  const quota = store.getQuota('claude', store.getSettings(), now);
+  assert.equal(quota.usedPercent, 11, 'the status-line reading is the card\'s latest');
+  assert.equal(quota.provenance, 'official-statusline');
+  const expected = forecastQuota(store.prepare('SELECT * FROM quota_observations').all(),
+    { now, schedule, allowanceChanges: store.getSettings().allowanceChanges });
+  assert.deepEqual(quota.forecast, expected, 'the card forecasts from the rows the forecast itself keeps');
+});
+
 test('the derived Fable estimate reads overall steps in the current allowance', (t) => {
   const OVERALL_RESET = '2026-09-02T00:00:00.000Z';
   const overall = (observedAt, usedPercent) => store.recordObservation({

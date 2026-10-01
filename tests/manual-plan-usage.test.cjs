@@ -498,6 +498,26 @@ test('without a plan-usage read, Claude is judged by the age of its latest offic
     assert.equal(source('claude-fable').status, 'stale');
     assert.equal(source('claude-fable').metadata.automatic.health.officialSource, 'not-requested');
   });
+  await t.test('a status-line reading after an allowance change is judged in the new allowance', async (tt) => {
+    const { store, source } = collectorFixture(tt);
+    // A Refresh three hours ago read 40% of an allowance a quarter the size
+    // of the one in force from an hour later: ten points of it. The old helper
+    // then redraws 11%, newer use that the card shows but cannot date.
+    store.updateSettings({ allowanceChanges: [{ source: 'claude', at: new Date(Date.now() - 2 * 3_600_000).toISOString(), previousAllowancePercent: 25 }] });
+    for (const [sourceId, bucketId] of [['claude', 'seven_day'], ['claude-fable', 'fable_seven_day']]) {
+      for (const [hoursAgo, usedPercent, provenance] of [[3, 40, 'official-claude-usage'], [1 / 60, 11, 'official-statusline']]) {
+        store.recordObservation({ sourceId, bucketId, bucketName: 'Weekly',
+          observedAt: new Date(Date.now() - hoursAgo * 3_600_000).toISOString(), usedPercent, remainingPercent: 100 - usedPercent,
+          resetsAt: new Date(Date.now() + 3 * 86_400_000).toISOString(), windowMinutes: 10_080, provenance, confidence: 1, metadata: {} });
+      }
+    }
+    await refreshClaude(store, path.join(store.backupDirectory, 'missing.jsonl'), { activityReader: { import: async () => ({ usageEvents: 0 }) } });
+    assert.equal(store.getQuota('claude', store.getSettings()).usedPercent, 11, 'it is the figure shown');
+    assert.equal(source('claude').status, 'stale');
+    assert.equal(store.getQuota('claude-fable', store.getSettings()).usedPercent, 11);
+    assert.equal(source('claude-fable').metadata.automatic.allowance.usedPercent, 11);
+    assert.equal(source('claude-fable').status, 'stale');
+  });
   await t.test('a manual entry is not a plan-usage reading', async (tt) => {
     const { store, source, reading } = collectorFixture(tt);
     reading({ hoursAgo: 1, provenance: 'manual-official' });

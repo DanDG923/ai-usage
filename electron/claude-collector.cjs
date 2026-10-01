@@ -691,7 +691,8 @@ function uninstallClaudeHelper() {
 // recent by the dashboard verdict's freshness rule. An automatic refresh does
 // not read plan usage, so this is how it judges the Claude source.
 // Readings are judged as the card shows them: a lower status-line reading
-// that restates limits a session fetched earlier is held back there, so it
+// that restates limits a session fetched earlier is held back there (lower in
+// the allowance in force now, not in a share of an earlier one), so it
 // can make Claude neither current here nor a failed Refresh successful. Each
 // window is as recent as its evidence (`evidence_at`), not its latest redraw,
 // and a redraw from a session first seen with limits in hand is known only
@@ -710,8 +711,9 @@ function latestPlanUsageReading(store, nowMs, graceMs, emptyReadMs = null) {
   }
   const latest = new Map();
   let lastPlanUsageReadMs = null;
+  const restatementOptions = { nowMs, freshReadGraceMs: graceMs, allowanceChanges: store.getSettings().allowanceChanges, sourceId: 'claude' };
   for (const [bucketId, bucketRows] of buckets) {
-    const accepted = withoutStaleRestatements(bucketRows, { nowMs, freshReadGraceMs: graceMs })
+    const accepted = withoutStaleRestatements(bucketRows, restatementOptions)
       .filter((row) => isProviderProvenance(row.provenance));
     // One plan-usage read records every window it returns at the same instant.
     const planUsageRead = accepted.findLast((row) => row.provenance === 'official-claude-usage');
