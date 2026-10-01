@@ -134,7 +134,16 @@ async function ask($, action) {
 // then: a measurement with no response since the last reading is an idle
 // repeat, which the app could not date.
 async function leaveReading($, e) {
-  if (!paths || pendingSince == null || !Array.isArray(e.rateLimits) || e.rateLimits.length === 0) return
+  if (!paths || pendingSince == null || !Array.isArray(e.rateLimits)) return
+  if (e.rateLimits.length === 0) {
+    // Responses that reported no limits (off a subscription) delivered none
+    // to date: limits that appear later count from the requests after them.
+    if (responsesSinceReading > 0) {
+      pendingSince = inFlight.size ? Math.min(...inFlight.values()) : null
+      responsesSinceReading = 0
+    }
+    return
+  }
   const moved = Array.isArray(e.changed) && e.changed.includes('rateLimits')
   if (!moved && responsesSinceReading === 0) return
   const capturedMs = Date.now()

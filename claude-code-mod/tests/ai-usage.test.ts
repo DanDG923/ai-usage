@@ -282,6 +282,19 @@ test('a reading that could not be saved is written with the next response', asyn
   expect(Date.parse(JSON.parse(writes[0].text).fetched_after) <= before + 50).toBe(true)
 })
 
+test('responses that reported no limits do not date limits that appear later', async ($, on) => {
+  const { writes } = stub(on)
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await step($, 0)
+  await $.session.measure({ context: { window: 200_000 }, rateLimits: [], changed: ['context'] })
+  await new Promise((resolve) => setTimeout(resolve, 25))
+  const before = Date.now()
+  await step($, 1)
+  await $.session.measure({ context: { window: 200_000 }, rateLimits: LIMITS(20), changed: ['rateLimits'] })
+  expect(writes.length).toBe(1)
+  expect(Date.parse(JSON.parse(writes[0].text).fetched_after) >= before).toBe(true)
+})
+
 test('no reading without plan limits, as off a subscription', async ($, on) => {
   const { writes } = stub(on)
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
