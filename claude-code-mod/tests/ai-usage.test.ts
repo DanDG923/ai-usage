@@ -303,6 +303,14 @@ test('no reading without plan limits, as off a subscription', async ($, on) => {
   expect(writes.length).toBe(0)
 })
 
+test('no reading is left for an app that has been silent for more than a week', async ($, on) => {
+  const { writes } = stub(on, { feed: glance('safe', { writtenAt: new Date(Date.now() - 8 * 24 * HOUR).toISOString() }) })
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await step($)
+  await $.session.measure({ context: { window: 200_000 }, rateLimits: LIMITS(20), changed: ['rateLimits'] })
+  expect(writes.length).toBe(0)
+})
+
 test('sync and open leave a request for a running app, and say so when it is not running', async ($, on) => {
   const { writes, toasts } = stub(on)
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })

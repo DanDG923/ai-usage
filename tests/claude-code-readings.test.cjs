@@ -120,6 +120,14 @@ test('malformed, foreign and future files are discarded, and a torn one is retri
   assert.deepEqual(rows(store), []);
 });
 
+test('of a backlog the newest readings are imported first, and the rest wait', (t) => {
+  const { directory, store } = setup(t);
+  for (let index = 0; index <= 2_000; index += 1) write(directory, `${String(index).padStart(15, '0')}-s-1.json`, '{}');
+  const result = importClaudeCodeReadings(store, directory);
+  assert.equal(result.files, 2_000);
+  assert.deepEqual(fs.readdirSync(directory), ['000000000000000-s-1.json']);
+});
+
 test('an import that cannot store keeps the reading for the next collection', (t) => {
   const { directory, store } = setup(t);
   const nowMs = Date.now();

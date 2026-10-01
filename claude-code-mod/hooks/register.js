@@ -35,6 +35,9 @@ const POLL_MS = 15_000
 // An unchanged reading is left at most this often, so a busy session keeps
 // the app's evidence current without a file after every response.
 const UNCHANGED_READING_MS = 10 * 60_000
+// Readings are for an app that will collect them: none are left once it has
+// been silent this long (removed, or not started again).
+const APP_GONE_MS = 7 * 24 * 60 * 60_000
 // A request streams for minutes at most. One still listed after this was
 // dropped without its hook being finished, and dates nothing.
 const REQUEST_LIMIT_MS = 30 * 60_000
@@ -177,6 +180,7 @@ async function leaveReading($, e) {
   // taken now, so a response that lands while the file is written counts there.
   pendingSince = earliestInFlight(capturedMs)
   responsesSinceReading = 0
+  if (!(capturedMs - Date.parse(glance?.writtenAt ?? '') <= APP_GONE_MS)) return
   const key = limitsKey(e.rateLimits)
   if (lastReading && lastReading.key === key && capturedMs - lastReading.atMs < UNCHANGED_READING_MS) return
   const previous = lastReading

@@ -342,7 +342,9 @@ function importClaudeCodeReadings(store, directory, { nowMs = Date.now() } = {})
   if (!directory) return result;
   let names;
   try {
-    names = fs.readdirSync(directory).filter((name) => name.endsWith('.json')).sort().slice(0, MAX_CLAUDE_CODE_READINGS);
+    // Of a backlog, the newest first: they are what makes Claude current. The
+    // rest wait for the collections that follow.
+    names = fs.readdirSync(directory).filter((name) => name.endsWith('.json')).sort().slice(-MAX_CLAUDE_CODE_READINGS);
   } catch (error) {
     // The mod creates the folder with its first reading.
     return error?.code === 'ENOENT' ? result : emptyInboxResult({ files: 0, readErrors: 1 });
