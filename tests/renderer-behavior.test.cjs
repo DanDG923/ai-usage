@@ -609,6 +609,38 @@ test('empty hourly activity and chart data tables are available without pointer 
   assert.match(render(DailyUsageChart, { rows: [{ date: '2026-09-14', tokens: 100 }], days: 30 }), /View daily token data.*<table>/);
 });
 
+// The value labels down a chart's left edge, bottom first.
+const axisLabels = (html) => [...html.matchAll(/class="chart-grid"><\/line><text class="chart-axis"[^>]*>([^<]*)<\/text>/g)].map((match) => match[1]);
+const costPeriod = (codex, claude) => ({
+  ...demoSnapshot.costs, currency: 'GBP', periodDays: 7, chart: [{ date: lib.localDateKey(new Date()), codex, claude }],
+});
+
+test('a period with no priced usage labels its cost axis in distinct whole pence', async () => {
+  const { CostChart } = await server.ssrLoadModule('/src/components/Charts.tsx');
+  const labels = axisLabels(render(CostChart, { costs: costPeriod(0, 0) }));
+  assert.ok(labels.length >= 2, 'the cost axis is labelled');
+  assert.equal(new Set(labels).size, labels.length, `repeated cost labels: ${labels.join(' ')}`);
+  assert.deepEqual(labels, ['£0.00', '£0.01', '£0.02', '£0.03', '£0.04']);
+});
+
+test('a few pence of cost keeps the decimals its axis step needs', async () => {
+  const { CostChart } = await server.ssrLoadModule('/src/components/Charts.tsx');
+  // A 9p peak steps by 2.5p: two decimals would round the ticks to £0.03 / £0.05 / £0.08.
+  const labels = axisLabels(render(CostChart, { costs: costPeriod(0.06, 0.03) }));
+  assert.equal(new Set(labels).size, labels.length, `repeated cost labels: ${labels.join(' ')}`);
+  assert.deepEqual(labels, ['£0.000', '£0.025', '£0.050', '£0.075', '£0.100']);
+});
+
+test('an empty or near-empty token period labels its axis in whole tokens', async () => {
+  const { DailyUsageChart } = await server.ssrLoadModule('/src/components/Charts.tsx');
+  for (const tokens of [0, 1]) {
+    const labels = axisLabels(render(DailyUsageChart, { rows: [{ date: lib.localDateKey(new Date()), tokens }], days: 7 }));
+    assert.ok(labels.length >= 2, `peak ${tokens}: the token axis is labelled`);
+    assert.ok(labels.every((label) => /^\d+$/.test(label)), `peak ${tokens}: ${labels.join(' ')}`);
+    assert.equal(new Set(labels).size, labels.length, `peak ${tokens}: ${labels.join(' ')}`);
+  }
+});
+
 test('Claude model-scoped weeks are named and grouped apart, never read as the plan weekly allowance', () => {
   const window = (bucketId, bucketName, metadata) => ({ bucketId, bucketName, windowMinutes: 10_080, metadata });
   assert.equal(lib.modelAllowanceName(window('seven_day', 'Weekly', { scope: 'overall' })), null);

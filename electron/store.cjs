@@ -29,7 +29,7 @@ const COMPACT_AFTER_MS = 60 * DAY_MS;
 // About a megabyte of ledger CSV is written at a time.
 const CSV_BATCH_CHARS = 1 << 20;
 const OPENAI_LONG_CONTEXT_THRESHOLD = 272_000;
-const OPENAI_LONG_CONTEXT_MODELS = new Set(['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
+const OPENAI_LONG_CONTEXT_MODELS = new Set(['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
 
 const DEFAULT_SETTINGS = {
   showCodexSubscription: true,
@@ -171,6 +171,9 @@ function priceSourceUrl(value) {
 const PRICE_ROWS = [
   // Standard API rates verified 2026-09-04; OpenAI has one cache-write rate.
   ['gpt-6-astra', 10, 12.5, 12.5, 1, 50],
+  // GPT-6.1 Sol standard rates verified 2026-10-01. It differs from GPT-6 Sol
+  // only in cached input: $0.10 against $0.20 per MTok.
+  ['gpt-6.1-sol', 2, 2.5, 2.5, 0.1, 10],
   // GPT-6 Sol and Luna standard rates verified 2026-09-22.
   ['gpt-6-sol', 2, 2.5, 2.5, 0.2, 10],
   ['gpt-6-luna', 0.1, 0.125, 0.125, 0.01, 0.5],
@@ -702,15 +705,18 @@ class UsageStore {
       ON CONFLICT(model) DO NOTHING
     `);
     for (const row of PRICE_ROWS) {
-      const astra = row[0] === 'gpt-6-astra';
-      const newGpt6 = row[0] === 'gpt-6-sol' || row[0] === 'gpt-6-luna';
+      // OpenAI rows sourced from the model's own page, with their effective
+      // dates; the other OpenAI rows cite the comparison page.
+      const openAiEffective = {
+        'gpt-6-astra': '2026-09-04', 'gpt-6.1-sol': '2026-09-29', 'gpt-6-sol': '2026-09-22', 'gpt-6-luna': '2026-09-22',
+      }[row[0]];
       const claudeEffective = { 'claude-fable-5-1': '2026-09-01', 'claude-opus-5-5': '2026-09-22' }[row[0]];
-      const source = astra || newGpt6
+      const source = openAiEffective
         ? `https://developers.openai.com/api/docs/models/${row[0]}`
         : row[0].startsWith('claude')
         ? 'https://platform.claude.com/docs/en/about-claude/pricing'
         : 'https://developers.openai.com/api/docs/models/compare';
-      insertPrice.run(...row, claudeEffective ?? (newGpt6 ? '2026-09-22' : astra ? '2026-09-04' : '2026-08-01'), source);
+      insertPrice.run(...row, openAiEffective ?? claudeEffective ?? '2026-08-01', source);
     }
     // Repair only the obsolete built-in Sonnet row. User-edited rows do not
     // match this complete old vector and are left alone.
@@ -1196,8 +1202,11 @@ class UsageStore {
       grouped.get(row.bucket_id).push(row);
     }
     // A stale status-line restatement must not become the card's current
-    // balance, a forecast reading or a token-capacity interval.
-    const restatementOptions = { nowMs, freshReadGraceMs: freshReadGraceFor(settings) };
+    // balance, a forecast reading or a token-capacity interval. Readings are
+    // compared in the allowance in force now, as the forecast compares them,
+    // or one taken after a recorded change is held back for being lower than
+    // a read of the old allowance.
+    const restatementOptions = { nowMs, freshReadGraceMs: freshReadGraceFor(settings), allowanceChanges: settings.allowanceChanges, sourceId };
     for (const [bucketId, bucketRows] of grouped) {
       grouped.set(bucketId, withoutStaleRestatements(bucketRows, restatementOptions));
     }
@@ -1926,7 +1935,13 @@ class UsageStore {
     const nextEvent = this.prepare(`SELECT occurred_at FROM usage_events
       WHERE source_id = ? AND occurred_at >= ? ${modelFilter}
       ORDER BY occurred_at ASC LIMIT 1`).get(eventSource, iso(nowMs));
+    // A stored reading dated beyond the clock-skew allowance joins its cycle
+    // once the clock comes within that allowance of it.
+    const nextReading = this.prepare(`SELECT observed_at FROM quota_observations
+      WHERE source_id = ? AND bucket_id = ? AND observed_at > ?
+      ORDER BY observed_at ASC LIMIT 1`).get(sourceId, quota.bucketId, iso(nowMs + QUOTA_CLOCK_SKEW_MS));
     const expiresAt = Math.min(nextEvent ? Date.parse(nextEvent.occurred_at) + 1 : Infinity,
+      nextReading ? Date.parse(nextReading.observed_at) - QUOTA_CLOCK_SKEW_MS : Infinity,
       ...value.filter((row) => row.current).map((row) => Date.parse(row.resetsAt)));
     this.cycleHistoryCache.delete(key);
     this.cycleHistoryCache.set(key, { at: nowMs, expiresAt, revision, value });
@@ -1943,9 +1958,18 @@ class UsageStore {
         COUNT(*) AS readings
       FROM quota_observations
       WHERE source_id = ? AND bucket_id = ?
+        -- The same recheck getQuota applies with validQuotaTime: older app
+        -- versions could store dates and windows now rejected on ingest.
+        -- Stored times are toISOString() text, so julianday reads them
+        -- exactly; rounding to whole milliseconds keeps the bounds exact.
+        AND julianday(observed_at) <= julianday(?)
+        AND CAST(ROUND((julianday(resets_at) - julianday(observed_at)) * 86400000) AS INTEGER) BETWEEN ? AND ?
+        AND (window_minutes IS NULL
+          OR (typeof(window_minutes) = 'integer' AND window_minutes BETWEEN 0 AND ?))
       GROUP BY resets_at
       ORDER BY resets_at DESC
-    `).iterate(sourceId, bucketId);
+    `).iterate(sourceId, bucketId, iso(nowMs + QUOTA_CLOCK_SKEW_MS),
+      -QUOTA_CLOCK_SKEW_MS, MAX_QUOTA_RESET_AHEAD_MS, MAX_QUOTA_RESET_AHEAD_MS / 60_000);
     // Before its first use, an idle allowance can roll its reset forward with
     // every poll. Fold those unused readings into the subsequently pinned
     // window as well as merging ordinary sub-minute timestamp jitter.

@@ -509,6 +509,11 @@ function latestEvidenceAt(rows, options = {}) {
 // window an early replenishment replaced as well as show a corrected reset.
 // Readings must be in time order; readings before any evidence are kept
 // because nothing yet shows them to be stale.
+// Given the recorded `allowanceChanges` (and the `sourceId` for rows that do
+// not name it), readings are compared in the allowance in force now, as the
+// forecast compares them: after a fourfold upgrade a read of 40% is today's
+// 10%, so a later 11% is newer use, not a restatement. The rows kept come back
+// as given, so a caller that forecasts from them rescales them only once.
 const STALE_RESTATEMENT_MARGIN = 0.5;
 const FRESH_READ_GRACE_MS = 2 * HOUR_MS;
 // The least an undated lower reading waits for the provider's next read: two
@@ -517,8 +522,8 @@ function freshReadGraceFor(settings) {
   const minutes = Number(settings.refreshIntervalMinutes);
   return Math.max(FRESH_READ_GRACE_MS, minutes > 0 ? 2 * minutes * 60_000 : 0);
 }
-function withoutStaleRestatements(rows, { nowMs = Date.now(), freshReadGraceMs = FRESH_READ_GRACE_MS } = {}) {
-  const parsed = rows.map(normaliseObservation);
+function withoutStaleRestatements(rows, { nowMs = Date.now(), freshReadGraceMs = FRESH_READ_GRACE_MS, allowanceChanges, sourceId } = {}) {
+  const parsed = rescaleObservations(rows.map(normaliseObservation), { allowanceChanges, now: nowMs, sourceId });
   const nextFresh = Array.from({ length: parsed.length }, () => null);
   for (let index = parsed.length - 1, next = null; index >= 0; index -= 1) {
     nextFresh[index] = next;

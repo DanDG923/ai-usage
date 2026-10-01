@@ -247,7 +247,9 @@ function getLastCurrentOfficial(store, nowMs) {
   `).all(FABLE_SOURCE_ID, FABLE_BUCKET_ID, ...OFFICIAL_PROVENANCES, new Date(nowMs + QUOTA_CLOCK_SKEW_MS).toISOString(),
     new Date(nowMs - 8 * 24 * 60 * 60 * 1000).toISOString())
     .filter((row) => validQuotaTime(Date.parse(row.observed_at), Date.parse(row.resets_at), row.window_minutes, nowMs));
-  const accepted = withoutStaleRestatements(rows, { nowMs, freshReadGraceMs: freshReadGraceFor(store.getSettings()) });
+  const settings = store.getSettings();
+  const accepted = withoutStaleRestatements(rows,
+    { nowMs, freshReadGraceMs: freshReadGraceFor(settings), allowanceChanges: settings.allowanceChanges, sourceId: FABLE_SOURCE_ID });
   if (!accepted.length) return null;
   // A manual entry can be the allowance, but never evidence that the provider
   // was read recently: a provider figure is dated by provider readings alone.

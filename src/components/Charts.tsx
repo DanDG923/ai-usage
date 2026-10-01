@@ -687,9 +687,23 @@ export function RunwayChart({
 
 const axisMoneyFormats = new Map<string, Intl.NumberFormat>();
 
-/** Axis money: whole units when every step is whole ("£20"), otherwise pence ("£2.50"). */
+/** Decimal places that write `step` exactly, so 0.1 + 0.2 counts as one place rather than seventeen. */
+function stepDecimals(step: number) {
+  for (let digits = 0; digits < 6; digits += 1) {
+    const scaled = step * 10 ** digits;
+    if (Math.abs(scaled - Math.round(scaled)) < 1e-9 * Math.max(1, scaled)) return digits;
+  }
+  return 6;
+}
+
+/**
+ * Axis money: whole units when every step is whole ("£20"), otherwise pence
+ * ("£2.50"), and a further place when the step needs one ("£0.025"), so no two
+ * ticks round to the same label.
+ */
 function axisMoney(value: number, currency: string, step: number) {
-  const digits = Number.isInteger(step) ? 0 : 2;
+  const needed = stepDecimals(step);
+  const digits = needed === 0 ? 0 : Math.max(2, needed);
   const key = `${currency}|${digits}`;
   let format = axisMoneyFormats.get(key);
   if (!format) {
@@ -721,7 +735,8 @@ function costLayout(costs: CostAnalytics, todayMs: number, width: number) {
   const points = recentDayKeys(costs.periodDays, todayMs).map(
     (date) => byDate.get(date) || { date, codex: 0, claude: 0 },
   );
-  const axis = niceScale(Math.max(...points.map((point) => point.codex + point.claude), 0.01));
+  // A 4p floor steps an empty or unpriced period in whole pence.
+  const axis = niceScale(Math.max(...points.map((point) => point.codex + point.claude), 0.04));
   const max = axis.max;
   const plotWidth = width - COST.left - COST.right;
   const plotHeight = COST.height - COST.top - COST.bottom;
@@ -932,7 +947,8 @@ function dailyLayout(rows: DailyUsage[], days: number, todayMs: number, width: n
   const totals = new Map<string, number>();
   for (const row of rows) totals.set(row.date, (totals.get(row.date) || 0) + Number(row.tokens || 0));
   const points = recentDayKeys(days, todayMs).map((date) => ({ date, tokens: totals.get(date) || 0 }));
-  const axis = niceScale(Math.max(...points.map((point) => point.tokens), 1));
+  // A floor of 4 steps an empty period in whole tokens.
+  const axis = niceScale(Math.max(...points.map((point) => point.tokens), 4));
   const max = axis.max;
   const plotWidth = width - DAILY.left - DAILY.right;
   const plotHeight = DAILY.height - DAILY.top - DAILY.bottom;

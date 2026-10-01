@@ -228,12 +228,14 @@ test('Astra prices cached input, cache writes, and output at the exact long-cont
   assert.equal(store.resolvePrice('gpt-6-astra-unknown'), null);
 }));
 
-for (const [model, standardUsd, longUsd] of [
-  ['gpt-6-sol', 0.424, 0.843004],
-  ['gpt-6-luna', 0.0212, 0.0421502],
+// inputUsd is the cost of 100,000 uncached input tokens at the model's rate.
+for (const [model, standardUsd, longUsd, effectiveFrom, inputUsd] of [
+  ['gpt-6-sol', 0.424, 0.843004, '2026-09-22', 0.2],
+  ['gpt-6-luna', 0.0212, 0.0421502, '2026-09-22', 0.01],
+  ['gpt-6.1-sol', 0.414, 0.823004, '2026-09-29', 0.2],
 ]) {
   test(`${model} prices every token category at the long-context boundary`, () => withStore((store) => {
-    for (const name of [model, `${model}-20260922`, `${model}-2026-09-22`]) {
+    for (const name of [model, `${model}-${effectiveFrom.replaceAll('-', '')}`, `${model}-${effectiveFrom}`]) {
       const row = {
         source_id: 'codex', model: name, input_tokens: 172_000, cached_input_tokens: 100_000,
         cache_write_input_tokens: 100_000, cache_write_5m_input_tokens: 50_000,
@@ -267,9 +269,9 @@ for (const [model, standardUsd, longUsd] of [
       const costs = store.getCostAnalytics(1);
       assert.equal(costs.coverage, 1);
       assert.equal(costs.isComplete, true);
-      assert.ok(Math.abs(costs.actual - (model === 'gpt-6-sol' ? 0.2 : 0.01)) < 1e-12);
+      assert.ok(Math.abs(costs.actual - inputUsd) < 1e-12);
       assert.deepEqual(costs.unpricedModels, []);
-      assert.equal(store.resolvePrice(model).effective_from, '2026-09-22');
+      assert.equal(store.resolvePrice(model).effective_from, effectiveFrom);
       assert.equal(store.resolvePrice(model).source_url, `https://developers.openai.com/api/docs/models/${model}`);
       store.updatePrice({ model, inputUsdPerMillion: 3, cacheWriteUsdPerMillion: 4,
         cacheWrite1hUsdPerMillion: 4, cacheReadUsdPerMillion: 0.3, outputUsdPerMillion: 15 });

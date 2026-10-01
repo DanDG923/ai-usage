@@ -167,3 +167,50 @@ test('five-hour, weekly and maximum windows retain their true reset and strict s
     }
   }
 });
+
+test('cycle history skips stored rows that the quota card already rejects', (t) => {
+  t.mock.method(Date, 'now', () => NOW);
+  const store = new UsageStore(':memory:', os.tmpdir());
+  try {
+    store.recordObservation({ ...observation(NOW - 8 * DAY, NOW - DAY), usedPercent: 40, remainingPercent: 60, sourceId: 'codex', bucketId: 'weekly' });
+    store.recordObservation({ ...observation(NOW - DAY + HOUR, NOW + 6 * DAY), sourceId: 'codex', bucketId: 'weekly' });
+    // Bypass ingestion to model rows an older application version accepted.
+    const insert = store.db.prepare(`INSERT INTO quota_observations
+      (source_id, bucket_id, observed_at, resets_at, used_percent, remaining_percent, window_minutes, provenance)
+      VALUES ('codex', 'weekly', ?, ?, 95, 5, ?, 'official')`);
+    for (const [observed, reset, window] of [
+      [NOW - 10 * HOUR, NOW + 89 * DAY, 10080],
+      [NOW + SKEW + 1, NOW + 3 * DAY, 10080],
+      [NOW - 11 * HOUR, NOW - 11 * HOUR - SKEW - 1, 10080],
+      [NOW - 12 * HOUR, NOW + 2 * DAY, 999999999],
+      [NOW - 13 * HOUR, NOW + 3 * DAY, 2.5],
+    ]) insert.run(iso(observed), iso(reset), window);
+    const quota = store.getQuota('codex', store.getSettings(), NOW);
+    const cycles = store.getCycleHistory('codex', quota, store.getSettings(), 8, NOW);
+    assert.deepEqual(cycles.map((row) => [row.resetsAt, row.peakUsedPercent, row.current]), [
+      [iso(NOW + 6 * DAY), 10, true],
+      [iso(NOW - DAY), 40, false],
+    ]);
+    // Exactly at the ingest limits a row still counts, as it does for the card.
+    insert.run(iso(NOW + SKEW), iso(NOW + SKEW + 31 * DAY), 31 * 24 * 60);
+    const edge = store.getCycleHistory('codex', quota, store.getSettings(), 8, NOW + 1);
+    assert.equal(edge[0].resetsAt, iso(NOW + SKEW + 31 * DAY));
+  } finally { store.close(); }
+});
+
+test('cached cycle history admits a stored future row once the clock reaches it', (t) => {
+  t.mock.method(Date, 'now', () => NOW);
+  const store = new UsageStore(':memory:', os.tmpdir());
+  try {
+    store.recordObservation({ ...observation(NOW - DAY, NOW + 6 * DAY), sourceId: 'codex', bucketId: 'weekly' });
+    // A clock that ran ahead and was then corrected leaves a row observed in the future.
+    store.db.prepare(`INSERT INTO quota_observations
+      (source_id, bucket_id, observed_at, resets_at, used_percent, remaining_percent, window_minutes, provenance)
+      VALUES ('codex', 'weekly', ?, ?, 30, 70, 10080, 'official')`).run(iso(NOW + SKEW + HOUR), iso(NOW + 8 * DAY));
+    const quota = store.getQuota('codex', store.getSettings(), NOW);
+    const resets = (nowMs) => store.getCycleHistory('codex', quota, store.getSettings(), 8, nowMs).map((row) => row.resetsAt);
+    assert.deepEqual(resets(NOW), [iso(NOW + 6 * DAY)]);
+    assert.deepEqual(resets(NOW + HOUR - 1), [iso(NOW + 6 * DAY)]);
+    assert.deepEqual(resets(NOW + HOUR), [iso(NOW + 8 * DAY), iso(NOW + 6 * DAY)]);
+  } finally { store.close(); }
+});
