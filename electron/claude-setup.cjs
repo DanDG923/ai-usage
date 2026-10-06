@@ -4,10 +4,15 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFile, spawn } = require('node:child_process');
 const { findClaudeBinary, providerProcessOptions } = require('./provider-executable.cjs');
+const { fetchInstaller: downloadInstaller, verifyInstallerScript } = require('./claude-installer.cjs');
+const shippedPin = require('./claude-installer-pin.json');
 
-// Fixed vendor command: neither executable arguments nor script content come
-// from the renderer. The native installer needs no npm or administrator rights.
-const INSTALL_COMMAND = "$ErrorActionPreference='Stop'; & ([scriptblock]::Create((Invoke-RestMethod -Uri 'https://claude.ai/install.ps1' -TimeoutSec 60))) stable";
+// The vendor installer is fetched, checked against the digest pinned at
+// release time, written beside the setup state, and only then run from that
+// file. Neither executable arguments nor script content come from the
+// renderer. The native installer needs no npm or administrator rights.
+const INSTALLER_FILE = 'claude-install.ps1';
+const INSTALL_TARGET = 'stable';
 
 function runCommand(file, args, { timeoutMs = 15000, acceptExitOne = false, environment = process.env } = {}) {
   return new Promise((resolve, reject) => {
@@ -21,7 +26,10 @@ function runCommand(file, args, { timeoutMs = 15000, acceptExitOne = false, envi
 
 // `environment` is the one the app was launched with: the update check
 // removes GitHub tokens from process.env, and Claude must not inherit that.
-function createClaudeSetup({ statePath, findBinary = findClaudeBinary, run = runCommand, launch = spawn, installHelper, uninstallHelper, helperInstalled = () => false, environment = process.env } = {}) {
+function createClaudeSetup({
+  statePath, findBinary = findClaudeBinary, run = runCommand, launch = spawn, installHelper, uninstallHelper, helperInstalled = () => false,
+  environment = process.env, fetchInstaller = downloadInstaller, installerPin = shippedPin, log = () => {},
+} = {}) {
   let busy = false;
   let child = null;
   let cancelPending = null;
@@ -92,7 +100,25 @@ function createClaudeSetup({ statePath, findBinary = findClaudeBinary, run = run
     dismissed,
     install: () => exclusive(async () => {
       if (findBinary()) return;
-      await interactiveCommand(powershell, ['-NoProfile', '-NonInteractive', '-Command', INSTALL_COMMAND], 12 * 60_000);
+      let bytes;
+      try {
+        ({ bytes } = await fetchInstaller(installerPin.url));
+      } catch (error) {
+        log(`Claude installer download failed${error?.code ? ` (${error.code})` : ''}.`);
+        throw new Error('The Claude Code installer could not be downloaded. Check your connection and try again.');
+      }
+      // A changed script is reported with the vendor's own command and is
+      // never written to disk or run.
+      const digest = verifyInstallerScript(bytes, installerPin);
+      log(`Claude installer verified: sha256 ${digest} (${bytes.length} bytes, pinned ${installerPin.verifiedOn || 'unknown date'}).`);
+      const scriptPath = path.join(path.dirname(statePath), INSTALLER_FILE);
+      fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
+      fs.writeFileSync(scriptPath, bytes);
+      try {
+        await interactiveCommand(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, INSTALL_TARGET], 12 * 60_000);
+      } finally {
+        try { fs.unlinkSync(scriptPath); } catch { /* Already gone or still locked; it is overwritten on the next attempt. */ }
+      }
       if (!findBinary()) throw new Error('Claude Code installation could not be verified. Check your connection and try again.');
     }),
     login: () => exclusive(async () => {
@@ -116,4 +142,4 @@ function createClaudeSetup({ statePath, findBinary = findClaudeBinary, run = run
   };
 }
 
-module.exports = { createClaudeSetup, INSTALL_COMMAND, runCommand };
+module.exports = { createClaudeSetup, INSTALLER_FILE, INSTALL_TARGET, runCommand };
