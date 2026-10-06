@@ -114,6 +114,46 @@ test('a failed installer download is reported without request details and withou
   } finally { f.clean(); }
 });
 
+test('cancelling during the installer download aborts the request and leaves setup idle', async () => {
+  let launched = 0;
+  let aborted = false;
+  const pending = (_url, { signal }) => new Promise((_resolve, reject) => {
+    signal.addEventListener('abort', () => { aborted = true; reject(Object.assign(new Error('aborted'), { code: 'ABORT_ERR' })); });
+  });
+  const f = fixture({ findBinary: () => null, fetchInstaller: pending, installerPin, launch: () => { launched++; return new EventEmitter(); } });
+  try {
+    const install = f.setup.install();
+    const rejection = assert.rejects(install, (error) => error.code === 'CLAUDE_INSTALLER_DOWNLOAD_CANCELLED' && /cancelled/.test(error.message));
+    await new Promise((resolve) => setImmediate(resolve));
+    f.setup.cancel();
+    await rejection;
+    assert.equal(aborted, true);
+    assert.equal(launched, 0);
+    assert.equal(fs.existsSync(path.join(path.dirname(f.statePath), INSTALLER_FILE)), false);
+    assert.equal((await f.setup.status()).busy, false);
+    // A later cancel is a no-op rather than a stale handle.
+    f.setup.cancel();
+  } finally { f.clean(); }
+});
+
+test('a download that completes after Cancel is discarded and never launched', async () => {
+  let launched = 0;
+  let release;
+  const late = () => new Promise((resolve) => { release = () => resolve({ url: installerPin.url, bytes: Buffer.from(installerScript) }); });
+  const f = fixture({ findBinary: () => null, fetchInstaller: late, installerPin, launch: () => { launched++; return new EventEmitter(); } });
+  try {
+    const install = f.setup.install();
+    const rejection = assert.rejects(install, /cancelled/);
+    await new Promise((resolve) => setImmediate(resolve));
+    f.setup.cancel();
+    release();
+    await rejection;
+    assert.equal(launched, 0);
+    assert.equal(fs.existsSync(path.join(path.dirname(f.statePath), INSTALLER_FILE)), false);
+    assert.equal((await f.setup.status()).busy, false);
+  } finally { f.clean(); }
+});
+
 test('the installer script is removed even when the installer fails or is cancelled', async () => {
   const f = fixture({ findBinary: () => null, fetchInstaller: servedInstaller, installerPin, launch: () => {
     const child = new EventEmitter(); queueMicrotask(() => child.emit('exit', 1)); return child;

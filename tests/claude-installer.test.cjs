@@ -16,13 +16,15 @@ const pin = { url: 'https://claude.ai/install.ps1', sha256: digestOf(script), by
 
 // A fake https.get: `routes` maps a URL to a response description.
 function fakeGet(routes, calls = []) {
-  return (url, _options, onResponse) => {
+  return (url, options, onResponse) => {
     calls.push(url);
     const request = new EventEmitter();
     request.setTimeout = () => {};
     request.destroy = (error) => request.emit('error', error);
+    options.signal?.addEventListener('abort', () => request.emit('error', Object.assign(new Error('aborted'), { code: 'ABORT_ERR', name: 'AbortError' })));
     const route = routes[url];
     setImmediate(() => {
+      if (options.signal?.aborted) return;
       if (!route) { request.emit('error', Object.assign(new Error('getaddrinfo'), { code: 'ENOTFOUND' })); return; }
       const response = new EventEmitter();
       response.statusCode = route.status ?? 200;
@@ -66,6 +68,22 @@ test('a redirect to plain HTTP, a redirect loop, or a non-200 answer never yield
   const offline = fakeGet({});
   await assert.rejects(fetchInstaller('https://claude.ai/install.ps1', { get: offline }), (error) => error.code === 'CLAUDE_INSTALLER_DOWNLOAD_FAILED');
   await assert.rejects(fetchInstaller('http://claude.ai/install.ps1', { get: fakeGet({}) }), /HTTPS/);
+});
+
+test('an abort signal cancels the download before or during the request', async () => {
+  const early = new AbortController();
+  early.abort();
+  const calls = [];
+  await assert.rejects(fetchInstaller('https://claude.ai/install.ps1', { get: fakeGet({ 'https://claude.ai/install.ps1': { chunks: [script] } }, calls), signal: early.signal }),
+    (error) => error.code === 'CLAUDE_INSTALLER_DOWNLOAD_CANCELLED');
+  assert.equal(calls.length, 0, 'an already-cancelled download makes no request');
+  const during = new AbortController();
+  const seen = [];
+  const get = (url, options, onResponse) => { seen.push(options.signal); return fakeGet({})(url, options, onResponse); };
+  const pending = fetchInstaller('https://claude.ai/install.ps1', { get, signal: during.signal });
+  during.abort();
+  await assert.rejects(pending, (error) => error.code === 'CLAUDE_INSTALLER_DOWNLOAD_CANCELLED');
+  assert.equal(seen[0], during.signal, 'the signal is handed to the request');
 });
 
 test('an oversized download is abandoned instead of buffered', async () => {

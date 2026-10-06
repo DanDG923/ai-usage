@@ -79,19 +79,40 @@ function createClaudeSetup({
         cancelPending = null;
         if (error) reject(error); else resolve();
       };
-      cancelPending = () => finish(new Error('Claude setup was cancelled or timed out. You can try again.'));
+      cancelPending = () => finish(new Error(CANCELLED));
       active.once('error', () => finish(new Error('Claude setup could not start. Please try again.')));
       active.once('exit', (code) => finish(code === 0 ? null : new Error('Claude setup was cancelled or did not finish. You can try again.')));
     });
   }
+  // Cancels whichever stage is running: the installer download, which has no
+  // child process yet, or the interactive child process itself.
   function cancel() {
-    if (!child) return;
     const active = child;
     // Terminate only the process tree started by this setup operation.
-    if (Number.isInteger(active.pid)) {
+    if (active && Number.isInteger(active.pid)) {
       execFile(path.join(systemRoot, 'System32', 'taskkill.exe'), ['/PID', String(active.pid), '/T', '/F'], { windowsHide: true }, (error) => { if (error) active.kill(); });
     }
     cancelPending?.();
+  }
+  const CANCELLED = 'Claude setup was cancelled or timed out. You can try again.';
+  // Runs the download under a cancellation handle so Cancel (or shutdown)
+  // aborts the request, and a response that still arrives is discarded.
+  async function cancellableDownload(url) {
+    const controller = new AbortController();
+    let cancelled = false;
+    const handle = () => { cancelled = true; controller.abort(); };
+    cancelPending = handle;
+    try {
+      const { bytes } = await fetchInstaller(url, { signal: controller.signal });
+      if (cancelled) throw Object.assign(new Error(CANCELLED), { code: 'CLAUDE_INSTALLER_DOWNLOAD_CANCELLED' });
+      return bytes;
+    } catch (error) {
+      if (cancelled || error?.code === 'CLAUDE_INSTALLER_DOWNLOAD_CANCELLED') throw Object.assign(new Error(CANCELLED), { code: 'CLAUDE_INSTALLER_DOWNLOAD_CANCELLED' });
+      log(`Claude installer download failed${error?.code ? ` (${error.code})` : ''}.`);
+      throw new Error('The Claude Code installer could not be downloaded. Check your connection and try again.');
+    } finally {
+      if (cancelPending === handle) cancelPending = null;
+    }
   }
   return {
     status,
@@ -100,13 +121,7 @@ function createClaudeSetup({
     dismissed,
     install: () => exclusive(async () => {
       if (findBinary()) return;
-      let bytes;
-      try {
-        ({ bytes } = await fetchInstaller(installerPin.url));
-      } catch (error) {
-        log(`Claude installer download failed${error?.code ? ` (${error.code})` : ''}.`);
-        throw new Error('The Claude Code installer could not be downloaded. Check your connection and try again.');
-      }
+      const bytes = await cancellableDownload(installerPin.url);
       // A changed script is reported with the vendor's own command and is
       // never written to disk or run.
       const digest = verifyInstallerScript(bytes, installerPin);

@@ -29,11 +29,15 @@ function validPin(pin) {
     && typeof pin.sha256 === 'string' && /^[0-9a-f]{64}$/.test(pin.sha256);
 }
 
-function requestOnce(url, get, timeoutMs) {
+function requestOnce(url, get, timeoutMs, signal) {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(coded('Installer download was cancelled.', 'CLAUDE_INSTALLER_DOWNLOAD_CANCELLED'));
+      return;
+    }
     let request;
     try {
-      request = get(url, { headers: { 'user-agent': 'ai-usage-claude-setup' } }, (response) => {
+      request = get(url, { headers: { 'user-agent': 'ai-usage-claude-setup' }, ...(signal ? { signal } : {}) }, (response) => {
         const status = response.statusCode;
         if (REDIRECT_CODES.has(status)) {
           response.resume();
@@ -63,7 +67,11 @@ function requestOnce(url, get, timeoutMs) {
       reject(coded(`Installer download could not start: ${error?.code || 'request error'}.`, 'CLAUDE_INSTALLER_DOWNLOAD_FAILED'));
       return;
     }
-    request.on('error', (error) => reject(coded(`Installer download failed: ${error?.code || 'network error'}.`, 'CLAUDE_INSTALLER_DOWNLOAD_FAILED')));
+    request.on('error', (error) => {
+      if (signal?.aborted || error?.name === 'AbortError' || error?.code === 'ABORT_ERR') {
+        reject(coded('Installer download was cancelled.', 'CLAUDE_INSTALLER_DOWNLOAD_CANCELLED'));
+      } else reject(coded(`Installer download failed: ${error?.code || 'network error'}.`, 'CLAUDE_INSTALLER_DOWNLOAD_FAILED'));
+    });
     if (typeof request.setTimeout === 'function') {
       request.setTimeout(timeoutMs, () => {
         request.destroy(coded('Installer download timed out.', 'CLAUDE_INSTALLER_DOWNLOAD_FAILED'));
@@ -73,12 +81,13 @@ function requestOnce(url, get, timeoutMs) {
 }
 
 // Follows a bounded number of HTTPS-to-HTTPS redirects (claude.ai currently
-// forwards to downloads.claude.ai) and refuses any hop to another scheme.
-async function fetchInstaller(url, { get = https.get, timeoutMs = FETCH_TIMEOUT_MS } = {}) {
+// forwards to downloads.claude.ai) and refuses any hop to another scheme. An
+// aborted `signal` ends the download with CLAUDE_INSTALLER_DOWNLOAD_CANCELLED.
+async function fetchInstaller(url, { get = https.get, timeoutMs = FETCH_TIMEOUT_MS, signal } = {}) {
   let current = url;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
     if (!/^https:\/\//i.test(current)) throw coded('Installer download must use HTTPS.', 'CLAUDE_INSTALLER_DOWNLOAD_FAILED');
-    const result = await requestOnce(current, get, timeoutMs);
+    const result = await requestOnce(current, get, timeoutMs, signal);
     if (result.bytes) return { url: current, bytes: result.bytes };
     if (!result.redirect) throw coded('Installer download redirected without a destination.', 'CLAUDE_INSTALLER_DOWNLOAD_FAILED');
     current = new URL(result.redirect, current).href;
