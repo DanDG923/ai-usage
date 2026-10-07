@@ -198,3 +198,13 @@ test('Haiku 5.5 activity takes its share of the week instead of making the Fable
   near(shareScenario(t, 'claude-haiku-5-5', { cachedInputTokens: 100 * MILLION, outputTokens: 2 * MILLION })
     .usedPercent, 10 / 3 / 0.5, 1e-9, 'cache reads at $0.01 and output at $0.50');
 });
+
+test('an undated Haiku 5.5 variant is unpriced but still weighed as Haiku 5.5 in the Fable estimate', (t) => {
+  // Pricing takes only date suffixes; attribution falls back to the family,
+  // so the week stays covered rather than the estimate being withheld.
+  const projection = shareScenario(t, 'claude-haiku-5-5-fast', { inputTokens: 10 * MILLION });
+  assert.equal(projection.available, true);
+  near(projection.usedPercent, 10, 1e-9, 'weighed as Haiku 5.5');
+  const { store } = fixture(t);
+  assert.equal(store.resolvePrice('claude-haiku-5-5-fast'), null);
+});

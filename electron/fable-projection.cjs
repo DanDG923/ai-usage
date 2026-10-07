@@ -87,9 +87,13 @@ const ALLOWANCE_PRESSURE_V3 = [
   ['claude-haiku-4-5', 1, 1.25, 2, 0.1, 5],
 ];
 
-// Longest name first so a dated variant matches its exact family, not a
-// shorter prefix. Built once; the per-model answer is remembered because the
-// pressure scan asks for it once per usage event.
+// Any suffix falls back to its family here, dated or not, unlike pricing,
+// which takes only date suffixes: weighing a variant or point release as its
+// family keeps the estimate available, where withholding it would discard the
+// week (design/FABLE-SHARED-POOL-AND-5-1.md, section 3). Longest name first so
+// a variant matches its exact family, not a shorter prefix. Built once; the
+// per-model answer is remembered because the pressure scan asks for it once
+// per usage event.
 const ALLOWANCE_PROFILES = ALLOWANCE_PRESSURE_V3
   .map(([name, input, write5m, write1h, read, output]) => ({ name, input, write5m, write1h, read, output }))
   .sort((a, b) => b.name.length - a.name.length);
