@@ -70,20 +70,33 @@ const FABLE_ALLOWANCE_SHARE = 0.5;
 // its API rate. Anthropic publishes no conversion from tokens to plan usage,
 // only that cached tokens count less and that Fable uses limits faster, so the
 // weights stay API-proportional, the basis v1 was built on.
-const ALLOWANCE_PRESSURE_V2 = [
+//
+// v3 adds Sonnet 5.5 and Haiku 5.5. Sonnet 5.5 was weighed as Sonnet 5 by
+// the family fallback, its cache reads at twice their rate. Haiku 5.5 had no
+// family, so any request left a week's activity uncovered and the estimate
+// unavailable. It is weighed at the rates for prompts up to 100,000 tokens
+// whatever the prompt: the higher card for longer prompts is a per-request
+// billing rule, and no plan-usage counterpart is published.
+const ALLOWANCE_PRESSURE_V3 = [
   ['claude-fable-5-1', 10, 12.5, 20, 0.25, 50],
   ['claude-fable-5', 10, 12.5, 20, 1, 50],
   ['claude-opus-5-5', 4, 5, 8, 0.2, 20],
   ['claude-opus-5', 5, 6.25, 10, 0.5, 25],
   ['claude-opus-4-8', 5, 6.25, 10, 0.5, 25],
+  ['claude-sonnet-5-5', 2, 2.5, 4, 0.1, 10],
   ['claude-sonnet-5', 2, 2.5, 4, 0.2, 10],
+  ['claude-haiku-5-5', 0.1, 0.125, 0.2, 0.01, 0.5],
   ['claude-haiku-4-5', 1, 1.25, 2, 0.1, 5],
 ];
 
-// Longest name first so a dated variant matches its exact family, not a
-// shorter prefix. Built once; the per-model answer is remembered because the
-// pressure scan asks for it once per usage event.
-const ALLOWANCE_PROFILES = ALLOWANCE_PRESSURE_V2
+// Any suffix falls back to its family here, dated or not, unlike pricing,
+// which takes only date suffixes: weighing a variant or point release as its
+// family keeps the estimate available, where withholding it would discard the
+// week (design/FABLE-SHARED-POOL-AND-5-1.md, section 3). Longest name first so
+// a variant matches its exact family, not a shorter prefix. Built once; the
+// per-model answer is remembered because the pressure scan asks for it once
+// per usage event.
+const ALLOWANCE_PROFILES = ALLOWANCE_PRESSURE_V3
   .map(([name, input, write5m, write1h, read, output]) => ({ name, input, write5m, write1h, read, output }))
   .sort((a, b) => b.name.length - a.name.length);
 const allowanceProfiles = new Map();
@@ -484,7 +497,7 @@ function computeProjection(store, nowMs, { freshReadGraceMs } = {}) {
       anchoredAt: anchor ? anchor.observed_at : null,
       measuredSteps: steps.length,
       measuredPairs: pair.pairs,
-      profile: 'allowance-pressure-v2',
+      profile: 'allowance-pressure-v3',
       pairMeasuredPressure: pair.measuredPressure,
       steppedPercent: stepped,
       projectedTailPercent: tail,
