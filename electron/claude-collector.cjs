@@ -813,8 +813,9 @@ function latestPlanUsageReading(store, nowMs, graceMs, emptyReadMs = null) {
     const planReadMs = planUsageRead ? Date.parse(planUsageRead.observed_at) : null;
     if (planReadMs != null) lastPlanUsageReadMs = Math.max(lastPlanUsageReadMs ?? -Infinity, planReadMs);
     if (accepted.length) {
-      latest.set(bucketId, { ...accepted.at(-1), evidence_at: new Date(latestEvidenceAt(accepted, { known: true })).toISOString(),
-        own_evidence_at: new Date(evidenceTimes(accepted, { known: true }).at(-1)).toISOString(), plan_read_ms: planReadMs });
+      const evidenceOptions = { ...restatementOptions, known: true };
+      latest.set(bucketId, { ...accepted.at(-1), evidence_at: new Date(latestEvidenceAt(accepted, evidenceOptions)).toISOString(),
+        own_evidence_at: new Date(evidenceTimes(accepted, evidenceOptions).at(-1)).toISOString(), plan_read_ms: planReadMs });
     }
   }
   if (Number.isFinite(emptyReadMs) && !(lastPlanUsageReadMs >= emptyReadMs)) lastPlanUsageReadMs = emptyReadMs;

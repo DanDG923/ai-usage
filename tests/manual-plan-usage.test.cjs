@@ -534,6 +534,29 @@ test('without a plan-usage read, Claude is judged by the age of its latest offic
     assert.equal(source('claude-fable').metadata.automatic.allowance.usedPercent, 11);
     assert.equal(source('claude-fable').status, 'stale');
   });
+  // The same shape with the redraw at 10%: whether the three-hour-old read
+  // vouches for it depends on what the read was in the new allowance.
+  for (const [readPercent, expected, meaning] of [
+    [10, 'stale', 'a read that matches only in raw percentages does not date a figure after an allowance change'],
+    [40, 'connected', 'a read that matches in the current allowance dates a figure after an allowance change'],
+  ]) {
+    await t.test(meaning, async (tt) => {
+      const { store, source } = collectorFixture(tt);
+      store.updateSettings({ allowanceChanges: [{ source: 'claude', at: new Date(Date.now() - 2 * 3_600_000).toISOString(), previousAllowancePercent: 25 }] });
+      for (const [sourceId, bucketId] of [['claude', 'seven_day'], ['claude-fable', 'fable_seven_day']]) {
+        for (const [hoursAgo, usedPercent, provenance] of [[3, readPercent, 'official-claude-usage'], [1 / 60, 10, 'official-statusline']]) {
+          store.recordObservation({ sourceId, bucketId, bucketName: 'Weekly',
+            observedAt: new Date(Date.now() - hoursAgo * 3_600_000).toISOString(), usedPercent, remainingPercent: 100 - usedPercent,
+            resetsAt: new Date(Date.now() + 3 * 86_400_000).toISOString(), windowMinutes: 10_080, provenance, confidence: 1, metadata: {} });
+        }
+      }
+      await refreshClaude(store, path.join(store.backupDirectory, 'missing.jsonl'), { activityReader: { import: async () => ({ usageEvents: 0 }) } });
+      assert.equal(store.getQuota('claude', store.getSettings()).usedPercent, 10, 'it is the figure shown');
+      assert.equal(source('claude').status, expected);
+      assert.equal(source('claude-fable').metadata.automatic.allowance.usedPercent, 10);
+      assert.equal(source('claude-fable').status, expected);
+    });
+  }
   await t.test('a manual entry is not a plan-usage reading', async (tt) => {
     const { store, source, reading } = collectorFixture(tt);
     reading({ hoursAgo: 1, provenance: 'manual-official' });
