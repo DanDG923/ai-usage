@@ -838,6 +838,16 @@ function readingTime(value) {
   return new Date(value).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
+// Why a Refresh could not read plan usage, as a sentence for the status line.
+// A missing sign-in is said in words, since it is something to act on; any
+// other failure is named by its code, as Diagnostics names it.
+function planUsageFailure(provider, refresh) {
+  const reason = provider?.errorCode === 'claude-usage-signed-out'
+    ? ' because Claude Code did not report your Claude subscription sign-in'
+    : provider?.errorCode ? ` (${provider.errorCode})` : '';
+  return ` ${refresh} could not read Claude plan usage${reason}.`;
+}
+
 // When a plan-usage read succeeded without returning any overall window.
 function emptyPlanUsageReadMs(request) {
   const provider = request?.provider;
@@ -995,6 +1005,10 @@ async function refreshClaude(store, inboxPath, options = {}) {
     : hasQuota ? 'stale'
       : transcripts.usageEvents ? 'observing'
         : binary ? 'ready' : 'awaiting-installation';
+  // This Refresh's failure, said on both cards. A failed activity import
+  // already quotes it through the tracker's detail.
+  const refreshFailure = readPlanUsage && activityCurrent && lastRequest.succeeded === false
+    ? planUsageFailure(lastRequest.provider, 'This Refresh') : '';
   const lastRead = planReading?.lastReadAt ? readingTime(planReading.lastReadAt) : null;
   const staleRead = planReading?.staleReadAt ? readingTime(planReading.staleReadAt) : null;
   const claudeDetail = !readPlanUsage ? (!activityCurrent
@@ -1009,7 +1023,7 @@ async function refreshClaude(store, inboxPath, options = {}) {
           ? `Claude Code was found. Plan usage is read when you press Refresh; no local transcript activity was available. ${helperSentence}`
           : 'Claude Code is not currently installed or available locally. Plan usage is read through Claude Code when you press Refresh.')
       // Outside the group: inside it, `+` would bind only to the last branch.
-      + (lastRequestFailed ? ` The last Refresh could not read Claude plan usage${lastRequest.provider?.errorCode ? ` (${lastRequest.provider.errorCode})` : ''}.` : '')
+      + (lastRequestFailed ? planUsageFailure(lastRequest.provider, 'The last Refresh') : '')
     : (!activityCurrent
     ? `${hasFreshClaudeEvidence ? 'Official Claude allowance evidence was refreshed, but' : 'The allowance check completed, but'} the local transcript activity import failed; previously tracked token activity remains available. ${fableTracking.health.detail || ''}`
     : hasFreshClaudeEvidence
@@ -1020,7 +1034,10 @@ async function refreshClaude(store, inboxPath, options = {}) {
         ? `Scanned ${transcripts.usageEvents} Claude transcript messages; the provider did not return a current allowance${binary ? '.' : ' and no Claude Code executable was found.'}`
         : binary
           ? `Claude Code was found. Automatic plan usage was checked, but no current allowance or local transcript activity was available. ${helperSentence}`
-          : 'Claude Code is not currently installed or available locally.') + extraUsageDetail;
+          : 'Claude Code is not currently installed or available locally.')
+      + refreshFailure
+      + (refreshFailure && lastRequest.provider?.errorCode === 'claude-usage-signed-out' ? ' If Claude Code is signed in, press Refresh again.' : '')
+      + extraUsageDetail;
   store.setSourceStatus('claude', claudeStatus, claudeDetail, {
     binary,
     inboxPath,
@@ -1051,7 +1068,7 @@ async function refreshClaude(store, inboxPath, options = {}) {
     ? `Official model-scoped Fable allowance was last read ${fableReadAt}; it is read again when you press Refresh. ${fableEvents} are in the current window.`
     : providerCurrent
     ? `Official model-scoped Fable allowance is collected automatically; ${fableEvents} are in the current window.`
-    : providerStale && !readPlanUsage
+    : (providerStale && !readPlanUsage
       ? `The last official model-scoped Fable allowance (${fableReadAt}) is still valid but out of date; press Refresh to read it again. Local activity remains available.`
     : providerStale
       ? 'The last official model-scoped Fable allowance is still valid, but this refresh could not replace it. Local activity remains available.'
@@ -1061,7 +1078,7 @@ async function refreshClaude(store, inboxPath, options = {}) {
           ? 'Fable has allowance history, but the provider did not return a current model-scoped reading.'
           : fableTracking.activity.requests
             ? `Imported ${fableTracking.activity.requests} actual local Fable usage event${fableTracking.activity.requests === 1 ? '' : 's'}; the provider did not return a model-scoped allowance.`
-            : 'Waiting for actual local Fable activity or a provider model-scoped allowance.';
+            : 'Waiting for actual local Fable activity or a provider model-scoped allowance.') + refreshFailure;
   // Successful local activity collection is useful without an allowance.
   // A stale provider-scoped reading still requires a provider refresh, unless
   // this run was never asked to read the provider.

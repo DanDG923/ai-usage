@@ -75,6 +75,29 @@ test('non-subscription sessions can legitimately have no plan windows', async ()
   assert.equal(f.calls(), 1);
 });
 
+// As Claude Code answered a Refresh on 7 October 2026, on an account whose
+// plan windows were running: in under a second, without a fetch.
+const signedOut = { subscription_type: null, rate_limits_available: false, rate_limits: null };
+
+test('no subscription for an account known to have one retries once, then fails as signed out', async () => {
+  const f = fixture([{ payload: signedOut, log: '' }, { payload: signedOut, log: '' }]);
+  await assert.rejects(f.port.read({ expectSubscription: true }), (error) => {
+    assert.equal(error.code, 'claude-usage-signed-out');
+    assert.match(error.message, /did not report your Claude subscription sign-in/);
+    assert.deepEqual(error.collectionDiagnostics.attempts.map((a) => a.errorCode),
+      ['claude-usage-signed-out', 'claude-usage-signed-out']);
+    return true;
+  });
+  assert.equal(f.calls(), 2);
+});
+
+test('a sign-in Claude Code sees on the retry recovers the read', async () => {
+  const f = fixture([{ payload: signedOut, log: '' }, { log: ok }]);
+  const result = await f.port.read({ expectSubscription: true });
+  assert.deepEqual(result, fresh);
+  assert.deepEqual(result.collectionDiagnostics.attempts.map((a) => a.outcome), ['failed', 'fresh']);
+});
+
 test('a protocol change that removes freshness diagnostics fails closed', async () => {
   const f = fixture([{ log: '' }, { log: '' }]);
   await assert.rejects(f.port.read(), { code: 'claude-usage-unverified' });

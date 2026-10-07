@@ -229,7 +229,7 @@ function createClaudeAgentSdkUsagePort({
   timeoutMs = DEFAULT_TIMEOUT_MS,
   retryDelayMs = 1000,
 } = {}) {
-  async function readOnce({ signal } = {}) {
+  async function readOnce({ signal, expectSubscription = false } = {}) {
     const diagnostics = createUsageDiagnostics();
     let result;
     const abortController = new AbortController();
@@ -351,25 +351,34 @@ function createClaudeAgentSdkUsagePort({
       error.retryable = fetch.outcome === 'verified';
       throw error;
     }
+    // No subscription is what an API-key session reports, but an account
+    // whose plan windows are still running has one, so Claude Code did not
+    // see its sign-in this time.
+    if (expectSubscription && !result.subscription_type && !result.rate_limits_available) {
+      throw new ClaudeUsageAdapterError('claude-usage-signed-out', 'Claude Code did not report your Claude subscription sign-in. The last fresh reading is retained.');
+    }
     return result;
   }
   return {
-    async read({ signal } = {}) {
+    // `expectSubscription`: the caller knows this account has a Claude
+    // subscription, so a session reporting none is a failed read.
+    async read({ signal, expectSubscription = false } = {}) {
       const attempts = [];
       for (let attempt = 1; attempt <= 2; attempt += 1) {
         const startedAt = new Date().toISOString();
         const started = Date.now();
         try {
-          const result = await readOnce({ signal });
+          const result = await readOnce({ signal, expectSubscription });
           attempts.push({ startedAt, durationMs: Date.now() - started, outcome: result.rate_limits_available ? 'fresh' : 'unavailable', errorCode: null });
           Object.defineProperty(result, 'collectionDiagnostics', { value: { attempts } });
           return result;
         } catch (error) {
           attempts.push({ startedAt, durationMs: Date.now() - started, outcome: 'failed', errorCode: error.code });
           error.collectionDiagnostics = { attempts };
-          const retryable = /^claude-usage-(?:empty|fetch-failed|econnrefused|econnreset|etimedout|enotfound|eai_again|http-50[0234]|http-529)$/.test(error.code);
+          const retryable = /^claude-usage-(?:empty|signed-out|fetch-failed|econnrefused|econnreset|etimedout|enotfound|eai_again|http-50[0234]|http-529)$/.test(error.code);
           // Do not immediately retry throttling, authentication, schema, or
-          // cleanup failures. Each retry starts only after cleanup completes.
+          // cleanup failures. A missing sign-in is retried once, since it
+          // can be momentary. Each retry starts only after cleanup completes.
           if (attempt === 2 || !retryable || error.retryable === false || signal?.aborted) throw error;
           try { await delay(retryDelayMs, undefined, { signal }); }
           catch {
