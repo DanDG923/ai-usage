@@ -71,17 +71,19 @@ const FABLE_ALLOWANCE_SHARE = 0.5;
 // only that cached tokens count less and that Fable uses limits faster, so the
 // weights stay API-proportional, the basis v1 was built on.
 //
-// v3 adds Haiku 5.5. Without a row, any Haiku 5.5 request left a week's
-// activity uncovered and the estimate unavailable. It is weighed at the rates
-// for prompts up to 100,000 tokens whatever the prompt: the higher card for
-// longer prompts is a per-request billing rule, and no plan-usage counterpart
-// is published.
+// v3 adds Sonnet 5.5 and Haiku 5.5. Sonnet 5.5 was weighed as Sonnet 5 by
+// the family fallback, its cache reads at twice their rate. Haiku 5.5 had no
+// family, so any request left a week's activity uncovered and the estimate
+// unavailable. It is weighed at the rates for prompts up to 100,000 tokens
+// whatever the prompt: the higher card for longer prompts is a per-request
+// billing rule, and no plan-usage counterpart is published.
 const ALLOWANCE_PRESSURE_V3 = [
   ['claude-fable-5-1', 10, 12.5, 20, 0.25, 50],
   ['claude-fable-5', 10, 12.5, 20, 1, 50],
   ['claude-opus-5-5', 4, 5, 8, 0.2, 20],
   ['claude-opus-5', 5, 6.25, 10, 0.5, 25],
   ['claude-opus-4-8', 5, 6.25, 10, 0.5, 25],
+  ['claude-sonnet-5-5', 2, 2.5, 4, 0.1, 10],
   ['claude-sonnet-5', 2, 2.5, 4, 0.2, 10],
   ['claude-haiku-5-5', 0.1, 0.125, 0.2, 0.01, 0.5],
   ['claude-haiku-4-5', 1, 1.25, 2, 0.1, 5],

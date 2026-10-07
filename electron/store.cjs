@@ -205,6 +205,9 @@ const PRICE_ROWS = [
   ['claude-opus-5-5', 4, 5, 8, 0.2, 20],
   ['claude-opus-5', 5, 6.25, 10, 0.5, 25],
   ['claude-opus-4-8', 5, 6.25, 10, 0.5, 25],
+  // Sonnet 5.5 standard rates verified 2026-10-07, the day its cache reads
+  // fell from $0.20 to $0.10 per MTok; it differs from Sonnet 5 only there.
+  ['claude-sonnet-5-5', 2, 2.5, 4, 0.1, 10],
   ['claude-sonnet-5', 2, 2.5, 4, 0.2, 10],
   // Haiku 5.5 rates for prompts up to 100,000 tokens, verified 2026-10-07;
   // LONG_CONTEXT_PRICING applies the rates for longer prompts.
@@ -731,7 +734,8 @@ class UsageStore {
         'gpt-6-astra': '2026-09-04', 'gpt-6.1-sol': '2026-09-29', 'gpt-6-sol': '2026-09-22', 'gpt-6-luna': '2026-09-22',
       }[row[0]];
       const claudeEffective = {
-        'claude-fable-5-1': '2026-09-01', 'claude-opus-5-5': '2026-09-22', 'claude-haiku-5-5': '2026-10-07',
+        'claude-fable-5-1': '2026-09-01', 'claude-opus-5-5': '2026-09-22',
+        'claude-sonnet-5-5': '2026-10-07', 'claude-haiku-5-5': '2026-10-07',
       }[row[0]];
       const source = openAiEffective
         ? `https://developers.openai.com/api/docs/models/${row[0]}`
