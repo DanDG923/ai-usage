@@ -8,6 +8,11 @@ const collectorPath = require.resolve('../electron/claude-collector.cjs');
 delete require.cache[collectorPath];
 const { createClaudeAgentSdkUsagePort } = require(adapterPath);
 
+// A test that hangs fails at this cap. The adapter times out in milliseconds,
+// so the cap only has to outlast a busy CI runner: a 100 ms cap once cancelled
+// a release run whose cleanup test took 133 ms.
+const HANG_GUARD = { timeout: 2_000 };
+
 test('loading the SDK usage adapter does not eagerly load the Claude collector', () => {
   assert.equal(require.cache[collectorPath], undefined);
 });
@@ -97,7 +102,7 @@ test('one read returns only plan windows and closes a no-message Claude query', 
   assert.equal(queryOptions.abortController.signal.aborted, true);
 });
 
-test('an initialization timeout aborts and closes the idle query without starting usage', { timeout: 100 }, async () => {
+test('an initialization timeout aborts and closes the idle query without starting usage', HANG_GUARD, async () => {
   let idleResult;
   let usageCalls = 0;
   let returnCalls = 0;
@@ -136,7 +141,7 @@ test('an initialization timeout aborts and closes the idle query without startin
   assert.deepEqual(idleResult, { value: undefined, done: true });
 });
 
-test('a usage timeout aborts and closes an initialized query', { timeout: 100 }, async () => {
+test('a usage timeout aborts and closes an initialized query', HANG_GUARD, async () => {
   let returnCalls = 0;
   let querySignal;
   const usagePort = createClaudeAgentSdkUsagePort({
@@ -421,7 +426,7 @@ test('a query cleanup failure never masks the primary sanitized usage failure', 
   assert.equal(returnCalls, 1);
 });
 
-test('a query cleanup that never settles is bounded and cannot wedge later refreshes', { timeout: 100 }, async () => {
+test('a query cleanup that never settles is bounded and cannot wedge later refreshes', HANG_GUARD, async () => {
   const usagePort = createClaudeAgentSdkUsagePort({
     timeoutMs: 5,
     findClaudeBinary: () => 'C:\\fixture\\claude.exe',
@@ -445,7 +450,7 @@ test('a query cleanup that never settles is bounded and cannot wedge later refre
   });
 });
 
-test('a cleanup timeout never masks a primary sanitized usage failure', { timeout: 100 }, async () => {
+test('a cleanup timeout never masks a primary sanitized usage failure', HANG_GUARD, async () => {
   const usagePort = createClaudeAgentSdkUsagePort({
     timeoutMs: 5,
     findClaudeBinary: () => 'C:\\fixture\\claude.exe',
@@ -470,7 +475,7 @@ test('a cleanup timeout never masks a primary sanitized usage failure', { timeou
   });
 });
 
-test('caller cancellation aborts and closes a pending control-only query', { timeout: 100 }, async () => {
+test('caller cancellation aborts and closes a pending control-only query', HANG_GUARD, async () => {
   let returnCalls = 0;
   let querySignal;
   const caller = new AbortController();
