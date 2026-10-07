@@ -6,7 +6,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const test = require('node:test');
-const { createClaudeSetup } = require('../electron/claude-setup.cjs');
+const { createClaudeSetup, INSTALLER_FILE, INSTALL_TARGET } = require('../electron/claude-setup.cjs');
+const { MANUAL_INSTALL_COMMAND, digestOf } = require('../electron/claude-installer.cjs');
 
 function fixture(options = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-setup-'));
@@ -58,16 +59,108 @@ test('existing installation is reused without downloading or changing its login'
   try { await f.setup.install(); assert.equal(launched, false); } finally { f.clean(); }
 });
 
+const installerScript = Buffer.from('param([string]$Target = "latest")\nWrite-Output "install $Target"\n');
+const installerPin = { url: 'https://claude.ai/install.ps1', sha256: digestOf(installerScript), bytes: installerScript.length, verifiedOn: '2026-10-06' };
+const servedInstaller = async (url) => ({ url, bytes: Buffer.from(installerScript) });
+
 test('installer cannot claim success until the installed binary is found', async () => {
   let command;
-  const f = fixture({ findBinary: () => null, launch: (file, args) => {
-    command = { file, args }; const child = new EventEmitter(); queueMicrotask(() => child.emit('exit', 0)); return child;
+  let scriptAtLaunch;
+  const logs = [];
+  const f = fixture({ findBinary: () => null, fetchInstaller: servedInstaller, installerPin, log: (line) => logs.push(line), launch: (file, args) => {
+    command = { file, args };
+    scriptAtLaunch = fs.readFileSync(args[args.indexOf('-File') + 1]);
+    const child = new EventEmitter(); queueMicrotask(() => child.emit('exit', 0)); return child;
   } });
   try {
     await assert.rejects(f.setup.install(), /could not be verified/);
     assert.match(command.file, /powershell.exe$/);
-    assert.match(command.args.at(-1), /https:\/\/claude.ai\/install.ps1/);
+    // The script runs from a verified local file, never from a remote expression.
+    assert.deepEqual(command.args.slice(0, 5), ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File']);
+    assert.equal(path.dirname(command.args[5]), path.dirname(f.statePath));
+    assert.equal(path.basename(command.args[5]), INSTALLER_FILE);
+    assert.equal(command.args.at(-1), INSTALL_TARGET);
+    assert.ok(!command.args.some((arg) => /Invoke-RestMethod|https?:|scriptblock/i.test(arg)));
+    assert.deepEqual(scriptAtLaunch, installerScript);
+    assert.equal(fs.existsSync(command.args[5]), false, 'the script is removed after the installer exits');
     assert.equal(fs.existsSync(f.statePath), false);
+    assert.equal(logs.length, 1);
+    assert.match(logs[0], new RegExp(`sha256 ${installerPin.sha256} \\(${installerScript.length} bytes`));
+  } finally { f.clean(); }
+});
+
+test('a changed vendor installer is never written or run, and the user is told how to install manually', async () => {
+  let launched = 0;
+  const changed = async (url) => ({ url, bytes: Buffer.concat([installerScript, Buffer.from('Start-Process evil.exe\n')]) });
+  const f = fixture({ findBinary: () => null, fetchInstaller: changed, installerPin, launch: () => { launched++; return new EventEmitter(); } });
+  try {
+    await assert.rejects(f.setup.install(), (error) => error.code === 'CLAUDE_INSTALLER_CHANGED' && error.message.includes(MANUAL_INSTALL_COMMAND));
+    assert.equal(launched, 0);
+    assert.equal(fs.existsSync(path.join(path.dirname(f.statePath), INSTALLER_FILE)), false);
+    assert.equal((await f.setup.status()).busy, false);
+  } finally { f.clean(); }
+});
+
+test('a failed installer download is reported without request details and without running anything', async () => {
+  let launched = 0;
+  const logs = [];
+  const offline = async () => { throw Object.assign(new Error('getaddrinfo ENOTFOUND claude.ai https://claude.ai/install.ps1?token=secret'), { code: 'ENOTFOUND' }); };
+  const f = fixture({ findBinary: () => null, fetchInstaller: offline, installerPin, log: (line) => logs.push(line), launch: () => { launched++; return new EventEmitter(); } });
+  try {
+    await assert.rejects(f.setup.install(), /could not be downloaded/);
+    assert.equal(launched, 0);
+    assert.ok(!logs.join('\n').includes('secret'));
+    assert.deepEqual(logs, ['Claude installer download failed (ENOTFOUND).']);
+  } finally { f.clean(); }
+});
+
+test('cancelling during the installer download aborts the request and leaves setup idle', async () => {
+  let launched = 0;
+  let aborted = false;
+  const pending = (_url, { signal }) => new Promise((_resolve, reject) => {
+    signal.addEventListener('abort', () => { aborted = true; reject(Object.assign(new Error('aborted'), { code: 'ABORT_ERR' })); });
+  });
+  const f = fixture({ findBinary: () => null, fetchInstaller: pending, installerPin, launch: () => { launched++; return new EventEmitter(); } });
+  try {
+    const install = f.setup.install();
+    const rejection = assert.rejects(install, (error) => error.code === 'CLAUDE_INSTALLER_DOWNLOAD_CANCELLED' && /cancelled/.test(error.message));
+    await new Promise((resolve) => setImmediate(resolve));
+    f.setup.cancel();
+    await rejection;
+    assert.equal(aborted, true);
+    assert.equal(launched, 0);
+    assert.equal(fs.existsSync(path.join(path.dirname(f.statePath), INSTALLER_FILE)), false);
+    assert.equal((await f.setup.status()).busy, false);
+    // A later cancel is a no-op rather than a stale handle.
+    f.setup.cancel();
+  } finally { f.clean(); }
+});
+
+test('a download that completes after Cancel is discarded and never launched', async () => {
+  let launched = 0;
+  let release;
+  const late = () => new Promise((resolve) => { release = () => resolve({ url: installerPin.url, bytes: Buffer.from(installerScript) }); });
+  const f = fixture({ findBinary: () => null, fetchInstaller: late, installerPin, launch: () => { launched++; return new EventEmitter(); } });
+  try {
+    const install = f.setup.install();
+    const rejection = assert.rejects(install, /cancelled/);
+    await new Promise((resolve) => setImmediate(resolve));
+    f.setup.cancel();
+    release();
+    await rejection;
+    assert.equal(launched, 0);
+    assert.equal(fs.existsSync(path.join(path.dirname(f.statePath), INSTALLER_FILE)), false);
+    assert.equal((await f.setup.status()).busy, false);
+  } finally { f.clean(); }
+});
+
+test('the installer script is removed even when the installer fails or is cancelled', async () => {
+  const f = fixture({ findBinary: () => null, fetchInstaller: servedInstaller, installerPin, launch: () => {
+    const child = new EventEmitter(); queueMicrotask(() => child.emit('exit', 1)); return child;
+  } });
+  try {
+    await assert.rejects(f.setup.install(), /did not finish/);
+    assert.equal(fs.existsSync(path.join(path.dirname(f.statePath), INSTALLER_FILE)), false);
   } finally { f.clean(); }
 });
 
