@@ -98,8 +98,8 @@ export function ClaudeCodeModSetting({
             'so Claude stays current here between Refreshes.'
           ) : (
             <>
-              but while Collect automatically is set to Only when I refresh, they are picked up only when you press
-              Refresh here or Sync now in the <code>/ai-usage</code> pane.
+              but while Collect automatically is set to Only when I refresh, they wait for the next collection: when the
+              app starts, when you press Refresh here, or Sync now in the <code>/ai-usage</code> pane.
             </>
           )}{' '}
           No API use, and nothing is added to your conversations. Needs Claude Code 2.1.287 or later.

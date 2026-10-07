@@ -222,7 +222,7 @@ test('the Claude Code mod says when its plan limits reach the app, by the collec
   snapshot.settings.refreshIntervalMinutes = 0;
   sources = text(section(renderSettings(snapshot), 'sources'));
   assert.doesNotMatch(sources, /stays current here between Refreshes/);
-  assert.match(sources, /already receives, but while Collect automatically is set to Only when I refresh, they are picked up only when you press Refresh here or Sync now in the \/ai-usage pane\. No API use/);
+  assert.match(sources, /already receives, but while Collect automatically is set to Only when I refresh, they wait for the next collection: when the app starts, when you press Refresh here, or Sync now in the \/ai-usage pane\. No API use/);
 });
 
 test('monthly fees are back, shown per visible subscription, with the comparison note', () => {
