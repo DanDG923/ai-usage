@@ -4,10 +4,15 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFile, spawn } = require('node:child_process');
 const { findClaudeBinary, providerProcessOptions } = require('./provider-executable.cjs');
+const { fetchInstaller: downloadInstaller, verifyInstallerScript } = require('./claude-installer.cjs');
+const shippedPin = require('./claude-installer-pin.json');
 
-// Fixed vendor command: neither executable arguments nor script content come
-// from the renderer. The native installer needs no npm or administrator rights.
-const INSTALL_COMMAND = "$ErrorActionPreference='Stop'; & ([scriptblock]::Create((Invoke-RestMethod -Uri 'https://claude.ai/install.ps1' -TimeoutSec 60))) stable";
+// The vendor installer is fetched, checked against the digest pinned at
+// release time, written beside the setup state, and only then run from that
+// file. Neither executable arguments nor script content come from the
+// renderer. The native installer needs no npm or administrator rights.
+const INSTALLER_FILE = 'claude-install.ps1';
+const INSTALL_TARGET = 'stable';
 
 function runCommand(file, args, { timeoutMs = 15000, acceptExitOne = false, environment = process.env } = {}) {
   return new Promise((resolve, reject) => {
@@ -21,7 +26,10 @@ function runCommand(file, args, { timeoutMs = 15000, acceptExitOne = false, envi
 
 // `environment` is the one the app was launched with: the update check
 // removes GitHub tokens from process.env, and Claude must not inherit that.
-function createClaudeSetup({ statePath, findBinary = findClaudeBinary, run = runCommand, launch = spawn, installHelper, uninstallHelper, helperInstalled = () => false, environment = process.env } = {}) {
+function createClaudeSetup({
+  statePath, findBinary = findClaudeBinary, run = runCommand, launch = spawn, installHelper, uninstallHelper, helperInstalled = () => false,
+  environment = process.env, fetchInstaller = downloadInstaller, installerPin = shippedPin, log = () => {},
+} = {}) {
   let busy = false;
   let child = null;
   let cancelPending = null;
@@ -71,19 +79,40 @@ function createClaudeSetup({ statePath, findBinary = findClaudeBinary, run = run
         cancelPending = null;
         if (error) reject(error); else resolve();
       };
-      cancelPending = () => finish(new Error('Claude setup was cancelled or timed out. You can try again.'));
+      cancelPending = () => finish(new Error(CANCELLED));
       active.once('error', () => finish(new Error('Claude setup could not start. Please try again.')));
       active.once('exit', (code) => finish(code === 0 ? null : new Error('Claude setup was cancelled or did not finish. You can try again.')));
     });
   }
+  // Cancels whichever stage is running: the installer download, which has no
+  // child process yet, or the interactive child process itself.
   function cancel() {
-    if (!child) return;
     const active = child;
     // Terminate only the process tree started by this setup operation.
-    if (Number.isInteger(active.pid)) {
+    if (active && Number.isInteger(active.pid)) {
       execFile(path.join(systemRoot, 'System32', 'taskkill.exe'), ['/PID', String(active.pid), '/T', '/F'], { windowsHide: true }, (error) => { if (error) active.kill(); });
     }
     cancelPending?.();
+  }
+  const CANCELLED = 'Claude setup was cancelled or timed out. You can try again.';
+  // Runs the download under a cancellation handle so Cancel (or shutdown)
+  // aborts the request, and a response that still arrives is discarded.
+  async function cancellableDownload(url) {
+    const controller = new AbortController();
+    let cancelled = false;
+    const handle = () => { cancelled = true; controller.abort(); };
+    cancelPending = handle;
+    try {
+      const { bytes } = await fetchInstaller(url, { signal: controller.signal });
+      if (cancelled) throw Object.assign(new Error(CANCELLED), { code: 'CLAUDE_INSTALLER_DOWNLOAD_CANCELLED' });
+      return bytes;
+    } catch (error) {
+      if (cancelled || error?.code === 'CLAUDE_INSTALLER_DOWNLOAD_CANCELLED') throw Object.assign(new Error(CANCELLED), { code: 'CLAUDE_INSTALLER_DOWNLOAD_CANCELLED' });
+      log(`Claude installer download failed${error?.code ? ` (${error.code})` : ''}.`);
+      throw new Error('The Claude Code installer could not be downloaded. Check your connection and try again.');
+    } finally {
+      if (cancelPending === handle) cancelPending = null;
+    }
   }
   return {
     status,
@@ -92,7 +121,19 @@ function createClaudeSetup({ statePath, findBinary = findClaudeBinary, run = run
     dismissed,
     install: () => exclusive(async () => {
       if (findBinary()) return;
-      await interactiveCommand(powershell, ['-NoProfile', '-NonInteractive', '-Command', INSTALL_COMMAND], 12 * 60_000);
+      const bytes = await cancellableDownload(installerPin.url);
+      // A changed script is reported with the vendor's own command and is
+      // never written to disk or run.
+      const digest = verifyInstallerScript(bytes, installerPin);
+      log(`Claude installer verified: sha256 ${digest} (${bytes.length} bytes, pinned ${installerPin.verifiedOn || 'unknown date'}).`);
+      const scriptPath = path.join(path.dirname(statePath), INSTALLER_FILE);
+      fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
+      fs.writeFileSync(scriptPath, bytes);
+      try {
+        await interactiveCommand(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, INSTALL_TARGET], 12 * 60_000);
+      } finally {
+        try { fs.unlinkSync(scriptPath); } catch { /* Already gone or still locked; it is overwritten on the next attempt. */ }
+      }
       if (!findBinary()) throw new Error('Claude Code installation could not be verified. Check your connection and try again.');
     }),
     login: () => exclusive(async () => {
@@ -116,4 +157,4 @@ function createClaudeSetup({ statePath, findBinary = findClaudeBinary, run = run
   };
 }
 
-module.exports = { createClaudeSetup, INSTALL_COMMAND, runCommand };
+module.exports = { createClaudeSetup, INSTALLER_FILE, INSTALL_TARGET, runCommand };

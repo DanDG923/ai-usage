@@ -534,6 +534,29 @@ test('without a plan-usage read, Claude is judged by the age of its latest offic
     assert.equal(source('claude-fable').metadata.automatic.allowance.usedPercent, 11);
     assert.equal(source('claude-fable').status, 'stale');
   });
+  // The same shape with the redraw at 10%: whether the three-hour-old read
+  // vouches for it depends on what the read was in the new allowance.
+  for (const [readPercent, expected, meaning] of [
+    [10, 'stale', 'a read that matches only in raw percentages does not date a figure after an allowance change'],
+    [40, 'connected', 'a read that matches in the current allowance dates a figure after an allowance change'],
+  ]) {
+    await t.test(meaning, async (tt) => {
+      const { store, source } = collectorFixture(tt);
+      store.updateSettings({ allowanceChanges: [{ source: 'claude', at: new Date(Date.now() - 2 * 3_600_000).toISOString(), previousAllowancePercent: 25 }] });
+      for (const [sourceId, bucketId] of [['claude', 'seven_day'], ['claude-fable', 'fable_seven_day']]) {
+        for (const [hoursAgo, usedPercent, provenance] of [[3, readPercent, 'official-claude-usage'], [1 / 60, 10, 'official-statusline']]) {
+          store.recordObservation({ sourceId, bucketId, bucketName: 'Weekly',
+            observedAt: new Date(Date.now() - hoursAgo * 3_600_000).toISOString(), usedPercent, remainingPercent: 100 - usedPercent,
+            resetsAt: new Date(Date.now() + 3 * 86_400_000).toISOString(), windowMinutes: 10_080, provenance, confidence: 1, metadata: {} });
+        }
+      }
+      await refreshClaude(store, path.join(store.backupDirectory, 'missing.jsonl'), { activityReader: { import: async () => ({ usageEvents: 0 }) } });
+      assert.equal(store.getQuota('claude', store.getSettings()).usedPercent, 10, 'it is the figure shown');
+      assert.equal(source('claude').status, expected);
+      assert.equal(source('claude-fable').metadata.automatic.allowance.usedPercent, 10);
+      assert.equal(source('claude-fable').status, expected);
+    });
+  }
   await t.test('a manual entry is not a plan-usage reading', async (tt) => {
     const { store, source, reading } = collectorFixture(tt);
     reading({ hoursAgo: 1, provenance: 'manual-official' });
@@ -705,6 +728,39 @@ test('a Refresh that returns no window at all leaves no earlier window current',
     confidence: 1, metadata: {}, fetchedAfter: new Date(nowMs + 90_000).toISOString() });
   await refreshClaude(store, missingInbox(store), { activityReader: quietActivity, clock: () => new Date(nowMs + 3 * MINUTE) });
   assert.equal(source('claude').status, 'connected');
+});
+
+test('a Refresh that returns no Fable window leaves the earlier Fable reading out of date', async (t) => {
+  const { refreshClaude } = collectorWithPortSpy();
+  const { store, source } = collectorFixture(t);
+  const nowMs = Date.now() - 15 * MINUTE;
+  const reset = new Date(nowMs + 3 * 1440 * MINUTE).toISOString();
+  const read = (atMs, fable) => refreshClaude(store, missingInbox(store), {
+    readPlanUsage: true, activityReader: quietActivity, clock: () => new Date(atMs),
+    usagePort: { read: async () => ({ subscription_type: 'max', rate_limits_available: true, rate_limits: {
+      seven_day: { utilization: 30, resets_at: reset },
+      ...(fable ? { model_scoped: [{ display_name: 'Fable', utilization: 40, resets_at: reset }] } : {}),
+    } }) },
+  });
+  await read(nowMs - 60 * MINUTE, true);
+  assert.equal(source('claude-fable').status, 'connected');
+  // The provider then reports every overall window but no model-scoped one.
+  await read(nowMs, false);
+  assert.equal(source('claude').status, 'connected');
+  assert.equal(source('claude-fable').status, 'stale');
+  // Automatic runs do not bring the hour-old Fable reading back as current.
+  await refreshClaude(store, missingInbox(store), { activityReader: quietActivity, clock: () => new Date(nowMs + MINUTE) });
+  assert.equal(source('claude').status, 'connected');
+  const fable = source('claude-fable');
+  assert.equal(fable.status, 'stale');
+  assert.match(fable.status_detail, /still valid, but the last Refresh could not replace it/);
+  // A session that fetches the Fable window after that read renews it.
+  store.recordObservation({ sourceId: 'claude-fable', bucketId: 'fable_seven_day', bucketName: 'Fable',
+    observedAt: new Date(nowMs + 2 * MINUTE).toISOString(), usedPercent: 41, remainingPercent: 59, resetsAt: reset,
+    windowMinutes: 10_080, provenance: 'official-statusline', confidence: 1, metadata: {},
+    fetchedAfter: new Date(nowMs + 90_000).toISOString() });
+  await refreshClaude(store, missingInbox(store), { activityReader: quietActivity, clock: () => new Date(nowMs + 3 * MINUTE) });
+  assert.equal(source('claude-fable').status, 'connected');
 });
 
 test('a window the latest plan-usage read returned stays, whatever redraws of it followed', async (t) => {

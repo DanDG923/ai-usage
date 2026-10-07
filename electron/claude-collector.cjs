@@ -813,8 +813,9 @@ function latestPlanUsageReading(store, nowMs, graceMs, emptyReadMs = null) {
     const planReadMs = planUsageRead ? Date.parse(planUsageRead.observed_at) : null;
     if (planReadMs != null) lastPlanUsageReadMs = Math.max(lastPlanUsageReadMs ?? -Infinity, planReadMs);
     if (accepted.length) {
-      latest.set(bucketId, { ...accepted.at(-1), evidence_at: new Date(latestEvidenceAt(accepted, { known: true })).toISOString(),
-        own_evidence_at: new Date(evidenceTimes(accepted, { known: true }).at(-1)).toISOString(), plan_read_ms: planReadMs });
+      const evidenceOptions = { ...restatementOptions, known: true };
+      latest.set(bucketId, { ...accepted.at(-1), evidence_at: new Date(latestEvidenceAt(accepted, evidenceOptions)).toISOString(),
+        own_evidence_at: new Date(evidenceTimes(accepted, evidenceOptions).at(-1)).toISOString(), plan_read_ms: planReadMs });
     }
   }
   if (Number.isFinite(emptyReadMs) && !(lastPlanUsageReadMs >= emptyReadMs)) lastPlanUsageReadMs = emptyReadMs;
@@ -969,11 +970,18 @@ async function refreshClaude(store, inboxPath, options = {}) {
   // Plan usage not requested: judge the last reading by its age, and count
   // the run a success when its local work succeeded.
   const planReading = readPlanUsage ? null : acceptedReading;
+  // Whether it brought the Fable allowance up to date is kept apart: a read
+  // can return every overall window and still omit the model-scoped one.
   const lastRequest = readPlanUsage
-    ? { at: requestAt, succeeded: hasFreshClaudeEvidence || providerScanSucceeded, provider: fableTracking.provider }
+    ? { at: requestAt, succeeded: hasFreshClaudeEvidence || providerScanSucceeded, provider: fableTracking.provider,
+      fableCurrent: fableTracking.health.officialSource === 'connected' }
     : previousRequest;
   // A failed Refresh that no reading has since replaced.
   const failedSince = (observedAt) => !readPlanUsage && lastRequest?.succeeded === false
+    && !(Date.parse(observedAt) >= Date.parse(lastRequest.at));
+  // Likewise a Refresh that left the Fable allowance out of date. A request
+  // recorded before this was kept says nothing either way.
+  const fableMissedSince = (observedAt) => !readPlanUsage && lastRequest?.fableCurrent === false
     && !(Date.parse(observedAt) >= Date.parse(lastRequest.at));
   const lastRequestFailed = failedSince(planReading?.lastReadAt);
   // Automatic runs judge all active windows even when this run just imported
@@ -1051,8 +1059,10 @@ async function refreshClaude(store, inboxPath, options = {}) {
     planUsage: { requested: readPlanUsage, lastReadAt: planReading?.lastReadAt ?? null, lastRequest },
   }, { scanSucceeded: claudeScanSucceeded });
   const fableAuto = fableDerived.derived;
+  const fableEvidenceAt = fableTracking.allowance.evidenceAt ?? fableTracking.allowance.observedAt;
+  const fableMissed = hasProviderScopedFable && fableMissedSince(fableEvidenceAt);
   const providerCurrent = hasProviderScopedFable && fableTracking.health.officialSource === 'connected'
-    && !failedSince(fableTracking.allowance.evidenceAt ?? fableTracking.allowance.observedAt);
+    && !failedSince(fableEvidenceAt) && !fableMissed;
   const providerStale = hasProviderScopedFable && !providerCurrent;
   const fableStatus = !activityCurrent ? 'degraded'
     : providerCurrent ? 'connected'
@@ -1061,14 +1071,16 @@ async function refreshClaude(store, inboxPath, options = {}) {
         : fableObserved ? 'observing'
           : fableTracking.activity.requests ? 'activity-only' : 'waiting';
   const fableEvents = `${fableTracking.activity.requests} local Fable usage event${fableTracking.activity.requests === 1 ? '' : 's'}`;
-  const fableReadAt = hasProviderScopedFable ? readingTime(fableTracking.allowance.evidenceAt ?? fableTracking.allowance.observedAt) : null;
+  const fableReadAt = hasProviderScopedFable ? readingTime(fableEvidenceAt) : null;
   const fableDetail = !activityCurrent
     ? `${providerCurrent ? 'The official model-scoped Fable allowance is current, but' : readPlanUsage ? 'The allowance check completed, but' : 'Plan usage is read only when you press Refresh, and'} the actual local activity import failed; previously tracked counts are retained. ${fableTracking.health.detail || ''}`
     : providerCurrent && !readPlanUsage
     ? `Official model-scoped Fable allowance was last read ${fableReadAt}; it is read again when you press Refresh. ${fableEvents} are in the current window.`
     : providerCurrent
     ? `Official model-scoped Fable allowance is collected automatically; ${fableEvents} are in the current window.`
-    : (providerStale && !readPlanUsage
+    : (fableMissed
+      ? `The last official model-scoped Fable allowance (${fableReadAt}) is still valid, but the last Refresh could not replace it. Local activity remains available.`
+    : providerStale && !readPlanUsage
       ? `The last official model-scoped Fable allowance (${fableReadAt}) is still valid but out of date; press Refresh to read it again. Local activity remains available.`
     : providerStale
       ? 'The last official model-scoped Fable allowance is still valid, but this refresh could not replace it. Local activity remains available.'

@@ -313,6 +313,32 @@ test('the card judges a status-line reading against an earlier read in the curre
   assert.deepEqual(quota.forecast, expected, 'the card forecasts from the rows the forecast itself keeps');
 });
 
+test('the card dates its figure by readings that agree with it in the current allowance', async (t) => {
+  // A read at 05:00, then a fourfold upgrade at 06:00, then an undated
+  // status-line redraw of 10% at 07:00. The redraw's fetch is known only from
+  // its window's start unless an earlier reading showed the same figure.
+  const now = local(13, 8);
+  const windowStart = new Date(RESET - 10_080 * 60_000).toISOString();
+  for (const [readPercent, evidenceAt, meaning] of [
+    [10, windowStart, 'a read of 10% of the old allowance is 2.5% of the new one, so it does not vouch for 10%'],
+    [40, new Date(local(13, 5)).toISOString(), 'a read of 40% of the old allowance is the same 10% of the new one'],
+  ]) {
+    await t.test(meaning, (tt) => {
+      const store = fixture(tt);
+      store.updateSettings({ activeStartHour: 0, activeEndHour: 24, allowanceChanges: [change({ previousAllowancePercent: 25 })] });
+      for (const [at, usedPercent, provenance] of [[local(13, 5), readPercent, 'official'], [local(13, 7), 10, 'official-statusline']]) {
+        store.recordObservation({ ...row(new Date(at).toISOString(), usedPercent, { provenance }),
+          resetsAt: new Date(RESET).toISOString(), bucketName: 'Weekly' });
+      }
+      const quota = store.getQuota('claude', store.getSettings(), now);
+      assert.equal(quota.usedPercent, 10);
+      assert.equal(quota.evidenceAt, evidenceAt);
+      assert.ok(Math.abs(now - quota.forecast.staleHours * HOUR - Date.parse(quota.evidenceAt)) < 1,
+        'the card and its forecast agree on how current the figure is');
+    });
+  }
+});
+
 test('the derived Fable estimate reads overall steps in the current allowance', (t) => {
   const OVERALL_RESET = '2026-09-02T00:00:00.000Z';
   const overall = (observedAt, usedPercent) => store.recordObservation({

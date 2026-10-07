@@ -248,18 +248,19 @@ function getLastCurrentOfficial(store, nowMs) {
     new Date(nowMs - 8 * 24 * 60 * 60 * 1000).toISOString())
     .filter((row) => validQuotaTime(Date.parse(row.observed_at), Date.parse(row.resets_at), row.window_minutes, nowMs));
   const settings = store.getSettings();
-  const accepted = withoutStaleRestatements(rows,
-    { nowMs, freshReadGraceMs: freshReadGraceFor(settings), allowanceChanges: settings.allowanceChanges, sourceId: FABLE_SOURCE_ID });
+  const restatementOptions = { nowMs, freshReadGraceMs: freshReadGraceFor(settings), allowanceChanges: settings.allowanceChanges, sourceId: FABLE_SOURCE_ID };
+  const accepted = withoutStaleRestatements(rows, restatementOptions);
   if (!accepted.length) return null;
   // A manual entry can be the allowance, but never evidence that the provider
   // was read recently: a provider figure is dated by provider readings alone.
   const chosen = accepted.at(-1);
+  const evidenceOptions = { ...restatementOptions, known: true };
   const evidence = isProviderProvenance(chosen.provenance)
-    ? latestEvidenceAt(accepted.filter((row) => isProviderProvenance(row.provenance)), { known: true }) : Date.parse(chosen.observed_at);
+    ? latestEvidenceAt(accepted.filter((row) => isProviderProvenance(row.provenance)), evidenceOptions) : Date.parse(chosen.observed_at);
   // Its own fetch as well, for the Refresh fallback, which must not borrow an
   // earlier read's time.
   const latest = { ...chosen, evidence_at: new Date(evidence).toISOString(),
-    own_evidence_at: new Date(evidenceTimes(accepted, { known: true }).at(-1)).toISOString() };
+    own_evidence_at: new Date(evidenceTimes(accepted, evidenceOptions).at(-1)).toISOString() };
   const window = { row: latest, bucketId: latest.bucket_id, observedAt: latest.observed_at, resetsAt: latest.resets_at,
     windowMinutes: latest.window_minutes, provenance: latest.provenance, metadata: {} };
   return selectDisplayedWindows([window], { nowMs }).active[0]?.row ?? null;

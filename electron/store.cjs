@@ -1242,7 +1242,8 @@ class UsageStore {
         observedAt: latest.observed_at,
         // When this value was last known to hold. A status-line redraw is
         // recorded now but may carry limits its session fetched hours ago.
-        evidenceAt: iso(latestEvidenceAt(observations, { known: true })),
+        // Readings agree in the allowance in force now, as the forecast's do.
+        evidenceAt: iso(latestEvidenceAt(observations, { ...restatementOptions, known: true })),
         usedPercent: latest.used_percent,
         remainingPercent: latest.remaining_percent,
         resetsAt: latest.resets_at,
