@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.57 — 7 October 2026
+
+- Treat a **Refresh** that Claude Code answers without your subscription sign-in as failed. Claude Code can briefly report no subscription, as an API-key session would, and AI Usage used to store that as a successful read that returned nothing: the Claude card showed **Last good** at that moment next to **Stale**, gave no reason and asked for a **Refresh** straight after one. On an account with a Claude allowance still running, AI Usage now tries once more, keeps the last reading and the last good scan, and says on the Claude and Fable cards that Claude Code did not report your subscription sign-in, until a newer reading replaces it. Other failed Refreshes now name their error on the card too.
+- Say in **Settings → Sources** when the Claude Code mod's plan limits reach the app. With **Collect automatically** set to **Only when I refresh**, they wait for the next collection: when the app starts, when you press **Refresh**, or **Sync now** in the `/ai-usage` pane. The **Collect automatically** description no longer says local activity is collected automatically whatever it is set to.
+- Date Claude and Fable figures correctly after a recorded allowance change. When a reading is matched with an earlier read of the same figure, both are now compared in the allowance in force now, as the forecast compares them. After an upgrade, a figure could otherwise look recently read when its evidence was days old, or days old when it had been read hours earlier, and Claude and Fable were called current or out of date on that wrong match.
+- Keep Fable marked out of date after a **Refresh** that returned the Claude allowance but not Fable's, until a newer Fable reading arrives. Before, the next automatic collection showed the older Fable reading as current again.
+- Check Anthropic's Claude Code installer before running it. **Install Claude Code** in the first-run guide now downloads the installer script over HTTPS, compares it with the digest recorded in this release, and runs only an exact match from a local file. If Anthropic has changed the script since this version was built, the app does not run it and shows the official PowerShell command instead.
+- Preserve local usage history, settings, observations, and backups during an in-place update.
+
 ## 1.0.56 — 1 October 2026
 
 - Bring your allowances into Claude Code with the new AI Usage mod. Install it from **Settings → Sources → Claude Code mod**; it needs Claude Code 2.1.287 or later and works in the terminal and in the desktop app's Code tab. Type `/ai-usage` to open the tray flyout's figures beside the conversation, with the verdict, a fuel tape for each subscription, the forecast at reset and shorter windows such as the five-hour session. In the pane, `s` collects now, `o` opens the dashboard and `c` turns the caution line on or off; `/ai-usage text` prints the same figures where Claude Code draws nothing.
