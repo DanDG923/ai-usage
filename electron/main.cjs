@@ -1079,6 +1079,7 @@ if (isPrimaryInstance) {
         uninstallHelper: uninstallClaudeHelper,
         helperInstalled: isClaudeHelperInstalled,
         environment: launchEnvironment,
+        log,
       });
       claudeCodeMod = createClaudeCodeMod({
         root: claudeCodeRoot(),

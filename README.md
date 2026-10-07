@@ -266,7 +266,7 @@ Packaging uses `--publish never` and has no publishing credential in its environ
 
 ## Set up another Windows computer
 
-Run the Setup installer and leave **Open AI Usage and set up usage tracking** checked. The first-run guide detects Microsoft Store and native Claude Code installations. If missing, **Install Claude Code** runs Anthropic's official native installer for the current Windows user; no Node.js or npm installation is needed. Internet access and Windows 10/11 are required.
+Run the Setup installer and leave **Open AI Usage and set up usage tracking** checked. The first-run guide detects Microsoft Store and native Claude Code installations. If missing, **Install Claude Code** runs Anthropic's official native installer for the current Windows user; no Node.js or npm installation is needed. AI Usage downloads that installer script over HTTPS, checks it byte-for-byte against the SHA-256 recorded in the app at release time, and runs only an exact match from a local file; if Anthropic has changed the script since the release, the app does not run it and instead shows the official PowerShell command to run yourself. Internet access and Windows 10/11 are required.
 
 Choose **Sign in to Claude** and complete the account flow in your browser. AI Usage never copies account credentials into its database or installer. Claude Desktop sign-in can be separate from Claude Code sign-in. Then choose **Start collecting** to optionally enable the fallback helper and refresh. Restart Claude Code for the helper to take effect. The provider may omit subscription windows even after a successful sign-in; missing limits are not reported as zero. Local activity only appears after Claude Code has written local usage records.
 

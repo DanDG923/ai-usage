@@ -426,8 +426,12 @@ function fetchMomentOf(row) {
 // window they show, so the figure is known only from that window's start.
 // A figure shown before an early replenishment belongs to the allowance it
 // replaced, even where the reset timestamp is unchanged.
-function evidenceTimes(rows, { known = false } = {}) {
-  const parsed = rows.map(normaliseObservation);
+// Given the recorded `allowanceChanges` (with `sourceId` and `nowMs`, as for
+// `withoutStaleRestatements`), figures are compared in the allowance in force
+// now: after a fourfold upgrade a read of 40% shows the same use as a later
+// 10%, and a read of 10% does not.
+function evidenceTimes(rows, { known = false, nowMs, allowanceChanges, sourceId } = {}) {
+  const parsed = rescaleObservations(rows.map(normaliseObservation), { allowanceChanges, now: nowMs, sourceId });
   let firstShown = [];
   return parsed.map((row, index) => {
     if (index > 0 && replenishedWithin(parsed[index - 1], row)) {
@@ -468,12 +472,12 @@ function replenishedWithin(previous, row) {
 // redrawing a value it fetched hours ago is only as current as that fetch,
 // unless a newer read agrees with it. The same figure from before an early
 // replenishment is no evidence for the allowance that replaced it. Readings
-// must be in time order. `known` as for `evidenceTimes`.
-function latestEvidenceAt(rows, options = {}) {
-  const parsed = rows.map(normaliseObservation);
+// must be in time order. Options as for `evidenceTimes`.
+function latestEvidenceAt(rows, { known = false, nowMs, allowanceChanges, sourceId } = {}) {
+  const parsed = rescaleObservations(rows.map(normaliseObservation), { allowanceChanges, now: nowMs, sourceId });
   const current = parsed.at(-1);
   if (!current) return null;
-  const times = evidenceTimes(parsed, options);
+  const times = evidenceTimes(parsed, { known });
   let start = parsed.length - 1;
   while (start > 0 && !replenishedWithin(parsed[start - 1], parsed[start])) start -= 1;
   let at = times.at(-1);

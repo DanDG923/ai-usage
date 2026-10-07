@@ -188,7 +188,9 @@ export function PricingSection({
       cache_write_1h_usd_per_million: 0,
       cache_read_usd_per_million: 0,
       output_usd_per_million: 0,
-      effective_from: localDateKey(new Date()),
+      // The editor dates the row when it is saved; reading the clock here,
+      // during render, would make the placeholder differ between renders.
+      effective_from: '',
       source_url: null,
     } satisfies PriceRow,
   }));
