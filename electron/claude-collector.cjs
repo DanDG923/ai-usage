@@ -1072,6 +1072,10 @@ async function refreshClaude(store, inboxPath, options = {}) {
           : fableTracking.activity.requests ? 'activity-only' : 'waiting';
   const fableEvents = `${fableTracking.activity.requests} local Fable usage event${fableTracking.activity.requests === 1 ? '' : 's'}`;
   const fableReadAt = hasProviderScopedFable ? readingTime(fableEvidenceAt) : null;
+  // As on the Claude card, a failed Refresh stays explained until a newer
+  // Fable reading replaces it; without one, until a Refresh succeeds.
+  const fableRefreshFailure = refreshFailure
+    || (failedSince(hasProviderScopedFable ? fableEvidenceAt : null) ? planUsageFailure(lastRequest.provider, 'The last Refresh') : '');
   const fableDetail = !activityCurrent
     ? `${providerCurrent ? 'The official model-scoped Fable allowance is current, but' : readPlanUsage ? 'The allowance check completed, but' : 'Plan usage is read only when you press Refresh, and'} the actual local activity import failed; previously tracked counts are retained. ${fableTracking.health.detail || ''}`
     : providerCurrent && !readPlanUsage
@@ -1090,7 +1094,7 @@ async function refreshClaude(store, inboxPath, options = {}) {
           ? 'Fable has allowance history, but the provider did not return a current model-scoped reading.'
           : fableTracking.activity.requests
             ? `Imported ${fableTracking.activity.requests} actual local Fable usage event${fableTracking.activity.requests === 1 ? '' : 's'}; the provider did not return a model-scoped allowance.`
-            : 'Waiting for actual local Fable activity or a provider model-scoped allowance.') + refreshFailure;
+            : 'Waiting for actual local Fable activity or a provider model-scoped allowance.') + fableRefreshFailure;
   // Successful local activity collection is useful without an allowance.
   // A stale provider-scoped reading still requires a provider refresh, unless
   // this run was never asked to read the provider.

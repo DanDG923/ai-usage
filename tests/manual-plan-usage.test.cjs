@@ -949,7 +949,19 @@ test('a Refresh Claude Code answers without the subscription sign-in fails and s
   claude = source('claude');
   assert.equal(claude.status, 'stale');
   assert.match(claude.status_detail, /The last Refresh could not read Claude plan usage because Claude Code did not report your Claude subscription sign-in\./);
-  assert.doesNotMatch(source('claude-fable').status_detail, /This Refresh/);
+  let fable = source('claude-fable').status_detail;
+  assert.doesNotMatch(fable, /This Refresh/);
+  assert.match(fable, /The last Refresh could not read Claude plan usage because Claude Code did not report your Claude subscription sign-in\./,
+    'the Fable card keeps the reason too');
+
+  // A Refresh that reads plan usage again clears it from both cards.
+  await refreshClaude(store, missingInbox(store), {
+    readPlanUsage: true, activityReader: quietActivity, usagePort: { read: async () => usageResponse({ five_hour: 240, seven_day: 3 * 1440 }) },
+  });
+  await refreshClaude(store, missingInbox(store), { activityReader: quietActivity });
+  assert.doesNotMatch(source('claude').status_detail, /could not read/);
+  fable = source('claude-fable').status_detail;
+  assert.doesNotMatch(fable, /could not read Claude plan usage/);
 });
 
 // A lower status-line reading for the same reset is held back from the card
