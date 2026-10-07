@@ -12,7 +12,7 @@ const React = require('react');
 const { renderToStaticMarkup } = require('react-dom/server');
 const { flyoutBounds, taskbarEdge } = require('../electron/flyout-position.cjs');
 const {
-  FLYOUT_BACKGROUND, FLYOUT_RELEASE_MS, NAVIGATION_TTL_MS, createNavigationQueue, createTrayFlyout, flyoutPayload,
+  FLYOUT_BACKGROUND, FLYOUT_MEASURE_MS, FLYOUT_RELEASE_MS, NAVIGATION_TTL_MS, createNavigationQueue, createTrayFlyout, flyoutPayload,
   isMainFrameOf, normalizeNavigationTarget,
 } = require('../electron/flyout.cjs');
 const { assertArchive } = require('../tools/audit-release.cjs');
@@ -241,6 +241,76 @@ test('the window fits its content between the minimum and maximum height, anchor
   assert.equal(flyout.bounds.height, 200);
   flyout.webContents.emit('preferred-size-changed', {}, null);
   assert.equal(flyout.bounds.height, 200);
+});
+
+// The renderer rounds its preferred height down, while a page at 150% scaling
+// is rarely a whole number of pixels (460.55 in the 1.0.57 flyout). A window
+// that short overflowed by the fraction, the scrollbar rewrapped the page to
+// 477, and the window resized between the two hundreds of times a second.
+test('a whole-pixel preferred height gets a window one pixel taller, so the page never overflows by a fraction', (t) => {
+  const h = controller(t);
+  h.flyout.toggle();
+  const [flyout] = h.windows;
+  flyout.emit('ready-to-show');
+  const placed = [];
+  flyout.setBounds = (bounds) => { flyout.bounds = bounds; placed.push(bounds.height); };
+  flyout.webContents.emit('preferred-size-changed', {}, { width: 1, height: 460 });
+  assert.equal(flyout.bounds.height, 461);
+  assert.equal(flyout.bounds.y + flyout.bounds.height, 1032 - 8, 'still anchored to the taskbar');
+  flyout.webContents.emit('preferred-size-changed', {}, { width: 1, height: 460 });
+  assert.deepEqual(placed, [461], 'the same height is not placed again');
+});
+
+// Gives the newest window a page that reports this height when measured.
+function pageHeight(h, height) {
+  const calls = [];
+  h.windows.at(-1).webContents.executeJavaScript = (code) => {
+    calls.push(code);
+    return Promise.resolve(height);
+  };
+  return calls;
+}
+const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+test('a new window measures its page before it opens, instead of opening at the maximum and shrinking', async (t) => {
+  const h = controller(t);
+  h.flyout.toggle();
+  const calls = pageHeight(h, 460.55);
+  const [flyout] = h.windows;
+  const shown = [];
+  flyout.show = () => { flyout.visible = true; shown.push(flyout.bounds.height); };
+  flyout.emit('ready-to-show');
+  assert.equal(flyout.visible, false, 'not revealed while the page is measured');
+  await settle();
+  assert.deepEqual(calls, ['document.body.getBoundingClientRect().height']);
+  assert.deepEqual(shown, [461], 'revealed once, already at the page height');
+  assert.deepEqual(h.reveals, [{ reused: false }]);
+});
+
+test('a page that cannot be measured in time opens at the maximum height', async (t) => {
+  const h = controller(t);
+  h.flyout.toggle();
+  pageHeight(h, new Promise(() => {}));
+  h.windows[0].emit('ready-to-show');
+  await settle();
+  assert.equal(h.windows[0].visible, false);
+  h.advance(FLYOUT_MEASURE_MS);
+  await settle();
+  assert.equal(h.windows[0].visible, true);
+  assert.equal(h.windows[0].bounds.height, 540);
+});
+
+test('a flyout closed while its page is measured stays closed, and opens at the measured height', async (t) => {
+  const h = controller(t);
+  h.flyout.toggle();
+  pageHeight(h, 300.2);
+  h.flyout.hide();
+  h.windows[0].emit('ready-to-show');
+  await settle();
+  assert.equal(h.windows[0].visible, false);
+  assert.equal(h.flyout.toggle(), true);
+  assert.equal(h.windows[0].visible, true);
+  assert.equal(h.windows[0].bounds.height, 301);
 });
 
 test('a crashed flyout renderer is dropped and pushes reach only a live window', (t) => {
