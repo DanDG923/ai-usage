@@ -26,9 +26,11 @@ test('release metadata, dependency pin, package exclusions, and docs agree', () 
   for (const name of ['react', 'react-dom', 'lucide-react']) assert.ok(pkg.devDependencies[name], `${name} is a devDependency`);
   // The release tooling and these tests load js-yaml and @electron/asar
   // directly, so they must be declared rather than borrowed from
-  // electron-builder's transitive tree.
-  for (const [name, version] of [['js-yaml', '5.4.2'], ['@electron/asar', '4.3.0']]) {
-    assert.equal(pkg.devDependencies[name], version, `${name} is an exactly pinned devDependency`);
+  // electron-builder's transitive tree. The pin is checked for its form, not
+  // a particular version, so a dependency bump needs no edit here.
+  for (const name of ['js-yaml', '@electron/asar']) {
+    const version = pkg.devDependencies[name];
+    assert.match(version ?? '', /^\d+\.\d+\.\d+$/, `${name} is an exactly pinned devDependency`);
     assert.equal(lock.packages[''].devDependencies[name], version);
     assert.equal(lock.packages[`node_modules/${name}`].version, version);
   }
