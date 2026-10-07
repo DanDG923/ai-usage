@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.58 — 7 October 2026
+
+- Stop the tray flyout juddering while it is open. At some display scalings, such as 150%, its contents could come out a fraction of a pixel taller than the window, so a scrollbar appeared, the text rewrapped and the window resized itself back and forth hundreds of times a second, sometimes showing a blank band or cut-off buttons at the bottom. The flyout now opens at its final height and stays still, including the first time it opens after being closed for a while, when it used to open at full height and then shrink.
+- Preserve local usage history, settings, observations, and backups during an in-place update.
+
 ## 1.0.57 — 7 October 2026
 
 - Treat a **Refresh** that Claude Code answers without your subscription sign-in as failed. Claude Code can briefly report no subscription, as an API-key session would, and AI Usage used to store that as a successful read that returned nothing: the Claude card showed **Last good** at that moment next to **Stale**, gave no reason and asked for a **Refresh** straight after one. On an account with a Claude allowance still running, AI Usage now tries once more, keeps the last reading and the last good scan, and says on the Claude and Fable cards that Claude Code did not report your subscription sign-in, until a newer reading replaces it. Other failed Refreshes now name their error on the card too.
