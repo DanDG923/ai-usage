@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.59 — 7 October 2026
+
+- Add built-in Claude Haiku 5.5 API-equivalent pricing, using official rates verified on 7 October 2026. Haiku 5.5 is priced by prompt length. A request whose prompt is 100,000 tokens or fewer costs $0.10 input, $0.125 five-minute cache writes, $0.20 one-hour cache writes, $0.01 cache reads and $0.50 output per million tokens. A longer request pays five times each rate, output included. Claude Code work and imported chat estimates on Haiku 5.5 were unpriced until now; existing records are priced when the catalogue loads, and saved custom prices are kept.
+- Add built-in Claude Sonnet 5.5 API-equivalent pricing: $2 input, $2.50 five-minute and $4 one-hour cache writes, $0.10 cache reads and $10 output per million tokens. The cache-read rate includes the cut Anthropic made on 7 October 2026, from $0.20. Sonnet 5.5 work was unpriced until now.
+- Keep the Fable estimate available when you use Haiku 5.5. Any Haiku 5.5 request in the week used to leave the estimate unavailable for lack of activity coverage. Haiku 5.5 and Sonnet 5.5 now take their share of the Claude week at their own rates; Sonnet 5.5 cache reads used to weigh as much as Sonnet 5's.
+- Preserve local usage history, settings, observations, and backups during an in-place update.
+
 ## 1.0.58 — 7 October 2026
 
 - Stop the tray flyout juddering while it is open. At some display scalings, such as 150%, its contents could come out a fraction of a pixel taller than the window, so a scrollbar appeared, the text rewrapped and the window resized itself back and forth hundreds of times a second, sometimes showing a blank band or cut-off buttons at the bottom. The flyout now opens at its final height and stays still, including the first time it opens after being closed for a while, when it used to open at full height and then shrink.
