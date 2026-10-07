@@ -44,8 +44,16 @@ const MOD_STATE: Record<'on' | 'disabled', { tone: SourceTone; Icon: LucideIcon;
 /**
  * The AI Usage mod for Claude Code: installed through the person's own Claude
  * Code, and checked when the section is shown rather than with every snapshot.
+ * The plan limits it passes on are imported as they land only while the app
+ * collects automatically; otherwise they wait for a collection.
  */
-export function ClaudeCodeModSetting({ onClaudeCodeMod }: { onClaudeCodeMod: ClaudeCodeModAction }) {
+export function ClaudeCodeModSetting({
+  onClaudeCodeMod,
+  collectsAutomatically,
+}: {
+  onClaudeCodeMod: ClaudeCodeModAction;
+  collectsAutomatically: boolean;
+}) {
   const [status, setStatus] = useState<ClaudeCodeModStatus | null>(null);
   const [checked, setChecked] = useState(false);
   const [pending, setPending] = useState<'install' | 'uninstall' | null>(null);
@@ -85,8 +93,16 @@ export function ClaudeCodeModSetting({ onClaudeCodeMod }: { onClaudeCodeMod: Cla
         <>
           Shows these allowances in Claude Code: <code>/ai-usage</code> opens them beside the conversation, and a
           caution line appears above the prompt while one needs attention. Claude Code also passes on the plan limits it
-          already receives, so Claude stays current here between Refreshes. No API use, and nothing is added to your
-          conversations. Needs Claude Code 2.1.287 or later.
+          already receives,{' '}
+          {collectsAutomatically ? (
+            'so Claude stays current here between Refreshes.'
+          ) : (
+            <>
+              but while Collect automatically is set to Only when I refresh, they wait for the next collection: when the
+              app starts, when you press Refresh here, or Sync now in the <code>/ai-usage</code> pane.
+            </>
+          )}{' '}
+          No API use, and nothing is added to your conversations. Needs Claude Code 2.1.287 or later.
           {shown && (
             <span className="source-status claude-code-mod-state" data-tone={shown.tone}>
               <shown.Icon aria-hidden="true" />
@@ -196,12 +212,15 @@ export function SourcesSection({
               Set up Claude
             </button>
           </SettingRow>
-          <ClaudeCodeModSetting onClaudeCodeMod={onClaudeCodeMod} />
+          <ClaudeCodeModSetting
+            onClaudeCodeMod={onClaudeCodeMod}
+            collectsAutomatically={snapshot.settings.refreshIntervalMinutes > 0}
+          />
         </div>
         <div className="setting-col">
           <SelectSetting
             label="Collect automatically"
-            description="Alerts, scheduled backups, and the forecast are only as current as the last collection. While this is on, the app also collects when the window is reopened and when Windows wakes. Collection runs in a separate process, so a slow scan never freezes the dashboard. Claude plan usage is read through Claude Code only when you press Refresh; local activity and the optional status-line helper are collected automatically."
+            description="Alerts, scheduled backups, and the forecast are only as current as the last collection. While this is on, the app also collects when the window is reopened and when Windows wakes. Collection runs in a separate process, so a slow scan never freezes the dashboard. Claude plan usage is read through Claude Code only when you press Refresh, whatever this is set to; local activity, the optional status-line helper and the Claude Code mod’s readings follow this setting."
             value={snapshot.settings.refreshIntervalMinutes}
             onChange={(value) => void update({ refreshIntervalMinutes: Number(value) })}
           >

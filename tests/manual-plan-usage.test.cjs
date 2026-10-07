@@ -896,6 +896,74 @@ test('a failed Refresh stays visible through automatic runs until a Refresh succ
   assert.doesNotMatch(claude.status_detail, /could not read/);
 });
 
+test('a Refresh tells the usage port whether the account is known to have a subscription', async (t) => {
+  const { refreshClaude } = collectorWithPortSpy();
+  const { store } = collectorFixture(t);
+  const seen = [];
+  const usagePort = { read: async ({ expectSubscription }) => {
+    seen.push(expectSubscription);
+    return { subscription_type: null, rate_limits_available: false, rate_limits: null };
+  } };
+  await refreshClaude(store, missingInbox(store), { readPlanUsage: true, usagePort, activityReader: quietActivity });
+  recordRead(store, { minutesAgo: 6, windows: { five_hour: 240, seven_day: 3 * 1440 }, provenance: 'official-statusline' });
+  await refreshClaude(store, missingInbox(store), { readPlanUsage: true, usagePort, activityReader: quietActivity });
+  assert.deepEqual(seen, [false, true], 'only a plan window still running shows a subscription');
+});
+
+test('a Refresh Claude Code answers without the subscription sign-in fails and says why on both cards', async (t) => {
+  const { refreshClaude } = collectorWithPortSpy();
+  const { createClaudeAgentSdkUsagePort } = require('../electron/claude-agent-usage.cjs');
+  const { store, source } = collectorFixture(t);
+  // The mod left a reading six minutes before the Refresh.
+  recordRead(store, { minutesAgo: 6, windows: { five_hour: 240, seven_day: 3 * 1440 }, provenance: 'official-statusline' });
+  await refreshClaude(store, missingInbox(store), { activityReader: quietActivity });
+  const lastGood = source('claude').last_success_at;
+  assert.ok(lastGood);
+  let launches = 0;
+  const usagePort = createClaudeAgentSdkUsagePort({
+    retryDelayMs: 0,
+    findClaudeBinary: () => 'C:\\fixture\\claude.exe',
+    loadSdk: async () => ({ query: () => {
+      launches += 1;
+      return {
+        initializationResult: async () => ({}),
+        usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => ({
+          subscription_type: null, rate_limits_available: false, rate_limits: null,
+        }),
+        return: async () => ({ done: true }),
+      };
+    } }),
+  });
+  await refreshClaude(store, missingInbox(store), { readPlanUsage: true, usagePort, activityReader: quietActivity });
+  assert.equal(launches, 2, 'retried once');
+  let claude = source('claude');
+  assert.equal(claude.status, 'stale');
+  assert.equal(claude.last_success_at, lastGood, 'not counted as a good scan');
+  assert.equal(claude.metadata.planUsage.lastRequest.succeeded, false);
+  assert.equal(claude.metadata.provider.errorCode, 'claude-usage-signed-out');
+  assert.match(claude.status_detail, /This Refresh could not read Claude plan usage because Claude Code did not report your Claude subscription sign-in\. If Claude Code is signed in, press Refresh again\./);
+  assert.match(source('claude-fable').status_detail, /This Refresh could not read Claude plan usage because Claude Code did not report your Claude subscription sign-in\./);
+
+  // Automatic runs keep saying why until a newer reading replaces it.
+  await refreshClaude(store, missingInbox(store), { activityReader: quietActivity });
+  claude = source('claude');
+  assert.equal(claude.status, 'stale');
+  assert.match(claude.status_detail, /The last Refresh could not read Claude plan usage because Claude Code did not report your Claude subscription sign-in\./);
+  let fable = source('claude-fable').status_detail;
+  assert.doesNotMatch(fable, /This Refresh/);
+  assert.match(fable, /The last Refresh could not read Claude plan usage because Claude Code did not report your Claude subscription sign-in\./,
+    'the Fable card keeps the reason too');
+
+  // A Refresh that reads plan usage again clears it from both cards.
+  await refreshClaude(store, missingInbox(store), {
+    readPlanUsage: true, activityReader: quietActivity, usagePort: { read: async () => usageResponse({ five_hour: 240, seven_day: 3 * 1440 }) },
+  });
+  await refreshClaude(store, missingInbox(store), { activityReader: quietActivity });
+  assert.doesNotMatch(source('claude').status_detail, /could not read/);
+  fable = source('claude-fable').status_detail;
+  assert.doesNotMatch(fable, /could not read Claude plan usage/);
+});
+
 // A lower status-line reading for the same reset is held back from the card
 // while the provider's last read is inside the grace period. The source status
 // and the Refresh outcome are judged on the same accepted readings.

@@ -393,7 +393,12 @@ function createFableUsageTracker({ store, usagePort, activityReader, clock = () 
     // Finish synchronous imports before starting the SDK timeout clock.
     const activityRead = timed(() => activityReader.import({ signal: options.signal }));
     const [activityResult] = await Promise.allSettled([activityRead.promise]);
-    const usageRead = planUsageRequested ? timed(() => usagePort.read({ signal: options.signal })) : null;
+    // A Claude plan window that is still running means the account has a
+    // subscription, so a read reporting none has failed.
+    const expectSubscription = planUsageRequested
+      && store.hasUsableObservation('claude', nowMs, { activeWithinMs: 8 * 24 * 60 * 60 * 1000 });
+    const usageRead = planUsageRequested
+      ? timed(() => usagePort.read({ signal: options.signal, expectSubscription })) : null;
     const [usageResult] = usageRead ? await Promise.allSettled([usageRead.promise]) : [null];
     const fetched = clock();
     nowMs = fetched instanceof Date ? fetched.getTime() : new Date(fetched).getTime();

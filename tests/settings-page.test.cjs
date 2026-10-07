@@ -214,6 +214,17 @@ test('navigation badges report connected sources, sources needing attention and 
   assert.doesNotMatch(html, /unpriced/);
 });
 
+test('the Claude Code mod says when its plan limits reach the app, by the collection setting', () => {
+  const snapshot = structuredClone(demoSnapshot);
+  let sources = text(section(renderSettings(snapshot), 'sources'));
+  assert.match(sources, /passes on the plan limits it already receives, so Claude stays current here between Refreshes\./);
+  assert.match(sources, /local activity, the optional status-line helper and the Claude Code mod’s readings follow this setting\./);
+  snapshot.settings.refreshIntervalMinutes = 0;
+  sources = text(section(renderSettings(snapshot), 'sources'));
+  assert.doesNotMatch(sources, /stays current here between Refreshes/);
+  assert.match(sources, /already receives, but while Collect automatically is set to Only when I refresh, they wait for the next collection: when the app starts, when you press Refresh here, or Sync now in the \/ai-usage pane\. No API use/);
+});
+
 test('monthly fees are back, shown per visible subscription, with the comparison note', () => {
   const snapshot = structuredClone(demoSnapshot);
   let html = section(renderSettings(snapshot), 'subscriptions');
