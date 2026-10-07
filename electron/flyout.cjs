@@ -21,6 +21,22 @@ const FLYOUT_DOUBLE_CLICK_HOLD_MS = 600;
 // Follows --panel (night #08090b, Daylight #ffffff) in src/styles/tokens.css,
 // the colour the flyout paints, so it never flashes the other palette.
 const FLYOUT_BACKGROUND = Object.freeze({ dark: '#08090b', light: '#ffffff' });
+// How long the first opening waits to measure the page before it opens at
+// the maximum height instead.
+const FLYOUT_MEASURE_MS = 150;
+
+/**
+ * The window height that holds a page of the given height. The renderer
+ * reports its preferred height in whole pixels, rounded down, while the page
+ * is rarely whole at 150% scaling. A window that short overflows by the
+ * fraction, the scrollbar that raises narrows and rewraps the page taller,
+ * the window grows, the scrollbar goes and the page shrinks back: it resized
+ * hundreds of times a second while open. The next whole pixel always holds it.
+ */
+function fitHeight(height) {
+  const value = Number(height);
+  return value > 0 ? Math.floor(value) + 1 : null;
+}
 
 const DASHBOARD_TABS = Object.freeze(['overview', 'activity', 'costs', 'settings']);
 const DASHBOARD_PROVIDERS = Object.freeze(['codex', 'claude', 'fable']);
@@ -126,6 +142,7 @@ function createTrayFlyout({
   minHeight = FLYOUT_MIN_HEIGHT,
   releaseAfterMs = FLYOUT_RELEASE_MS,
   blurGraceMs = FLYOUT_BLUR_GRACE_MS,
+  measureMs = FLYOUT_MEASURE_MS,
   now = Date.now,
 }) {
   let win = null;
@@ -169,16 +186,47 @@ function createTrayFlyout({
     try { onReveal({ reused }); } catch { /* Showing must not depend on a fresh payload. */ }
   }
 
+  // The page's height before its window is first shown: the renderer reports
+  // a preferred size only once the window is visible, so without this a new
+  // window opened at the maximum height and then shrank on screen. Null when
+  // it cannot be read in time.
+  function measure(target) {
+    if (typeof target.webContents?.executeJavaScript !== 'function') return null;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(null), measureMs);
+      Promise.resolve()
+        .then(() => target.webContents.executeJavaScript('document.body.getBoundingClientRect().height', true))
+        .then(fitHeight, () => null)
+        .then((height) => {
+          clearTimeout(timer);
+          resolve(height);
+        });
+    });
+  }
+
   function create() {
     ready = false;
     contentHeight = null;
     const created = createWindow({ width, height: maxHeight });
     win = created;
     const current = () => win === created && !created.isDestroyed();
-    created.once('ready-to-show', () => {
-      if (!current()) return;
+    const becomeReady = () => {
+      if (!current() || ready) return;
       ready = true;
       if (wanted) reveal(false);
+    };
+    created.once('ready-to-show', () => {
+      if (!current()) return;
+      const measuring = measure(created);
+      if (!measuring) {
+        becomeReady();
+        return;
+      }
+      void measuring.then((height) => {
+        // A preferred size that arrived meanwhile is the newer height.
+        if (current() && height != null && contentHeight == null) contentHeight = height;
+        becomeReady();
+      });
     });
     created.on('blur', () => {
       if (!current() || !wanted) return;
@@ -195,8 +243,8 @@ function createTrayFlyout({
     // With preferred-size mode the renderer reports its natural height, so
     // the window fits its content up to the maximum.
     created.webContents.on('preferred-size-changed', (_event, preferred) => {
-      const next = Math.ceil(Number(preferred?.height));
-      if (!current() || !(next > 0) || next === contentHeight) return;
+      const next = fitHeight(preferred?.height);
+      if (!current() || next == null || next === contentHeight) return;
       contentHeight = next;
       place();
     });
@@ -272,6 +320,7 @@ module.exports = {
   FLYOUT_BLUR_GRACE_MS,
   FLYOUT_DOUBLE_CLICK_HOLD_MS,
   FLYOUT_MAX_HEIGHT,
+  FLYOUT_MEASURE_MS,
   FLYOUT_RELEASE_MS,
   FLYOUT_WIDTH,
   NAVIGATION_TTL_MS,
