@@ -41,12 +41,16 @@ const LONG_CONTEXT_PRICING = new Map([
 ]);
 const LONG_CONTEXT_THRESHOLDS = [...new Set([...LONG_CONTEXT_PRICING.values()].map((rule) => rule.threshold))]
   .sort((a, b) => a - b);
-// How many thresholds a stored request's prompt is over. Queries that sum
-// requests group by it, so no sum mixes requests either side of the threshold
-// their model is priced by. Codex input includes its cached subset; Claude's
-// categories are exclusive, so cache reads join its prompt.
-const CONTEXT_TIER_SQL = LONG_CONTEXT_THRESHOLDS.map((threshold) => `(CASE WHEN source_id = 'codex'
-  THEN input_tokens ELSE input_tokens + cached_input_tokens END + cache_write_input_tokens > ${threshold})`).join(' + ');
+// How many thresholds a request's prompt is over, as calculateCost's
+// contextTier. Queries that sum requests group by it, so no sum mixes requests
+// either side of the threshold their model is priced by.
+function contextTierSql(promptSql) {
+  return LONG_CONTEXT_THRESHOLDS.map((threshold) => `(${promptSql} > ${threshold})`).join(' + ');
+}
+// Codex input includes its cached subset; Claude's categories are exclusive,
+// so cache reads join its prompt.
+const CONTEXT_TIER_SQL = contextTierSql(`CASE WHEN source_id = 'codex'
+  THEN input_tokens ELSE input_tokens + cached_input_tokens END + cache_write_input_tokens`);
 
 const DEFAULT_SETTINGS = {
   showCodexSubscription: true,
@@ -2758,4 +2762,4 @@ class UsageStore {
   }
 }
 
-module.exports = { UsageStore, DEFAULT_SETTINGS };
+module.exports = { UsageStore, DEFAULT_SETTINGS, contextTierSql };

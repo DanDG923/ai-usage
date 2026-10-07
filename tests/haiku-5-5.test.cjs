@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const { desktopAnalytics, saveDesktopEstimates } = require('../electron/desktop-estimates.cjs');
 const { projectFableAllowance } = require('../electron/fable-projection.cjs');
 const { UsageStore } = require('../electron/store.cjs');
 
@@ -141,6 +142,26 @@ test('cycle history prices each Haiku 5.5 request by its own prompt length', (t)
   assert.equal(current.current, true);
   assert.equal(current.cost, 0.36);
   assert.equal(current.tokens, 400_001);
+});
+
+test('desktop and web chat estimates price each Haiku 5.5 reply by its own prompt length', (t) => {
+  const { store } = fixture(t);
+  const reply = (key, inputTokens, outputTokens) => ({
+    event_key: key.repeat(64), occurred_at: iso(NOW - HOUR), model: 'claude-haiku-5-5', model_origin: 'exported',
+    input_tokens: inputTokens, output_tokens: outputTokens, excluded_content: 0, input_missing: 0,
+    method: 'visible-prompt-reply-chars-v1',
+  });
+  // 60k in and 10k out at $0.10 / $0.50, then 150k in and 10k out at five
+  // times both: $0.011 and $0.10, where pricing their sum on the first card
+  // would give $0.031.
+  assert.deepEqual(saveDesktopEstimates(store, [reply('a', 60_000, 10_000), reply('b', 150_000, 10_000)]),
+    { imported: 2, duplicates: 0 });
+  const analytics = desktopAnalytics(store, 30, store.getSettings(), NOW);
+  assert.equal(analytics.byModel.length, 1);
+  assert.equal(analytics.byModel[0].replies, 2);
+  near(analytics.byModel[0].estimatedCost, 0.011 + 0.1, 1e-12, 'by model');
+  near(analytics.estimatedCost, 0.011 + 0.1, 1e-12, 'total');
+  assert.equal(analytics.unpricedReplies, 0);
 });
 
 test('an existing database gains the Haiku 5.5 row on reopen, reprices history and keeps custom rates', (t) => {

@@ -175,17 +175,30 @@ function desktopAnalytics(store, days, settings, nowMs) {
 }
 
 function buildDesktopAnalytics(store, days, settings, nowMs) {
+  const period = [new Date(nowMs - days * 86400000).toISOString(), new Date(nowMs).toISOString()];
   const rows = store.prepare(`SELECT model, model_origin AS modelOrigin, COUNT(*) AS replies,
     SUM(input_tokens) AS inputTokens, SUM(output_tokens) AS outputTokens,
     SUM(CASE WHEN excluded_content OR input_missing THEN 1 ELSE 0 END) AS incompleteReplies
     FROM desktop_chat_estimates WHERE occurred_at >= ? AND occurred_at <= ? GROUP BY model, model_origin
-    ORDER BY replies DESC, model, model_origin`).all(new Date(nowMs - days * 86400000).toISOString(), new Date(nowMs).toISOString());
+    ORDER BY replies DESC, model, model_origin`).all(...period);
+  // Each reply is priced by the rate card its own prompt selects, as recorded
+  // requests are, so replies are summed within a long-context tier, never
+  // across one. The visible prompt is all an estimate knows of a reply's
+  // prompt; earlier turns could only raise its tier.
+  const { contextTierSql } = require('./store.cjs');
+  const usdByModel = new Map();
+  for (const tier of store.prepare(`SELECT model, model_origin AS modelOrigin, ${contextTierSql('input_tokens')} AS contextTier,
+    SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens
+    FROM desktop_chat_estimates WHERE occurred_at >= ? AND occurred_at <= ? GROUP BY model, model_origin, contextTier`).iterate(...period)) {
+    const cost = store.calculateCost({ ...tier, source_id: 'claude' });
+    const key = `${tier.model}|${tier.modelOrigin}`;
+    usdByModel.set(key, cost.covered ? (usdByModel.get(key) ?? 0) + cost.actualUsd : null);
+  }
   const conversion = settings.currency === 'USD' ? 1 : settings.usdToCurrency;
   let estimatedUsd = 0;
   let unpricedReplies = 0;
   for (const row of rows) {
-    const price = store.resolvePrice(row.model);
-    const usd = price ? (row.inputTokens * price.input_usd_per_million + row.outputTokens * price.output_usd_per_million) / 1e6 : null;
+    const usd = usdByModel.get(`${row.model}|${row.modelOrigin}`) ?? null;
     row.estimatedCost = usd === null ? null : usd * conversion;
     if (usd === null) unpricedReplies += row.replies;
     else estimatedUsd += usd;
