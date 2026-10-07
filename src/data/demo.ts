@@ -339,6 +339,16 @@ export const demoSnapshot: Snapshot = {
       effective_from: '2026-08-01',
       source_url: 'https://platform.claude.com/docs/en/about-claude/pricing',
     },
+    {
+      model: 'claude-haiku-5-5',
+      input_usd_per_million: 0.1,
+      cache_write_usd_per_million: 0.125,
+      cache_write_1h_usd_per_million: 0.2,
+      cache_read_usd_per_million: 0.01,
+      output_usd_per_million: 0.5,
+      effective_from: '2026-10-07',
+      source_url: 'https://platform.claude.com/docs/en/about-claude/pricing',
+    },
   ],
   settings: {
     showCodexSubscription: true,

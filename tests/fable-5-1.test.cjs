@@ -172,7 +172,7 @@ test('allowance pressure weighs a Fable 5.1 cache read at its own quarter-dollar
   const fable51 = pairScenario(t, 'claude-fable-5-1');
   assert.equal(fable51.available, true);
   assert.equal(fable51.calibration.method, 'fable-anchor-pair');
-  assert.equal(fable51.calibration.profile, 'allowance-pressure-v2');
+  assert.equal(fable51.calibration.profile, 'allowance-pressure-v3');
   near(fable51.calibration.pairMeasuredPressure, 0.25, 1e-12, 'Fable 5.1 pressure');
   near(fable51.calibration.percentPerPressureUnit, 20, 1e-9, 'Fable 5.1 rate');
   const dated = pairScenario(t, 'claude-fable-5-1-20260901');
@@ -199,11 +199,11 @@ test('the overall-share split uses the Fable 5.1 and Opus 5.5 weights', (t) => {
   const { context, projection } = shareScenario(t, 'claude-fable-5-1', { cachedInputTokens: 4 * MILLION },
     'claude-opus-5-5', { inputTokens: 250_000 });
   assert.equal(projection.calibration.method, 'overall-share');
-  assert.equal(projection.calibration.profile, 'allowance-pressure-v2');
+  assert.equal(projection.calibration.profile, 'allowance-pressure-v3');
   near(projection.usedPercent, 10, 1e-9, 'Fable 5.1 with Opus 5.5');
   const quota = context.store.getQuota('claude-fable', context.store.getSettings(), NOW);
   assert.equal(quota.provenance, 'derived-tokens');
-  assert.equal(quota.metadata.calibration.profile, 'allowance-pressure-v2');
+  assert.equal(quota.metadata.calibration.profile, 'allowance-pressure-v3');
   assert.equal(quota.bucketName, 'Fable weekly');
 
   // The same tokens on the predecessors weigh differently.

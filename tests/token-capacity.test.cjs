@@ -105,6 +105,7 @@ for (const [sourceId, bucketId, model] of [
   ['claude', 'seven_day_sonnet', 'claude-sonnet-5'],
   ['claude', 'model_scoped:claude%20opus', 'claude-opus-5'],
   ['claude', 'model_scoped:claude-opus-5', 'claude-opus-5-20260901'],
+  ['claude', 'model_scoped:claude-haiku-5-5', 'claude-haiku-5-5-20261007'],
 ]) {
   test(`known weekly scope ${sourceId}/${bucketId} uses only its matching Claude model family`, () => {
     const input = fixture({ sourceId, bucketId });

@@ -28,8 +28,25 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const COMPACT_AFTER_MS = 60 * DAY_MS;
 // About a megabyte of ledger CSV is written at a time.
 const CSV_BATCH_CHARS = 1 << 20;
-const OPENAI_LONG_CONTEXT_THRESHOLD = 272_000;
-const OPENAI_LONG_CONTEXT_MODELS = new Set(['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
+// Long-context pricing by catalogue model: a request whose prompt is over
+// `threshold` tokens pays `input` times every input and cache rate and
+// `output` times the output rate, for the whole request. OpenAI's GPT-6 and
+// GPT-5.6 models double input and raise output by half above 272,000; Claude
+// Haiku 5.5's second rate card, for prompts over 100,000, is five times its first.
+const OPENAI_LONG_CONTEXT = { threshold: 272_000, input: 2, output: 1.5 };
+const LONG_CONTEXT_PRICING = new Map([
+  ...['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']
+    .map((model) => [model, OPENAI_LONG_CONTEXT]),
+  ['claude-haiku-5-5', { threshold: 100_000, input: 5, output: 5 }],
+]);
+const LONG_CONTEXT_THRESHOLDS = [...new Set([...LONG_CONTEXT_PRICING.values()].map((rule) => rule.threshold))]
+  .sort((a, b) => a - b);
+// How many thresholds a stored request's prompt is over. Queries that sum
+// requests group by it, so no sum mixes requests either side of the threshold
+// their model is priced by. Codex input includes its cached subset; Claude's
+// categories are exclusive, so cache reads join its prompt.
+const CONTEXT_TIER_SQL = LONG_CONTEXT_THRESHOLDS.map((threshold) => `(CASE WHEN source_id = 'codex'
+  THEN input_tokens ELSE input_tokens + cached_input_tokens END + cache_write_input_tokens > ${threshold})`).join(' + ');
 
 const DEFAULT_SETTINGS = {
   showCodexSubscription: true,
@@ -189,6 +206,9 @@ const PRICE_ROWS = [
   ['claude-opus-5', 5, 6.25, 10, 0.5, 25],
   ['claude-opus-4-8', 5, 6.25, 10, 0.5, 25],
   ['claude-sonnet-5', 2, 2.5, 4, 0.2, 10],
+  // Haiku 5.5 rates for prompts up to 100,000 tokens, verified 2026-10-07;
+  // LONG_CONTEXT_PRICING applies the rates for longer prompts.
+  ['claude-haiku-5-5', 0.1, 0.125, 0.2, 0.01, 0.5],
   ['claude-haiku-4-5', 1, 1.25, 2, 0.1, 5],
 ];
 
@@ -710,7 +730,9 @@ class UsageStore {
       const openAiEffective = {
         'gpt-6-astra': '2026-09-04', 'gpt-6.1-sol': '2026-09-29', 'gpt-6-sol': '2026-09-22', 'gpt-6-luna': '2026-09-22',
       }[row[0]];
-      const claudeEffective = { 'claude-fable-5-1': '2026-09-01', 'claude-opus-5-5': '2026-09-22' }[row[0]];
+      const claudeEffective = {
+        'claude-fable-5-1': '2026-09-01', 'claude-opus-5-5': '2026-09-22', 'claude-haiku-5-5': '2026-10-07',
+      }[row[0]];
       const source = openAiEffective
         ? `https://developers.openai.com/api/docs/models/${row[0]}`
         : row[0].startsWith('claude')
@@ -1557,17 +1579,22 @@ class UsageStore {
     if (cacheWrite5m + cacheWrite1h === 0 && cacheWriteTotal > 0) cacheWrite5m = cacheWriteTotal;
     // Long-context pricing is a per-request rule. Collectors currently persist
     // each provider message/last_token_usage record as one usage event, so this
-    // treats a row as one request. OpenAI input_tokens includes its cached-input
-    // subset, and eligibility is based on the full prompt rather than only the
-    // uncached portion. If collectors ever write aggregates, they must carry
-    // an explicit request-context field instead of applying this rule to totals.
+    // treats a row as one request. Eligibility is based on the full prompt,
+    // cached part included, rather than only the uncached portion. A sum of
+    // requests carries CONTEXT_TIER_SQL's contextTier instead; if collectors
+    // ever write aggregates, they must carry an explicit request-context field
+    // instead of applying this rule to totals.
     // Resolve through the catalogue row so dated supported model suffixes inherit
     // the rule, while similarly priced models such as codex-auto-review do not.
-    const requestInput = Number(row.input_tokens || 0) + cacheWriteTotal;
-    const longContext = OPENAI_LONG_CONTEXT_MODELS.has(price.model)
-      && (row.aggregateLongContext ?? requestInput > OPENAI_LONG_CONTEXT_THRESHOLD);
-    const inputMultiplier = longContext ? 2 : 1;
-    const outputMultiplier = longContext ? 1.5 : 1;
+    const promptTokens = row.source_id === 'codex'
+      ? Number(row.input_tokens || 0) + cacheWriteTotal
+      : Number(row.input_tokens || 0) + cacheWriteTotal + Number(row.cached_input_tokens || 0);
+    const rule = LONG_CONTEXT_PRICING.get(price.model);
+    const longContext = Boolean(rule) && (row.contextTier != null
+      ? row.contextTier > LONG_CONTEXT_THRESHOLDS.indexOf(rule.threshold)
+      : promptTokens > rule.threshold);
+    const inputMultiplier = longContext ? rule.input : 1;
+    const outputMultiplier = longContext ? rule.output : 1;
     const actualUsd = (
       regularInput * price.input_usd_per_million * inputMultiplier
       + cacheWrite5m * price.cache_write_usd_per_million * inputMultiplier
@@ -1575,11 +1602,8 @@ class UsageStore {
       + Number(row.cached_input_tokens || 0) * price.cache_read_usd_per_million * inputMultiplier
       + output * price.output_usd_per_million * outputMultiplier
     ) / million;
-    const allInputWithoutCache = row.source_id === 'codex'
-      ? Number(row.input_tokens || 0) + cacheWriteTotal
-      : Number(row.input_tokens || 0) + cacheWriteTotal + Number(row.cached_input_tokens || 0);
     const withoutCacheUsd = (
-      allInputWithoutCache * price.input_usd_per_million * inputMultiplier
+      promptTokens * price.input_usd_per_million * inputMultiplier
       + output * price.output_usd_per_million * outputMultiplier
     ) / million;
     const breakdownUsd = {
@@ -1701,7 +1725,7 @@ class UsageStore {
         rows = this.prepare(`SELECT MIN(event_key) AS event_key, source_id, session_id, model, project,
           ${ATTRIBUTION_METADATA} AS metadata_json,
           MIN(occurred_at) AS first_occurred_at, MAX(occurred_at) AS occurred_at, COUNT(*) AS event_count,
-          input_tokens + cache_write_input_tokens > ${OPENAI_LONG_CONTEXT_THRESHOLD} AS aggregateLongContext,
+          ${CONTEXT_TIER_SQL} AS contextTier,
           SUM(input_tokens) AS input_tokens, SUM(cached_input_tokens) AS cached_input_tokens,
           SUM(cache_write_input_tokens) AS cache_write_input_tokens,
           SUM(CASE WHEN cache_write_5m_input_tokens + cache_write_1h_input_tokens = 0 THEN cache_write_input_tokens ELSE cache_write_5m_input_tokens END) AS cache_write_5m_input_tokens,
@@ -1709,7 +1733,7 @@ class UsageStore {
           SUM(output_tokens) AS output_tokens, SUM(reasoning_output_tokens) AS reasoning_output_tokens
           FROM usage_events WHERE occurred_at >= ? AND occurred_at <= ?
           GROUP BY source_id, session_id, CASE WHEN session_id IS NULL OR session_id = '' THEN event_key END,
-            model, project, ${ATTRIBUTION_METADATA}, substr(occurred_at, 1, 13), CAST(substr(occurred_at, 15, 2) AS INTEGER) / 15, aggregateLongContext
+            model, project, ${ATTRIBUTION_METADATA}, substr(occurred_at, 1, 13), CAST(substr(occurred_at, 15, 2) AS INTEGER) / 15, contextTier
           ORDER BY first_occurred_at, occurred_at`).all(lower, upper);
         if (!this.db.isTransaction) {
           this.analyticsDayCache.set(day, { revision, lower, upper, rows });
@@ -2029,14 +2053,14 @@ class UsageStore {
       this.withPriceCache(() => {
         for (const window of windows) {
           const events = this.prepare(`SELECT source_id, model,
-            input_tokens + cache_write_input_tokens > ${OPENAI_LONG_CONTEXT_THRESHOLD} AS aggregateLongContext,
+            ${CONTEXT_TIER_SQL} AS contextTier,
             SUM(input_tokens) AS input_tokens, SUM(cached_input_tokens) AS cached_input_tokens,
             SUM(cache_write_input_tokens) AS cache_write_input_tokens,
             SUM(CASE WHEN cache_write_5m_input_tokens + cache_write_1h_input_tokens = 0 THEN cache_write_input_tokens ELSE cache_write_5m_input_tokens END) AS cache_write_5m_input_tokens,
             SUM(cache_write_1h_input_tokens) AS cache_write_1h_input_tokens,
             SUM(output_tokens) AS output_tokens
             FROM usage_events WHERE source_id = ? AND occurred_at >= ? AND occurred_at < ? ${modelFilter}
-            GROUP BY model, aggregateLongContext`).iterate(eventSource, window.startIso, window.endIso);
+            GROUP BY model, contextTier`).iterate(eventSource, window.startIso, window.endIso);
           for (const event of events) {
             window.usd += this.calculateCost(event).actualUsd;
             // Codex reports cached input as a subset of input; Claude reports it
