@@ -61,13 +61,19 @@ const CONTEXT_TIER_SQL = contextTierSql(`CASE WHEN source_id = 'codex'
 // than the omission and brings it back. A status-line figure was fetched no
 // later than its session's first redraw of it; a redraw only omits after its
 // recorded fetch, so an undated one, or a manual weekly entry, omits nothing.
+// The omission must follow every kept 5-hour reading, not only the last: an
+// older redraw that agrees with a newer Refresh is kept after it, and an
+// omission between the two must not hide the window that Refresh confirmed.
 const CLAUDE_SESSION_BUCKET = 'five_hour';
 const OMITTING_PROVENANCES = new Set(['official-claude-usage', 'official-statusline']);
 function sessionWindowOmitted(sessionRows, rows, nowMs) {
   const latest = sessionRows?.length ? normaliseObservation(sessionRows.at(-1)) : null;
   if (!latest || !(latest.resetsAt > nowMs)) return false;
-  const fetchedBy = latest.provenance === 'official-statusline' && Number.isFinite(latest.seenSince)
-    ? Math.min(latest.seenSince, latest.observedAt) : latest.observedAt;
+  const fetchedBy = sessionRows.reduce((newest, row) => {
+    const reading = normaliseObservation(row);
+    return Math.max(newest, reading.provenance === 'official-statusline' && Number.isFinite(reading.seenSince)
+      ? Math.min(reading.seenSince, reading.observedAt) : reading.observedAt);
+  }, -Infinity);
   const carried = new Set(rows.filter((row) => row.bucket_id === CLAUDE_SESSION_BUCKET)
     .map((row) => Date.parse(row.observed_at)));
   return rows.some((row) => {
