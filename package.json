@@ -43,7 +43,7 @@
     "@vitejs/plugin-react": "6.1.2",
     "concurrently": "10.0.6",
     "cross-env": "10.1.0",
-    "electron": "44.10.0",
+    "electron": "45.2.0",
     "electron-builder": "26.18.0",
     "js-yaml": "5.5.0",
     "lucide-react": "1.65.0",

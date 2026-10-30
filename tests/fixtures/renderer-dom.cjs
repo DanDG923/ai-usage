@@ -9,7 +9,7 @@ app.commandLine.appendSwitch('in-process-gpu');
 app.whenReady().then(async () => {
  const window = new BrowserWindow({ show: false, width: 1280, height: 900,
    webPreferences: { preload: path.join(__dirname, 'renderer-dom-preload.cjs'), contextIsolation: true, sandbox: false, backgroundThrottling: false, offscreen: true } });
- const evaluate = (fn) => window.webContents.executeJavaScript(`(${fn.toString()})()`);
+ const evaluate = (fn) => window.webContents.executeJavaScript(`((r) => r instanceof Node ? true : r)((${fn.toString()})())`);
  const until = async (fn) => { for (let attempt = 0; attempt < 100; attempt++) { if (await evaluate(fn)) return; await new Promise((resolve) => setTimeout(resolve, 50)); } throw new Error(`Timed out: ${fn}`); };
  try {
   await window.loadURL(process.env.AI_USAGE_RENDERER_URL);
@@ -237,7 +237,7 @@ app.whenReady().then(async () => {
   const waiting = new BrowserWindow({ show: false, width: 1280, height: 900,
     webPreferences: { preload: path.join(__dirname, 'renderer-dom-preload.cjs'), contextIsolation: true, sandbox: false, backgroundThrottling: false, offscreen: true,
       additionalArguments: ['--decline-reads'] } });
-  const inWaiting = (fn) => waiting.webContents.executeJavaScript(`(${fn.toString()})()`);
+  const inWaiting = (fn) => waiting.webContents.executeJavaScript(`((r) => r instanceof Node ? true : r)((${fn.toString()})())`);
   await waiting.loadURL(process.env.AI_USAGE_RENDERER_URL);
   for (let attempt = 0; !(await inWaiting(() => document.querySelector('.state-panel.is-error button'))); attempt++) {
     if (attempt > 100) throw new Error('The declined first read left the loading screen without a retry.');
