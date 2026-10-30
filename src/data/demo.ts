@@ -260,6 +260,16 @@ export const demoSnapshot: Snapshot = {
       source_url: 'https://developers.openai.com/api/docs/models/gpt-6.1-sol',
     },
     {
+      model: 'gpt-6.1-terra',
+      input_usd_per_million: 1,
+      cache_write_usd_per_million: 1.25,
+      cache_write_1h_usd_per_million: 1.25,
+      cache_read_usd_per_million: 0.05,
+      output_usd_per_million: 5,
+      effective_from: '2026-10-26',
+      source_url: 'https://developers.openai.com/api/docs/models/gpt-6.1-terra',
+    },
+    {
       model: 'gpt-6-sol',
       input_usd_per_million: 2,
       cache_write_usd_per_million: 2.5,

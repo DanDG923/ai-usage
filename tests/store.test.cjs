@@ -233,6 +233,7 @@ for (const [model, standardUsd, longUsd, effectiveFrom, inputUsd] of [
   ['gpt-6-sol', 0.424, 0.843004, '2026-09-22', 0.2],
   ['gpt-6-luna', 0.0212, 0.0421502, '2026-09-22', 0.01],
   ['gpt-6.1-sol', 0.414, 0.823004, '2026-09-29', 0.2],
+  ['gpt-6.1-terra', 0.207, 0.411502, '2026-10-26', 0.1],
 ]) {
   test(`${model} prices every token category at the long-context boundary`, () => withStore((store) => {
     for (const name of [model, `${model}-${effectiveFrom.replaceAll('-', '')}`, `${model}-${effectiveFrom}`]) {
