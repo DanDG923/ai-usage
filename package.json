@@ -32,28 +32,28 @@
     "installer:update": "node tools/claude-installer-pin.cjs --update"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.296",
-    "electron-updater": "6.8.9"
+    "@anthropic-ai/claude-agent-sdk": "0.3.314",
+    "electron-updater": "6.8.11"
   },
   "devDependencies": {
     "@electron/asar": "4.3.1",
-    "@types/node": "24.13.3",
+    "@types/node": "24.19.2",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.1.2",
     "concurrently": "10.0.6",
     "cross-env": "10.1.0",
-    "electron": "44.7.0",
-    "electron-builder": "26.15.3",
-    "js-yaml": "5.4.2",
-    "lucide-react": "1.50.0",
-    "oxlint": "1.86.0",
+    "electron": "44.10.0",
+    "electron-builder": "26.18.0",
+    "js-yaml": "5.5.0",
+    "lucide-react": "1.65.0",
+    "oxlint": "1.90.0",
     "prettier": "3.9.10",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "typescript": "7.0.2",
     "vite": "8.3.5",
-    "wait-on": "9.1.0"
+    "wait-on": "9.5.1"
   },
   "build": {
     "appId": "com.local.aiusage",
