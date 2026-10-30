@@ -35,7 +35,7 @@ const CSV_BATCH_CHARS = 1 << 20;
 // Haiku 5.5's second rate card, for prompts over 100,000, is five times its first.
 const OPENAI_LONG_CONTEXT = { threshold: 272_000, input: 2, output: 1.5 };
 const LONG_CONTEXT_PRICING = new Map([
-  ...['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']
+  ...['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']
     .map((model) => [model, OPENAI_LONG_CONTEXT]),
   ['claude-haiku-5-5', { threshold: 100_000, input: 5, output: 5 }],
 ]);
@@ -195,6 +195,9 @@ const PRICE_ROWS = [
   // GPT-6.1 Sol standard rates verified 2026-10-01. It differs from GPT-6 Sol
   // only in cached input: $0.10 against $0.20 per MTok.
   ['gpt-6.1-sol', 2, 2.5, 2.5, 0.1, 10],
+  // GPT-6.1 Terra standard rates verified 2026-10-30, released 2026-10-26:
+  // exactly half of GPT-6.1 Sol in every category.
+  ['gpt-6.1-terra', 1, 1.25, 1.25, 0.05, 5],
   // GPT-6 Sol and Luna standard rates verified 2026-09-22.
   ['gpt-6-sol', 2, 2.5, 2.5, 0.2, 10],
   ['gpt-6-luna', 0.1, 0.125, 0.125, 0.01, 0.5],
@@ -735,7 +738,8 @@ class UsageStore {
       // OpenAI rows sourced from the model's own page, with their effective
       // dates; the other OpenAI rows cite the comparison page.
       const openAiEffective = {
-        'gpt-6-astra': '2026-09-04', 'gpt-6.1-sol': '2026-09-29', 'gpt-6-sol': '2026-09-22', 'gpt-6-luna': '2026-09-22',
+        'gpt-6-astra': '2026-09-04', 'gpt-6.1-sol': '2026-09-29', 'gpt-6.1-terra': '2026-10-26',
+        'gpt-6-sol': '2026-09-22', 'gpt-6-luna': '2026-09-22',
       }[row[0]];
       const claudeEffective = {
         'claude-fable-5-1': '2026-09-01', 'claude-opus-5-5': '2026-09-22',
