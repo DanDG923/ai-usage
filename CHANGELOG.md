@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.60 — 30 October 2026
+
+- Stop showing the Claude 5-hour limit once Claude stops reporting it. Claude renamed Max 20x to Ultra and removed the 5-hour limit for verified Ultra accounts. A Refresh or Claude Code reading that carries the weekly limit without a 5-hour one now ends the last 5-hour figure at once, instead of leaving it on the card, in the tray and in warnings until its old reset. Accounts that still have a temporary 5-hour limit keep seeing it.
+- Add built-in GPT-6.1 Terra API-equivalent pricing: $1 input, $0.05 cached input, $1.25 cache writes and $5 output per million tokens, verified on 30 October 2026, with OpenAI's long-context rates above 272,000 input tokens. GPT-6.1 Terra was released on 26 October 2026 and is available in Codex; its work was unpriced until now.
+- Update Electron to 44.7.0 and the Claude Agent SDK used for Refresh to 0.3.296.
+- Preserve local usage history, settings, observations, and backups during an in-place update.
+
 ## 1.0.59 — 7 October 2026
 
 - Add built-in Claude Haiku 5.5 API-equivalent pricing, using official rates verified on 7 October 2026. Haiku 5.5 is priced by prompt length. A request whose prompt is 100,000 tokens or fewer costs $0.10 input, $0.125 five-minute cache writes, $0.20 one-hour cache writes, $0.01 cache reads and $0.50 output per million tokens. A longer request pays five times each rate, output included. Claude Code work and imported chat estimates on Haiku 5.5 were unpriced until now; existing records are priced when the catalogue loads, and saved custom prices are kept.
