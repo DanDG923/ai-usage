@@ -52,6 +52,39 @@ function contextTierSql(promptSql) {
 const CONTEXT_TIER_SQL = contextTierSql(`CASE WHEN source_id = 'codex'
   THEN input_tokens ELSE input_tokens + cached_input_tokens END + cache_write_input_tokens`);
 
+// Claude dropped the 5-hour limit for verified Ultra (formerly Max 20x)
+// accounts. A Refresh or a status-line reading records every window it
+// carries at one instant, so one that carries the weekly window but no 5-hour
+// window, fetched after the latest 5-hour figure, shows that window has ended:
+// it must not stay on the card, or drive warnings, until its old reset. A
+// later reading that carries one again (an account not yet verified) is newer
+// than the omission and brings it back. A status-line figure was fetched no
+// later than its session's first redraw of it; a redraw only omits after its
+// recorded fetch, so an undated one, or a manual weekly entry, omits nothing.
+// The omission must follow every kept 5-hour reading, not only the last: an
+// older redraw that agrees with a newer Refresh is kept after it, and an
+// omission between the two must not hide the window that Refresh confirmed.
+const CLAUDE_SESSION_BUCKET = 'five_hour';
+const OMITTING_PROVENANCES = new Set(['official-claude-usage', 'official-statusline']);
+function sessionWindowOmitted(sessionRows, rows, nowMs) {
+  const latest = sessionRows?.length ? normaliseObservation(sessionRows.at(-1)) : null;
+  if (!latest || !(latest.resetsAt > nowMs)) return false;
+  const fetchedBy = sessionRows.reduce((newest, row) => {
+    const reading = normaliseObservation(row);
+    return Math.max(newest, reading.provenance === 'official-statusline' && Number.isFinite(reading.seenSince)
+      ? Math.min(reading.seenSince, reading.observedAt) : reading.observedAt);
+  }, -Infinity);
+  const carried = new Set(rows.filter((row) => row.bucket_id === CLAUDE_SESSION_BUCKET)
+    .map((row) => Date.parse(row.observed_at)));
+  return rows.some((row) => {
+    if (row.bucket_id !== 'seven_day' || !OMITTING_PROVENANCES.has(row.provenance)) return false;
+    const reading = normaliseObservation(row);
+    if (carried.has(reading.observedAt)) return false;
+    const fetchedAfter = reading.provenance === 'official-statusline' ? reading.fetchedAfter : reading.observedAt;
+    return Number.isFinite(fetchedAfter) && fetchedAfter >= fetchedBy;
+  });
+}
+
 const DEFAULT_SETTINGS = {
   showCodexSubscription: true,
   showClaudeSubscription: true,
@@ -1243,6 +1276,9 @@ class UsageStore {
     const restatementOptions = { nowMs, freshReadGraceMs: freshReadGraceFor(settings), allowanceChanges: settings.allowanceChanges, sourceId };
     for (const [bucketId, bucketRows] of grouped) {
       grouped.set(bucketId, withoutStaleRestatements(bucketRows, restatementOptions));
+    }
+    if (sourceId === 'claude' && sessionWindowOmitted(grouped.get(CLAUDE_SESSION_BUCKET), rows, nowMs)) {
+      grouped.delete(CLAUDE_SESSION_BUCKET);
     }
     const schedule = {
       activeDays: settings.activeDays,

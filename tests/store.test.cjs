@@ -795,6 +795,95 @@ test('the Claude primary window is the shared weekly pool, not a model-scoped bu
   assert.deepEqual(quota.windows.slice(0, 2).map((window) => window.bucketId), ['seven_day', 'five_hour']);
 }));
 
+// Verified Ultra accounts have no 5-hour limit: a newer reading carrying the
+// weekly window without one ends the 5-hour window before its old reset.
+function claudeWindows(store, nowMs) {
+  return store.getQuota('claude', store.getSettings(), nowMs).windows.map((window) => window.bucketId);
+}
+function recordClaude(store, bucketId, at, { usedPercent = 10, provenance = 'official-claude-usage', fetchedAfter, seenSince } = {}) {
+  const session = bucketId === 'five_hour';
+  const atMs = Date.parse(at);
+  store.recordObservation({
+    sourceId: 'claude', bucketId, bucketName: session ? 'Five hour' : 'Weekly', observedAt: at, usedPercent,
+    resetsAt: new Date(atMs + (session ? 3 : 96) * 3_600_000).toISOString(), windowMinutes: session ? 300 : 10_080,
+    provenance, metadata: { scope: 'overall' }, fetchedAfter, seenSince,
+  });
+}
+
+test('a newer Claude reading without a 5-hour window ends the one still showing', () => withStore((store) => {
+  const now = Date.parse('2026-10-30T12:00:00Z');
+  const first = '2026-10-30T10:00:00.000Z';
+  recordClaude(store, 'seven_day', first);
+  recordClaude(store, 'five_hour', first);
+  assert.deepEqual(claudeWindows(store, now), ['seven_day', 'five_hour']);
+  const omitted = '2026-10-30T11:00:00.000Z';
+  recordClaude(store, 'seven_day', omitted, { usedPercent: 12 });
+  const quota = store.getQuota('claude', store.getSettings(), now);
+  assert.equal(quota.bucketId, 'seven_day');
+  assert.deepEqual(quota.windows.map((window) => window.bucketId), ['seven_day']);
+  // An account not yet verified still has a temporary limit, and shows it again.
+  recordClaude(store, 'seven_day', '2026-10-30T11:30:00.000Z', { usedPercent: 13 });
+  recordClaude(store, 'five_hour', '2026-10-30T11:30:00.000Z', { usedPercent: 4 });
+  assert.deepEqual(claudeWindows(store, now), ['seven_day', 'five_hour']);
+}));
+
+test('a manual weekly entry does not end the Claude 5-hour window', () => withStore((store) => {
+  const now = Date.parse('2026-10-30T12:00:00Z');
+  recordClaude(store, 'seven_day', '2026-10-30T10:00:00.000Z');
+  recordClaude(store, 'five_hour', '2026-10-30T10:00:00.000Z');
+  recordClaude(store, 'seven_day', '2026-10-30T11:00:00.000Z', { usedPercent: 12, provenance: 'manual-official' });
+  assert.deepEqual(claudeWindows(store, now), ['seven_day', 'five_hour']);
+}));
+
+test('a status-line redraw ends the Claude 5-hour window only when fetched after it', () => {
+  const now = Date.parse('2026-10-30T12:00:00Z');
+  const statusLine = { provenance: 'official-statusline' };
+  const shown = '2026-10-30T10:00:00.000Z';
+  const setup = (store) => {
+    recordClaude(store, 'seven_day', shown, { ...statusLine, fetchedAfter: '2026-10-30T09:59:00.000Z', seenSince: shown });
+    recordClaude(store, 'five_hour', shown, { ...statusLine, fetchedAfter: '2026-10-30T09:59:00.000Z', seenSince: shown });
+  };
+  const redraw = '2026-10-30T11:00:00.000Z';
+  // Fetched after the 5-hour figure was first shown: the limit is gone.
+  withStore((store) => {
+    setup(store);
+    recordClaude(store, 'seven_day', redraw, { ...statusLine, usedPercent: 12, fetchedAfter: '2026-10-30T10:30:00.000Z', seenSince: redraw });
+    assert.deepEqual(claudeWindows(store, now), ['seven_day']);
+  });
+  // Another session's fetch from before the 5-hour figure omits nothing.
+  withStore((store) => {
+    setup(store);
+    recordClaude(store, 'seven_day', redraw, { ...statusLine, usedPercent: 12, fetchedAfter: '2026-10-30T09:00:00.000Z', seenSince: redraw });
+    assert.deepEqual(claudeWindows(store, now), ['seven_day', 'five_hour']);
+  });
+  // An undated redraw cannot be ordered against it.
+  withStore((store) => {
+    setup(store);
+    recordClaude(store, 'seven_day', redraw, { ...statusLine, usedPercent: 12, seenSince: redraw });
+    assert.deepEqual(claudeWindows(store, now), ['seven_day', 'five_hour']);
+  });
+});
+
+test('an older redraw agreeing with a newer Refresh keeps the 5-hour window that Refresh confirmed', () => withStore((store) => {
+  const now = Date.parse('2026-10-30T11:30:00Z');
+  recordClaude(store, 'seven_day', '2026-10-30T09:30:00.000Z');
+  const refresh = '2026-10-30T10:00:00.000Z';
+  recordClaude(store, 'seven_day', refresh, { usedPercent: 11 });
+  recordClaude(store, 'five_hour', refresh, { usedPercent: 4 });
+  assert.deepEqual(claudeWindows(store, now), ['seven_day', 'five_hour']);
+  // The same figures, fetched by a session before the omission at 09:30.
+  const redraw = '2026-10-30T11:00:00.000Z';
+  const restated = { provenance: 'official-statusline', fetchedAfter: '2026-10-30T08:55:00.000Z', seenSince: '2026-10-30T09:00:00.000Z' };
+  for (const [bucketId, usedPercent] of [['seven_day', 11], ['five_hour', 4]]) {
+    store.recordObservation({
+      sourceId: 'claude', bucketId, bucketName: bucketId, observedAt: redraw, usedPercent,
+      resetsAt: new Date(Date.parse(refresh) + (bucketId === 'five_hour' ? 3 : 96) * 3_600_000).toISOString(),
+      windowMinutes: bucketId === 'five_hour' ? 300 : 10_080, metadata: { scope: 'overall' }, ...restated,
+    });
+  }
+  assert.deepEqual(claudeWindows(store, now), ['seven_day', 'five_hour']);
+}));
+
 test('reset-cycle token totals use the same per-source rule as the cost ledger', () => withStore((store) => {
   // Keep the event strictly before the cycle's exclusive upper bound, even
   // when insertion and the read finish within the same clock millisecond.
