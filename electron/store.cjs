@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { periodStart } = require('./time.cjs');
 const { DatabaseSync } = require('node:sqlite');
 const { buildDashboardVerdict } = require('./dashboard-decision.cjs');
 const { isOfficialWindow, selectDisplayedWindows } = require('./quota-selection.cjs');
@@ -347,16 +348,6 @@ function localParts(value, timeZone = Intl.DateTimeFormat().resolvedOptions().ti
 function dateKey(value, timeZone) {
   const values = localParts(value, timeZone);
   return `${values.year}-${values.month}-${values.day}`;
-}
-
-// A period of N days is the last N local calendar days, today included: its
-// total, its daily chart and the renderer's weekly tile share one window, and
-// its start moves only at local midnight. Zero days gives tomorrow's midnight.
-function periodStart(days, nowMs) {
-  const start = new Date(nowMs);
-  start.setHours(0, 0, 0, 0);
-  start.setDate(start.getDate() - (days - 1));
-  return start.getTime();
 }
 
 // The ledger is read in time order, so consecutive events nearly always fall

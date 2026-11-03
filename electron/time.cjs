@@ -33,4 +33,13 @@ function localDayKey(value) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
-module.exports = { asIso, epochToIso, localDayKey };
+// Inclusive local calendar days, today included. Zero gives tomorrow's
+// midnight for caches whose period changes at the next local day boundary.
+function periodStart(days, nowMs) {
+  const start = new Date(nowMs);
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() - (days - 1));
+  return start.getTime();
+}
+
+module.exports = { asIso, epochToIso, localDayKey, periodStart };

@@ -4,6 +4,10 @@ require('./setup.cjs');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const test = require('node:test');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const crypto = require('node:crypto');
 const { createUpdateChecker, feedConfigured } = require('../electron/updater.cjs');
 
 const pkg = { updateFeed: { provider: 'github', owner: 'DanDG923', repo: 'ai-usage', private: true } };
@@ -20,7 +24,12 @@ function fixture(options = {}) {
   updater.downloadUpdate = async () => {
     updater.downloads++;
     updater.emit('download-progress', { percent: 48.2 });
-    updater.emit('update-downloaded', { version: '1.0.23' });
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-updater-fixture-'));
+    const downloadedFile = path.join(root, 'setup.exe');
+    const content = Buffer.from('test installer, never executed');
+    fs.writeFileSync(downloadedFile, content);
+    updater.emit('update-downloaded', { version: '1.0.23', downloadedFile,
+      files: [{ url: 'setup.exe', sha512: crypto.createHash('sha512').update(content).digest('base64') }] });
   };
   updater.quitAndInstall = (silent, restart) => {
     updater.installs++;

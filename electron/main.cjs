@@ -1089,6 +1089,7 @@ if (isPrimaryInstance) {
         environment: launchEnvironment,
         onRequest: answerClaudeCodeRequest,
         onReading: importClaudeCodeReading,
+        getSnapshot: () => storageClosing() ? null : store.getTraySnapshot(Date.now()),
         log,
       });
       collectors = createCollectors();

@@ -18,6 +18,7 @@
 const { FABLE_ALLOWANCE_SHARE } = require('./fable-projection.cjs');
 const { exhaustionTime, forecastState } = require('./forecast.cjs');
 const { isMainWindow, selectDisplayedWindows } = require('./quota-selection.cjs');
+const { STALENESS_MS } = require('./token-capacity.cjs');
 
 const WEEK_MINUTES = 10_080;
 // The weekly Fable allowance, as quota-selection.mjs and allowance-changes.cjs
@@ -219,11 +220,19 @@ const TOKEN_WARNING = 'The Claude weekly reading leaves less than the Fable limi
 // Token capacity is estimated as of the last Fable reading. When the Claude
 // weekly reading leaves less, the remaining tokens become that reading's share
 // of the estimated week, dated to it. A copy: the store caches the original.
-function cappedCapacity(capacity, poolAtReading, poolObservedAt) {
-  if (!capacity || capacity.status !== 'available' || !finite(capacity.weeklyTokens)) return capacity;
+function cappedCapacity(capacity, poolAtReading, poolObservedAt, nowMs) {
+  // An unavailable remainder is intentional: a fresh overall reading cannot
+  // establish how much remains of Fable's own stale or uncalibrated limit.
+  if (!capacity || capacity.status !== 'available' || !finite(capacity.weeklyTokens)
+    || !finite(capacity.remainingTokens)) return capacity;
+  const poolTime = Date.parse(poolObservedAt);
+  if (!Number.isFinite(poolTime) || nowMs - poolTime > STALENESS_MS) {
+    return { ...capacity, remainingTokens: null, remainingRange: null, remainingAsOf: null,
+      warnings: [...(capacity.warnings || []), 'The limiting Claude weekly reading needs refreshing before remaining tokens can be estimated.'] };
+  }
   const share = clamp(poolAtReading, 0, 100) / 100;
   const remainingTokens = capacity.weeklyTokens * share;
-  if (!(remainingTokens < (capacity.remainingTokens ?? Number.POSITIVE_INFINITY))) return capacity;
+  if (!(remainingTokens < capacity.remainingTokens)) return capacity;
   return {
     ...capacity,
     remainingTokens,
@@ -315,7 +324,7 @@ function constrain(window, pool, options) {
     },
   };
   const tokenCapacity = binding === 'pool'
-    ? cappedCapacity(window.tokenCapacity, Math.round(Number(pool.remainingPercent)) / share, readingMoment(pool))
+    ? cappedCapacity(window.tokenCapacity, Math.round(Number(pool.remainingPercent)) / share, readingMoment(pool), nowMs)
     : window.tokenCapacity;
   if (tokenCapacity !== window.tokenCapacity) summary.cap.tokenCapacity = window.tokenCapacity;
   const observed = combineObserved(own.series?.observed, poolForecast.series?.observed, share);

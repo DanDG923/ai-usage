@@ -221,6 +221,9 @@ function createUpdateChecker({
           onLog('Quitting so the installer can replace the application.');
           quitForInstall();
         } else {
+          // The elevation helper launches the cached file without rehashing
+          // it. Apply the direct launcher's verification before delegating.
+          await require('./installer-launch.cjs').verifyInstaller(downloadedFile, downloadedSha512);
           onLog('Installer launch delegated to electron-updater.');
           updater().quitAndInstall(true, true);
         }

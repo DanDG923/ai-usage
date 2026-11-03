@@ -181,6 +181,39 @@ test('token capacity is scaled once per snapshot and the cached estimate is neve
   assert.deepEqual(context.fableOnly().tokenCapacity, own, 'the cached capacity is untouched');
 });
 
+test('a fresh shared pool cannot revive remaining tokens withheld for stale Fable evidence', (t) => {
+  const context = fixture(t);
+  [96, 72, 48, 25].forEach((hoursAgo, index) => {
+    if (index) context.usage(`stale-capacity-${index}`, NOW - (hoursAgo + 2) * HOUR, 'claude-fable-5', 1_000_000);
+    context.fable(NOW - hoursAgo * HOUR, 10 + index * 10);
+  });
+  context.claude(NOW, 95);
+  const own = context.fableOnly().tokenCapacity;
+  assert.equal(own.status, 'available');
+  assert.equal(own.remainingTokens, null);
+  const capped = context.snapshot(NOW, { tokenCapacity: true }).quotas.fable;
+  assert.equal(capped.sharedPool.binding, 'pool');
+  assert.deepEqual(capped.tokenCapacity, own);
+});
+
+test('a stale limiting pool withholds remaining tokens even when Fable evidence is fresh', (t) => {
+  const context = fixture(t);
+  [96, 72, 48, 0].forEach((hoursAgo, index) => {
+    if (index) context.usage(`stale-pool-${index}`, NOW - (hoursAgo + 2) * HOUR, 'claude-fable-5', 1_000_000);
+    context.fable(NOW - hoursAgo * HOUR, 10 + index * 10);
+  });
+  context.claude(NOW - 25 * HOUR, 95);
+  const own = context.fableOnly().tokenCapacity;
+  assert.ok(own.remainingTokens > 0);
+  const capped = context.snapshot(NOW, { tokenCapacity: true }).quotas.fable;
+  assert.equal(capped.sharedPool.binding, 'pool');
+  assert.equal(capped.tokenCapacity.remainingTokens, null);
+  assert.equal(capped.tokenCapacity.remainingRange, null);
+  assert.equal(capped.tokenCapacity.remainingAsOf, null);
+  assert.equal(capped.tokenCapacity.weeklyTokens, own.weeklyTokens);
+  assert.deepEqual(context.fableOnly().tokenCapacity, own);
+});
+
 test('when Fable\'s own limit is tighter the cap binds and the forecast is Fable\'s own', (t) => {
   const context = fixture(t);
   // Claude 60% used (80 Fable points left), Fable 80% used (20 left). The two

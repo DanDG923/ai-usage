@@ -47,6 +47,7 @@ function setup(t, options = {}) {
     onRequest: (action) => requests.push(action),
     onReading: () => readings.push(Date.now()),
     now: options.now ?? Date.now,
+    getSnapshot: options.getSnapshot ?? (() => ({ settings: {}, sources: [], quotas: {}, generatedAt: new Date().toISOString() })),
     watch: (folder, _options, listener) => {
       const name = path.basename(folder);
       // A watch the file system refuses once, as it can for a moment.
@@ -207,6 +208,61 @@ test('the glance is rewritten every few minutes so the mod knows the app is runn
   assert.equal(JSON.parse(read(root, 'glance.json')).writtenAt, '2026-10-01T12:00:00.000Z');
   t.mock.timers.tick(5 * 60_000);
   assert.equal(JSON.parse(read(root, 'glance.json')).writtenAt, '2026-10-01T12:05:00.000Z');
+});
+
+test('heartbeats age and expire allowances without collecting or renewing evidence', async (t) => {
+  const { UsageStore } = require('../electron/store.cjs');
+  const initial = Date.parse('2026-10-01T12:00:00Z');
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'], now: initial });
+  let store;
+  let reads = 0;
+  const { root, mod, requests, readings } = setup(t, { getSnapshot: () => {
+    reads++;
+    return store.getTraySnapshot(Date.now());
+  } });
+  store = new UsageStore(path.join(root, 'test.sqlite'), path.join(root, 'Backups'));
+  t.after(() => store.close());
+  store.updateSettings({ refreshIntervalMinutes: 0, showClaudeSubscription: false });
+  store.recordObservation({ sourceId: 'codex', bucketId: 'primary', observedAt: new Date(initial).toISOString(),
+    usedPercent: 100, remainingPercent: 0, resetsAt: '2026-10-01T14:00:00Z', windowMinutes: 300,
+    provenance: 'official', confidence: 1 });
+  store.setSourceStatus('codex', 'connected', 'Test reading', {}, { scanSucceeded: true });
+  await mod.install();
+  mod.publish(store.getTraySnapshot(initial));
+  const original = JSON.parse(read(root, 'glance.json'));
+  assert.equal(original.providers[0].waiting, false);
+  assert.equal(original.collectedAt, new Date(initial).toISOString());
+  t.mock.timers.tick(65 * 60_000);
+  const aged = JSON.parse(read(root, 'glance.json'));
+  assert.equal(aged.providers[0].waiting, false);
+  assert.equal(aged.providers[0].stale, true);
+  assert.equal(aged.collectedAt, original.collectedAt);
+  t.mock.timers.tick(60 * 60_000);
+  const glance = JSON.parse(read(root, 'glance.json'));
+  assert.ok(reads >= 2);
+  assert.equal(glance.providers[0].waiting, true);
+  assert.equal(glance.providers[0].remaining, null);
+  assert.equal(glance.verdict.state, 'unknown');
+  assert.deepEqual(requests, []);
+  assert.deepEqual(readings, []);
+  assert.equal(store.prepare('SELECT COUNT(*) AS n FROM quota_observations').get().n, 1);
+});
+
+test('an unavailable or failed heartbeat read never renews an old glance', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'], now: Date.parse('2026-10-01T12:00:00Z') });
+  let fails = false;
+  const { root, mod } = setup(t, { getSnapshot: () => {
+    if (fails) throw new Error('closed');
+    return null;
+  } });
+  await mod.install();
+  mod.publish({ settings: {}, sources: [], quotas: {}, generatedAt: new Date().toISOString() });
+  const original = read(root, 'glance.json');
+  t.mock.timers.tick(5 * 60_000);
+  assert.equal(read(root, 'glance.json'), original);
+  fails = true;
+  t.mock.timers.tick(5 * 60_000);
+  assert.equal(read(root, 'glance.json'), original);
 });
 
 test('fresh requests are acted on once; stale, foreign and unknown ones are only removed', async (t) => {

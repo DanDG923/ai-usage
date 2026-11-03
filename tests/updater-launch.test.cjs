@@ -4,6 +4,10 @@ require('./setup.cjs');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const test = require('node:test');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const crypto = require('node:crypto');
 const { createUpdateChecker, updateError } = require('../electron/updater.cjs');
 
 const pkg = { updateFeed: { provider: 'github', owner: 'DanDG923', repo: 'ai-usage', private: true } };
@@ -69,16 +73,29 @@ test('a launch that fails after retries triggers recovery, keeps the download, a
   assert.ok(f.logs.some((line) => line === `Failed while installing (UPDATE_INSTALLER_LAUNCH_FAILED): ${status.error}`));
 });
 
-test('electron-updater performs the launch when the file path is unknown or the install needs elevation', async () => {
-  for (const options of [{ downloadedEvent: { version: '1.0.27' } }, { writable: false }]) {
-    const f = fixture(options);
+test('elevated installs verify the cached file and refuse missing or changed downloads', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-elevated-update-'));
+  const file = path.join(root, 'setup.exe');
+  const original = Buffer.from('test installer, never executed');
+  const sha512 = crypto.createHash('sha512').update(original).digest('base64');
+  for (const state of ['valid', 'changed', 'deleted', 'missing-path', 'missing-digest']) {
+    fs.writeFileSync(file, original);
+    const f = fixture({ writable: false, downloadedEvent: {
+      version: '1.0.27', downloadedFile: state === 'missing-path' ? undefined : file,
+      files: [{ url: 'setup.exe', sha512: state === 'missing-digest' ? undefined : sha512 }],
+    } });
     await f.checker.check();
     await f.checker.download();
-    await f.checker.install();
+    if (state === 'changed') fs.writeFileSync(file, 'changed after download');
+    if (state === 'deleted') fs.unlinkSync(file);
+    const status = await f.checker.install();
     assert.equal(f.launches.length, 0);
     assert.equal(f.quit(), 0);
-    assert.equal(f.updater.installs, 1);
-    assert.ok(f.logs.includes('Installer launch delegated to electron-updater.'));
+    assert.equal(f.updater.installs, state === 'valid' ? 1 : 0, state);
+    if (state !== 'valid') {
+      assert.match(status.error, /could not be verified/);
+      assert.equal(f.recoveries(), 1);
+    }
   }
 });
 

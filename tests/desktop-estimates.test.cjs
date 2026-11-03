@@ -27,6 +27,30 @@ function setup() {
   return { root, config, store };
 }
 
+test('chat estimates and recorded costs share inclusive local calendar boundaries across DST', () => {
+  for (const instant of ['2026-11-03T12:00:00Z', '2026-10-27T12:00:00Z', '2026-03-31T12:00:00Z']) {
+    const { store } = setup();
+    try {
+      const nowMs = Date.parse(instant);
+      const start = new Date(nowMs);
+      start.setHours(0, 0, 0, 0);
+      start.setDate(start.getDate() - 6);
+      const times = [start.getTime() - 1, start.getTime(), nowMs, nowMs + 1];
+      const rows = times.map((ms, index) => ({ ...parseDesktopExport(fixture()).rows[0],
+        event_key: String(index).repeat(64), occurred_at: new Date(ms).toISOString() }));
+      saveDesktopEstimates(store, rows);
+      rows.forEach((row) => store.recordUsageEvent({ eventKey: row.event_key, sourceId: 'claude',
+        occurredAt: row.occurred_at, model: row.model, inputTokens: row.input_tokens, outputTokens: row.output_tokens }));
+      const recorded = store.getCostAnalytics(7, store.getSettings(), nowMs);
+      const estimates = desktopAnalytics(store, 7, store.getSettings(), nowMs);
+      assert.equal(recorded.requestCount, 2);
+      assert.equal(estimates.replies, 2, instant);
+      assert.equal(estimates.estimatedCost, 2 * store.calculateCost({ source_id: 'claude',
+        model: rows[0].model, input_tokens: rows[0].input_tokens, output_tokens: rows[0].output_tokens }).actualUsd);
+    } finally { store.close(); }
+  }
+});
+
 test('exports use reply model evidence, count content once and retain no conversation text', () => {
   const result = parseDesktopExport(fixture());
   assert.equal(result.rows.length, 2);

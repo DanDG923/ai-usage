@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const { createHash } = require('node:crypto');
+const { periodStart } = require('./time.cjs');
 
 const MAX_BYTES = 64 * 1024 * 1024;
 const MAX_MESSAGES = 200_000;
@@ -175,7 +176,7 @@ function desktopAnalytics(store, days, settings, nowMs) {
 }
 
 function buildDesktopAnalytics(store, days, settings, nowMs) {
-  const period = [new Date(nowMs - days * 86400000).toISOString(), new Date(nowMs).toISOString()];
+  const period = [new Date(periodStart(days, nowMs)).toISOString(), new Date(nowMs).toISOString()];
   const rows = store.prepare(`SELECT model, model_origin AS modelOrigin, COUNT(*) AS replies,
     SUM(input_tokens) AS inputTokens, SUM(output_tokens) AS outputTokens,
     SUM(CASE WHEN excluded_content OR input_missing THEN 1 ELSE 0 END) AS incompleteReplies

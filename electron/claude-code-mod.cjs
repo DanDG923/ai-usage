@@ -129,6 +129,7 @@ function createClaudeCodeMod({
   run = runClaude,
   onRequest = () => {},
   onReading = () => {},
+  getSnapshot = () => null,
   log = () => {},
   now = Date.now,
   watch = fs.watch,
@@ -400,12 +401,16 @@ function createClaudeCodeMod({
       ignoreRequestsBefore = now();
       unfollow();
     }
-    // Installed again from Claude Code's own /plugin: the glance starts from
-    // what the app last showed.
-    if (state !== 'off' && !lastGlance && lastSnapshot) publish(lastSnapshot);
-    if (state !== 'off' && lastGlance && now() - lastBeatAt >= HEARTBEAT_MS) {
-      lastBeatAt = now();
-      writeGlance({ ...lastGlance, writtenAt: new Date(lastBeatAt).toISOString() });
+    // Installing again from Claude Code's /plugin also gets a current local
+    // view, without waiting for a collection.
+    if (state !== 'off' && lastSnapshot && (!lastGlance || now() - lastBeatAt >= HEARTBEAT_MS)) {
+      // Rebuild locally so reset boundaries, evidence age and verdicts move
+      // with the heartbeat. A failed/closed store must not renew old figures.
+      try {
+        publish(getSnapshot());
+      } catch (error) {
+        log(`Claude Code heartbeat could not be built: ${error.message}`);
+      }
     }
   }
 
