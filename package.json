@@ -3,7 +3,7 @@
   "version": "1.0.60",
   "private": true,
   "license": "MIT",
-  "description": "Local-first AI subscription usage, runway forecasting, and API-equivalent cost dashboard.",
+  "description": "Local-first Windows dashboard for Codex, Claude, and Fable subscription allowances, run-out forecasts, and API-equivalent cost.",
   "main": "electron/main.cjs",
   "type": "module",
   "updateFeed": {

@@ -1,15 +1,15 @@
 # AI Usage
 
-AI Usage is a local-first Windows dashboard for answering two practical questions:
+AI Usage is a free, open-source, local-first Windows dashboard for answering two practical questions:
 
 - Will the remaining Codex, Claude, and Fable allowance last until each reset?
 - What would the tracked token activity have cost at the equivalent API token prices?
 
-It imports local usage evidence, learns your real burn pattern, evaluates every active allowance window, and keeps its database on this computer.
+It imports local usage evidence, learns your real burn pattern, evaluates every active allowance window, and keeps its database on this computer. The app has no server or account of its own: installing and updating it need no sign-in, and it reads usage through the Codex and Claude accounts you already use. An optional [Claude Code mod](#inside-claude-code) shows the same allowances inside Claude Code.
 
 ## Install
 
-Use `AI-Usage-Setup-1.0.60-x64.exe` for a normal Windows installation. Running it over an existing installation upgrades in place and preserves the local database, settings, observations, and backups. Uninstalling first is neither required nor recommended. Install this version once to enable future updates through the app.
+Download the installer from the [latest release](https://github.com/DanDG923/ai-usage/releases/latest). Use `AI-Usage-Setup-1.0.60-x64.exe` for a normal Windows installation. Running it over an existing installation upgrades in place and preserves the local database, settings, observations, and backups. Uninstalling first is neither required nor recommended. Install this version once to enable future updates through the app.
 
 Use `AI-Usage-Portable-1.0.60-x64.exe` for a single executable that does not install the app. Windows SmartScreen may show an unknown-publisher warning because this personal build is not backed by a commercial code-signing certificate; verify the supplied SHA-256 hash before running it.
 
