@@ -280,3 +280,7 @@ Local packaging output now defaults to `%LOCALAPPDATA%\AI Usage\Build\release`, 
 Release access remains a repository-administration decision: anyone with write access can change a tag-triggered workflow. SHA-pinned actions and least-privilege job tokens do not replace protected refs/environments or installer signing. Restrict writer access and configure signing when the repository plan and a certificate support it; these changes do not silently modify collaborators or claim that unsigned installers are signed. CI combines verification and packaging to avoid duplicate setup/renderer builds; releases still rebuild and audit the tagged commit with no publishing token present during packaging.
 
 Full JavaScript `checkJs` adoption is deferred: it requires a separate annotation pass through the Electron modules. TypeScript renderer checks, JavaScript lint, exercised IPC validation, and both Node/Electron runtime suites remain required.
+
+## Licence
+
+AI Usage is released under the [MIT License](LICENSE). To report a security problem, see [SECURITY.md](SECURITY.md).

@@ -2,6 +2,7 @@
   "name": "ai-usage",
   "version": "1.0.60",
   "private": true,
+  "license": "MIT",
   "description": "Local-first AI subscription usage, runway forecasting, and API-equivalent cost dashboard.",
   "main": "electron/main.cjs",
   "type": "module",
