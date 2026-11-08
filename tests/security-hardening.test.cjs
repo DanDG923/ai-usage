@@ -8,7 +8,6 @@ const path = require('node:path');
 const test = require('node:test');
 const { UsageStore } = require('../electron/store.cjs');
 const { stderrExcerpt } = require('../electron/codex-collector.cjs');
-const { createGitHubUpdateAuth } = require('../electron/update-auth.cjs');
 
 function withStore(run) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-hardening-'));
@@ -75,29 +74,4 @@ test('Codex exit diagnostics are reduced to one short line before they reach sta
   assert.ok(excerpt.startsWith('…'));
   assert.ok(excerpt.endsWith('tail'));
   assert.ok(!/[\r\n\p{Cc}]/u.test(excerpt));
-});
-
-test('the GitHub CLI is never taken from, or handed, the launch directory even when PATH names it absolutely', async () => {
-  const launch = 'C:\\Users\\tester\\Downloads\\ai-usage-launch';
-  const alias = 'C:\\Users\\tester\\Downloads\\LAUNCH-ALIAS';
-  const trusted = 'D:\\Tools\\GitHub CLI';
-  const calls = [];
-  const inspected = [];
-  const auth = createGitHubUpdateAuth({
-    environment: { PATH: `${launch};"${launch.toUpperCase()}";${alias};${launch}\\.;${trusted}` },
-    // The process was started from the planted directory; the alias is a junction to it.
-    realpath: (value) => (value === process.cwd() || value.toLowerCase().startsWith(alias.toLowerCase()) ? launch : value),
-    stat(executable) {
-      inspected.push(executable);
-      return { isFile: () => executable.toLowerCase().startsWith(launch.toLowerCase()) || executable === path.win32.join(trusted, 'gh.exe') };
-    },
-    execute(file, args, options, callback) {
-      calls.push({ file, args, options });
-      callback(null, `gho_${'a'.repeat(36)}\r\n`);
-    },
-  });
-  await auth.getToken();
-  assert.equal(calls[0].file, path.win32.join(trusted, 'gh.exe'));
-  assert.ok(inspected.every((candidate) => !candidate.toLowerCase().startsWith(launch.toLowerCase()) && !candidate.toLowerCase().startsWith(alias.toLowerCase())));
-  assert.equal(calls[0].options.env.PATH, trusted);
 });

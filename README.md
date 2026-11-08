@@ -1,29 +1,27 @@
 # AI Usage
 
-AI Usage is a local-first Windows dashboard for answering two practical questions:
+AI Usage is a free, open-source, local-first Windows dashboard for answering two practical questions:
 
 - Will the remaining Codex, Claude, and Fable allowance last until each reset?
 - What would the tracked token activity have cost at the equivalent API token prices?
 
-It imports local usage evidence, learns your real burn pattern, evaluates every active allowance window, and keeps its database on this computer.
+It imports local usage evidence, learns your real burn pattern, evaluates every active allowance window, and keeps its database on this computer. The app has no server or account of its own: installing and updating it need no sign-in, and it reads usage through the Codex and Claude accounts you already use. An optional [Claude Code mod](#inside-claude-code) shows the same allowances inside Claude Code.
 
 ## Install
 
-Use `AI-Usage-Setup-1.0.60-x64.exe` for a normal Windows installation. Running it over an existing installation upgrades in place and preserves the local database, settings, observations, and backups. Uninstalling first is neither required nor recommended. Install this version once to enable future updates through the app.
+Download the installer from the [latest release](https://github.com/DanDG923/ai-usage/releases/latest). Use `AI-Usage-Setup-1.0.60-x64.exe` for a normal Windows installation. Running it over an existing installation upgrades in place and preserves the local database, settings, observations, and backups. Uninstalling first is neither required nor recommended. Install this version once to enable future updates through the app.
 
 Use `AI-Usage-Portable-1.0.60-x64.exe` for a single executable that does not install the app. Windows SmartScreen may show an unknown-publisher warning because this personal build is not backed by a commercial code-signing certificate; verify the supplied SHA-256 hash before running it.
 
-## Personal private updates
+## Updates
 
-Source code and update downloads remain in the private [DanDG923/ai-usage repository](https://github.com/DanDG923/ai-usage). Updates work in the installed Windows app; portable copies continue to be replaced manually.
+Source code and releases are published in the public [DanDG923/ai-usage repository](https://github.com/DanDG923/ai-usage). Updates work in the installed Windows app; portable copies continue to be replaced manually. Update checks and downloads need no GitHub account, sign-in or token: the app reads the repository's public releases anonymously.
 
-The app reuses the existing [GitHub CLI](https://cli.github.com/) sign-in on this computer. If GitHub CLI is missing, install it and run `gh auth login --hostname github.com` once. Sign in with an account that can read this private repository, then open **Settings → Appearance & updates** and check for updates. `gh auth status --hostname github.com` can confirm the CLI sign-in without displaying its token. A fine-grained personal access token, if you use one for the CLI, needs access to this repository with **Contents: Read-only**; an existing CLI sign-in may have broader permissions, but the app performs only read requests for releases and downloads.
-
-Automatic update checks are enabled by default, start about 45 seconds after launch, and repeat every six hours while the app is running. The setting can be disabled, and a manual check is always available. When a release is available, review its notes and choose **Download update**. Download progress is shown; private downloads use the complete installer and verify its SHA-512 checksum against the release manifest.
+Automatic update checks are enabled by default, start about 45 seconds after launch, and repeat every six hours while the app is running. The setting can be disabled, and a manual check is always available. When a release is available, review its notes and choose **Download update**. Download progress is shown; downloads always use the complete installer and verify its SHA-512 checksum against the release manifest.
 
 Choose **Restart and update** when ready. AI Usage finishes storage activity, makes a safety backup, and shuts down before installing and reopening. The whole preparation is limited to fifteen seconds. If the backup does not finish in time, nothing is installed and AI Usage reopens so you can retry; if only the final close stalls after the backup, the update proceeds. Quit from the tray waits the same fifteen seconds for storage work before exiting. If the backup fails, installation is blocked so you can resolve the error and retry. Ordinary app exits do not install a downloaded update. The installer preserves local settings, the database, and existing backups.
 
-GitHub CLI manages the account credential. AI Usage reads it into main-process memory only when needed; it does not copy it to the database, settings, renderer, logs, source code, or packaged update feed. A `GH_TOKEN` or `GITHUB_TOKEN` environment variable is ignored for update checks: the installed app removes both from its own environment before contacting the feed, so only the CLI sign-in can authenticate. Usage history and backups are never uploaded as part of an update check or download. If access expires or is revoked, sign in again with GitHub CLI and retry the check.
+Update requests carry no credential: a `GH_TOKEN` or `GITHUB_TOKEN` environment variable is not used for them. Usage history and backups are never uploaded as part of an update check or download.
 
 ## First run
 
@@ -197,7 +195,7 @@ The one-time correction also checks previously imported Codex logs outside the u
 
 Analytics caches track changes to usage, pricing, and the relevant allowance bucket separately. A source-status or import-cursor update therefore retains previously calculated costs and cycle history. Cycle history merges small reset-timestamp variations before applying its display limit. One shared rule decides which allowance window a provider headlines, which are listed beneath it, and which are history: the summary cards, tray tooltip, digests, dashboard verdict, recent-cycles table and token-capacity panel all consume it, so they always name the same window.
 
-Update checks fetch private GitHub release metadata and a version manifest. Installer downloads happen only after **Download update** is selected. Update requests contain the GitHub authorization needed for this private repository; local usage data is not sent.
+Update checks fetch public GitHub release metadata and a version manifest. Installer downloads happen only after **Download update** is selected. Update requests contain no GitHub authorization, and local usage data is not sent.
 
 Each update stage and any failure message is appended to `update.log` in the app's data folder (`%APPDATA%\ai-usage`), so a failed installation can be diagnosed after the app has restarted. The log holds only stage names, versions and the same wording shown in Settings; no request details or credentials. Before the installer runs, its checksum is verified again against the release manifest, and a launch the system refuses, for example while antivirus software is still scanning the download, is retried a few times before the update is reported as failed.
 
@@ -205,14 +203,14 @@ Each update stage and any failure message is appended to `update.log` in the app
 
 The window runs sandboxed with context isolation, no Node integration, a content security policy that allows no network origin, and navigation, pop-ups, redirects and embedded web views denied. Web permission requests (notifications, media, geolocation and the rest) are refused outright; desktop notifications come from the main process. Every bridge call is accepted only from the dashboard's own main frame. The tray flyout runs under the same restrictions with its own, smaller bridge (reading the tray summary, refresh, snooze, and opening the dashboard at a section or provider page); its calls are accepted only from the flyout's own main frame, and neither window can call the other's bridge. Navigation targets are checked against a fixed list of sections and providers.
 
-Provider executables are located only through absolute PATH entries, the native Claude Code install location, and the official Claude Code and Codex caches. The directory the app was launched from is never searched, and each provider process starts in its own directory with a PATH from which relative and launch-directory entries have been removed. The same rule applies to the GitHub CLI used for private updates. Setting `CODEX_BINARY` selects an explicit Codex executable; an invalid value disables Codex rather than choosing something else.
+Provider executables are located only through absolute PATH entries, the native Claude Code install location, and the official Claude Code and Codex caches. The directory the app was launched from is never searched, and each provider process starts in its own directory with a PATH from which relative and launch-directory entries have been removed. Setting `CODEX_BINARY` selects an explicit Codex executable; an invalid value disables Codex rather than choosing something else.
 
 CSV exports neutralise spreadsheet formula prefixes. Quota readings are accepted only with a reset at most 31 days ahead and an observation time no more than five minutes in the future; rows written by older versions are re-checked when read.
 
 Some risks are accepted by design and worth knowing:
 
 - **Claude Code installation** runs Anthropic's installer script, fetched from `claude.ai` at the moment you choose to install. Trust rests on TLS to that host; the script is not pinned or hashed locally.
-- **In-app updates** are not code-signed. Trust rests on GitHub TLS, access control on the private repository, and the SHA-512 in the release manifest. Downloading and installing each require a click, so a compromised release cannot install itself.
+- **In-app updates** are not code-signed. Trust rests on GitHub TLS, write access to the repository being limited to its owner, and the SHA-512 in the release manifest. Downloading and installing each require a click, so a compromised release cannot install itself.
 - **Backups** under `%APPDATA%\ai-usage\Backups` contain settings, session identifiers and the working directory of every session. They hold no credentials. Older backups in `Documents\AI Usage\Backups` remain there and may already have synced through OneDrive.
 
 ## Data and backups
@@ -252,15 +250,15 @@ For a repeatable cost-analytics benchmark, run `node tools/benchmark-analytics.c
 
 For Windows memory and lifecycle checks, build the renderer and run `node tools/benchmark-memory.cjs . optimized`. To compare with an older built source tree using the same installed development Electron runtime, run `node tools/benchmark-memory.cjs <older-source-directory> baseline` first. The `hidden` mode checks startup in the tray. Each run creates a fresh profile and 30,000 synthetic records under `work/memory-*`, isolates provider discovery, disables autostart writes and notifications, and reports process working sets, private bytes and reopening time in `report.json`. The optimized check also verifies idle process release, restored navigation, protected Settings, collection restart and database integrity. Working-set sums include shared pages; results depend on workload and should not be treated as unique physical RAM savings.
 
-Linting uses oxlint (typescript-eslint does not yet support the TypeScript 7 compiler this project builds with) and Prettier formats the renderer source. The same steps run in GitHub Actions on every push and pull request. `npm run build` runs the tests and web build, creates both Windows artifacts without publishing, audits the packaged ASAR for source maps, private local data, and the SDK's optional Claude binary, verifies the private update feed and installer manifest, then writes `SHA256SUMS.txt` in the configured build output folder. The checksums cover the installer, portable executable, installer block map, and `latest.yml`. The source uses React, Vite, Electron, Node's built-in SQLite support, the official Claude Agent SDK, and local JSON-line collectors. Packaged builds use the already installed external Claude binary instead.
+Linting uses oxlint (typescript-eslint does not yet support the TypeScript 7 compiler this project builds with) and Prettier formats the renderer source. The same steps run in GitHub Actions on every push and pull request. `npm run build` runs the tests and web build, creates both Windows artifacts without publishing, audits the packaged ASAR for source maps, private local data, and the SDK's optional Claude binary, verifies the public update feed and installer manifest, then writes `SHA256SUMS.txt` in the configured build output folder. The checksums cover the installer, portable executable, installer block map, and `latest.yml`. The source uses React, Vite, Electron, Node's built-in SQLite support, the official Claude Agent SDK, and local JSON-line collectors. Packaged builds use the already installed external Claude binary instead.
 
-## Publish future private updates
+## Publish future updates
 
-1. Update `package.json`, both root versions in `package-lock.json`, the current installer names in this README, the version contract test, and `CHANGELOG.md`. Keep the GitHub repository private and retain the matching `updateFeed` and `build.publish` settings in `package.json`; the separate `updateFeed` survives packaging so the installed app can verify its destination.
+1. Update `package.json`, both root versions in `package-lock.json`, the current installer names in this README, the version contract test, and `CHANGELOG.md`. Keep the GitHub repository public and retain the matching `updateFeed` and `build.publish` settings (with `"private": false`) in `package.json`; the separate `updateFeed` survives packaging so the installed app can verify its destination.
 2. Complete the checks above, review the changes, and merge them. Create and push the matching version tag, for example `v1.0.60` for version `1.0.60`.
-3. The **Private Windows release** GitHub Actions workflow builds Windows x64 packages, checks the manifest and packaged contents, and creates a draft release. It uploads the Setup installer, portable executable, installer block map, `latest.yml`, and `SHA256SUMS.txt`, verifies each remote asset's size and SHA-256 digest, then publishes the release as latest. The normal pull-request CI job is unchanged.
+3. The **Windows release** GitHub Actions workflow builds Windows x64 packages, checks the manifest and packaged contents, and creates a draft release. It uploads the Setup installer, portable executable, installer block map, `latest.yml`, and `SHA256SUMS.txt`, verifies each remote asset's size and SHA-256 digest, then publishes the release as latest. The normal pull-request CI job is unchanged.
 
-The release workflow can also be started manually with an existing version tag. It refuses a mismatched version, a public or different destination, a tag whose commit is not already on `main`, an existing release for that tag, or a version older than an existing stable release. If an upload fails, any created release stays a draft for inspection and is not offered to the app. Review and remove that incomplete draft before retrying; the workflow never overwrites existing release assets.
+The release workflow can also be started manually with an existing version tag. It refuses a mismatched version, a private or different destination, a tag whose commit is not already on `main`, an existing release for that tag, or a version older than an existing stable release. If an upload fails, any created release stays a draft for inspection and is not offered to the app. Review and remove that incomplete draft before retrying; the workflow never overwrites existing release assets.
 
 Packaging uses `--publish never` and has no publishing credential in its environment. The workflow supplies its short-lived GitHub token only to the validation and release-upload steps, never to packaging; no personal token needs to be saved as a repository secret. `latest.yml` includes notes generated from the current changelog entry, and the release audit checks its version, installer filename, byte size, and SHA-512 against the installer on disk before publication.
 
@@ -282,3 +280,7 @@ Local packaging output now defaults to `%LOCALAPPDATA%\AI Usage\Build\release`, 
 Release access remains a repository-administration decision: anyone with write access can change a tag-triggered workflow. SHA-pinned actions and least-privilege job tokens do not replace protected refs/environments or installer signing. Restrict writer access and configure signing when the repository plan and a certificate support it; these changes do not silently modify collaborators or claim that unsigned installers are signed. CI combines verification and packaging to avoid duplicate setup/renderer builds; releases still rebuild and audit the tagged commit with no publishing token present during packaging.
 
 Full JavaScript `checkJs` adoption is deferred: it requires a separate annotation pass through the Electron modules. TypeScript renderer checks, JavaScript lint, exercised IPC validation, and both Node/Electron runtime suites remain required.
+
+## Licence
+
+AI Usage is released under the [MIT License](LICENSE). To report a security problem, see [SECURITY.md](SECURITY.md).

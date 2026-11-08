@@ -10,16 +10,16 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { createUpdateChecker, feedConfigured } = require('../electron/updater.cjs');
 
-const pkg = { updateFeed: { provider: 'github', owner: 'DanDG923', repo: 'ai-usage', private: true } };
+const pkg = { updateFeed: { provider: 'github', owner: 'DanDG923', repo: 'ai-usage', private: false } };
 function fixture(options = {}) {
   const updater = new EventEmitter();
   updater.checks = 0;
   updater.downloads = 0;
   updater.installs = 0;
-  updater.setFeedURL = (value) => { updater.feed = value; };
+  updater.setFeedURL = () => { throw new Error('the public feed comes from app-update.yml'); };
   updater.checkForUpdates = async () => {
     updater.checks++;
-    updater.emit('update-available', { version: '1.0.23', releaseNotes: 'Private updates' });
+    updater.emit('update-available', { version: '1.0.23', releaseNotes: 'Public updates' });
   };
   updater.downloadUpdate = async () => {
     updater.downloads++;
@@ -40,7 +40,7 @@ function fixture(options = {}) {
   const logs = [];
   const checker = createUpdateChecker({
     autoUpdater: updater, enabled: () => true, isPackaged: true, isPortable: false,
-    platform: 'win32', pkg, getToken: async () => 'secret-for-test',
+    platform: 'win32', pkg,
     onStatus: (value) => states.push(value), onLog: (value) => logs.push(value), ...options,
   });
   return { updater, checker, states, logs };
@@ -53,9 +53,9 @@ test('placeholder and missing feeds are disabled, packaged top-level feed surviv
   assert.equal(feedConfigured({ build: { publish: { provider: 'github', owner: 'someone', repo: 'ai-usage' } } }), true);
 });
 
-test('development, portable and unsupported platform builds never authenticate, check or install', async () => {
+test('development, portable and unsupported platform builds never check or install', async () => {
   for (const options of [{ isPackaged: false }, { isPortable: true }, { platform: 'darwin' }]) {
-    const { checker, updater } = fixture({ ...options, getToken: () => { throw new Error('must not authenticate'); } });
+    const { checker, updater } = fixture(options);
     assert.equal((await checker.check()).status, 'unavailable');
     await checker.download();
     await checker.install();
@@ -63,7 +63,7 @@ test('development, portable and unsupported platform builds never authenticate, 
   }
 });
 
-test('private checks authenticate in memory, disable implicit installs, and emit safe version/notes', async () => {
+test('public checks need no credential, disable implicit installs, and emit safe version/notes', async () => {
   const { checker, updater, states, logs } = fixture();
   assert.equal(updater.autoDownload, false);
   assert.equal(updater.autoInstallOnAppQuit, false);
@@ -71,33 +71,42 @@ test('private checks authenticate in memory, disable implicit installs, and emit
   assert.equal(updater.allowPrerelease, false);
   assert.equal(updater.disableWebInstaller, true);
   assert.equal(updater.logger, null);
+  assert.equal(updater.disableDifferentialDownload, true);
   const result = await checker.check();
   assert.equal(result.status, 'available');
-  assert.equal(result.auth, 'github-cli');
-  assert.equal(result.releaseNotes, 'Private updates');
-  assert.equal(updater.feed.token, 'secret-for-test');
-  assert.equal(updater.feed.private, true);
+  assert.equal('auth' in result, false);
+  assert.equal(result.releaseNotes, 'Public updates');
+  assert.equal(updater.checks, 1);
   assert.equal(updater.installs, 0);
-  assert.ok(!JSON.stringify({ states, logs, result }).includes('secret-for-test'));
+  assert.equal(states.at(-1).status, 'available');
+  assert.deepEqual(logs, ['Update available: 1.0.23.']);
 });
 
-test('missing GitHub authentication produces an actionable state without contacting the feed', async () => {
-  const { checker, updater } = fixture({ getToken: async () => { throw Object.assign(new Error('secret-for-test'), { code: 'UPDATE_AUTH_REQUIRED' }); } });
-  assert.equal((await checker.check()).status, 'auth-required');
-  assert.equal(updater.checks, 0);
-  assert.ok(!JSON.stringify(checker.status()).includes('secret-for-test'));
+test('GitHub refusals and rate limits read as a temporary failure, not a sign-in problem', async () => {
+  const { checker, updater } = fixture();
+  for (const message of ['HttpError: 401 Unauthorized', 'HttpError: 403 Forbidden', 'HttpError: 404 Not Found', 'HttpError: 429 Too Many Requests']) {
+    updater.checkForUpdates = async () => { throw new Error(message); };
+    const result = await checker.check();
+    assert.equal(result.status, 'error');
+    assert.doesNotMatch(result.error, /sign in|private|access/i);
+  }
 });
 
 test('checking is deduplicated and downloads cannot race an in-flight check', async () => {
-  let resolveToken;
-  const { checker, updater } = fixture({ getToken: () => new Promise((resolve) => { resolveToken = resolve; }) });
+  let resolveCheck;
+  const { checker, updater } = fixture();
+  updater.checkForUpdates = () => new Promise((resolve) => {
+    updater.checks++;
+    resolveCheck = () => { updater.emit('update-available', { version: '1.0.23' }); resolve(); };
+  });
   const a = checker.check();
   const b = checker.check();
   const c = checker.download();
   await Promise.resolve();
   assert.equal(a, b);
   assert.equal(a, c);
-  resolveToken('secret-for-test');
+  await new Promise((resolve) => setImmediate(resolve));
+  resolveCheck();
   await a;
   assert.equal(updater.checks, 1);
   assert.equal(updater.downloads, 0);
@@ -155,12 +164,13 @@ test('checksum failures never allow installation and do not leak HTTP diagnostic
   assert.equal(states.filter((state) => state.status === 'error').length, 1);
 });
 
-test('environment tokens cannot replace the GitHub CLI sign-in for a private feed', async () => {
-  const environment = { GH_TOKEN: 'environment override', github_token: 'second override', GH_CONFIG_DIR: 'kept' };
-  const { checker, updater } = fixture({ environment });
+test('the update check leaves GitHub tokens in the environment for the processes that use them', async (t) => {
+  const previous = process.env.GH_TOKEN;
+  t.after(() => { if (previous === undefined) delete process.env.GH_TOKEN; else process.env.GH_TOKEN = previous; });
+  process.env.GH_TOKEN = 'kept-for-providers';
+  const { checker } = fixture();
   assert.equal((await checker.check()).status, 'available');
-  assert.equal(updater.feed.token, 'secret-for-test');
-  assert.deepEqual(environment, { GH_CONFIG_DIR: 'kept' });
+  assert.equal(process.env.GH_TOKEN, 'kept-for-providers');
 });
 
 test('ordinary HTTP errors are replaced by safe messages and failed checks can be retried', async () => {

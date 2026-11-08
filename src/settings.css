@@ -1164,9 +1164,6 @@
 .update-summary[data-tone='ok'] .update-label svg {
   color: var(--ok);
 }
-.update-summary[data-tone='caution'] .update-label svg {
-  color: var(--caution);
-}
 .update-summary[data-tone='warning'] .update-label svg {
   color: var(--warning);
 }

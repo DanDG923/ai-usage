@@ -19,13 +19,10 @@ function feedConfigured(pkg) {
 function updateError(error) {
   const code = String(error?.code || '');
   const message = String(error?.message || '');
-  if (code === 'UPDATE_AUTH_REQUIRED' || /\b401\b|bad credentials/i.test(message)) {
-    return { status: 'auth-required', error: 'GitHub sign-in is unavailable. Sign in with GitHub CLI on this PC, then check again.' };
-  }
   if (code === 'UPDATE_BACKUP_FAILED') return { status: 'error', error: 'The safety backup failed. Check your backup folder and free disk space, then restart the update.' };
   if (code === 'UPDATE_MODULE_UNAVAILABLE') return { status: 'error', error: 'The update component could not be loaded. Reinstall AI Usage from the latest setup file.' };
   if (code === 'ERR_UPDATER_CHANNEL_FILE_NOT_FOUND' || /cannot find latest\.yml/i.test(message)) {
-    return { status: 'error', error: 'The latest private release is missing its update manifest. Publish the complete release, then check again.' };
+    return { status: 'error', error: 'The latest release is missing its update manifest. Publish the complete release, then check again.' };
   }
   if (code === 'ERR_UPDATER_CHECKSUM_MISMATCH' || code === 'ERR_UPDATER_INVALID_SIGNATURE' || code === 'ERR_UPDATER_INVALID_INSTALLER' || /checksum mismatch/i.test(message)) {
     return { status: 'error', error: 'The download could not be verified. Check again to download a fresh copy.' };
@@ -33,23 +30,13 @@ function updateError(error) {
   if (code === 'UPDATE_INSTALLER_LAUNCH_FAILED') {
     return { status: 'error', error: 'The installer could not be started. If antivirus software is scanning the download, wait a moment and try again.' };
   }
-  if (/\b403\b|\b404\b/.test(message)) return { status: 'error', error: 'GitHub could not provide this private release. Check repository access and try again later.' };
+  if (/\b403\b|\b404\b|\b429\b/.test(message)) return { status: 'error', error: 'GitHub could not provide this release right now. Try again later.' };
   return { status: 'error', error: 'The update could not finish. Check your connection and free disk space, then try again.' };
 }
 
 function notesText(notes) {
   const value = Array.isArray(notes) ? notes.map((entry) => entry?.note || '').join('\n\n') : notes;
   return typeof value === 'string' ? value.slice(0, 20_000) : null;
-}
-
-// electron-updater prefers these over the token it is handed whenever the feed
-// is private. Only the GitHub CLI sign-in may authenticate an update check.
-const ENVIRONMENT_TOKEN_KEYS = /^(?:GH_TOKEN|GITHUB_TOKEN)$/i;
-
-function clearEnvironmentTokens(environment) {
-  for (const key of Object.keys(environment)) {
-    if (ENVIRONMENT_TOKEN_KEYS.test(key)) delete environment[key];
-  }
 }
 
 // The manifest may list several files. Verify against the entry that names
@@ -79,14 +66,16 @@ function createUpdateChecker({
   // module tree is sizeable, so a build that can never update (development,
   // portable) never loads it, and an installed one loads it for the first
   // check rather than at launch.
-  autoUpdater: updaterOption, enabled, isPackaged, pkg, getToken,
+  autoUpdater: updaterOption, enabled, isPackaged, pkg,
   isPortable = Boolean(process.env.PORTABLE_EXECUTABLE_FILE || process.env.PORTABLE_EXECUTABLE_DIR),
-  platform = process.platform, environment = process.env, beforeInstall = async () => {}, onInstallError = () => {},
+  platform = process.platform, beforeInstall = async () => {}, onInstallError = () => {},
   // When both are supplied the app verifies and launches the installer itself,
   // retrying a refused launch before it quits; otherwise electron-updater does.
   launchInstaller = null, quitForInstall = null, installDirectoryWritable = () => false,
   onStatus = () => {}, onLog = () => {},
 }) {
+  // The feed is a public GitHub repository: checks and downloads are anonymous
+  // and carry no credential. electron-updater reads it from app-update.yml.
   const feed = releaseFeed(pkg);
   const lazy = typeof updaterOption === 'function';
   const available = Boolean((lazy || updaterOption) && isPackaged && feed && !isPortable && platform === 'win32');
@@ -101,7 +90,7 @@ function createUpdateChecker({
   let lastFailure = null;
   let result = {
     status: available ? 'idle' : 'unavailable', available,
-    checkedAt: null, version: null, error: null, progress: null, releaseNotes: null, auth: null,
+    checkedAt: null, version: null, error: null, progress: null, releaseNotes: null,
     reason: isPortable ? 'Use the installed Windows version for in-app updates.' : !available ? 'Updates are available in the installed Windows app with a configured release feed.' : null,
   };
   const status = () => ({ ...result });
@@ -138,9 +127,9 @@ function createUpdateChecker({
     autoUpdater.allowDowngrade = false;
     autoUpdater.allowPrerelease = false;
     autoUpdater.disableWebInstaller = true;
-    // Private GitHub assets use API URLs that lack filename-based blockmap
-    // lookup. Full downloads still receive SHA-512 verification.
-    autoUpdater.disableDifferentialDownload = Boolean(feed?.private);
+    // Always download the complete installer so the file verified against the
+    // manifest's SHA-512 is exactly the one published.
+    autoUpdater.disableDifferentialDownload = true;
     autoUpdater.on('update-available', (info) => {
       candidate = true;
       change({ status: 'available', version: info?.version || null, releaseNotes: notesText(info?.releaseNotes), checkedAt: new Date().toISOString(), error: null });
@@ -183,17 +172,7 @@ function createUpdateChecker({
     return run(async () => {
       candidate = false;
       change({ status: 'checking', error: null, progress: null, version: null, releaseNotes: null });
-      const autoUpdater = updater();
-      if (feed.provider === 'github' && feed.private) {
-        if (!getToken) throw Object.assign(new Error(), { code: 'UPDATE_AUTH_REQUIRED' });
-        const token = await getToken();
-        clearEnvironmentTokens(environment);
-        // Keep the authenticated feed in main-process memory. Never persist it
-        // or pass it to logs, a command line, or the renderer.
-        autoUpdater.setFeedURL({ ...feed, token });
-        change({ auth: 'github-cli' });
-      }
-      await autoUpdater.checkForUpdates();
+      await updater().checkForUpdates();
     });
   }
 

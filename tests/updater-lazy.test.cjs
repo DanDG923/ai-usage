@@ -6,12 +6,11 @@ const { EventEmitter } = require('node:events');
 const test = require('node:test');
 const { createUpdateChecker } = require('../electron/updater.cjs');
 
-const pkg = { updateFeed: { provider: 'github', owner: 'DanDG923', repo: 'ai-usage', private: true } };
+const pkg = { updateFeed: { provider: 'github', owner: 'DanDG923', repo: 'ai-usage', private: false } };
 
 function fakeUpdater() {
   const updater = new EventEmitter();
   updater.checks = 0;
-  updater.setFeedURL = (value) => { updater.feed = value; };
   updater.checkForUpdates = async () => {
     updater.checks++;
     updater.emit('update-not-available');
@@ -23,7 +22,7 @@ function checker(loader, options = {}) {
   const states = [];
   const instance = createUpdateChecker({
     autoUpdater: loader, enabled: () => true, isPackaged: true, isPortable: false, platform: 'win32', pkg,
-    getToken: async () => 'secret-for-test', onStatus: (value) => states.push(value), ...options,
+    onStatus: (value) => states.push(value), ...options,
   });
   return { checker: instance, states };
 }
@@ -39,7 +38,7 @@ test('electron-updater is loaded for the first check, not at launch, and configu
   assert.equal(loads, 1);
   assert.equal(updater.autoDownload, false, 'the loaded instance is configured like an eager one');
   assert.equal(updater.autoInstallOnAppQuit, false);
-  assert.equal(updater.feed.token, 'secret-for-test');
+  assert.equal(updater.disableDifferentialDownload, true);
   await instance.check();
   assert.equal(loads, 1, 'later checks reuse the loaded module');
   assert.equal(updater.checks, 2);

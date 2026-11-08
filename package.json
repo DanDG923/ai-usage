@@ -2,14 +2,15 @@
   "name": "ai-usage",
   "version": "1.0.60",
   "private": true,
-  "description": "Local-first AI subscription usage, runway forecasting, and API-equivalent cost dashboard.",
+  "license": "MIT",
+  "description": "Local-first Windows dashboard for Codex, Claude, and Fable subscription allowances, run-out forecasts, and API-equivalent cost.",
   "main": "electron/main.cjs",
   "type": "module",
   "updateFeed": {
     "provider": "github",
     "owner": "DanDG923",
     "repo": "ai-usage",
-    "private": true
+    "private": false
   },
   "scripts": {
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
@@ -110,7 +111,7 @@
       "provider": "github",
       "owner": "DanDG923",
       "repo": "ai-usage",
-      "private": true
+      "private": false
     }
   }
 }

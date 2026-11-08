@@ -39,7 +39,7 @@ test('release metadata, dependency pin, package exclusions, and docs agree', () 
   assert.match(pkg.scripts['format:check'], /prettier --check/);
   assert.equal(pkg.scripts.typecheck, 'tsc -b');
   assert.equal(pkg.build.publish.provider, 'github');
-  assert.deepEqual(pkg.build.publish, { provider: 'github', owner: 'DanDG923', repo: 'ai-usage', private: true });
+  assert.deepEqual(pkg.build.publish, { provider: 'github', owner: 'DanDG923', repo: 'ai-usage', private: false });
   assert.deepEqual(pkg.updateFeed, pkg.build.publish);
   assert.match(pkg.scripts.build, /--win portable nsis --x64 --publish never/);
   assert.match(pkg.scripts.pack, /--publish never/);
@@ -58,12 +58,12 @@ test('release metadata, dependency pin, package exclusions, and docs agree', () 
   assert.match(readme, /experimental/i);
 });
 
-test('private releases build without credentials and publish complete verified assets', () => {
+test('public releases build without credentials and publish complete verified assets', () => {
   const yaml = require('js-yaml');
   const workflow = yaml.load(readText('.github/workflows/release.yml'));
   const steps = workflow.jobs.release.steps;
   const build = steps.find((step) => step.run === 'npm run build');
-  const publish = steps.find((step) => step.name === 'Publish audited private release');
+  const publish = steps.find((step) => step.name === 'Publish audited release');
   const validate = steps.find((step) => step.name === 'Validate version and destination');
   assert.deepEqual(workflow.on.push.tags, ['v*']);
   assert.equal(workflow.on.workflow_dispatch.inputs.tag.required, true);
@@ -74,7 +74,8 @@ test('private releases build without credentials and publish complete verified a
   assert.match(validate.run, /-notin @\('identical', 'behind'\)/);
   assert.equal(build.env.GITHUB_TOKEN, undefined);
   assert.equal(publish.env.GH_TOKEN, '${{ github.token }}');
-  assert.match(publish.run, /repository\.private -ne \$true/);
+  assert.match(validate.run, /publish\.private -ne \$false/);
+  assert.match(publish.run, /repository\.private -ne \$false/);
   assert.match(publish.run, /--draft/);
   assert.match(publish.run, /--verify-tag/);
   assert.doesNotMatch(publish.run, /releases\/tags\//);
