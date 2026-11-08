@@ -55,6 +55,10 @@
     "vite": "8.3.5",
     "wait-on": "9.5.1"
   },
+  "overrides": {
+    "glob@>=9.0.0 <14.0.2": "^14.0.4",
+    "minimatch@>=7.0.0 <11.0.1": "^11.0.5"
+  },
   "build": {
     "appId": "com.local.aiusage",
     "productName": "AI Usage",
