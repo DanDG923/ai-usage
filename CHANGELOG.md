@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.61 — 8 November 2026
+
+- AI Usage is now open source under the MIT licence, and its source code and releases are public on GitHub. Updates no longer need the GitHub CLI or a GitHub sign-in: the app checks the public releases anonymously, and update requests carry no credential. Downloads still use the complete installer, checked against the release's SHA-512 before it runs. Copies of 1.0.60 and earlier find this update through their existing GitHub CLI sign-in; from this version on, no sign-in is needed.
+- Check a downloaded update again before Windows' administrator prompt starts it. When the installation folder needed administrator rights, the installer was handed to the elevation prompt without the second checksum check that a normal update makes; both paths now verify the file first.
+- Keep the Claude Code glance current between collections. Its heartbeat used to rewrite the last figures with a new time, so reset countdowns, evidence age and verdicts could look current while standing still. It is now rebuilt from the local data each time, and stops renewing figures while the app's storage is closing.
+- Stop estimating Fable's remaining tokens from an out-of-date Claude weekly reading. When the overall Claude weekly limit is the one holding Fable back and that reading is older than the freshness limit, the token panel now asks for a Refresh instead of showing a figure.
+- Count the Claude desktop estimates' 7-, 30- and 90-day periods in local calendar days, like the rest of the dashboard. They used to count back exactly that many 24-hour days, so their totals could differ from the cost history for the same period.
+- Update Electron to 45.2.0 and the Claude Agent SDK used for Refresh to 0.3.314.
+- Preserve local usage history, settings, observations, and backups during an in-place update.
+
 ## 1.0.60 — 30 October 2026
 
 - Stop showing the Claude 5-hour limit once Claude stops reporting it. Claude renamed Max 20x to Ultra and removed the 5-hour limit for verified Ultra accounts. A Refresh or Claude Code reading that carries the weekly limit without a 5-hour one now ends the last 5-hour figure at once, instead of leaving it on the card, in the tray and in warnings until its old reset. Accounts that still have a temporary 5-hour limit keep seeing it.
