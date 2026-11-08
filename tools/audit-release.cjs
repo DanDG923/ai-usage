@@ -76,12 +76,12 @@ function assertArchive(entries) {
   if (privateLocalData.length) fail(`private local data is packaged: ${privateLocalData.slice(0, 5).join(', ')}`);
 }
 
-function assertPrivateFeed() {
+function assertPublicFeed() {
   const configurationPath = path.join(releaseDirectory, 'win-unpacked', 'resources', 'app-update.yml');
   if (!fs.existsSync(configurationPath)) fail('packaged update configuration is missing');
   const configuration = yaml.load(fs.readFileSync(configurationPath, 'utf8'), { schema: yaml.JSON_SCHEMA });
   if (configuration?.provider !== 'github' || configuration.owner !== 'DanDG923'
-    || configuration.repo !== 'ai-usage' || configuration.private !== true) fail('packaged private feed is incorrect');
+    || configuration.repo !== 'ai-usage' || configuration.private !== false) fail('packaged public feed is incorrect');
   const allowed = new Set(['provider', 'owner', 'repo', 'private', 'updaterCacheDirName']);
   if (Object.keys(configuration).some((key) => !allowed.has(key))) fail('packaged feed contains unexpected settings or credentials');
   const packedPackage = JSON.parse(asar.extractFile(archivePath, 'package.json').toString('utf8'));
@@ -113,7 +113,7 @@ async function auditArtifacts() {
 async function main() {
   const entries = normalizedEntries();
   assertArchive(entries);
-  assertPrivateFeed();
+  assertPublicFeed();
   if (unpackedOnly) {
     process.stdout.write(`${JSON.stringify({
       mode: 'unpacked',

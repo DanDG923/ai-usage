@@ -447,7 +447,6 @@ export type UpdateStatus = {
     | 'up-to-date'
     | 'error'
     | 'unavailable'
-    | 'auth-required'
     | 'downloading'
     | 'downloaded'
     | 'installing';
@@ -457,7 +456,6 @@ export type UpdateStatus = {
   error?: string | null;
   progress?: number | null;
   releaseNotes?: string | null;
-  auth?: 'github-cli' | null;
   reason?: string | null;
 };
 

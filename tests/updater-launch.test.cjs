@@ -10,7 +10,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { createUpdateChecker, updateError } = require('../electron/updater.cjs');
 
-const pkg = { updateFeed: { provider: 'github', owner: 'DanDG923', repo: 'ai-usage', private: true } };
+const pkg = { updateFeed: { provider: 'github', owner: 'DanDG923', repo: 'ai-usage', private: false } };
 const DOWNLOADED = {
   version: '1.0.27', downloadedFile: 'C:\\Users\\tester\\AppData\\Local\\ai-usage-updater\\pending\\AI-Usage-Setup-1.0.27-x64.exe',
   files: [{ url: 'AI-Usage-Setup-1.0.27-x64.exe', sha512: 'manifest-digest' }],
@@ -19,7 +19,6 @@ const DOWNLOADED = {
 function fixture(options = {}) {
   const updater = new EventEmitter();
   updater.installs = 0;
-  updater.setFeedURL = () => {};
   updater.checkForUpdates = async () => updater.emit('update-available', { version: '1.0.27' });
   updater.downloadUpdate = async () => updater.emit('update-downloaded', options.downloadedEvent ?? DOWNLOADED);
   updater.quitAndInstall = () => { updater.installs++; };
@@ -29,7 +28,6 @@ function fixture(options = {}) {
   let recoveries = 0;
   const checker = createUpdateChecker({
     autoUpdater: updater, enabled: () => true, isPackaged: true, isPortable: false, platform: 'win32', pkg,
-    getToken: async () => 'secret-for-test',
     launchInstaller: async (request) => { launches.push(request); if (options.launchError) throw options.launchError; return { attempt: 1, pid: 1 }; },
     quitForInstall: () => { quits++; },
     installDirectoryWritable: () => options.writable ?? true,
@@ -58,7 +56,6 @@ test('the app verifies and launches the downloaded installer itself, then quits,
     'Install requested: 1.0.27.',
     'Quitting so the installer can replace the application.',
   ]);
-  assert.ok(!JSON.stringify(f.logs).includes('secret-for-test'));
 });
 
 test('a launch that fails after retries triggers recovery, keeps the download, and shows a safe message', async () => {

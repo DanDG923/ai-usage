@@ -24,7 +24,6 @@ const {
 } = require('./flyout.cjs');
 const { createUpdateChecker } = require('./updater.cjs');
 const { installDirectoryWritable, launchInstaller, relaunchApplication, preserveInstallerEnvironment } = require('./installer-launch.cjs');
-const { createGitHubUpdateAuth } = require('./update-auth.cjs');
 const {
   WINDOW_BOUNDS,
   createDeferredWindowReveal,
@@ -39,10 +38,9 @@ const {
 
 const pkg = require('../package.json');
 
-// The environment the app was launched with, taken before anything runs. The
-// update check deletes GH_TOKEN and GITHUB_TOKEN from process.env so that
-// electron-updater cannot prefer them to the GitHub CLI sign-in; the Claude
-// and Codex executables the app spawns must still see the user's own values.
+// The environment the app was launched with, taken before anything runs, so
+// the Claude and Codex executables, the installer and a relaunch see the
+// user's own values whatever later changes process.env.
 const launchEnvironment = Object.freeze({ ...process.env });
 
 function storagePaths() {
@@ -1099,7 +1097,6 @@ if (isPrimaryInstance) {
         enabled: () => Boolean(store.getSettings().autoUpdate),
         isPackaged: app.isPackaged,
         pkg,
-        getToken: createGitHubUpdateAuth().getToken,
         beforeInstall: prepareUpdateInstall,
         onInstallError: recoverFromUpdateInstallFailure,
         launchInstaller: (options) => launchInstaller({ ...options, environment: launchEnvironment }),

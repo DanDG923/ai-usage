@@ -1,13 +1,4 @@
-import {
-  AlertOctagon,
-  AlertTriangle,
-  CheckCircle2,
-  ChevronRight,
-  Hourglass,
-  Info,
-  RefreshCw,
-  type LucideIcon,
-} from 'lucide-react';
+import { AlertOctagon, CheckCircle2, ChevronRight, Hourglass, Info, RefreshCw, type LucideIcon } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { shortDate } from '../../lib';
 import type { RenderingMode, Settings, Snapshot, Theme, UpdateStatus } from '../../types';
@@ -17,8 +8,6 @@ function updateLabel(status: UpdateStatus | null) {
   switch (status?.status) {
     case 'unavailable':
       return 'Updates are unavailable in this build';
-    case 'auth-required':
-      return 'GitHub sign-in needed';
     case 'checking':
       return 'Checking for updates…';
     case 'available':
@@ -34,22 +23,20 @@ function updateLabel(status: UpdateStatus | null) {
     case 'error':
       return 'The update could not finish';
     default:
-      return 'Private updates from GitHub';
+      return 'Updates from GitHub';
   }
 }
 
-type UpdateTone = 'idle' | 'info' | 'busy' | 'ok' | 'caution' | 'warning';
+type UpdateTone = 'idle' | 'info' | 'busy' | 'ok' | 'warning';
 
 /**
  * Where the update is, as an icon and a tone for the version box: idle and
  * busy stay grey, a waiting update is ink, ready and up to date are on track,
- * a sign-in problem is a caution and a failure is a warning.
+ * and a failure is a warning.
  */
 function updateMark(status: UpdateStatus | null, preview: boolean): { tone: UpdateTone; Icon: LucideIcon } {
   if (preview) return { tone: 'idle', Icon: Info };
   switch (status?.status) {
-    case 'auth-required':
-      return { tone: 'caution', Icon: AlertTriangle };
     case 'checking':
     case 'downloading':
       return { tone: 'busy', Icon: RefreshCw };
@@ -73,8 +60,6 @@ function updateDescription(status: UpdateStatus | null, preview: boolean) {
   switch (status?.status) {
     case 'unavailable':
       return status.reason || 'Install the Windows setup version to receive updates here.';
-    case 'auth-required':
-      return 'GitHub sign-in is unavailable. Sign in with GitHub CLI using an account that can read the private repository, then check again.';
     case 'error':
       return `${status.error || 'Please check your connection.'} Check again to retry.`;
     case 'downloading':
@@ -86,9 +71,7 @@ function updateDescription(status: UpdateStatus | null, preview: boolean) {
     case 'installing':
       return 'Saving a safety backup before restarting. AI Usage will reopen after the update.';
     default:
-      return status?.auth === 'github-cli'
-        ? 'Connected through your GitHub sign-in. Downloads stay private; you choose when to download and restart.'
-        : 'Uses your local GitHub sign-in to access private releases. You choose when to download and restart.';
+      return 'Checks the public GitHub releases; no sign-in is needed. You choose when to download and restart.';
   }
 }
 
@@ -256,7 +239,7 @@ export function AppearanceSection({
           ) : null}
           <ToggleRow
             title="Check for updates automatically"
-            description="Checks private GitHub releases shortly after launch and every few hours. Your usage history stays on this PC."
+            description="Checks GitHub releases shortly after launch and every few hours. Your usage history stays on this PC."
             checked={snapshot.settings.autoUpdate}
             onChange={(checked) => update({ autoUpdate: checked })}
           />
@@ -294,11 +277,7 @@ export function AppearanceSection({
                 aria-busy={checking || undefined}
                 onClick={() => void runAction('check')}
               >
-                {checking
-                  ? 'Checking…'
-                  : status?.status === 'error' || status?.status === 'auth-required'
-                    ? 'Check again'
-                    : 'Check now'}
+                {checking ? 'Checking…' : status?.status === 'error' ? 'Check again' : 'Check now'}
               </button>
               {status?.status === 'available' || downloading ? (
                 <button

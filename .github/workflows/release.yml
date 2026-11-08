@@ -1,4 +1,4 @@
-name: Private Windows release
+name: Windows release
 
 on:
   push:
@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: private-windows-release
+  group: windows-release
   cancel-in-progress: false
 
 jobs:
@@ -44,8 +44,8 @@ jobs:
           if ($env:RELEASE_TAG -cnotmatch '^v\d+\.\d+\.\d+$' -or $env:RELEASE_TAG -cne "v$($package.version)") {
             throw 'The version tag must match package.json exactly.'
           }
-          if ($env:GITHUB_REPOSITORY -cne 'DanDG923/ai-usage' -or $package.build.publish.owner -cne 'DanDG923' -or $package.build.publish.repo -cne 'ai-usage' -or $package.build.publish.private -ne $true) {
-            throw 'This workflow only publishes the configured private AI Usage repository.'
+          if ($env:GITHUB_REPOSITORY -cne 'DanDG923/ai-usage' -or $package.build.publish.owner -cne 'DanDG923' -or $package.build.publish.repo -cne 'ai-usage' -or $package.build.publish.private -ne $false) {
+            throw 'This workflow only publishes the configured public AI Usage repository.'
           }
           # Only reviewed, merged work may enter the update feed: the tagged
           # commit has to be an ancestor of main, not a side branch.
@@ -68,7 +68,7 @@ jobs:
       - run: npm run build
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-      - name: Publish audited private release
+      - name: Publish audited release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -76,8 +76,10 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $repo = 'DanDG923/ai-usage'
           $repository = gh api "repos/$repo" | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0 -or $repository.private -ne $true) {
-            throw 'Release publication requires the destination repository to remain private.'
+          # Installed copies read the feed anonymously, so a release published
+          # while the repository is private could never be found by them.
+          if ($LASTEXITCODE -ne 0 -or $repository.private -ne $false) {
+            throw 'Release publication requires the destination repository to be public.'
           }
           $version = (Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json).version
           $releases = gh api "repos/$repo/releases?per_page=100" | ConvertFrom-Json
