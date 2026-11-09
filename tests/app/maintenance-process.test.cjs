@@ -322,3 +322,42 @@ test('a real idle worker closes its store and exits on its own', async () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('a job waiting behind another gets its whole time limit once the worker reaches it', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { workers, createWorker } = fakeWorkers();
+  const host = createMaintenanceHost({ requestTimeoutMs: 100, idleTimeoutMs: 0, createWorker });
+  const settled = [];
+  const restore = host.request('restore-backup', { filePath: 'a' });
+  t.mock.timers.tick(10);
+  // The worker runs one job at a time, so this one waits for the restore.
+  const exported = host.request('export-csv', { filePath: 'b', days: 1 });
+  exported.then(() => settled.push('answered'), (error) => settled.push(error.message));
+  t.mock.timers.tick(80);
+  workers[0].emit('message', { id: workers[0].sent[0].id, ok: true, result: 'restored' });
+  assert.equal(await restore, 'restored');
+  // 150 ms after the export was sent, but only 70 ms after the worker could start it.
+  t.mock.timers.tick(70);
+  await new Promise(setImmediate);
+  assert.deepEqual(settled, [], 'the export has not used up its own limit yet');
+  assert.equal(workers[0].terminated, 0);
+  assert.equal(host.running, true);
+  // A job that is then not answered within its own limit still times out.
+  t.mock.timers.tick(30);
+  await assert.rejects(exported, /did not respond in time \(export-csv\)/);
+  assert.equal(workers[0].terminated, 1);
+  assert.equal(host.running, false);
+});
+
+test('a waiting job is failed with the stalled job ahead of it, at that job\'s limit', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { workers, createWorker } = fakeWorkers();
+  const host = createMaintenanceHost({ requestTimeoutMs: 100, idleTimeoutMs: 0, createWorker });
+  const stalled = host.request('restore-backup', { filePath: 'a' });
+  t.mock.timers.tick(60);
+  const waiting = host.request('export-csv', { filePath: 'b', days: 1 });
+  t.mock.timers.tick(40);
+  await assert.rejects(stalled, /did not respond in time \(restore-backup\)/);
+  await assert.rejects(waiting, /did not respond in time \(restore-backup\)/);
+  assert.equal(workers[0].terminated, 1);
+});

@@ -48,7 +48,7 @@ const { CLOSE_REQUEST, isReplyEnvelope } = require('./process-protocol.cjs');
  * @property {(child: Child) => void} stop end a child at once; a throw means it had already gone and is ignored
  * @property {(message: string) => void} log
  * @property {HostErrors} errors
- * @property {(type: string) => number | null} requestTimeoutMs how long a request of this type may go unanswered; null for no limit
+ * @property {(type: string) => number | null} requestTimeoutMs how long a request of this type may go unanswered once the child has answered every timed request sent before it; null for no limit
  * @property {boolean} unrefRequestTimers true when a request that is only waiting for its time limit must not keep the main process alive
  * @property {'stop' | 'abandon'} onTimeout what an unanswered request does to the child and its other requests; see request()
  * @property {'throw' | 'reject'} spawnFailure whether request() throws when a child cannot be started, or returns a rejected promise
@@ -71,7 +71,9 @@ const { CLOSE_REQUEST, isReplyEnvelope } = require('./process-protocol.cjs');
  * @property {(result: unknown) => void} resolve
  * @property {(error: unknown) => void} reject
  * @property {Child} child
- * @property {NodeJS.Timeout | null} timer null when the request has no time limit
+ * @property {NodeJS.Timeout | null} timer null when the request has no time limit, or is still waiting behind an earlier one
+ * @property {number | null} limit how long the request may go unanswered once its turn has come; null for no limit
+ * @property {() => void} expire what happens when that time is up
  * @property {string} type
  */
 
@@ -155,6 +157,24 @@ function createProcessHost({
       // A request with no time limit carries null, which has nothing to clear.
       clearTimeout(entry.timer ?? undefined);
       entry.reject(error);
+    }
+  }
+
+  // A child works through its requests in the order they were sent, so a
+  // request's time limit is for its own work: it starts when the timed
+  // requests sent before it have been answered, not while it waits behind
+  // them. Only the oldest such request of a child is being timed. If that one
+  // is never answered, every request behind it fails with it.
+  /** @param {Child} target */
+  function startClock(target) {
+    // The map keeps the order in which the requests were sent.
+    for (const entry of pending.values()) {
+      if (entry.child !== target || entry.limit === null) continue;
+      if (!entry.timer) {
+        entry.timer = setTimeout(entry.expire, entry.limit);
+        if (unrefRequestTimers) entry.timer.unref?.();
+      }
+      return;
     }
   }
 
@@ -247,6 +267,7 @@ function createProcessHost({
     onReply(entry.type, message.ok);
     if (message.ok) entry.resolve(message.result);
     else entry.reject(new Error(message.error?.message || errors.failed));
+    startClock(source);
     if (current === source) scheduleIdle();
   }
 
@@ -296,7 +317,7 @@ function createProcessHost({
       const target = currentChild();
       const id = nextId++;
       const limit = requestTimeoutMs(type);
-      const timer = limit === null ? null : setTimeout(() => {
+      const expire = () => {
         if (!pending.has(id)) return;
         if (onTimeout === 'abandon') {
           drop(target);
@@ -307,14 +328,16 @@ function createProcessHost({
         pending.delete(id);
         reject(errors.timedOut(type));
         if (current === target) stop();
-      }, limit);
-      if (unrefRequestTimers) timer?.unref?.();
-      pending.set(id, { resolve, reject, child: target, timer, type });
+      };
+      /** @type {PendingRequest<Child>} */
+      const entry = { resolve, reject, child: target, timer: null, limit, expire, type };
+      pending.set(id, entry);
+      startClock(target);
       try {
         send(target, { id, type, payload });
       } catch (error) {
         pending.delete(id);
-        clearTimeout(timer ?? undefined);
+        clearTimeout(entry.timer ?? undefined);
         reject(error);
         if (idleAfterSendFailure) scheduleIdle();
       }
