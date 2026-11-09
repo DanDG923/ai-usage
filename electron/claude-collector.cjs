@@ -14,6 +14,7 @@ const { evidenceTimes, freshReadGraceFor, latestEvidenceAt, withoutStaleRestatem
 const { IncrementalReadError, planIncrementalRead, readCompleteLines } = require('./incremental-file.cjs');
 const { asIso, epochToIso } = require('./time.cjs');
 const { claudeWindowDescriptor } = require('./claude-window-descriptors.cjs');
+const { writeFileAtomically } = require('./atomic-write.cjs');
 
 /** @typedef {import('./types').Store} Store */
 /** @typedef {import('./types').IsoTime} IsoTime */
@@ -945,7 +946,7 @@ function installClaudeHelper(inboxPath) {
     padding: 1,
     refreshInterval: 60,
   };
-  fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
+  writeFileAtomically(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
   return { helperPath, settingsPath, previousStatusLinePreserved: fs.existsSync(previousStatusLinePath), restartRequired: true };
 }
 
@@ -974,7 +975,7 @@ function uninstallClaudeHelper() {
     delete settings.statusLine;
     statusLineRemoved = true;
   }
-  fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
+  writeFileAtomically(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
   // The preserved copy is only discarded once it has been handed back.
   if (restoredPreviousStatusLine && fs.existsSync(previousStatusLinePath)) fs.unlinkSync(previousStatusLinePath);
   try {
