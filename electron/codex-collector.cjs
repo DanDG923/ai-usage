@@ -7,6 +7,7 @@ const { spawn } = require('node:child_process');
 const { findCodexBinary, providerProcessOptions, providerHome } = require('./provider-executable.cjs');
 const { IncrementalReadError, planIncrementalRead, readCompleteLines } = require('./incremental-file.cjs');
 const { epochToIso } = require('./time.cjs');
+const { MAX_QUOTA_RESET_AHEAD_MS } = require('./quota-time.cjs');
 const { codexQuotaLabel, durationLabel } = require('./codex-quota-label.cjs');
 const { codexAgentMetadata, textId } = require('./task-usage.cjs');
 
@@ -164,11 +165,12 @@ function recordRateLimit(store, raw, observedAt, provenance, extra = {}, { onRej
       store.recordObservation(observation);
       count += 1;
     } catch (error) {
-      // Historical logs can contain a stale window beside a valid one. The
-      // importer reports that rejection and keeps reading; live reads retain
-      // their fail-fast behaviour when no rejection handler is supplied.
-      // Coded runtime/SQLite failures must still roll back the file so its
-      // cursor cannot advance past records that failed to persist.
+      // A reading can carry a window the store rejects beside a valid one.
+      // The session-log import and the app-server read both report that
+      // rejection and keep the rest; a caller with no rejection handler fails
+      // fast. Coded runtime/SQLite failures always propagate, so the caller's
+      // transaction rolls back and a log's cursor cannot advance past records
+      // that failed to persist.
       if (!onRejected || error?.code) throw error;
       onRejected(error);
     }
@@ -193,9 +195,21 @@ async function collectFromAppServer(store, binary, {
       ? Object.entries(limits.rateLimitsByLimitId).map(([limitId, bucket]) => ({ ...bucket, limitId: bucket?.limitId ?? bucket?.limit_id ?? limitId }))
       : [limits?.rateLimits].filter(Boolean);
     let observations = 0;
-    for (const bucket of buckets) {
-      observations += recordRateLimit(store, bucket, observedAt, 'official', { resetCredits });
-    }
+    let rejected = 0;
+    let lastRejection = null;
+    // One response is stored whole, as a session log's records are: a window
+    // the store rejects is counted and the others are kept, and a storage
+    // failure leaves none of them behind to be reported as a failed read.
+    store.transaction(() => {
+      for (const bucket of buckets) {
+        observations += recordRateLimit(store, bucket, observedAt, 'official', { resetCredits }, {
+          onRejected: (error) => {
+            rejected += 1;
+            lastRejection = error instanceof Error ? error.message : String(error);
+          },
+        });
+      }
+    });
     // Daily account history is useful for context but must not make a valid,
     // newer allowance reading disappear when that optional endpoint fails.
     let dailyBuckets = 0;
@@ -209,7 +223,7 @@ async function collectFromAppServer(store, binary, {
     } catch {
       usageWarning = 'Codex daily usage could not be read.';
     }
-    return { observations, dailyBuckets, resetCredits, usageWarning };
+    return { observations, rejected, lastRejection, dailyBuckets, resetCredits, usageWarning };
   } finally {
     client.close();
   }
@@ -647,6 +661,16 @@ function importLocalSessions(store, days = 120) {
   return { importedFiles, events, observations, rejected, lastRejection, duplicateEvents, reconciledEvents, reconciliationBackup, readErrors, lastReadError };
 }
 
+// Whether Codex has an allowance reading whose window is still running, from
+// the app server or a session log. A run's count of new rows cannot answer
+// that: it is zero whenever nothing was appended since the last refresh. No
+// window runs longer than the bound, so it only limits how far back to look.
+function hasActiveReading(store, nowMs = Date.now()) {
+  return store.hasUsableObservation('codex', nowMs, { activeWithinMs: MAX_QUOTA_RESET_AHEAD_MS });
+}
+
+const withoutFullStop = (text) => String(text || 'unknown reason').replace(/\.$/, '');
+
 async function refreshCodex(store, {
   findBinary = findCodexBinary,
   importSessions = importLocalSessions,
@@ -655,6 +679,7 @@ async function refreshCodex(store, {
   const binary = findBinary();
   let local = { importedFiles: 0, events: 0, observations: 0 };
   let localWarning = null;
+  let localScanFailed = false;
   try {
     local = importSessions(store);
     if (local.readErrors > 0) {
@@ -663,6 +688,7 @@ async function refreshCodex(store, {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error || 'Unknown local error.');
     localWarning = `Codex local session scan failed: ${message}`;
+    localScanFailed = true;
   }
   if (!binary) {
     const status = localWarning ? 'error' : local.observations ? 'observing' : 'unavailable';
@@ -675,6 +701,29 @@ async function refreshCodex(store, {
 
   try {
     const appServer = await collectAppServer(store, binary);
+    if (!appServer.observations) {
+      // The app server answered, but with no window that could be recorded:
+      // an empty or unrecognised response, or one the store rejected. The
+      // allowance was not read, so the source is not current and this is not
+      // a good scan. An earlier reading still in force stays on the dashboard
+      // as one this refresh did not replace; without one the allowance is
+      // unknown, and no figure stands in for it.
+      const active = hasActiveReading(store);
+      const cause = appServer.rejected
+        ? `The Codex app server's allowance reading could not be recorded (${withoutFullStop(appServer.lastRejection)})`
+        : 'The Codex app server returned no allowance reading';
+      const standing = active
+        ? '; the last recorded reading is still active but was not replaced.'
+        : ', and no earlier reading is still active, so the Codex allowance is unknown.';
+      store.setSourceStatus('codex', active ? 'stale' : 'unavailable',
+        `${cause}${standing}${localWarning ? ' Local session records could not be scanned.' : ''}`, {
+          binary,
+          appServer,
+          local,
+          localWarning,
+        }, { scanSucceeded: false });
+      return { binary, appServer, local, localWarning };
+    }
     // The official allowance was read, so the source is current. Optional
     // extras that failed go in the detail: every consumer reads 'degraded' as
     // stale data and would flip the verdict and send a cached-data alert.
@@ -686,6 +735,9 @@ async function refreshCodex(store, {
     } else if (localWarning) {
       detail = 'Official Codex allowance was updated; local session records could not be scanned.';
     }
+    if (appServer.rejected) {
+      detail += ` ${appServer.rejected} allowance window${appServer.rejected === 1 ? '' : 's'} in the reading ${appServer.rejected === 1 ? 'was' : 'were'} rejected and left unchanged (${withoutFullStop(appServer.lastRejection)}).`;
+    }
     store.setSourceStatus('codex', 'connected', detail, {
       binary,
       appServer,
@@ -696,7 +748,13 @@ async function refreshCodex(store, {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error || 'Unknown local error.');
     const localDetail = localWarning ? 'Local session records were also unavailable.' : 'Local records were scanned.';
-    store.setSourceStatus('codex', local.observations ? 'observing' : 'error', `App server unavailable; ${localDetail} ${message}`, {
+    // While the app server keeps failing, the status says whether a reading is
+    // still in force, not whether this run happened to import new rows: that
+    // changes from one refresh to the next and would raise a cached-data
+    // notification each time. A run in which the local scan failed as well
+    // observed nothing.
+    const status = !localScanFailed && hasActiveReading(store) ? 'observing' : 'error';
+    store.setSourceStatus('codex', status, `App server unavailable; ${localDetail} ${message}`, {
       binary,
       local,
       localWarning,
