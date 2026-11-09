@@ -166,7 +166,7 @@ test('a failed live fetch cannot advance stored Claude or Fable evidence timesta
   const path = require('node:path');
   const { UsageStore } = require('../../electron/store.cjs');
   const { createFableUsageTracker } = require('../../electron/fable-tracker.cjs');
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-freshness-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-claude-freshness-'));
   const store = new UsageStore(path.join(root, 'test.sqlite'), path.join(root, 'backups'));
   const f = fixture([{ log: ok }, { log: offline }, { log: offline }]);
   let now = new Date('2026-09-05T13:00:00Z');
