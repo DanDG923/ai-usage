@@ -4,6 +4,7 @@
 // the scheduled and the off-schedule part of the day separately.
 
 const { fetchMomentOf, normaliseObservation, restatesSessionLimits, riseMomentOf } = require('../quota-evidence.cjs');
+const { isProviderProvenance } = require('../quota-provenance.mjs');
 const { DAY_MS, HOUR_MS, exclusionLookup, isActiveHour, localDayKey, nextLocalHour } = require('./calendar.cjs');
 const { learnableInOrder } = require('./readings.cjs');
 const {
@@ -56,7 +57,10 @@ function addIntervalSamples(samples, before, after, schedule, nowMs, rateElapsed
   const delta = after.usedPercent - before.usedPercent;
   if (delta < 0 || delta > MAX_LEARNABLE_RISE_POINTS) return;
   const ageDays = Math.max(0, (nowMs - after.observedAt) / DAY_MS);
-  const provenanceWeight = ['official', 'official-statusline'].includes(after.provenance) ? 1 : ESTIMATED_READING_WEIGHT;
+  // Every reading the provider itself supplied counts in full: a plan-usage
+  // read and a figure from a Codex session log as much as a status-line one.
+  // A projected estimate and a figure typed in by hand count for less.
+  const provenanceWeight = isProviderProvenance(after.provenance) ? 1 : ESTIMATED_READING_WEIGHT;
   const smoothingHours = rateElapsedHours != null && rateElapsedHours > 0 ? rateElapsedHours : elapsedHours;
   const rate = delta / smoothingHours;
   const allocationRate = delta / elapsedHours;

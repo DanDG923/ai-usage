@@ -831,3 +831,24 @@ test('a latest reading with no usable figure gives an unknown forecast, never an
     .run(new Date(now - hour).toISOString(), new Date(now + 72 * hour).toISOString());
   assert.equal(store.getDashboardSnapshot(7, now).quotas.codex.forecast.state, 'unknown');
 });
+
+test('every reading the provider supplied is learned at full weight; an estimate or a manual entry is not', () => {
+  const now = Date.parse('2026-11-09T12:00:00Z');
+  const hour = 3_600_000;
+  const schedule = { activeDays: [0, 1, 2, 3, 4, 5, 6], startHour: 0, endHour: 24 };
+  const weightOf = (provenance) => {
+    const samples = deriveLearningSamples([[3, 10], [1, 15]].map(([hoursAgo, usedPercent]) => ({
+      observedAt: new Date(now - hoursAgo * hour).toISOString(), usedPercent, remainingPercent: 100 - usedPercent,
+      resetsAt: new Date(now + 72 * hour).toISOString(), windowMinutes: 10_080, provenance,
+    })), schedule, now);
+    assert.equal(samples.length, 1, provenance);
+    return samples[0].weight;
+  };
+  const full = weightOf('official');
+  for (const provenance of ['official-statusline', 'official-claude-usage', 'local-official']) {
+    assert.equal(weightOf(provenance), full, `${provenance} is the provider's own figure`);
+  }
+  for (const provenance of ['derived-tokens', 'manual-official']) {
+    assert.ok(weightOf(provenance) < full, `${provenance} counts for less than a provider reading`);
+  }
+});
