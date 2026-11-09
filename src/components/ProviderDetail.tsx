@@ -2,7 +2,7 @@ import { AlertOctagon, AlertTriangle, CheckCircle2, ChevronRight, EyeOff, Plug }
 import { useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { bankedResetsFor } from '../banked-resets';
 import { dailyBudget, forecastReserve, paceLabel, scheduleOf } from '../budget';
-import { currentCycleFor } from '../cycle-match';
+import { currentCycleFor, cycleEndedEarly } from '../cycle-match';
 import {
   capVisible,
   compactNumber,
@@ -323,7 +323,7 @@ function CycleTable({ view, snapshot }: { view: ProviderView; snapshot: Snapshot
   const heavyUsed = forecast?.heavyRemaining == null ? null : 100 - Math.max(0, forecast.heavyRemaining);
   const bar = (used: number) => `${Math.max(0, Math.min(100, used)).toFixed(1)}%`;
   const pastRow = (row: CycleRow) => {
-    const endedEarly = row.endsAt && Math.abs(Date.parse(row.endsAt) - Date.parse(row.resetsAt)) > 60_000;
+    const endedEarly = cycleEndedEarly(row);
     return (
       <tr key={`${row.resetsAt}:${row.windowMinutes}`}>
         <td>

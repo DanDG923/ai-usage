@@ -1,3 +1,4 @@
+import { cycleEndedEarly } from '../../cycle-match';
 import { compactNumber, dayDate, money, percent } from '../../lib';
 import type { CycleRow, Snapshot } from '../../types';
 
@@ -94,7 +95,7 @@ export function CycleHistory({ cycles, currency }: { cycles: Snapshot['cycles'];
                             {dayDate(row.endsAt ?? row.resetsAt)}
                             {row.current ? <span className="chip">Current</span> : null}
                           </span>
-                          {row.endsAt && row.endsAt !== row.resetsAt ? <small>Reset early</small> : null}
+                          {cycleEndedEarly(row) ? <small>Reset early</small> : null}
                         </td>
                         <td className="num cycle-peak">{percent(row.peakUsedPercent)}</td>
                         <td className="num">{row.readings}</td>

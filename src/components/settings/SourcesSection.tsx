@@ -141,6 +141,7 @@ export function ClaudeCodeModSetting({
 export function SourcesSection({
   snapshot,
   update,
+  helperBusy,
   onInstallClaude,
   onUninstallClaude,
   onSetupClaude,
@@ -148,6 +149,8 @@ export function SourcesSection({
 }: {
   snapshot: Snapshot;
   update: (patch: Partial<Settings>) => Promise<void | boolean>;
+  /** True while the helper is being enabled or disabled; a second click then changes nothing. */
+  helperBusy: boolean;
   onInstallClaude: () => Promise<void>;
   onUninstallClaude: () => Promise<void>;
   onSetupClaude: () => void;
@@ -190,11 +193,23 @@ export function SourcesSection({
               </dl>
               {source.id === 'claude' &&
                 (source.metadata?.helperInstalled ? (
-                  <button type="button" className="btn" onClick={onUninstallClaude}>
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={helperBusy}
+                    aria-busy={helperBusy || undefined}
+                    onClick={onUninstallClaude}
+                  >
                     Disable helper
                   </button>
                 ) : (
-                  <button type="button" className="btn" onClick={onInstallClaude}>
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={helperBusy}
+                    aria-busy={helperBusy || undefined}
+                    onClick={onInstallClaude}
+                  >
                     Enable fallback helper
                   </button>
                 ))}
