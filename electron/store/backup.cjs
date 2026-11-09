@@ -241,7 +241,7 @@ function restoreFromExport(store, payload) {
   try {
     store.db.exec('BEGIN IMMEDIATE');
   } catch (error) {
-    throw new Error(`The database was busy and the restore did not start: ${/** @type {Error} */ (error).message}`);
+    throw new Error(`The database was busy and the restore did not start: ${/** @type {Error | null | undefined} */ (error)?.message}`);
   }
   try {
     const exported = payload.settings && typeof payload.settings === 'object' ? payload.settings : {};

@@ -185,7 +185,7 @@ function registerIpc(context) {
       try {
         await databaseJobs.run(() => claudeCodeMod.publish(currentView()));
       } catch (error) {
-        log(`Claude Code glance after install: ${/** @type {Error} */ (error).message}`);
+        log(`Claude Code glance after install: ${/** @type {Error | null | undefined} */ (error)?.message}`);
       }
     }
     void refreshClaudeOnly().catch((error) => log(`Refresh after the Claude Code mod was installed: ${error.message}`));

@@ -191,7 +191,7 @@ function createRefreshModule(main) {
         if (backup) main.snapshots.invalidateSnapshot();
       }
     } catch (error) {
-      backupError = /** @type {Error} */ (error).message;
+      backupError = /** @type {Error | null | undefined} */ (error)?.message ?? String(error);
     }
     return {
       // Collection publishes once. Returning a second snapshot repeats renders

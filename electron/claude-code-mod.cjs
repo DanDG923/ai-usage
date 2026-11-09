@@ -298,7 +298,7 @@ function createClaudeCodeMod({
     try {
       writeAtomically(paths.glance, `${JSON.stringify(glance)}\n`);
     } catch (error) {
-      log(`Claude Code glance could not be written: ${/** @type {Error} */ (error).message}`);
+      log(`Claude Code glance could not be written: ${/** @type {Error | null | undefined} */ (error)?.message}`);
     }
   }
 
@@ -313,7 +313,7 @@ function createClaudeCodeMod({
     try {
       lastGlance = buildGlance(snapshot, { nowMs: now(), appVersion });
     } catch (error) {
-      log(`Claude Code glance could not be built: ${/** @type {Error} */ (error).message}`);
+      log(`Claude Code glance could not be built: ${/** @type {Error | null | undefined} */ (error)?.message}`);
       return;
     }
     lastBeatAt = now();
@@ -409,7 +409,7 @@ function createClaudeCodeMod({
       return true;
     } catch (error) {
       // Logged once while it keeps failing, not at every check.
-      if (!unwatchable.has(folder)) log(`Claude Code mod folder could not be watched: ${/** @type {Error} */ (error).message}`);
+      if (!unwatchable.has(folder)) log(`Claude Code mod folder could not be watched: ${/** @type {Error | null | undefined} */ (error)?.message}`);
       unwatchable.add(folder);
       return false;
     }
@@ -467,7 +467,7 @@ function createClaudeCodeMod({
       try {
         publish(getSnapshot());
       } catch (error) {
-        log(`Claude Code heartbeat could not be built: ${/** @type {Error} */ (error).message}`);
+        log(`Claude Code heartbeat could not be built: ${/** @type {Error | null | undefined} */ (error)?.message}`);
       }
     }
   }
@@ -489,7 +489,7 @@ function createClaudeCodeMod({
       try {
         if (writeModFiles()) log('Claude Code mod files updated; Claude Code loads them at its next session.');
       } catch (error) {
-        log(`Claude Code mod files could not be updated: ${/** @type {Error} */ (error).message}`);
+        log(`Claude Code mod files could not be updated: ${/** @type {Error | null | undefined} */ (error)?.message}`);
       }
     }
     lastBeatAt = now();

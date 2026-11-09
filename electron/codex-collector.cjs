@@ -168,7 +168,7 @@ class JsonLineClient {
         if (error) this.fail(new Error(`Codex app server stdin write failed: ${error.message}`));
       });
     } catch (error) {
-      const failure = new Error(`Codex app server stdin write failed: ${/** @type {Error} */ (error).message}`);
+      const failure = new Error(`Codex app server stdin write failed: ${/** @type {Error | null | undefined} */ (error)?.message}`);
       this.fail(failure);
       throw failure;
     }

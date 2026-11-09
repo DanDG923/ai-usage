@@ -1135,14 +1135,14 @@ async function refreshClaude(store, inboxPath, options = {}) {
   } catch (error) {
     // The status-line helper is an optional fallback. Its inbox must never
     // prevent the primary SDK read or the independent transcript import.
-    statusLine = emptyInboxResult({ readErrors: 1, error: /** @type {Error} */ (error).message });
+    statusLine = emptyInboxResult({ readErrors: 1, error: /** @type {Error | null | undefined} */ (error)?.message });
   }
   // Readings the Claude Code mod left, each dated by the request that fetched it.
   let claudeCodeReadings;
   try {
     claudeCodeReadings = importClaudeCodeReadings(store, options.claudeCodeReadingsDirectory);
   } catch (error) {
-    claudeCodeReadings = emptyInboxResult({ files: 0, readErrors: 1, error: /** @type {Error} */ (error).message });
+    claudeCodeReadings = emptyInboxResult({ files: 0, readErrors: 1, error: /** @type {Error | null | undefined} */ (error)?.message });
   }
   const usagePort = !readPlanUsage ? null : options.usagePort || createClaudeAgentSdkUsagePort({
     // Reuse this refresh's discovery result so the SDK launches precisely the
@@ -1179,7 +1179,7 @@ async function refreshClaude(store, inboxPath, options = {}) {
       fableDerived = deriveFableEstimate(store, nowMs);
     } catch (error) {
       // A bad Fable estimate must never take down the whole Claude refresh.
-      fableDerived = { derived: false, reason: `derive-failed: ${/** @type {Error} */ (error).message}` };
+      fableDerived = { derived: false, reason: `derive-failed: ${/** @type {Error | null | undefined} */ (error)?.message}` };
     }
   }
   // One definition of where the helper lives, shared with install and uninstall:
