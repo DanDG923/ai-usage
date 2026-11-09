@@ -3,7 +3,7 @@
 // The glance the Claude Code mod draws: the tray flyout's figures, already
 // decided, so the mod is a view and never a second copy of the forecast.
 // Every rule here mirrors the renderer (src/provider-view.ts, src/lib.ts,
-// src/budget.ts and the flyout's verdict); tests/claude-code-glance.test.cjs
+// src/budget.ts and the flyout's verdict); tests/claude-code/claude-code-glance.test.cjs
 // compares the two on the demo snapshots so they cannot drift apart.
 
 const { SOURCES, evidenceNeedsRefresh, stalePoolWindow, subscriptionVisible } = require('./dashboard-decision.cjs');

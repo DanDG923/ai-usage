@@ -40,6 +40,8 @@ CI combines verification and packaging to avoid duplicate setup/renderer builds;
 
 ## Tests
 
+The tests are in `tests/`, one folder per feature: `app` (the main process, its bridge and windows), `collectors`, `claude-code` (setup, the installer and the mod), `store`, `quota` (the forecast and the readings it is made from), `fable`, `costs`, `renderer`, `tray` (the icon, the flyout, notifications and the verdict) and `updates` (the updater and the release tools). Both runners take every `tests/*/*.test.cjs`, so a new test file goes in one of those folders; a file left directly in `tests/` is not run. `tests/setup.cjs`, `tests/helpers/` and `tests/fixtures/` are shared.
+
 `npm test` uses two test processes, isolated provider folders, an explicit Europe/London test clock zone, fast SQLite settings for disposable fixtures, and cleanup of only the temporary folders created by that run. It runs on Linux as well as Windows; CI runs it on both. `npm run test:electron` repeats the suite with the shipped Electron runtime. Renderer interaction tests also exercise the real Chromium DOM with a fake bridge.
 
 JavaScript lint, exercised IPC validation, and both Node/Electron runtime suites remain required alongside the type check.
@@ -81,7 +83,7 @@ The behaviour these checks measure (window release, idle collectors, **Lower mem
 - `electron/providers.mjs` describes each subscription once: its ids, label, collector, allowance buckets and, for Fable, how it sits inside Claude's weekly allowance. The rest of the main process looks a provider up there instead of naming it, and the renderer reaches the same data through `dashboard-decision.mjs` and `quota-selection.mjs`.
 - `electron/forecast.cjs` is the forecast as a pipeline, over one module per stage in `electron/forecast/` (`readings`, `windows`, `samples`, `anchors`, `daily-shape`, `rates`, `series`, `assess`, with `early-reset` and `learn` beside them). Every number the stages are tuned with has a name in `forecast/tuning.cjs`. `electron/quota-evidence.cjs` dates each reading's evidence and rescales readings across an allowance change; the collectors use it without forecasting anything.
 - `collector-host.cjs` and `maintenance-host.cjs` run the two background processes through one host, `process-host.cjs`, with the messages they exchange in `process-protocol.cjs`.
-- The rest of `electron/` is the collectors and the other pieces these use. `tests/ipc-contract.test.cjs` holds the bridge's three descriptions together: the preloads, the handlers and the renderer's types.
+- The rest of `electron/` is the collectors and the other pieces these use. `tests/app/ipc-contract.test.cjs` holds the bridge's three descriptions together: the preloads, the handlers and the renderer's types.
 
 ## Analytics caches and window selection
 
