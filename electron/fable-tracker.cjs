@@ -663,8 +663,15 @@ function createFableUsageTracker({ store, usagePort, activityReader, clock = () 
       // failed or left a response: with no provider failure `normalized` is
       // set, which the casts on these branches and in the result rely on.
       // `cached` was read after this refresh's windows were recorded, so it
-      // is already the row a second query would return.
-      allowance = allowanceFromRow(/** @type {NonNullable<typeof cached>} */ (cached));
+      // is already the row a second query would return. There is none when a
+      // reading stamped later than this one, inside the clock-skew allowance,
+      // shows a window that has already ended: the card headlines that
+      // reading, and the allowance is the figure the provider just returned.
+      const read = /** @type {ObservedUsage} */ (normalized).fable;
+      allowance = cached ? allowanceFromRow(cached) : {
+        kind: 'official', usedPercent: read.utilization, remainingPercent: 100 - read.utilization,
+        resetsAt: read.resetsAt, observedAt: refreshedAt, evidenceAt: refreshedAt, source: 'claude-usage-model-scoped',
+      };
       officialSource = 'connected';
       state = 'current';
     } else if (cached) {

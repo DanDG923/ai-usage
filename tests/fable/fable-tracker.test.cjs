@@ -116,6 +116,33 @@ test('a zero-percent official Fable window is valid evidence, not a missing valu
   assert.equal(result.allowance.remainingPercent, 100);
 }));
 
+test('a successful read still reports its allowance when a later-stamped reading of an ended window is headlined', async () => withStore(async (store) => {
+  // A manual entry stamped two minutes ahead of the clock (inside the allowed
+  // skew) whose window has already ended is the bucket's latest reading, so
+  // no stored reading is both current and headlined.
+  const nowMs = Date.parse(NOW);
+  store.recordObservation({
+    sourceId: 'claude-fable', bucketId: 'fable_seven_day', bucketName: 'Fable weekly',
+    observedAt: new Date(nowMs + 2 * 60_000).toISOString(), usedPercent: 90, remainingPercent: 10,
+    resetsAt: new Date(nowMs - 60_000).toISOString(), windowMinutes: 10_080, provenance: 'manual-official',
+  });
+  const tracker = createFableUsageTracker({
+    store,
+    clock: () => new Date(NOW),
+    activityReader: { import: async () => ({ filesFound: 0, usageEvents: 0, fableEvents: 0 }) },
+    usagePort: { read: async () => usagePayload() },
+  });
+
+  const result = await tracker.refresh();
+  assert.deepEqual(result.allowance, {
+    kind: 'official', usedPercent: 63, remainingPercent: 37, resetsAt: RESET,
+    observedAt: NOW, evidenceAt: NOW, source: 'claude-usage-model-scoped',
+  });
+  assert.equal(result.health.state, 'current');
+  assert.equal(result.health.officialSource, 'connected');
+  assert.equal(result.provider.kind, 'observed');
+}));
+
 test('actual local Fable activity remains available when the provider window is absent', async () => withStore(async (store) => {
   store.recordUsageEvent({
     eventKey: 'local-fable', sourceId: 'claude', occurredAt: '2026-08-30T17:00:00.000Z',
