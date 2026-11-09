@@ -209,7 +209,7 @@ CSV exports neutralise spreadsheet formula prefixes. Quota readings are accepted
 
 Some risks are accepted by design and worth knowing:
 
-- **Claude Code installation** runs Anthropic's installer script, fetched from `claude.ai` at the moment you choose to install. Trust rests on TLS to that host; the script is not pinned or hashed locally.
+- **Claude Code installation** runs Anthropic's installer script, downloaded from `claude.ai` over HTTPS at the moment you choose to install. The app runs the script only if it matches, byte for byte, the SHA-256 recorded in the app at release time (`electron/claude-installer-pin.json`). The pin covers that short bootstrap script and nothing after it: what the script goes on to download and install is Anthropic's and is not checked by AI Usage. If Anthropic has changed the script since the release, the app does not run it and shows the official PowerShell command instead; running that command yourself rests on TLS to `claude.ai` alone.
 - **In-app updates** are not code-signed. Trust rests on GitHub TLS, write access to the repository being limited to its owner, and the SHA-512 in the release manifest. Downloading and installing each require a click, so a compromised release cannot install itself.
 - **Backups** under `%APPDATA%\ai-usage\Backups` contain settings, session identifiers and the working directory of every session. They hold no credentials. Older backups in `Documents\AI Usage\Backups` remain there and may already have synced through OneDrive.
 
@@ -231,7 +231,7 @@ After 30 seconds closed to the tray, the dashboard releases its window and detai
 
 ## Developer verification
 
-Requires Node.js and npm:
+Requires Node.js and npm. `.nvmrc` names the Node.js version that CI and the release build use; both workflows read it from there, so it is changed in that one file. It is the version the tools and `npm test` run on, and is separate from the Node.js that Electron embeds in the app, which `npm run test:electron` covers.
 
 ```powershell
 npm ci
@@ -256,11 +256,13 @@ Linting uses oxlint (typescript-eslint does not yet support the TypeScript 7 com
 
 1. Update `package.json`, both root versions in `package-lock.json`, the current installer names in this README, the version contract test, and `CHANGELOG.md`. Keep the GitHub repository public and retain the matching `updateFeed` and `build.publish` settings (with `"private": false`) in `package.json`; the separate `updateFeed` survives packaging so the installed app can verify its destination.
 2. Complete the checks above, review the changes, and merge them. Create and push the matching version tag, for example `v1.0.61` for version `1.0.61`.
-3. The **Windows release** GitHub Actions workflow builds Windows x64 packages, checks the manifest and packaged contents, and creates a draft release. It uploads the Setup installer, portable executable, installer block map, `latest.yml`, and `SHA256SUMS.txt`, verifies each remote asset's size and SHA-256 digest, then publishes the release as latest. The normal pull-request CI job is unchanged.
+3. The **Windows release** GitHub Actions workflow runs as two jobs. The build job installs the dependencies, runs the tests, builds the Windows x64 packages, checks the manifest and packaged contents, and passes the release files to the second job as a workflow artifact. The publish job checks those files against `SHA256SUMS.txt` and creates a draft release. It uploads the Setup installer, portable executable, installer block map, `latest.yml`, and `SHA256SUMS.txt`, verifies each remote asset's size and SHA-256 digest, then publishes the release as latest. The normal pull-request CI job is unchanged.
 
-The release workflow can also be started manually with an existing version tag. It refuses a mismatched version, a private or different destination, a tag whose commit is not already on `main`, an existing release for that tag, or a version older than an existing stable release. If an upload fails, any created release stays a draft for inspection and is not offered to the app. Review and remove that incomplete draft before retrying; the workflow never overwrites existing release assets.
+The release workflow can also be started manually with an existing version tag. It refuses a mismatched version, a private or different destination, a tag whose commit is not already on `main`, a tag that moved between the two jobs, an existing release for that tag, or a version older than an existing stable release. The tag checks run twice: in the build job before anything is installed, and again in the publish job. If an upload fails, any created release stays a draft for inspection and is not offered to the app. Review and remove that incomplete draft before retrying; the workflow never overwrites existing release assets.
 
-Packaging uses `--publish never` and has no publishing credential in its environment. The workflow supplies its short-lived GitHub token only to the validation and release-upload steps, never to packaging; no personal token needs to be saved as a repository secret. `latest.yml` includes notes generated from the current changelog entry, and the release audit checks its version, installer filename, byte size, and SHA-512 against the installer on disk before publication.
+Packaging uses `--publish never`, and the build job's short-lived GitHub token can only read the repository. Dependencies, tests and the packager all run in that job, so nothing they execute can create, change or delete a release or a tag. Permission to write releases belongs to the publish job alone. That job starts on a fresh runner, checks out only `package.json`, installs nothing and runs no project code: it repeats the tag checks, verifies the files it was handed, and passes them to `gh release`. No personal token needs to be saved as a repository secret.
+
+This separation limits what build-time code can reach; it does not vouch for what the build produces. The publish job uploads the files the build job made, and `SHA256SUMS.txt` was written by that same build, so checking against it catches a file that changed or went missing between the jobs, not a build that was compromised while it ran. `latest.yml` includes notes generated from the current changelog entry, and the release audit checks its version, installer filename, byte size, and SHA-512 against the installer on disk before publication.
 
 ## Set up another Windows computer
 
@@ -277,7 +279,7 @@ Local packaging output now defaults to `%LOCALAPPDATA%\AI Usage\Build\release`, 
 
 `npm test` uses two test processes, isolated provider folders, an explicit Europe/London test clock zone, fast SQLite settings for disposable fixtures, and cleanup of only the temporary folders created by that run. `npm run test:electron` repeats the suite with the shipped Electron runtime. Renderer interaction tests also exercise the real Chromium DOM with a fake bridge.
 
-Release access remains a repository-administration decision: anyone with write access can change a tag-triggered workflow. SHA-pinned actions and least-privilege job tokens do not replace protected refs/environments or installer signing. Restrict writer access and configure signing when the repository plan and a certificate support it; these changes do not silently modify collaborators or claim that unsigned installers are signed. CI combines verification and packaging to avoid duplicate setup/renderer builds; releases still rebuild and audit the tagged commit with no publishing token present during packaging.
+Release access remains a repository-administration decision: anyone with write access can change a tag-triggered workflow. SHA-pinned actions and least-privilege job tokens do not replace protected refs/environments or installer signing. Restrict writer access and configure signing when the repository plan and a certificate support it; these changes do not silently modify collaborators or claim that unsigned installers are signed. CI combines verification and packaging to avoid duplicate setup/renderer builds; releases still rebuild and audit the tagged commit, in a job whose token cannot write to the repository.
 
 Full JavaScript `checkJs` adoption is deferred: it requires a separate annotation pass through the Electron modules. TypeScript renderer checks, JavaScript lint, exercised IPC validation, and both Node/Electron runtime suites remain required.
 
