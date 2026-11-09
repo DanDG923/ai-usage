@@ -1,5 +1,8 @@
 'use strict';
 require('./setup.cjs');
+// An absolute program path on this system: exactly C:\Claude Code\claude.exe on Windows.
+const FIXTURE_FOLDER = require('node:path').join(process.platform === 'win32' ? 'C:\\' : '/', 'Claude Code');
+const FIXTURE_CLAUDE = require('node:path').join(FIXTURE_FOLDER, 'claude.exe');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -12,7 +15,7 @@ const { MANUAL_INSTALL_COMMAND, digestOf } = require('../electron/claude-install
 function fixture(options = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-setup-'));
   const statePath = path.join(root, 'setup.json');
-  const setup = createClaudeSetup({ statePath, findBinary: () => 'C:\\Claude Code\\claude.exe', run: async () => JSON.stringify({ loggedIn: false }), ...options });
+  const setup = createClaudeSetup({ statePath, findBinary: () => FIXTURE_CLAUDE, run: async () => JSON.stringify({ loggedIn: false }), ...options });
   return { setup, statePath, clean: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
@@ -63,7 +66,7 @@ const installerScript = Buffer.from('param([string]$Target = "latest")\nWrite-Ou
 const installerPin = { url: 'https://claude.ai/install.ps1', sha256: digestOf(installerScript), bytes: installerScript.length, verifiedOn: '2026-10-06' };
 const servedInstaller = async (url) => ({ url, bytes: Buffer.from(installerScript) });
 
-test('installer cannot claim success until the installed binary is found', async () => {
+test('installer cannot claim success until the installed binary is found', { skip: process.platform !== 'win32' ? 'the installer runs Windows PowerShell from the Windows system folder (SystemRoot, C:\\Windows by default), a Windows path that does not exist elsewhere' : false }, async () => {
   let command;
   let scriptAtLaunch;
   const logs = [];
@@ -154,7 +157,7 @@ test('a download that completes after Cancel is discarded and never launched', a
   } finally { f.clean(); }
 });
 
-test('the installer script is removed even when the installer fails or is cancelled', async () => {
+test('the installer script is removed even when the installer fails or is cancelled', { skip: process.platform !== 'win32' ? 'the installer runs Windows PowerShell from the Windows system folder (SystemRoot, C:\\Windows by default), a Windows path that does not exist elsewhere' : false }, async () => {
   const f = fixture({ findBinary: () => null, fetchInstaller: servedInstaller, installerPin, launch: () => {
     const child = new EventEmitter(); queueMicrotask(() => child.emit('exit', 1)); return child;
   } });
@@ -167,7 +170,7 @@ test('the installer script is removed even when the installer fails or is cancel
 test('login is exclusive, cancellable, and retryable without leaking its output', async () => {
   let launchOptions;
   const f = fixture({ launch: (file, args, options) => {
-    assert.equal(file, 'C:\\Claude Code\\claude.exe'); assert.deepEqual(args, ['auth', 'login']);
+    assert.equal(file, FIXTURE_CLAUDE); assert.deepEqual(args, ['auth', 'login']);
     launchOptions = options; return new EventEmitter();
   } });
   try {
@@ -178,7 +181,7 @@ test('login is exclusive, cancellable, and retryable without leaking its output'
     f.setup.cancel(); await rejection;
     assert.equal((await f.setup.status()).busy, false);
     assert.equal(launchOptions.stdio, 'ignore');
-    assert.equal(launchOptions.cwd, 'C:\\Claude Code');
+    assert.equal(launchOptions.cwd, FIXTURE_FOLDER);
     assert.ok(Object.hasOwn(launchOptions.env, 'PATH'));
     assert.equal(fs.existsSync(f.statePath), false);
   } finally { f.clean(); }

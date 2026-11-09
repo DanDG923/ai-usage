@@ -65,13 +65,15 @@ test('a relaunch keeps the command line but never the sign-in --hidden flag', ()
 
 test('NSIS asynchronous elevation retries preserve launch tokens only for trusted installer processes', async () => {
   const calls = [];
-  const updater = { installerPath: 'C:\\download\\setup.exe', spawnLog: async (...args) => { calls.push(args); } };
-  preserveInstallerEnvironment(updater, { GH_TOKEN: 'launch-only' }, 'C:\\app\\resources');
+  // Absolute paths on this system: exactly C:\\download\\setup.exe and so on, on Windows.
+  const at = (...parts) => path.join(process.platform === 'win32' ? 'C:\\' : '/', ...parts);
+  const updater = { installerPath: at('download', 'setup.exe'), spawnLog: async (...args) => { calls.push(args); } };
+  preserveInstallerEnvironment(updater, { GH_TOKEN: 'launch-only' }, at('app', 'resources'));
   await updater.spawnLog(updater.installerPath, ['/S']);
   await new Promise((resolve) => setImmediate(resolve));
-  await updater.spawnLog('C:\\app\\resources\\elevate.exe', [updater.installerPath]);
-  await updater.spawnLog('C:\\other\\program.exe', []);
-  await updater.spawnLog('C:\\app\\resources\\elevate.exe', ['C:\\other\\program.exe']);
+  await updater.spawnLog(at('app', 'resources', 'elevate.exe'), [updater.installerPath]);
+  await updater.spawnLog(at('other', 'program.exe'), []);
+  await updater.spawnLog(at('app', 'resources', 'elevate.exe'), [at('other', 'program.exe')]);
   assert.deepEqual(calls[0][2], { GH_TOKEN: 'launch-only' });
   assert.deepEqual(calls[1][2], { GH_TOKEN: 'launch-only' });
   assert.equal(calls[2][2], undefined);

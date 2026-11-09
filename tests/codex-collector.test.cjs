@@ -3,6 +3,7 @@ require('./setup.cjs');
 
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
+const { join: joinPath } = require('node:path');
 const { PassThrough } = require('node:stream');
 const test = require('node:test');
 
@@ -13,6 +14,10 @@ const {
   recordRateLimit,
   refreshCodex,
 } = require('../electron/codex-collector.cjs');
+
+// An absolute program path on this system: exactly C:\\fixture\\codex.exe on Windows.
+const FIXTURE_FOLDER = joinPath(process.platform === 'win32' ? 'C:\\' : '/', 'fixture');
+const FIXTURE_CODEX = joinPath(FIXTURE_FOLDER, 'codex.exe');
 
 function makeChild() {
   const child = new EventEmitter();
@@ -26,10 +31,10 @@ function makeChild() {
 
 test('the JSON-line client rejects pending and future requests when the child cannot start', async () => {
   const child = makeChild();
-  const client = new JsonLineClient('C:\\fixture\\codex.exe', (file, args, options) => {
-    assert.equal(file, 'C:\\fixture\\codex.exe');
+  const client = new JsonLineClient(FIXTURE_CODEX, (file, args, options) => {
+    assert.equal(file, FIXTURE_CODEX);
     assert.deepEqual(args, ['app-server', '--stdio']);
-    assert.equal(options.cwd, 'C:\\fixture');
+    assert.equal(options.cwd, FIXTURE_FOLDER);
     assert.ok(Object.hasOwn(options.env, 'PATH'));
     return child;
   });
@@ -44,7 +49,7 @@ test('the JSON-line client rejects pending and future requests when the child ca
 for (const pipe of ['stdin', 'stdout', 'stderr']) {
   test(`the JSON-line client rejects a pending request when ${pipe} fails`, async () => {
     const child = makeChild();
-    const client = new JsonLineClient('C:\\fixture\\codex.exe', () => child);
+    const client = new JsonLineClient(FIXTURE_CODEX, () => child);
     const pending = client.request('account/rateLimits/read');
 
     child[pipe].emit('error', new Error(`${pipe} EPIPE`));
@@ -61,14 +66,14 @@ test('the JSON-line client handles an asynchronous stdin write failure', async (
       return false;
     },
   });
-  const client = new JsonLineClient('C:\\fixture\\codex.exe', () => child);
+  const client = new JsonLineClient(FIXTURE_CODEX, () => child);
 
   await assert.rejects(client.request('initialize'), /write EPIPE/);
 });
 
 test('the JSON-line client still resolves valid JSON-line responses', async () => {
   const child = makeChild();
-  const client = new JsonLineClient('C:\\fixture\\codex.exe', () => child);
+  const client = new JsonLineClient(FIXTURE_CODEX, () => child);
   const response = client.request('account/usage/read');
 
   child.stdout.write('null\n[]\n42\n');

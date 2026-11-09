@@ -951,7 +951,7 @@ test('a Refresh Claude Code answers without the subscription sign-in fails and s
   let launches = 0;
   const usagePort = createClaudeAgentSdkUsagePort({
     retryDelayMs: 0,
-    findClaudeBinary: () => 'C:\\fixture\\claude.exe',
+    findClaudeBinary: () => path.join(process.platform === 'win32' ? 'C:\\' : '/', 'fixture', 'claude.exe'),
     loadSdk: async () => ({ query: () => {
       launches += 1;
       return {

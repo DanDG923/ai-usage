@@ -140,7 +140,7 @@ test('Codex map keys retain separate bucket identity and duration labels', async
 
 test('an SDK response without fresh-fetch diagnostics fails once instead of retrying an unsupported signal', async () => {
   let attempts = 0;
-  const port = createClaudeAgentSdkUsagePort({ findClaudeBinary: () => 'C:\\fixture\\claude.exe', retryDelayMs: 0, loadSdk: async () => ({
+  const port = createClaudeAgentSdkUsagePort({ findClaudeBinary: () => path.join(process.platform === 'win32' ? 'C:\\' : '/', 'fixture', 'claude.exe'), retryDelayMs: 0, loadSdk: async () => ({
     query: () => { attempts += 1; return { initializationResult: async () => ({}), return: async () => ({ done: true }),
       usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => ({ subscription_type: 'max', rate_limits_available: true,
         rate_limits: { seven_day: { utilization: 20, resets_at: '2026-09-18T12:00:00Z' } } }),

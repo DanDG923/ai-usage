@@ -162,7 +162,12 @@ test('real worker backs up, exports and restores without blocking parent timers 
   }
 });
 
-test('a maintenance request that never answers times out and the wedged worker is replaced', async () => {
+test('a maintenance request that never answers times out and the wedged worker is replaced', async (t) => {
+  // The request timer does not keep the process alive, by design, and here it
+  // is the only thing pending. Without something that does, Node can end the
+  // test file before the timeout fires.
+  const keepAlive = setInterval(() => {}, 1_000);
+  t.after(() => clearInterval(keepAlive));
   const workers = [];
   const host = createMaintenanceHost({
     requestTimeoutMs: 20,

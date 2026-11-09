@@ -195,4 +195,21 @@ test('public releases build without credentials and publish complete verified as
   assert.equal(builder.env.GITHUB_TOKEN, undefined);
   assert.ok(packRuns.includes('node tools/audit-release.cjs --unpacked'));
   assert.match(readText('tools/audit-release.cjs'), /--unpacked/);
+
+  // A second job runs the checks and the Node test suite on Linux, so code
+  // that assumes Windows paths by accident is caught. It only checks: it never
+  // installs the Electron binary, packages, or widens the workflow's permissions.
+  assert.deepEqual(Object.keys(ci.jobs), ['verify', 'verify-linux']);
+  const linux = ci.jobs['verify-linux'];
+  assert.equal(linux['runs-on'], 'ubuntu-latest');
+  assert.equal(linux.permissions, undefined, 'the Linux job keeps the workflow-wide read-only permissions');
+  for (const step of linux.steps.filter((item) => item.uses)) assert.match(step.uses, /@[a-f0-9]{40}$/);
+  const linuxActions = linux.steps.filter((item) => item.uses).map((item) => item.uses);
+  assert.deepEqual(linuxActions, pack.steps.filter((item) => item.uses).map((item) => item.uses), 'both jobs pin the same actions');
+  const linuxNode = linux.steps.find((step) => usesAction(step, 'actions/setup-node'));
+  assert.equal(linuxNode.with['node-version-file'], '.nvmrc');
+  assert.equal(linuxNode.with['node-version'], undefined);
+  assert.deepEqual(linux.steps.map((step) => step.run).filter(Boolean),
+    ['npm ci --ignore-scripts', 'npm run lint', 'npm run format:check', 'npm run typecheck', 'npm test']);
+  for (const run of ['npm run lint', 'npm run format:check', 'npm run typecheck', 'npm test']) assert.ok(packRuns.includes(run), `the Windows job still runs ${run}`);
 });

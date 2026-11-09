@@ -1,5 +1,7 @@
 'use strict';
 require('./setup.cjs');
+// An absolute program path on this system: exactly C:\fixture\claude.exe on Windows.
+const FIXTURE_CLAUDE = require('node:path').join(process.platform === 'win32' ? 'C:\\' : '/', 'fixture', 'claude.exe');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { createClaudeAgentSdkUsagePort } = require('../electron/claude-agent-usage.cjs');
@@ -14,7 +16,7 @@ function fixture(steps, options = {}) {
   let calls = 0;
   let closed = 0;
   const port = createClaudeAgentSdkUsagePort({ retryDelayMs: 0, ...options,
-    findClaudeBinary: () => 'C:\\fixture\\claude.exe',
+    findClaudeBinary: () => FIXTURE_CLAUDE,
     loadSdk: async () => ({ query({ options: queryOptions }) {
       assert.equal(closed, calls, 'Previous query must close before a retry');
       const step = steps[calls++];

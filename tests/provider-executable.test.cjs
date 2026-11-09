@@ -36,7 +36,8 @@ test('both public resolvers ignore planted providers and lookup utilities in the
   fixture(({ root, attack, install }) => {
     const alias = path.join(root, 'cwd-alias');
     fs.symlinkSync(attack, alias, 'junction');
-    for (const value of ['', ';.;relative;C:relative;\\rooted', `"${attack}";${attack.toUpperCase()};${attack}\\.;${alias}`]) {
+    // PATH entries are joined with the system's own separator (';' on Windows).
+    for (const value of ['', ['', '.', 'relative', 'C:relative', '\\rooted'].join(path.delimiter), [`"${attack}"`, attack.toUpperCase(), `${attack}\\.`, alias].join(path.delimiter)]) {
       process.env.PATH = value;
       assert.equal(findClaudeBinary(), null);
       assert.equal(findCodexBinary(), null);
@@ -44,7 +45,7 @@ test('both public resolvers ignore planted providers and lookup utilities in the
     const trusted = path.join(root, 'configured bin');
     const claude = install(trusted, 'claude.exe');
     const codex = install(trusted, 'codex.exe');
-    process.env.PATH = `.;${alias};"${trusted}";`;
+    process.env.PATH = ['.', alias, `"${trusted}"`, ''].join(path.delimiter);
     assert.equal(findClaudeBinary(), claude);
     assert.equal(findCodexBinary(), codex);
   });
@@ -78,7 +79,7 @@ test('PATH priority, regular files, managed Codex timestamps and case-insensitiv
     const second = path.join(root, 'second');
     fs.mkdirSync(path.join(first, 'codex.exe'), { recursive: true });
     const onPath = install(second, 'codex.exe');
-    process.env.Path = `"${first}";${second}`;
+    process.env.Path = [`"${first}"`, second].join(path.delimiter);
     process.env.localappdata = path.join(root, 'local');
     const managed = path.join(process.env.localappdata, 'OpenAI', 'Codex', 'bin');
     const old = install(path.join(managed, 'old'), 'codex.exe');
@@ -93,7 +94,7 @@ test('PATH priority, regular files, managed Codex timestamps and case-insensitiv
 test('provider launch options reject relative programs and strip every CWD-dependent PATH entry', () => {
   fixture(({ root, attack, install }) => {
     const binary = install(path.join(root, 'trusted'), 'codex.exe');
-    const result = providerProcessOptions(binary, { Path: `;.;C:relative;${attack};${path.dirname(binary)}`, KEEP_ME: 'present' });
+    const result = providerProcessOptions(binary, { Path: ['', '.', 'C:relative', attack, path.dirname(binary)].join(path.delimiter), KEEP_ME: 'present' });
     assert.equal(result.cwd, path.dirname(binary));
     assert.deepEqual(result.env, { KEEP_ME: 'present', PATH: path.dirname(binary) });
     for (const file of ['codex.exe', '.\\codex.exe', 'C:codex.exe', '\\codex.exe', 'C:\\bin\\codex.cmd']) {
@@ -107,7 +108,9 @@ test('setup auth execution rejects a relative program before execFile', async ()
   await assert.rejects(runCommand('claude.exe', ['auth', 'status']), /absolute local/);
 });
 
-test('providerHome honours an absolute override and otherwise derives the folder from the profile', () => {
+test('providerHome honours an absolute override and otherwise derives the folder from the profile', {
+  skip: process.platform !== 'win32' ? 'these profile and override values are Windows drive and UNC paths; tests/path-flavour.test.cjs pins the same results with Windows paths injected' : false,
+}, () => {
   const { providerHome } = require('../electron/provider-executable.cjs');
   assert.equal(providerHome('CODEX_HOME', '.codex', { CODEX_HOME: 'D:\\tools\\codex', USERPROFILE: 'C:\\Users\\tester' }), 'D:\\tools\\codex');
   assert.equal(providerHome('codex_home', '.codex', { Codex_Home: '"D:\\tools\\codex"' }), 'D:\\tools\\codex');

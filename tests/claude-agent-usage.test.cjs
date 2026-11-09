@@ -1,5 +1,8 @@
 'use strict';
 require('./setup.cjs');
+// An absolute program path on this system: exactly C:\fixture\claude.exe on Windows.
+const FIXTURE_FOLDER = require('node:path').join(process.platform === 'win32' ? 'C:\\' : '/', 'fixture');
+const FIXTURE_CLAUDE = require('node:path').join(FIXTURE_FOLDER, 'claude.exe');
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -62,7 +65,7 @@ test('one read returns only plan windows and closes a no-message Claude query', 
   });
   const usagePort = createClaudeAgentSdkUsagePort({
     loadSdk,
-    findClaudeBinary: () => 'C:\\fixture\\claude.exe',
+    findClaudeBinary: () => FIXTURE_CLAUDE,
   });
 
   const result = await usagePort.read();
@@ -87,10 +90,10 @@ test('one read returns only plan windows and closes a no-message Claude query', 
   assert.equal(usageCalls, 1);
   assert.equal(returnCalls, 1);
   assert.deepEqual(idleResult, { value: undefined, done: true });
-  assert.equal(queryOptions.pathToClaudeCodeExecutable, 'C:\\fixture\\claude.exe');
+  assert.equal(queryOptions.pathToClaudeCodeExecutable, FIXTURE_CLAUDE);
   assert.equal(queryOptions.persistSession, false);
   assert.deepEqual(queryOptions.settingSources, []);
-  assert.equal(queryOptions.cwd, 'C:\\fixture');
+  assert.equal(queryOptions.cwd, FIXTURE_FOLDER);
   assert.ok(Object.hasOwn(queryOptions.env, 'PATH'));
   assert.equal(queryOptions.systemPrompt, '');
   assert.deepEqual(queryOptions.tools, []);
@@ -109,7 +112,7 @@ test('an initialization timeout aborts and closes the idle query without startin
   let querySignal;
   const usagePort = createClaudeAgentSdkUsagePort({
     timeoutMs: 5,
-    findClaudeBinary: () => 'C:\\fixture\\claude.exe',
+    findClaudeBinary: () => FIXTURE_CLAUDE,
     loadSdk: async () => ({
       query(params) {
         querySignal = params.options.abortController.signal;
@@ -146,7 +149,7 @@ test('a usage timeout aborts and closes an initialized query', HANG_GUARD, async
   let querySignal;
   const usagePort = createClaudeAgentSdkUsagePort({
     timeoutMs: 5,
-    findClaudeBinary: () => 'C:\\fixture\\claude.exe',
+    findClaudeBinary: () => FIXTURE_CLAUDE,
     loadSdk: async () => ({
       query(params) {
         querySignal = params.options.abortController.signal;
@@ -171,7 +174,7 @@ test('a usage timeout aborts and closes an initialized query', HANG_GUARD, async
 test('malformed experimental usage data fails with a safe schema error and still closes', async () => {
   let returnCalls = 0;
   const usagePort = createClaudeAgentSdkUsagePort({
-    findClaudeBinary: () => 'C:\\fixture\\claude.exe',
+    findClaudeBinary: () => FIXTURE_CLAUDE,
     loadSdk: async () => ({
       query() {
         return {
@@ -206,7 +209,7 @@ test('malformed experimental usage data fails with a safe schema error and still
 test('malformed extra usage metadata is rejected without exposing unrecognized fields', async () => {
   let returnCalls = 0;
   const usagePort = createClaudeAgentSdkUsagePort({
-    findClaudeBinary: () => 'C:\\fixture\\claude.exe',
+    findClaudeBinary: () => FIXTURE_CLAUDE,
     loadSdk: async () => ({
       query() {
         return {
@@ -242,7 +245,7 @@ test('malformed extra usage metadata is rejected without exposing unrecognized f
 test('an SDK usage failure is sanitized and the query is still closed', async () => {
   let returnCalls = 0;
   const usagePort = createClaudeAgentSdkUsagePort({
-    findClaudeBinary: () => 'C:\\fixture\\claude.exe',
+    findClaudeBinary: () => FIXTURE_CLAUDE,
     loadSdk: async () => ({
       query() {
         return {
@@ -268,7 +271,7 @@ test('an SDK usage failure is sanitized and the query is still closed', async ()
 test('an SDK initialization failure is sanitized before it reaches the tracker', async () => {
   let returnCalls = 0;
   const usagePort = createClaudeAgentSdkUsagePort({
-    findClaudeBinary: () => 'C:\\fixture\\claude.exe',
+    findClaudeBinary: () => FIXTURE_CLAUDE,
     loadSdk: async () => ({
       query() {
         return {
@@ -308,7 +311,7 @@ test('a missing external Claude executable is reported before loading the SDK', 
 
 test('an SDK load failure is sanitized without exposing module or environment detail', async () => {
   const usagePort = createClaudeAgentSdkUsagePort({
-    findClaudeBinary: () => 'C:\\fixture\\claude.exe',
+    findClaudeBinary: () => FIXTURE_CLAUDE,
     loadSdk: async () => { throw new Error('failed beside fixture-secret path'); },
   });
 
@@ -324,7 +327,7 @@ test('an SDK query launch failure is sanitized and releases the idle input', asy
   let idleCompletion;
   let querySignal;
   const usagePort = createClaudeAgentSdkUsagePort({
-    findClaudeBinary: () => 'C:\\fixture\\claude.exe',
+    findClaudeBinary: () => FIXTURE_CLAUDE,
     loadSdk: async () => ({
       query(params) {
         querySignal = params.options.abortController.signal;
@@ -347,7 +350,7 @@ test('an SDK query launch failure is sanitized and releases the idle input', asy
 test('an SDK without the experimental usage method reports unsupported and closes', async () => {
   let returnCalls = 0;
   const usagePort = createClaudeAgentSdkUsagePort({
-    findClaudeBinary: () => 'C:\\fixture\\claude.exe',
+    findClaudeBinary: () => FIXTURE_CLAUDE,
     loadSdk: async () => ({
       query() {
         return {
@@ -369,7 +372,7 @@ test('an SDK without the experimental usage method reports unsupported and close
 test('a query cleanup failure after success is sanitized', async () => {
   let returnCalls = 0;
   const usagePort = createClaudeAgentSdkUsagePort({
-    findClaudeBinary: () => 'C:\\fixture\\claude.exe',
+    findClaudeBinary: () => FIXTURE_CLAUDE,
     loadSdk: async () => ({
       query() {
         return {
@@ -400,7 +403,7 @@ test('a query cleanup failure after success is sanitized', async () => {
 test('a query cleanup failure never masks the primary sanitized usage failure', async () => {
   let returnCalls = 0;
   const usagePort = createClaudeAgentSdkUsagePort({
-    findClaudeBinary: () => 'C:\\fixture\\claude.exe',
+    findClaudeBinary: () => FIXTURE_CLAUDE,
     loadSdk: async () => ({
       query() {
         return {
@@ -429,7 +432,7 @@ test('a query cleanup failure never masks the primary sanitized usage failure', 
 test('a query cleanup that never settles is bounded and cannot wedge later refreshes', HANG_GUARD, async () => {
   const usagePort = createClaudeAgentSdkUsagePort({
     timeoutMs: 5,
-    findClaudeBinary: () => 'C:\\fixture\\claude.exe',
+    findClaudeBinary: () => FIXTURE_CLAUDE,
     loadSdk: async () => ({
       query() {
         return {
@@ -453,7 +456,7 @@ test('a query cleanup that never settles is bounded and cannot wedge later refre
 test('a cleanup timeout never masks a primary sanitized usage failure', HANG_GUARD, async () => {
   const usagePort = createClaudeAgentSdkUsagePort({
     timeoutMs: 5,
-    findClaudeBinary: () => 'C:\\fixture\\claude.exe',
+    findClaudeBinary: () => FIXTURE_CLAUDE,
     loadSdk: async () => ({
       query() {
         return {
@@ -481,7 +484,7 @@ test('caller cancellation aborts and closes a pending control-only query', HANG_
   const caller = new AbortController();
   const usagePort = createClaudeAgentSdkUsagePort({
     timeoutMs: 1_000,
-    findClaudeBinary: () => 'C:\\fixture\\claude.exe',
+    findClaudeBinary: () => FIXTURE_CLAUDE,
     loadSdk: async () => ({
       query(params) {
         querySignal = params.options.abortController.signal;
