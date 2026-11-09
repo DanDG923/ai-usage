@@ -2,12 +2,20 @@
 
 // The snapshots the tray, flyout, notifications and dashboard are drawn from.
 
+/** @typedef {import('../../src/types').ClaudeExtraUsage} ClaudeExtraUsage */
+/** @typedef {import('../../src/types').Snapshot} Snapshot */
+/** @typedef {Pick<import('../../src/types').Snapshot, 'generatedAt' | 'timezone' | 'settings' | 'sources' | 'quotas' | 'fableApplies' | 'dashboardVerdict' | 'resetCredits'>} TraySnapshot */
+
 const fs = require('node:fs');
 const { buildDashboardVerdict } = require('../dashboard-decision.cjs');
 const { applySharedPool } = require('../fable-shared-pool.cjs');
 const { QUOTA_CLOCK_SKEW_MS, FORECAST_LOOKBACK_MS } = require('../quota-time.cjs');
 const { iso, json } = require('./shared.cjs');
 
+/**
+ * @param {import('../store.cjs').Store} store
+ * @returns {TraySnapshot}
+ */
 function getTraySnapshot(store, nowMs = Date.now(), { tokenCapacity = false } = {}) {
   const settings = store.getSettings();
   const sources = store.prepare('SELECT * FROM sources ORDER BY CASE id WHEN \'codex\' THEN 1 WHEN \'claude\' THEN 2 ELSE 3 END').all()
@@ -25,7 +33,7 @@ function getTraySnapshot(store, nowMs = Date.now(), { tokenCapacity = false } = 
   const fableProjection = quotas.fable ? null : store.getFableProjection(settings, nowMs);
   const fableApplies = Boolean(quotas.fable)
     || !(fableProjection?.reason === 'fable-not-confirmed-in-shared-plan' && fableProjection.planType);
-  const reportedResetCredits = quotas.codex?.metadata?.resetCredits;
+  const reportedResetCredits = /** @type {any} */ (quotas.codex?.metadata?.resetCredits);
   // The renderer compares and formats this count. Never coerce imported JSON.
   const resetCredits = Number.isSafeInteger(reportedResetCredits) && reportedResetCredits >= 0
     ? reportedResetCredits : 0;
@@ -44,6 +52,10 @@ function getTraySnapshot(store, nowMs = Date.now(), { tokenCapacity = false } = 
 // The extra-usage setting the newest plan-usage read reported, from either
 // Claude source. A newer status-line or projected reading carries none, so
 // the headline window's metadata alone can miss the last Refresh.
+/**
+ * @param {import('../store.cjs').Store} store
+ * @returns {ClaudeExtraUsage | null}
+ */
 function getClaudeExtraUsage(store, nowMs = Date.now()) {
   const row = store.prepare(`
       SELECT metadata_json, observed_at FROM quota_observations
@@ -57,6 +69,10 @@ function getClaudeExtraUsage(store, nowMs = Date.now()) {
   return { isEnabled: extra.isEnabled, utilization, observedAt: row.observed_at };
 }
 
+/**
+ * @param {import('../store.cjs').Store} store
+ * @returns {Snapshot}
+ */
 function getDashboardSnapshot(store, days = 30, nowMs = Date.now()) {
   const snapshot = store.getTraySnapshot(nowMs, { tokenCapacity: true });
   const { settings, quotas } = snapshot;

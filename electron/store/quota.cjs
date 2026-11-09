@@ -3,6 +3,9 @@
 // Reading allowances back: the windows of a source with their forecasts,
 // the projected Fable estimate and token capacity, each cached by revision.
 
+/** @typedef {import('../../src/types').Quota} Quota */
+/** @typedef {import('../../src/types').QuotaWindow} QuotaWindow */
+
 const { isOfficialWindow, selectDisplayedWindows } = require('../quota-selection.cjs');
 const { FABLE_BUCKET, FABLE_BUCKET_NAME, projectFableAllowance } = require('../fable-projection.cjs');
 const { codexQuotaLabel } = require('../codex-quota-label.cjs');
@@ -50,6 +53,10 @@ function sessionWindowOmitted(sessionRows, rows, nowMs) {
 // backups; it is simply not re-forecast on every snapshot.
 // `tokenCapacity: false` skips the capacity estimate, which only the
 // dashboard shows; the tray and notifications never read it.
+/**
+ * @param {import('../store.cjs').Store} store
+ * @returns {Quota | null}
+ */
 function getQuota(store, sourceId, settings = store.getSettings(), nowMs = Date.now(), { tokenCapacity = true } = {}) {
   const latestAllowed = iso(nowMs + QUOTA_CLOCK_SKEW_MS);
   const oldestRecent = iso(nowMs - FORECAST_LOOKBACK_MS);
@@ -131,7 +138,7 @@ function getQuota(store, sourceId, settings = store.getSettings(), nowMs = Date.
     freshReadGraceMs: restatementOptions.freshReadGraceMs,
     sourceId,
   };
-  let windows = [...grouped.entries()].map(([bucketId, observations]) => {
+  const readings = [...grouped.entries()].map(([bucketId, observations]) => {
     const latest = observations.at(-1);
     // Old backups may already have persisted invalid metadata; keep the
     // reading usable without rewriting the original historical evidence.
@@ -160,9 +167,10 @@ function getQuota(store, sourceId, settings = store.getSettings(), nowMs = Date.
   // Decide replacement from every window before omitting any forecast: a
   // live provider window in an alternate Fable bucket can prevent projection.
   const projected = sourceId === 'claude-fable'
-    ? store.projectedFableWindow(windows, grouped.get(FABLE_BUCKET) || [], settings, forecastOptions, nowMs, tokenCapacity)
+    ? store.projectedFableWindow(readings, grouped.get(FABLE_BUCKET) || [], settings, forecastOptions, nowMs, tokenCapacity)
     : null;
-  windows = windows.filter((window) => !projected || window.bucketId !== FABLE_BUCKET).map((window) => ({
+  /** @type {QuotaWindow[]} */
+  const windows = readings.filter((window) => !projected || window.bucketId !== FABLE_BUCKET).map((window) => ({
     ...window,
     forecast: store.learnedForecast(sourceId, window.bucketId, grouped.get(window.bucketId), forecastOptions, quotaRevision),
     tokenCapacity: tokenCapacity && Number(window.windowMinutes) === 10_080
@@ -178,6 +186,7 @@ function getQuota(store, sourceId, settings = store.getSettings(), nowMs = Date.
   return { ...selection.primary, windows: [...selection.active, ...selection.expired] };
 }
 
+/** @param {import('../store.cjs').Store} store */
 function learnedForecast(store, sourceId, bucketId, observations, options, revision) {
   const { now, ...modelOptions } = options;
   const key = JSON.stringify([sourceId, bucketId, modelOptions,
@@ -198,6 +207,7 @@ function learnedForecast(store, sourceId, bucketId, observations, options, revis
 // from the official rows plus the projection's own series, in the same row
 // shape, so a helper-only machine keeps a learned pace without persisting
 // estimates that would outlive the settings they were computed under.
+/** @param {import('../store.cjs').Store} store */
 function projectedFableWindow(store, windows, bucketRows, settings, forecastOptions, nowMs, includeTokenCapacity = true) {
   const current = selectDisplayedWindows(windows, { nowMs }).primary;
   if (current && Date.parse(current.resetsAt) > nowMs && isOfficialWindow(current)) return null;
@@ -232,6 +242,7 @@ function projectedFableWindow(store, windows, bucketRows, settings, forecastOpti
 // Claude usage and the allowance-change setting, all of which bump a
 // revision or change the key. The tail grows with wall time, so a value is
 // good for a minute and never past the window reset or a pending change.
+/** @param {import('../store.cjs').Store} store */
 function getFableProjection(store, settings, nowMs) {
   const projectionOptions = { freshReadGraceMs: freshReadGraceFor(settings) };
   if (store.db.isTransaction) return projectFableAllowance(store, nowMs, projectionOptions);
@@ -270,6 +281,7 @@ function getFableProjection(store, settings, nowMs) {
 // row older than the freshness bound, since everything after it is older.
 // For active windows, only each bucket's latest usable reading counts:
 // a corrected reset must supersede an older, apparently still-active one.
+/** @param {import('../store.cjs').Store} store */
 function hasUsableObservation(store, sourceId, nowMs = Date.now(), { activeWithinMs = null } = {}) {
   const rows = store.prepare(`SELECT bucket_id, observed_at, resets_at, window_minutes FROM quota_observations
       WHERE source_id = ? AND observed_at <= ? ORDER BY observed_at DESC, id DESC`)
@@ -288,6 +300,7 @@ function hasUsableObservation(store, sourceId, nowMs = Date.now(), { activeWithi
   return false;
 }
 
+/** @param {import('../store.cjs').Store} store */
 function tokenCapacityEvidence(store, sourceId, nowMs) {
   // Claude and Fable share the same local ledger. Read each source's bounded
   // token history once, independent of API prices and the selected Costs period.
@@ -317,6 +330,7 @@ function tokenCapacityEvidence(store, sourceId, nowMs) {
   return result;
 }
 
+/** @param {import('../store.cjs').Store} store */
 function getTokenCapacity(store, sourceId, bucketId, observations, settings, nowMs, capturedQuotaRevision = null) {
   const ledgerSource = sourceId === 'claude-fable' ? 'claude' : sourceId;
   const evidence = store.tokenCapacityEvidence(ledgerSource, nowMs);

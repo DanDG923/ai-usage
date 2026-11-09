@@ -5,15 +5,19 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { closed } = require('./closed.cjs');
 
 // A failed update used to leave no trace once the app had quit. Stage changes
 // and the sanitised failure messages the updater already shows are appended
 // here; request details, URLs and credentials never reach this file.
 const UPDATE_LOG_MAX_BYTES = 256 * 1024;
 
+/** @param {import('./application.cjs').Application} main */
 function createLogsModule(main) {
   const { app } = main.electron;
-  const logs = {};
+  const logs = closed({
+    log, logRendererError, updateLogPath, updateLog,
+  });
 
   function log(message) {
     if (main.process.env.AI_USAGE_DEBUG === '1') main.process.stderr.write(`[ai-usage] ${message}\n`);
@@ -44,7 +48,6 @@ function createLogsModule(main) {
     } catch { /* Diagnostics must never affect the update itself. */ }
   }
 
-  Object.assign(logs, { log, logRendererError, updateLogPath, updateLog });
   return logs;
 }
 

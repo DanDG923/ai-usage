@@ -26,6 +26,20 @@ function runCommand(file, args, { timeoutMs = 15000, acceptExitOne = false, envi
 
 // `environment` is the one the app was launched with: the update check
 // removes GitHub tokens from process.env, and Claude must not inherit that.
+/**
+ * @param {object} [options]
+ * @param {string} [options.statePath]
+ * @param {typeof findClaudeBinary} [options.findBinary]
+ * @param {typeof runCommand} [options.run]
+ * @param {typeof spawn} [options.launch]
+ * @param {() => unknown} [options.installHelper]
+ * @param {() => unknown} [options.uninstallHelper]
+ * @param {() => boolean} [options.helperInstalled]
+ * @param {NodeJS.ProcessEnv} [options.environment]
+ * @param {typeof downloadInstaller} [options.fetchInstaller]
+ * @param {typeof shippedPin} [options.installerPin]
+ * @param {(message: string) => void} [options.log]
+ */
 function createClaudeSetup({
   statePath, findBinary = findClaudeBinary, run = runCommand, launch = spawn, installHelper, uninstallHelper, helperInstalled = () => false,
   environment = process.env, fetchInstaller = downloadInstaller, installerPin = shippedPin, log = () => {},
@@ -64,7 +78,7 @@ function createClaudeSetup({
     } finally { busy = false; }
   }
   function interactiveCommand(file, args, timeoutMs) {
-    return new Promise((resolve, reject) => {
+    return new Promise((/** @type {(value?: void) => void} */ resolve, reject) => {
       // Claude opens the user's browser itself. Discard its output so OAuth
       // URLs, codes and account details never enter app logs or the renderer.
       child = launch(file, args, { ...providerProcessOptions(file, environment), windowsHide: true, stdio: 'ignore' });
@@ -144,7 +158,7 @@ function createClaudeSetup({
       if (checked.auth !== 'signed-in') throw new Error('Sign-in is not complete. Please try again.');
       return checked;
     }),
-    finish: ({ enableHelper } = {}) => exclusive(async () => {
+    finish: (/** @type {{ enableHelper?: boolean }} */ { enableHelper } = {}) => exclusive(async () => {
       const checked = await status();
       if (checked.auth !== 'signed-in') throw new Error('Sign in to Claude before finishing setup.');
       if (enableHelper === true) await installHelper();

@@ -71,7 +71,7 @@ function spawnOnce(filePath, args, spawnProcess, environment) {
 
 async function launchInstaller({
   filePath, sha512, args = INSTALLER_ARGS, spawnProcess = spawn,
-  environment, attempts = LAUNCH_ATTEMPTS, retryDelayMs = LAUNCH_RETRY_DELAY_MS, onLog = () => {},
+  environment, attempts = LAUNCH_ATTEMPTS, retryDelayMs = LAUNCH_RETRY_DELAY_MS, onLog = /** @type {(message: string) => void} */ (() => {}),
 }) {
   await verifyInstaller(filePath, sha512);
   onLog(`Installer verified: ${path.basename(filePath)}.`);

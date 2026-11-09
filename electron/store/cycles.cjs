@@ -3,10 +3,13 @@
 // Reset-cycle history: what each past allowance window peaked at and what
 // its tokens are worth today.
 
+/** @typedef {import('../../src/types').CycleRow} CycleRow */
+
 const { MAX_QUOTA_RESET_AHEAD_MS, QUOTA_CLOCK_SKEW_MS } = require('../quota-time.cjs');
 const { CONTEXT_TIER_SQL } = require('./pricing.cjs');
 const { iso, round } = require('./shared.cjs');
 
+/** @param {import('../store.cjs').Store} store */
 function cycleRevision(store, sourceId, bucketId) {
   const eventSource = sourceId === 'codex' ? 'codex' : 'claude';
   return store.prepare(`SELECT COALESCE(SUM(revision), 0) AS revision FROM analytics_revisions
@@ -18,6 +21,10 @@ function cycleRevision(store, sourceId, bucketId) {
 // One row per past allowance window of a source's primary bucket: when it
 // ran, how much of it was used, and what that window's tracked tokens would
 // have cost at the current catalogue. Windows are keyed by their reset time.
+/**
+ * @param {import('../store.cjs').Store} store
+ * @returns {CycleRow[]}
+ */
 function getCycleHistory(store, sourceId, quota, settings = store.getSettings(), limit = 8, nowMs = Date.now()) {
   if (!quota) return [];
   if (store.db.isTransaction) return store.buildCycleHistory(sourceId, quota, settings, limit, nowMs);
@@ -52,6 +59,10 @@ function getCycleHistory(store, sourceId, quota, settings = store.getSettings(),
   return value;
 }
 
+/**
+ * @param {import('../store.cjs').Store} store
+ * @returns {CycleRow[]}
+ */
 function buildCycleHistory(store, sourceId, quota, settings = store.getSettings(), limit = 8, nowMs = Date.now()) {
   if (!quota) return [];
   const bucketId = quota.bucketId;

@@ -3,10 +3,14 @@
 // Where the app keeps its files.
 
 const path = require('node:path');
+const { closed } = require('./closed.cjs');
 
+/** @param {import('./application.cjs').Application} main */
 function createPathsModule(main) {
   const { app } = main.electron;
-  const paths = {};
+  const paths = closed({
+    storagePaths, getInboxPath, claudeCodeRoot, notificationStatePath,
+  });
 
   function storagePaths() {
     const root = main.process.env.AI_USAGE_TEST_ROOT || app.getPath('userData');
@@ -27,7 +31,6 @@ function createPathsModule(main) {
     return path.join(app.getPath('userData'), 'notification-state.json');
   }
 
-  Object.assign(paths, { storagePaths, getInboxPath, claudeCodeRoot, notificationStatePath });
   return paths;
 }
 

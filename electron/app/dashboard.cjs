@@ -15,6 +15,7 @@ const {
   restorableBounds,
   revealWindow,
 } = require('../app-lifecycle.cjs');
+const { closed } = require('./closed.cjs');
 
 // This file sits one folder below the main process's other modules.
 const ELECTRON_DIR = path.join(__dirname, '..');
@@ -31,17 +32,20 @@ const CHROME = {
 
 const appIconPath = path.join(ELECTRON_DIR, '..', 'build', 'icon.png');
 
+/** @param {import('./application.cjs').Application} main */
 function createDashboardModule(main) {
   const { app, BrowserWindow, dialog, nativeImage, nativeTheme, screen } = main.electron;
-  const dashboard = {
-    window: undefined,
-    windowIdle: undefined,
-    savedWindowBounds: undefined,
+  const dashboard = closed({
+    window: /** @type {import('electron').BrowserWindow | null} */ (undefined),
+    windowIdle: /** @type {ReturnType<typeof createWindowIdleRelease>} */ (undefined),
+    savedWindowBounds: /** @type {import('electron').Rectangle} */ (undefined),
     savedWindowMaximized: false,
     lastDashboardReload: 0,
     navigation: createNavigationQueue(),
-    deferredWindowReveal: undefined,
-  };
+    deferredWindowReveal: /** @type {ReturnType<typeof createDeferredWindowReveal>} */ (undefined),
+    isVisible, loadAppIcon, showFatalError, resolvedTheme, applyTheme, applyWindowChrome, loadWindowContents,
+    createWindow, showMainWindow, openDashboardAt,
+  });
 
   // On screen, as opposed to released, hidden in the tray or being torn down.
   // Only a visible dashboard is worth a full snapshot or a push.
@@ -203,10 +207,6 @@ function createDashboardModule(main) {
     if (dashboard.window && !dashboard.window.isDestroyed()) dashboard.window.webContents.send('dashboard:navigation-pending');
   }
 
-  Object.assign(dashboard, {
-    isVisible, loadAppIcon, showFatalError, resolvedTheme, applyTheme, applyWindowChrome, loadWindowContents, createWindow,
-    showMainWindow, openDashboardAt,
-  });
   dashboard.deferredWindowReveal = createDeferredWindowReveal(dashboard.showMainWindow);
   return dashboard;
 }

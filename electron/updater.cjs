@@ -68,11 +68,11 @@ function createUpdateChecker({
   // check rather than at launch.
   autoUpdater: updaterOption, enabled, isPackaged, pkg,
   isPortable = Boolean(process.env.PORTABLE_EXECUTABLE_FILE || process.env.PORTABLE_EXECUTABLE_DIR),
-  platform = process.platform, beforeInstall = async () => {}, onInstallError = () => {},
+  platform = process.platform, beforeInstall = async () => {}, onInstallError = /** @type {(message?: string) => void} */ (() => {}),
   // When both are supplied the app verifies and launches the installer itself,
   // retrying a refused launch before it quits; otherwise electron-updater does.
   launchInstaller = null, quitForInstall = null, installDirectoryWritable = () => false,
-  onStatus = () => {}, onLog = () => {},
+  onStatus = /** @type {(status: object) => void} */ (() => {}), onLog = /** @type {(message: string) => void} */ (() => {}),
 }) {
   // The feed is a public GitHub repository: checks and downloads are anonymous
   // and carry no credential. electron-updater reads it from app-update.yml.

@@ -3,6 +3,8 @@
 // The API price catalogue: built-in rates, long-context rules, and the cost
 // of one usage row at today's catalogue prices.
 
+/** @typedef {import('../../src/types').PriceRow} PriceRow */
+
 const { iso } = require('./shared.cjs');
 
 // Long-context pricing by catalogue model: a request whose prompt is over
@@ -11,11 +13,11 @@ const { iso } = require('./shared.cjs');
 // GPT-5.6 models double input and raise output by half above 272,000; Claude
 // Haiku 5.5's second rate card, for prompts over 100,000, is five times its first.
 const OPENAI_LONG_CONTEXT = { threshold: 272_000, input: 2, output: 1.5 };
-const LONG_CONTEXT_PRICING = new Map([
+const LONG_CONTEXT_PRICING = new Map(/** @type {[string, typeof OPENAI_LONG_CONTEXT][]} */ ([
   ...['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']
     .map((model) => [model, OPENAI_LONG_CONTEXT]),
   ['claude-haiku-5-5', { threshold: 100_000, input: 5, output: 5 }],
-]);
+]));
 const LONG_CONTEXT_THRESHOLDS = [...new Set([...LONG_CONTEXT_PRICING.values()].map((rule) => rule.threshold))]
   .sort((a, b) => a - b);
 // How many thresholds a request's prompt is over, as calculateCost's
@@ -61,6 +63,7 @@ function priceSourceUrl(value) {
 }
 
 // model, input, five-minute cache write, one-hour cache write, cache read, output
+/** @type {[string, number, number, number, number, number][]} */
 const PRICE_ROWS = [
   // Standard API rates verified 2026-09-04; OpenAI has one cache-write rate.
   ['gpt-6-astra', 10, 12.5, 12.5, 1, 50],
@@ -103,6 +106,7 @@ const VERSION_SUFFIX = /^(?:\d{8}|\d{4}(?:-\d{2}){0,2})$/;
 // Analytics runs resolve the same handful of model names thousands of times.
 // Inside `withPriceCache` every lookup after the first is a Map hit and the
 // catalogue is read once; outside it, each call reads the live table.
+/** @param {import('../store.cjs').Store} store */
 function withPriceCache(store, run) {
   if (store.priceCache) return run();
   store.priceCache = { byModel: new Map(), rows: null };
@@ -113,6 +117,7 @@ function withPriceCache(store, run) {
   }
 }
 
+/** @param {import('../store.cjs').Store} store */
 function resolvePrice(store, model) {
   if (!model) return null;
   const cache = store.priceCache;
@@ -122,6 +127,7 @@ function resolvePrice(store, model) {
   return resolved;
 }
 
+/** @param {import('../store.cjs').Store} store */
 function lookupPrice(store, model, cache) {
   const direct = store.prepare('SELECT * FROM price_catalog WHERE model = ?').get(model);
   if (direct) return direct;
@@ -141,6 +147,10 @@ function lookupPrice(store, model, cache) {
   return candidates[0] || null;
 }
 
+/**
+ * @param {import('../store.cjs').Store} store
+ * @returns {PriceRow[]}
+ */
 function getPriceCatalog(store) {
   return store.prepare(`
       SELECT model, input_usd_per_million, cache_write_usd_per_million,
@@ -150,6 +160,7 @@ function getPriceCatalog(store) {
     `).all();
 }
 
+/** @param {import('../store.cjs').Store} store */
 function updatePrice(store, row) {
   const values = ['inputUsdPerMillion', 'cacheWriteUsdPerMillion', 'cacheWrite1hUsdPerMillion', 'cacheReadUsdPerMillion', 'outputUsdPerMillion']
     .map((key) => Number(row[key]));
@@ -178,6 +189,7 @@ function updatePrice(store, row) {
   return store.getPriceCatalog();
 }
 
+/** @param {import('../store.cjs').Store} store */
 function calculateCost(store, row) {
   // This dashboard answers the counterfactual "what would these tokens cost
   // at today's API catalogue?" A legacy/imported reported charge is useful

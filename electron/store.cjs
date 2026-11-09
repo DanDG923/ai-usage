@@ -2,18 +2,21 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const schema = require('./store/schema.cjs');
-const settings = require('./store/settings.cjs');
-const ledger = require('./store/ledger.cjs');
-const quota = require('./store/quota.cjs');
-const pricing = require('./store/pricing.cjs');
-const analytics = require('./store/analytics.cjs');
-const cycles = require('./store/cycles.cjs');
-const snapshot = require('./store/snapshot.cjs');
-const backup = require('./store/backup.cjs');
-const { contextTierSql } = pricing;
-const { DEFAULT_SETTINGS } = settings;
-const { openDatabase } = schema;
+// What the store does, one module per responsibility.
+const impl = {
+  schema: require('./store/schema.cjs'),
+  settings: require('./store/settings.cjs'),
+  ledger: require('./store/ledger.cjs'),
+  quota: require('./store/quota.cjs'),
+  pricing: require('./store/pricing.cjs'),
+  analytics: require('./store/analytics.cjs'),
+  cycles: require('./store/cycles.cjs'),
+  snapshot: require('./store/snapshot.cjs'),
+  backup: require('./store/backup.cjs'),
+};
+const { contextTierSql } = impl.pricing;
+const { DEFAULT_SETTINGS } = impl.settings;
+const { openDatabase } = impl.schema;
 
 // The one handle on the local database. The class owns the connection, the
 // prepared-statement and analytics caches and the transaction; what it does
@@ -41,6 +44,11 @@ class UsageStore {
     this.analyticsDayCache = new Map();
     this.forecastModelCache = new Map();
     this.transactionDepth = 0;
+    // The price catalogue as read once for a run of lookups; see withPriceCache.
+    this.priceCache = null;
+    // Set by migrate() when this launch added the one-hour cache-write column,
+    // so seed() knows to fill it.
+    this.addedOneHourPriceColumn = false;
     const opened = openDatabase(databasePath);
     this.db = opened.db;
     // The path an unreadable database was moved to, or null on a normal open.
@@ -92,77 +100,93 @@ class UsageStore {
   }
 
   // Schema, migrations and seed rows: store/schema.cjs
-  migrate() { return schema.migrate(this); }
-  migrateAnalyticsRevisions() { return schema.migrateAnalyticsRevisions(this); }
-  canonicaliseCodexManualRows() { return schema.canonicaliseCodexManualRows(this); }
-  seed() { return schema.seed(this); }
+  migrate() { return impl.schema.migrate(this); }
+  migrateAnalyticsRevisions() { return impl.schema.migrateAnalyticsRevisions(this); }
+  canonicaliseCodexManualRows() { return impl.schema.canonicaliseCodexManualRows(this); }
+  seed() { return impl.schema.seed(this); }
 
   // Settings: store/settings.cjs
-  repairSettings() { return settings.repairSettings(this); }
-  getSettings() { return settings.getSettings(this); }
-  updateSettings(...args) { return settings.updateSettings(this, ...args); }
+  repairSettings() { return impl.settings.repairSettings(this); }
+  getSettings() { return impl.settings.getSettings(this); }
+  updateSettings(patch) { return impl.settings.updateSettings(this, patch); }
 
   // Collector writes: store/ledger.cjs
-  setSourceStatus(...args) { return ledger.setSourceStatus(this, ...args); }
-  recordObservation(...args) { return ledger.recordObservation(this, ...args); }
-  recordUsageEvent(...args) { return ledger.recordUsageEvent(this, ...args); }
-  getManualBucketId(...args) { return ledger.getManualBucketId(this, ...args); }
-  upsertDailyUsage(...args) { return ledger.upsertDailyUsage(this, ...args); }
-  getImportedFile(...args) { return ledger.getImportedFile(this, ...args); }
-  markImportedFile(...args) { return ledger.markImportedFile(this, ...args); }
-  forgetImportedFile(...args) { return ledger.forgetImportedFile(this, ...args); }
-  compactObservations(...args) { return ledger.compactObservations(this, ...args); }
+  setSourceStatus(id, status, detail, metadata, options) {
+    return impl.ledger.setSourceStatus(this, id, status, detail, metadata, options);
+  }
+  recordObservation(observation) { return impl.ledger.recordObservation(this, observation); }
+  recordUsageEvent(event) { return impl.ledger.recordUsageEvent(this, event); }
+  getManualBucketId(sourceId) { return impl.ledger.getManualBucketId(this, sourceId); }
+  upsertDailyUsage(sourceId, usageDate, tokens) { return impl.ledger.upsertDailyUsage(this, sourceId, usageDate, tokens); }
+  getImportedFile(filePath) { return impl.ledger.getImportedFile(this, filePath); }
+  markImportedFile(filePath, modifiedMs, sizeBytes, state) {
+    return impl.ledger.markImportedFile(this, filePath, modifiedMs, sizeBytes, state);
+  }
+  forgetImportedFile(filePath) { return impl.ledger.forgetImportedFile(this, filePath); }
+  compactObservations(nowMs) { return impl.ledger.compactObservations(this, nowMs); }
 
   // Allowance windows and forecasts: store/quota.cjs
-  getQuota(...args) { return quota.getQuota(this, ...args); }
-  learnedForecast(...args) { return quota.learnedForecast(this, ...args); }
-  projectedFableWindow(...args) { return quota.projectedFableWindow(this, ...args); }
-  getFableProjection(...args) { return quota.getFableProjection(this, ...args); }
-  hasUsableObservation(...args) { return quota.hasUsableObservation(this, ...args); }
-  tokenCapacityEvidence(...args) { return quota.tokenCapacityEvidence(this, ...args); }
-  getTokenCapacity(...args) { return quota.getTokenCapacity(this, ...args); }
+  getQuota(sourceId, settings, nowMs, options) { return impl.quota.getQuota(this, sourceId, settings, nowMs, options); }
+  learnedForecast(sourceId, bucketId, observations, options, revision) {
+    return impl.quota.learnedForecast(this, sourceId, bucketId, observations, options, revision);
+  }
+  projectedFableWindow(windows, bucketRows, settings, forecastOptions, nowMs, includeTokenCapacity) {
+    return impl.quota.projectedFableWindow(this, windows, bucketRows, settings, forecastOptions, nowMs, includeTokenCapacity);
+  }
+  getFableProjection(settings, nowMs) { return impl.quota.getFableProjection(this, settings, nowMs); }
+  hasUsableObservation(sourceId, nowMs, options) { return impl.quota.hasUsableObservation(this, sourceId, nowMs, options); }
+  tokenCapacityEvidence(sourceId, nowMs) { return impl.quota.tokenCapacityEvidence(this, sourceId, nowMs); }
+  getTokenCapacity(sourceId, bucketId, observations, settings, nowMs, capturedQuotaRevision) {
+    return impl.quota.getTokenCapacity(this, sourceId, bucketId, observations, settings, nowMs, capturedQuotaRevision);
+  }
 
   // Price catalogue: store/pricing.cjs
-  withPriceCache(...args) { return pricing.withPriceCache(this, ...args); }
-  resolvePrice(...args) { return pricing.resolvePrice(this, ...args); }
-  lookupPrice(...args) { return pricing.lookupPrice(this, ...args); }
-  getPriceCatalog() { return pricing.getPriceCatalog(this); }
-  updatePrice(...args) { return pricing.updatePrice(this, ...args); }
-  calculateCost(...args) { return pricing.calculateCost(this, ...args); }
+  withPriceCache(run) { return impl.pricing.withPriceCache(this, run); }
+  resolvePrice(model) { return impl.pricing.resolvePrice(this, model); }
+  lookupPrice(model, cache) { return impl.pricing.lookupPrice(this, model, cache); }
+  getPriceCatalog() { return impl.pricing.getPriceCatalog(this); }
+  updatePrice(row) { return impl.pricing.updatePrice(this, row); }
+  calculateCost(row) { return impl.pricing.calculateCost(this, row); }
 
   // Cost analytics: store/analytics.cjs
-  getCostAnalytics(...args) { return analytics.getCostAnalytics(this, ...args); }
-  analyticsRevision() { return analytics.analyticsRevision(this); }
-  getAnalytics(...args) { return analytics.getAnalytics(this, ...args); }
-  buildCostAnalytics(...args) { return analytics.buildCostAnalytics(this, ...args); }
-  getSessionPage(...args) { return analytics.getSessionPage(this, ...args); }
-  getTaskPage(...args) { return analytics.getTaskPage(this, ...args); }
-  analyticsEvents(...args) { return analytics.analyticsEvents(this, ...args); }
-  buildAnalytics(...args) { return analytics.buildAnalytics(this, ...args); }
-  exportLedgerCsv(...args) { return analytics.exportLedgerCsv(this, ...args); }
-  getDailyUsage(...args) { return analytics.getDailyUsage(this, ...args); }
-  getFableActivity(...args) { return analytics.getFableActivity(this, ...args); }
+  getCostAnalytics(days, settings, nowMs) { return impl.analytics.getCostAnalytics(this, days, settings, nowMs); }
+  analyticsRevision() { return impl.analytics.analyticsRevision(this); }
+  getAnalytics(days, settings, nowMs) { return impl.analytics.getAnalytics(this, days, settings, nowMs); }
+  buildCostAnalytics(days, settings, nowMs) { return impl.analytics.buildCostAnalytics(this, days, settings, nowMs); }
+  getSessionPage(options, nowMs) { return impl.analytics.getSessionPage(this, options, nowMs); }
+  getTaskPage(options, nowMs) { return impl.analytics.getTaskPage(this, options, nowMs); }
+  analyticsEvents(since, until) { return impl.analytics.analyticsEvents(this, since, until); }
+  buildAnalytics(days, settings, nowMs) { return impl.analytics.buildAnalytics(this, days, settings, nowMs); }
+  exportLedgerCsv(days, nowMs, write) { return impl.analytics.exportLedgerCsv(this, days, nowMs, write); }
+  getDailyUsage(days, nowMs) { return impl.analytics.getDailyUsage(this, days, nowMs); }
+  getFableActivity(fableQuota, settings, nowMs) { return impl.analytics.getFableActivity(this, fableQuota, settings, nowMs); }
 
   // Reset-cycle history: store/cycles.cjs
-  cycleRevision(...args) { return cycles.cycleRevision(this, ...args); }
-  getCycleHistory(...args) { return cycles.getCycleHistory(this, ...args); }
-  buildCycleHistory(...args) { return cycles.buildCycleHistory(this, ...args); }
+  cycleRevision(sourceId, bucketId) { return impl.cycles.cycleRevision(this, sourceId, bucketId); }
+  getCycleHistory(sourceId, quota, settings, limit, nowMs) {
+    return impl.cycles.getCycleHistory(this, sourceId, quota, settings, limit, nowMs);
+  }
+  buildCycleHistory(sourceId, quota, settings, limit, nowMs) {
+    return impl.cycles.buildCycleHistory(this, sourceId, quota, settings, limit, nowMs);
+  }
 
   // Snapshots: store/snapshot.cjs
-  getTraySnapshot(...args) { return snapshot.getTraySnapshot(this, ...args); }
-  getClaudeExtraUsage(...args) { return snapshot.getClaudeExtraUsage(this, ...args); }
-  getDashboardSnapshot(...args) { return snapshot.getDashboardSnapshot(this, ...args); }
+  getTraySnapshot(nowMs, options) { return impl.snapshot.getTraySnapshot(this, nowMs, options); }
+  getClaudeExtraUsage(nowMs) { return impl.snapshot.getClaudeExtraUsage(this, nowMs); }
+  getDashboardSnapshot(days, nowMs) { return impl.snapshot.getDashboardSnapshot(this, days, nowMs); }
 
   // Backups and restore: store/backup.cjs
-  createBackup(...args) { return backup.createBackup(this, ...args); }
-  readExport(...args) { return backup.readExport(this, ...args); }
-  readDatabaseBackup(...args) { return backup.readDatabaseBackup(this, ...args); }
-  sweepPartialBackups(...args) { return backup.sweepPartialBackups(this, ...args); }
-  restoreFromBackup(...args) { return backup.restoreFromBackup(this, ...args); }
-  restoreFromExport(...args) { return backup.restoreFromExport(this, ...args); }
-  pruneBackups(...args) { return backup.pruneBackups(this, ...args); }
-  scheduledBackupDue(...args) { return backup.scheduledBackupDue(this, ...args); }
-  maybeCreateScheduledBackup() { return backup.maybeCreateScheduledBackup(this); }
+  createBackup(options) { return impl.backup.createBackup(this, options); }
+  readExport(filePath) { return impl.backup.readExport(this, filePath); }
+  readDatabaseBackup(filePath) { return impl.backup.readDatabaseBackup(this, filePath); }
+  sweepPartialBackups(nowMs) { return impl.backup.sweepPartialBackups(this, nowMs); }
+  restoreFromBackup(filePath) { return impl.backup.restoreFromBackup(this, filePath); }
+  restoreFromExport(payload) { return impl.backup.restoreFromExport(this, payload); }
+  pruneBackups(retentionCount, keepPath) { return impl.backup.pruneBackups(this, retentionCount, keepPath); }
+  scheduledBackupDue(nowMs) { return impl.backup.scheduledBackupDue(this, nowMs); }
+  maybeCreateScheduledBackup() { return impl.backup.maybeCreateScheduledBackup(this); }
 }
+
+/** @typedef {InstanceType<typeof UsageStore>} Store The type of a store, for the modules in electron/store/. */
 
 module.exports = { UsageStore, DEFAULT_SETTINGS, contextTierSql };

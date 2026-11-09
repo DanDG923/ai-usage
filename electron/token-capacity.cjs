@@ -147,7 +147,7 @@ function mixOf(intervals) {
     for (const key of Object.keys(tokenMix)) tokenMix[key] += interval.mix[key];
   }
   return { models: new Map([...models].map(([model, count]) => [model, tokens > 0 ? count / tokens : 0])),
-    tokens: Object.fromEntries(Object.entries(tokenMix).map(([key, count]) => [key, tokens > 0 ? count / tokens : 0])) };
+    tokens: /** @type {typeof EMPTY_MIX} */ (Object.fromEntries(Object.entries(tokenMix).map(([key, count]) => [key, tokens > 0 ? count / tokens : 0]))) };
 }
 
 function mixDistance(left, right) {
@@ -163,6 +163,7 @@ function roundedTokens(value, direction = 'round') {
   return Math[direction](value / step) * step;
 }
 
+/** @param {{ sourceId?: string, bucketId?: string, observations?: any[], events?: any[], nowMs?: number, excludedDates?: string[], allowanceChanges?: any[] }} [evidence] */
 function estimateTokenCapacity({ sourceId, bucketId, observations = [], events = [], nowMs = Date.now(), excludedDates = [], allowanceChanges = [] } = {}) {
   const result = { status: 'unavailable', reason: null, weeklyTokens: null, weeklyRange: null,
     remainingTokens: null, remainingRange: null, remainingAsOf: null, confidence: 'low',

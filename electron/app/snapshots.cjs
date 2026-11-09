@@ -3,18 +3,24 @@
 // The dashboard snapshot the main process hands out: the selected period,
 // a short-lived cache, and the reduced copy notifications compare against.
 
+const { closed } = require('./closed.cjs');
+
+/** @typedef {import('../../src/types').Snapshot} Snapshot */
+
 // Tab switches and settings edits ask for the snapshot far more often than it
 // changes. Anything that writes clears this; the TTL bounds the drift of the
 // "now"-relative fields (staleness, estimated current balance) between writes.
 const SNAPSHOT_TTL_MS = 20_000;
 
+/** @param {import('./application.cjs').Application} main */
 function createSnapshotsModule(main) {
-  const snapshots = {
+  const snapshots = closed({
     periodDays: 30,
-    previousSnapshot: null,
-    cachedSnapshot: null,
-    lastFullSnapshot: null,
-  };
+    previousSnapshot: /** @type {Record<string, any> | null} */ (null),
+    cachedSnapshot: /** @type {{ days: number, at: number, value: Snapshot } | null} */ (null),
+    lastFullSnapshot: /** @type {Snapshot | null} */ (null),
+    setPeriodDays, invalidateSnapshot, snapshot, currentView, patchSnapshotSettings, releaseDashboardMemory,
+  });
 
   // The renderer owns the selected period, so every snapshot the main process
   // emits — refresh, settings change, price edit, backup — has to use it too.
@@ -69,7 +75,6 @@ function createSnapshotsModule(main) {
     main.store?.releaseDashboardCaches();
   }
 
-  Object.assign(snapshots, { setPeriodDays, invalidateSnapshot, snapshot, currentView, patchSnapshotSettings, releaseDashboardMemory });
   return snapshots;
 }
 

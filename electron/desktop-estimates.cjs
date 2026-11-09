@@ -131,11 +131,13 @@ function migrateDesktopEstimates(db) {
   ); CREATE INDEX IF NOT EXISTS desktop_estimate_date ON desktop_chat_estimates(occurred_at);`);
 }
 
+/** @param {import('./store.cjs').Store} store */
 function storedDesktopModels(store) {
   return new Set(store.prepare('SELECT DISTINCT model FROM desktop_chat_estimates WHERE model IS NOT NULL')
     .all().map((row) => row.model.toLowerCase()));
 }
 
+/** @param {import('./store.cjs').Store} store */
 function insertDesktopEstimate(store, row, models = storedDesktopModels(store)) {
   if (!row || typeof row.event_key !== 'string' || !/^[a-f0-9]{64}$/.test(row.event_key) || !timestamp(row.occurred_at)
     || row.method !== METHOD || !['exported', 'assumed', 'unknown'].includes(row.model_origin)
@@ -158,6 +160,7 @@ function insertDesktopEstimate(store, row, models = storedDesktopModels(store)) 
   return changed;
 }
 
+/** @param {import('./store.cjs').Store} store */
 function saveDesktopEstimates(store, rows, assumedModel = null) {
   if (assumedModel !== null && (!modelName(assumedModel) || !store.resolvePrice(assumedModel))) {
     throw new Error('Choose a priced Claude model or leave missing models unknown.');
@@ -171,10 +174,12 @@ function saveDesktopEstimates(store, rows, assumedModel = null) {
   return { imported, duplicates: rows.length - imported };
 }
 
+/** @param {import('./store.cjs').Store} store */
 function desktopAnalytics(store, days, settings, nowMs) {
   return store.withPriceCache(() => buildDesktopAnalytics(store, days, settings, nowMs));
 }
 
+/** @param {import('./store.cjs').Store} store */
 function buildDesktopAnalytics(store, days, settings, nowMs) {
   const period = [new Date(periodStart(days, nowMs)).toISOString(), new Date(nowMs).toISOString()];
   const rows = store.prepare(`SELECT model, model_origin AS modelOrigin, COUNT(*) AS replies,

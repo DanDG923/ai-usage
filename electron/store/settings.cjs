@@ -3,9 +3,12 @@
 // Settings: the defaults, the validator for every key, and the reads and
 // writes of the settings table.
 
+/** @typedef {import('../../src/types').Settings} Settings */
+
 const { isAllowanceChange, isAllowanceChangeList, normalizeAllowanceChanges } = require('../allowance-changes.cjs');
 const { iso, json } = require('./shared.cjs');
 
+/** @type {Settings} */
 const DEFAULT_SETTINGS = {
   showCodexSubscription: true,
   showClaudeSubscription: true,
@@ -138,6 +141,7 @@ function storedSettings(database) {
   return settings;
 }
 
+/** @param {import('../store.cjs').Store} store */
 function repairSettings(store) {
   const update = store.prepare('UPDATE settings SET value_json = ?, updated_at = ? WHERE key = ?');
   const repaired = { ...DEFAULT_SETTINGS };
@@ -170,6 +174,10 @@ function repairSettings(store) {
     .run('currencyRates', JSON.stringify(currencyRates), iso());
 }
 
+/**
+ * @param {import('../store.cjs').Store} store
+ * @returns {Settings}
+ */
 function getSettings(store) {
   const result = { ...DEFAULT_SETTINGS };
   for (const row of store.prepare('SELECT key, value_json FROM settings').all()) {
@@ -179,6 +187,10 @@ function getSettings(store) {
   return result;
 }
 
+/**
+ * @param {import('../store.cjs').Store} store
+ * @returns {Settings}
+ */
 function updateSettings(store, patch) {
   const statement = store.prepare(`
       INSERT INTO settings(key, value_json, updated_at) VALUES (?, ?, ?)

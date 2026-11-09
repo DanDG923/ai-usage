@@ -16,7 +16,11 @@ const { claudeWindowDescriptor } = require('./claude-window-descriptors.cjs');
 
 const MAX_INBOX_BYTES = 2 * 1024 * 1024;
 
-function emptyInboxResult(overrides = {}) {
+/**
+ * @template {object} T
+ * @param {T} [overrides]
+ */
+function emptyInboxResult(overrides = /** @type {T} */ ({})) {
   return {
     snapshots: 0,
     usageEvents: 0,
@@ -83,6 +87,7 @@ const sameWindow = (a, b) => (readableWindow(a) && readableWindow(b) ? a[0] === 
 // helper recorded sessions), but its redraws still share that first redraw,
 // so an idle session cannot renew its own evidence. Every session's opening
 // redraw has no limits, because they arrive with its first response.
+/** @param {import('./store.cjs').Store} store */
 function datedStatusLineFetch(store, payload, capturedAt) {
   const undated = { fetchedAfter: null, seenSince: null };
   const sessionId = typeof payload.session_id === 'string' ? payload.session_id.trim() : '';
@@ -129,6 +134,7 @@ function datedStatusLineFetch(store, payload, capturedAt) {
 // Records every window of one status-line payload (a helper redraw or a
 // Claude Code mod reading) as official status-line observations, dated by the
 // fetch that delivered them, and counts them into `result`.
+/** @param {import('./store.cjs').Store} store */
 function recordStatusLineLimits(store, payload, capturedAt, { fetchedAfter, seenSince }, result, extraMetadata = {}) {
   const model = payload.model?.id || payload.model?.display_name || 'claude-unknown';
   const limits = payload.rate_limits;
@@ -180,6 +186,7 @@ function recordStatusLineLimits(store, payload, capturedAt, { fetchedAfter, seen
   }
 }
 
+/** @param {import('./store.cjs').Store} store */
 function importClaudeInboxFile(store, inboxPath, state = null) {
   if (!fs.existsSync(inboxPath)) return emptyInboxResult();
   let stat;
@@ -240,6 +247,7 @@ function importClaudeInboxFile(store, inboxPath, state = null) {
   });
 }
 
+/** @param {import('./store.cjs').Store} store */
 function importClaudeInbox(store, inboxPath) {
   const directory = path.dirname(inboxPath);
   const base = path.basename(inboxPath);
@@ -337,6 +345,7 @@ function mergeInboxResult(total, result) {
   return total;
 }
 
+/** @param {import('./store.cjs').Store} store */
 function importClaudeCodeReadings(store, directory, { nowMs = Date.now() } = {}) {
   const result = emptyInboxResult({ files: 0 });
   if (!directory) return result;
@@ -453,6 +462,7 @@ function transcriptEvent(row, messageId, fullPath) {
 }
 
 // Repair only an untouched importer record whose source proves it was copied.
+/** @param {import('./store.cjs').Store} store */
 function copiedEventRow(store, event) {
   const row = store.prepare('SELECT * FROM usage_events WHERE event_key = ?').get(event.eventKey);
   if (!row || row.source_id !== 'claude' || row.reported_cost_usd != null) return null;
@@ -480,6 +490,7 @@ function usageRowFields(row, usage) {
   };
 }
 
+/** @param {import('./store.cjs').Store} store */
 function importClaudeTranscripts(store, days = 120) {
   // CLAUDE_CONFIG_DIR relocates Claude Code's directory, projects included.
   const home = providerHome('CLAUDE_CONFIG_DIR', '.claude');
@@ -792,6 +803,7 @@ function uninstallClaudeHelper() {
 // from the start of the window it shows.
 // `emptyReadMs` is a later read that succeeded without returning any window,
 // which omitted every window stored before it.
+/** @param {import('./store.cjs').Store} store */
 function latestPlanUsageReading(store, nowMs, graceMs, emptyReadMs = null) {
   const rows = store.prepare(`SELECT id, bucket_id, observed_at, resets_at, window_minutes, used_percent, remaining_percent, provenance, fetched_after, seen_since
     FROM quota_observations WHERE source_id = 'claude' AND observed_at <= ? AND observed_at >= ? ORDER BY observed_at ASC, id ASC`)
@@ -859,6 +871,7 @@ function emptyPlanUsageReadMs(request) {
 // The outcome of the last plan-usage read the user asked for, which an
 // automatic run carries forward so a failed Refresh stays visible until a
 // newer reading replaces it.
+/** @param {import('./store.cjs').Store} store */
 function previousPlanUsageRequest(store) {
   try {
     const row = store.prepare("SELECT metadata_json FROM sources WHERE id = 'claude'").get();
@@ -871,6 +884,7 @@ function previousPlanUsageRequest(store) {
 // SDK) only when `options.readPlanUsage` is true, which only an explicit user
 // refresh sets. Otherwise no usage port is created, nothing contacts
 // Anthropic, and the status-line inbox and the transcript import still run.
+/** @param {import('./store.cjs').Store} store */
 async function refreshClaude(store, inboxPath, options = {}) {
   const readPlanUsage = options.readPlanUsage === true;
   const binary = findClaudeBinary();

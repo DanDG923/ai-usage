@@ -14,6 +14,7 @@ const { createMaintenanceHost } = require('../maintenance-host.cjs');
 const { createUpdateChecker } = require('../updater.cjs');
 const { installDirectoryWritable, launchInstaller, relaunchApplication, preserveInstallerEnvironment } = require('../installer-launch.cjs');
 const { initializeWithVisibleFailure, registerSingleInstance, createDeadline, settleWithin } = require('../app-lifecycle.cjs');
+const { closed } = require('./closed.cjs');
 
 // This file sits one folder below the main process's other modules.
 const ELECTRON_DIR = path.join(__dirname, '..');
@@ -21,18 +22,21 @@ const ELECTRON_DIR = path.join(__dirname, '..');
 // A stalled restore, backup or collector must not hold Quit or an update open.
 const SHUTDOWN_TIMEOUT_MS = 15_000;
 
+/** @param {import('./application.cjs').Application} main */
 function createLifecycleModule(main) {
   const { app, dialog, nativeTheme, powerMonitor, session } = main.electron;
-  const lifecycle = {
-    renderingForced: undefined,
-    renderingMode: undefined,
+  const lifecycle = closed({
+    renderingForced: /** @type {boolean} */ (undefined),
+    renderingMode: /** @type {'software' | 'hardware'} */ (undefined),
     isQuitting: false,
-    shutdownPromise: undefined,
+    shutdownPromise: /** @type {Promise<void>} */ (undefined),
     shutdownComplete: false,
     preparingUpdate: false,
     quitRequestedDuringUpdate: false,
-    appliedLoginItem: null,
-  };
+    appliedLoginItem: /** @type {string | null} */ (null),
+    applyLoginItem, applySettingsEffects, stopForShutdown, storageClosing, closeStorage, prepareUpdateInstall,
+    recoverFromUpdateInstallFailure, loadAutoUpdater, start,
+  });
 
   // The portable build runs from a temporary extraction directory, so
   // process.execPath would register an autostart entry that is gone by the next
@@ -314,10 +318,6 @@ function createLifecycleModule(main) {
     }
   }
 
-  Object.assign(lifecycle, {
-    applyLoginItem, applySettingsEffects, stopForShutdown, storageClosing, closeStorage, prepareUpdateInstall,
-    recoverFromUpdateInstallFailure, loadAutoUpdater, start,
-  });
   return lifecycle;
 }
 

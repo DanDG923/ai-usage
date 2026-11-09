@@ -7,21 +7,26 @@ const path = require('node:path');
 const { createCollectorHost, createInlineCollectorHost } = require('../collector-host.cjs');
 const { createCollectorService } = require('../collector-service.cjs');
 const { REFRESH_TRIGGERS, createRefreshCoalescer, refreshOptionsFor } = require('../refresh-policy.cjs');
+const { closed } = require('./closed.cjs');
 
 // This file sits one folder below the main process's other modules.
 const ELECTRON_DIR = path.join(__dirname, '..');
 
 const STALE_AFTER_MS = 5 * 60_000;
 
+/** @param {import('./application.cjs').Application} main */
 function createRefreshModule(main) {
   const { utilityProcess } = main.electron;
-  const refresh = {
-    refreshTimer: undefined,
+  const refresh = closed({
+    refreshTimer: /** @type {NodeJS.Timeout | null} */ (undefined),
     lastRefreshAt: 0,
-    resumeTimer: undefined,
+    resumeTimer: /** @type {NodeJS.Timeout} */ (undefined),
     refreshIntervalMs: 0,
-    refreshRuns: undefined,
-  };
+    refreshRuns: /** @type {ReturnType<typeof createRefreshCoalescer>} */ (undefined),
+    automaticCollectionEnabled, scheduleAutomaticRefresh, refreshIfStale, scheduleLaunchRefresh, onResume,
+    createCollectors, collectorOutcome, publishAfterWrite, answerClaudeCodeRequest, importClaudeCodeReading,
+    refreshAll, collectAll, refreshClaudeOnly,
+  });
 
   function automaticCollectionEnabled() {
     return Number(main.store?.getSettings().refreshIntervalMinutes) > 0;
@@ -47,6 +52,7 @@ function createRefreshModule(main) {
   // automatic collection off has to silence the show and resume triggers too,
   // or the setting means nothing. Every caller is automatic, so the trigger's
   // policy never reads Claude plan usage here.
+  /** @param {{ trigger?: string, ignoreSchedule?: boolean }} [options] */
   function refreshIfStale({ trigger, ignoreSchedule = false } = {}) {
     // The window can be shown while an update install has closed the database.
     if (!main.store || main.lifecycle.storageClosing() || refresh.refreshRuns.running) return;
@@ -197,11 +203,6 @@ function createRefreshModule(main) {
     });
   }
 
-  Object.assign(refresh, {
-    automaticCollectionEnabled, scheduleAutomaticRefresh, refreshIfStale, scheduleLaunchRefresh, onResume,
-    createCollectors, collectorOutcome, publishAfterWrite, answerClaudeCodeRequest, importClaudeCodeReading,
-    refreshAll, collectAll, refreshClaudeOnly,
-  });
   // Every caller passes refreshOptionsFor(trigger). Claude plan usage is read
   // only when that says so (an explicit user refresh); the default never reads
   // it. The coalescer joins overlapping requests, except that a user refresh

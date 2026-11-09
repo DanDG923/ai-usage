@@ -83,6 +83,10 @@ function requestOnce(url, get, timeoutMs, signal) {
 // Follows a bounded number of HTTPS-to-HTTPS redirects (claude.ai currently
 // forwards to downloads.claude.ai) and refuses any hop to another scheme. An
 // aborted `signal` ends the download with CLAUDE_INSTALLER_DOWNLOAD_CANCELLED.
+/**
+ * @param {string} url
+ * @param {{ get?: typeof https.get, timeoutMs?: number, signal?: AbortSignal }} [options]
+ */
 async function fetchInstaller(url, { get = https.get, timeoutMs = FETCH_TIMEOUT_MS, signal } = {}) {
   let current = url;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {

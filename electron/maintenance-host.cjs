@@ -50,7 +50,7 @@ function createMaintenanceHost({
     worker = null;
     const stop = setTimeout(() => { try { void target.terminate?.(); } catch { /* Already gone. */ } }, RETIRE_TIMEOUT_MS);
     stop.unref?.();
-    retiring.set(target, new Promise((resolve) => {
+    retiring.set(target, new Promise((/** @type {(value?: void) => void} */ resolve) => {
       if (typeof target.once !== 'function') resolve();
       else target.once('exit', resolve);
     }).then(() => {
@@ -167,7 +167,9 @@ function createMaintenanceHost({
 // Writers must not contend with a long worker restore on the main thread:
 // SQLite's busy timeout is synchronous. Dashboard reads remain available.
 function createDatabaseQueue() {
+  /** @type {Promise<any>} */
   let queue = Promise.resolve();
+  /** @type {Promise<any>} */
   let maintenanceQueue = Promise.resolve();
   let exclusiveCount = 0;
   let closing = false;
@@ -180,9 +182,19 @@ function createDatabaseQueue() {
     return next;
   }
   return {
+    /**
+     * @template T
+     * @param {() => T | Promise<T>} operation
+     * @returns {Promise<T>}
+     */
     run(operation) {
       return closing || paused ? Promise.reject(closingError()) : enqueue(operation);
     },
+    /**
+     * @template T
+     * @param {() => T | Promise<T>} operation
+     * @returns {Promise<T>}
+     */
     async collect(operation) {
       if (closing || paused) throw closingError();
       // Completion decrements the count while this awaits the latest queue.
@@ -193,6 +205,11 @@ function createDatabaseQueue() {
       collections.add(next);
       try { return await next; } finally { collections.delete(next); }
     },
+    /**
+     * @template T
+     * @param {() => T | Promise<T>} operation
+     * @returns {Promise<T>}
+     */
     exclusive(operation) {
       if (closing || paused) return Promise.reject(closingError());
       exclusiveCount += 1;
@@ -205,6 +222,11 @@ function createDatabaseQueue() {
       maintenanceQueue = next.catch(() => {});
       return next;
     },
+    /**
+     * @template T
+     * @param {() => T | Promise<T>} operation
+     * @returns {Promise<T>}
+     */
     async prepareToClose(operation) {
       if (closing || paused) throw closingError();
       paused = true;

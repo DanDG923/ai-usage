@@ -40,6 +40,7 @@ function openDatabase(databasePath) {
   }
 }
 
+/** @param {import('../store.cjs').Store} store */
 function migrate(store) {
   require('../desktop-estimates.cjs').migrateDesktopEstimates(store.db);
   store.db.exec(`
@@ -267,6 +268,7 @@ function migrate(store) {
   store.canonicaliseCodexManualRows();
 }
 
+/** @param {import('../store.cjs').Store} store */
 function migrateAnalyticsRevisions(store) {
   // These revisions belong to the same SQLite transaction as their data.
   // They see collector-process writes and direct SQL, and roll back with
@@ -295,11 +297,11 @@ function migrateAnalyticsRevisions(store) {
     CREATE TRIGGER IF NOT EXISTS compaction_update AFTER UPDATE ON quota_observations BEGIN
       UPDATE quota_compaction_state SET dirty_at = MIN(COALESCE(dirty_at, NEW.observed_at), NEW.observed_at, OLD.observed_at) WHERE id = 1;
     END;`);
-  for (const [table, domain, scope] of [
+  for (const [table, domain, scope] of /** @type {[string, string, string[]][]} */ ([
     ['usage_events', 'usage', ['source_id']],
     ['quota_observations', 'quota', ['source_id', 'bucket_id']],
     ['price_catalog', 'price', []],
-  ]) {
+  ])) {
     const bump = (reference, condition = null) => {
       const source = scope.includes('source_id') ? `${reference}.source_id` : "''";
       const bucket = scope.includes('bucket_id') ? `${reference}.bucket_id` : "''";
@@ -319,6 +321,7 @@ function migrateAnalyticsRevisions(store) {
   }
 }
 
+/** @param {import('../store.cjs').Store} store */
 function canonicaliseCodexManualRows(store) {
   const official = store.prepare(`
       SELECT bucket_id FROM quota_observations
@@ -334,6 +337,7 @@ function canonicaliseCodexManualRows(store) {
       WHERE source_id = 'codex' AND bucket_id = 'manual-weekly'`).run();
 }
 
+/** @param {import('../store.cjs').Store} store */
 function seed(store) {
   const insertSource = store.prepare(`
       INSERT INTO sources(id, name, kind, status, metadata_json)

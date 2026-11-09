@@ -7,6 +7,8 @@
 const FLYOUT_MARGIN = 8;
 const EDGES = ['bottom', 'top', 'left', 'right'];
 
+/** @typedef {{ x: number, y: number, width: number, height: number }} Rect */
+
 function isRect(rect) {
   return Boolean(rect) && ['x', 'y', 'width', 'height'].every((key) => Number.isFinite(rect[key]));
 }
@@ -25,6 +27,7 @@ function nearestEdge(distances) {
  * taskbar, so the widest gap between them is the taskbar. An auto-hidden
  * taskbar leaves no gap; the edge nearest the icon is the one it slides from.
  */
+/** @param {{ trayBounds?: Rect, workArea?: Rect, displayBounds?: Rect }} [anchor] */
 function taskbarEdge({ trayBounds, workArea, displayBounds } = {}) {
   if (!isRect(workArea)) return 'bottom';
   if (isRect(displayBounds)) {
@@ -60,6 +63,7 @@ function clamp(value, low, high) {
  * cannot locate opens the flyout in the notification-area corner. Returns null
  * when there is no usable work area.
  */
+/** @param {{ trayBounds?: Rect, workArea?: Rect, displayBounds?: Rect, width?: number, height?: number, margin?: number }} [request] */
 function flyoutBounds({ trayBounds, workArea, displayBounds, width, height, margin = FLYOUT_MARGIN } = {}) {
   if (!isRect(workArea) || workArea.width <= 0 || workArea.height <= 0) return null;
   const edge = taskbarEdge({ trayBounds, workArea, displayBounds });

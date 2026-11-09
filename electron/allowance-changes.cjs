@@ -72,6 +72,11 @@ function normalizeAllowanceChanges(value) {
 // The multiplier that expresses a reading taken at `observedMs` in the current
 // allowance, or null when nothing recorded applies to this source so callers
 // can skip the work entirely.
+/**
+ * @param {any[]} changes
+ * @param {string} sourceId
+ * @param {{ bucketId?: string, windowMinutes?: number, nowMs?: number }} [options]
+ */
 function createAllowanceScaler(changes, sourceId, { bucketId, windowMinutes, nowMs = Date.now() } = {}) {
   if (!isWeeklyAllowance(sourceId, bucketId, windowMinutes)) return null;
   const family = allowanceFamily(sourceId);

@@ -17,6 +17,7 @@ const { OFFICIAL_PROVENANCES } = require('./quota-provenance.mjs');
 // the current estimate before that reading's own timestamp.
 const OFFICIAL_PLACEHOLDERS = OFFICIAL_PROVENANCES.map(() => '?').join(', ');
 
+/** @param {import('./store.cjs').Store} store */
 function latestOfficialAt(store, sourceId, bucketId, nowMs) {
   return store.prepare(`
     SELECT * FROM quota_observations
@@ -25,6 +26,7 @@ function latestOfficialAt(store, sourceId, bucketId, nowMs) {
   `).get(sourceId, bucketId, ...OFFICIAL_PROVENANCES, new Date(nowMs).toISOString()) ?? null;
 }
 
+/** @param {import('./store.cjs').Store} store */
 function officialBetween(store, sourceId, bucketId, sinceIso, nowMs) {
   return store.prepare(`
     SELECT * FROM quota_observations
@@ -77,6 +79,7 @@ const FABLE_ALLOWANCE_SHARE = 0.5;
 // unavailable. It is weighed at the rates for prompts up to 100,000 tokens
 // whatever the prompt: the higher card for longer prompts is a per-request
 // billing rule, and no plan-usage counterpart is published.
+/** @type {[string, number, number, number, number, number][]} */
 const ALLOWANCE_PRESSURE_V3 = [
   ['claude-fable-5-1', 10, 12.5, 20, 0.25, 50],
   ['claude-fable-5', 10, 12.5, 20, 1, 50],
@@ -111,6 +114,7 @@ function allowanceProfile(model) {
   return profile;
 }
 
+/** @param {import('./store.cjs').Store} store */
 function allowancePressure(store, modelLike, sinceIso, untilIso) {
   const rows = store.prepare(`
     SELECT * FROM usage_events
@@ -179,6 +183,7 @@ function riseEndMs(row, evidenceMs, startMs) {
   return startMs;
 }
 
+/** @param {import('./store.cjs').Store} store */
 function fablePairCalibration(store, nowMs, usedOf = rawUsedPercent, freshReadGraceMs) {
   const sinceIso = new Date(nowMs - 21 * 24 * 60 * 60 * 1000).toISOString();
   let deltaSum = 0;
@@ -235,6 +240,7 @@ function fablePairCalibration(store, nowMs, usedOf = rawUsedPercent, freshReadGr
 // caused it, in proportion to fixed allowance-pressure units. Each step is bounded
 // by two official readings, so only tokens between those readings matter — a
 // week of history this machine never saw cannot distort it.
+/** @param {import('./store.cjs').Store} store */
 function fableStepsFromOverall(store, readings, fromMs, toMs, usedOf = rawUsedPercent) {
   const steps = [];
   let rejectedCoverage = 0;
@@ -293,6 +299,7 @@ function rawUsedPercent(row) {
 // allowance. Readings taken before a recorded allowance change are a share of
 // the earlier allowance; without the rescale the step at the change would be
 // calibrated as Fable consumption and the earlier pairs would run too cool.
+/** @param {import('./store.cjs').Store} store */
 function allowanceAdjustedUsed(store, nowMs) {
   const scaler = createAllowanceScaler(store.getSettings().allowanceChanges, 'claude', {
     bucketId: OVERALL_BUCKET, windowMinutes: 10_080, nowMs,
@@ -307,6 +314,7 @@ function allowanceAdjustedUsed(store, nowMs) {
 }
 
 // The plan named by the most recent official reading in the same window.
+/** @param {import('./store.cjs').Store} store */
 function planEvidence(store, overallWindow, nowMs) {
   const resetMs = new Date(overallWindow.resets_at).getTime();
   const row = store.prepare(`
@@ -335,6 +343,11 @@ function planEvidence(store, overallWindow, nowMs) {
 // That ceiling must never be carried forward across later local activity: the
 // unobserved overall percentage moves too. A manual Fable reading re-anchors
 // the running total whenever one is present.
+/**
+ * @param {import('./store.cjs').Store} store
+ * @param {number} nowMs
+ * @param {{ freshReadGraceMs?: number }} [options]
+ */
 function computeProjection(store, nowMs, { freshReadGraceMs } = {}) {
   // Read the bucket directly rather than through getQuota, which forecasts
   // every window of every source on the way past.
@@ -510,16 +523,18 @@ function computeProjection(store, nowMs, { freshReadGraceMs } = {}) {
 // learning series from this; the collector reports it as source status.
 // `freshReadGraceMs` is the store's wait for a lower status-line reading to be
 // confirmed; left out, the forecast's default applies.
+/** @param {import('./store.cjs').Store} store */
 function projectFableAllowance(store, nowMs = Date.now(), options = {}) {
   const result = computeProjection(store, nowMs, options);
   // The plan is kept on this refusal: a named plan other than Max has no
   // Fable allowance to wait for, while an unnamed one is only unknown.
-  if (!result.derived) return { available: false, reason: result.reason, ...(result.planType ? { planType: result.planType } : {}) };
+  if (!result.derived) return { available: /** @type {const} */ (false), reason: result.reason, ...(result.planType ? { planType: result.planType } : {}) };
   const { derived: _derived, ...projection } = result;
-  return { available: true, reason: null, ...projection };
+  return { available: /** @type {const} */ (true), reason: null, ...projection };
 }
 
 // The summary the Claude refresh has always reported for the estimate.
+/** @param {import('./store.cjs').Store} store */
 function deriveFableEstimate(store, nowMs = Date.now()) {
   const result = store.getFableProjection(store.getSettings(), nowMs);
   if (!result.available) return { derived: false, reason: result.reason };

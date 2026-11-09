@@ -178,6 +178,7 @@ function normalizeUsagePayload(payload, observedAt) {
   };
 }
 
+/** @param {import('./store.cjs').Store} store */
 function recordProviderWindows(store, normalized, observedAt) {
   // UsageStore's writes are synchronous. The store's transaction makes
   // validation plus persistence all-or-nothing without exposing transaction
@@ -238,6 +239,7 @@ function recordProviderWindows(store, normalized, observedAt) {
 // back a stale status-line restatement and dates its figure by the newest
 // reading that shows it (`evidence_at`), so this reads the week the same way:
 // an idle session redraws every minute, and fifty rows can be under an hour.
+/** @param {import('./store.cjs').Store} store */
 function getLastCurrentOfficial(store, nowMs) {
   const placeholders = OFFICIAL_PROVENANCES.map(() => '?').join(', ');
   const rows = store.prepare(`
@@ -307,6 +309,7 @@ function allowanceFromRow(row) {
   };
 }
 
+/** @param {import('./store.cjs').Store} store */
 function localFableActivity(store, nowMs, allowance) {
   const resetMs = allowance?.kind === 'official' ? Date.parse(allowance.resetsAt) : Number.NaN;
   const sinceMs = Number.isFinite(resetMs) ? resetMs - WEEK_MS : nowMs - WEEK_MS;
@@ -349,6 +352,7 @@ function localFableActivity(store, nowMs, allowance) {
   };
 }
 
+/** @param {import('./store.cjs').Store} store */
 function previousActivitySuccess(store) {
   try {
     const row = store.prepare("SELECT metadata_json FROM sources WHERE id = 'claude-fable'").get();
@@ -392,7 +396,8 @@ function createFableUsageTracker({ store, usagePort, activityReader, clock = () 
     };
     // Finish synchronous imports before starting the SDK timeout clock.
     const activityRead = timed(() => activityReader.import({ signal: options.signal }));
-    const [activityResult] = await Promise.allSettled([activityRead.promise]);
+    // The reader's result is its own summary: counts, and what could not be read.
+    const [activityResult] = /** @type {{ status: 'fulfilled' | 'rejected', value?: any, reason?: any }[]} */ (await Promise.allSettled([activityRead.promise]));
     // A Claude plan window that is still running means the account has a
     // subscription, so a read reporting none has failed.
     const expectSubscription = planUsageRequested

@@ -135,6 +135,14 @@ function quotaWindow(window) {
   };
 }
 
+/**
+ * @param {import('./store.cjs').Store} store
+ * @param {any} raw
+ * @param {string} observedAt
+ * @param {string} provenance
+ * @param {object} [extra]
+ * @param {{ onRejected?: (error: unknown) => void }} [options]
+ */
 function recordRateLimit(store, raw, observedAt, provenance, extra = {}, { onRejected } = {}) {
   if (!raw) return 0;
   const sourceId = 'codex';
@@ -176,6 +184,7 @@ function recordRateLimit(store, raw, observedAt, provenance, extra = {}, { onRej
   return count;
 }
 
+/** @param {import('./store.cjs').Store} store */
 async function collectFromAppServer(store, binary, {
   clientFactory = (executable) => new JsonLineClient(executable),
 } = {}) {
@@ -266,7 +275,7 @@ function usageFingerprint(info, sessionId, model, occurredAt) {
 // copy are the parent's usage, recorded from the parent's own rollout.
 const COPIED_HISTORY_MS = 1000;
 
-function* sessionEntries(lines, state, onRejected = () => {}) {
+function* sessionEntries(lines, state, onRejected = /** @type {(message: string) => void} */ (() => {})) {
   for (const line of lines) {
     let entry;
     try { entry = JSON.parse(line); } catch { continue; }
@@ -321,6 +330,7 @@ function eventKeyFor(state, timestamp) {
 
 // Before forks kept their own identity, a fork's records were filed under
 // its parent's session id. A rescan must not import them a second time.
+/** @param {import('./store.cjs').Store} store */
 function parentFiledKey(store, state, eventKey) {
   const prefix = `codex:${state.sessionId}:`;
   if (!state.copiedFrom || !eventKey.startsWith(prefix)) return null;
@@ -381,6 +391,7 @@ function duplicateRowParameters(event) {
     ...DUPLICATE_METADATA_FIELDS.map((field) => event.metadata[field] ?? null)];
 }
 
+/** @param {import('./store.cjs').Store} store */
 function retainedSnapshotExists(store, eventKey, event) {
   return Boolean(store.prepare(`SELECT 1 AS found FROM usage_events
     WHERE event_key = ? AND source_id = 'codex' AND session_id IS ?
@@ -396,6 +407,7 @@ function retainedSnapshotExists(store, eventKey, event) {
 // Version 1.0.34 introduced ordinal keys without invalidating old cursors.
 // Before replaying a collision, verify every held row against its source group.
 // Conflicting/manual rows stay untouched, including the rest of that group.
+/** @param {import('./store.cjs').Store} store */
 function collisionMigration(store, lines, initialState, { checkCollisions, checkDuplicates, protectSingles }) {
   const groups = new Map();
   const state = { ...initialState };
@@ -453,6 +465,7 @@ const normalizedPath = (filePath) => path.resolve(filePath).replaceAll('\\', '/'
 // and nothing already imported is read again. Rollout names carry their start
 // time and session id, so a cursor under the other folder for a file that is no
 // longer there is this log's. A copy whose original is still in place is not.
+/** @param {import('./store.cjs').Store} store */
 function movedRolloutCursor(store, fullPath, prefixes) {
   const target = normalizedPath(fullPath);
   const name = `/${path.basename(target)}`;
@@ -469,6 +482,7 @@ function movedRolloutCursor(store, fullPath, prefixes) {
 // A Codex rollout log carries its session id, working directory, and model in
 // earlier lines than the token counts that need them. That context is kept in
 // the import cursor's state so an appended chunk can be parsed on its own.
+/** @param {import('./store.cjs').Store} store */
 function importLocalSessions(store, days = 120) {
   // CODEX_HOME relocates the whole Codex directory; honour it the way the
   // CLI does. Without an absolute home there is nothing safe to scan.
@@ -647,6 +661,7 @@ function importLocalSessions(store, days = 120) {
   return { importedFiles, events, observations, rejected, lastRejection, duplicateEvents, reconciledEvents, reconciliationBackup, readErrors, lastReadError };
 }
 
+/** @param {import('./store.cjs').Store} store */
 async function refreshCodex(store, {
   findBinary = findCodexBinary,
   importSessions = importLocalSessions,

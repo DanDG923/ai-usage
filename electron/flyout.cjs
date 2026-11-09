@@ -136,7 +136,7 @@ function flyoutPayload(snapshot) {
 function createTrayFlyout({
   createWindow,
   getAnchor,
-  onReveal = () => {},
+  onReveal = /** @type {(shown: { reused: boolean }) => void} */ (() => {}),
   width = FLYOUT_WIDTH,
   maxHeight = FLYOUT_MAX_HEIGHT,
   minHeight = FLYOUT_MIN_HEIGHT,

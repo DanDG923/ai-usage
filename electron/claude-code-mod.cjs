@@ -115,9 +115,17 @@ function writeAtomically(filePath, text) {
  * @param {object} options
  * @param {string} options.root the app's folder for the mod (userData/claude-code)
  * @param {string} options.sourceDirectory the mod as the app ships it
- * @param {() => object} options.readClaudeSettings Claude Code's user settings, parsed
+ * @param {() => Record<string, any>} options.readClaudeSettings Claude Code's user settings, parsed
  * @param {(action: 'sync' | 'open') => void} options.onRequest
  * @param {() => void} options.onReading
+ * @param {string | null} [options.appVersion]
+ * @param {NodeJS.ProcessEnv} [options.environment]
+ * @param {typeof findClaudeBinary} [options.findBinary]
+ * @param {typeof runClaude} [options.run]
+ * @param {() => object | null} [options.getSnapshot] the tray snapshot the glance is drawn from
+ * @param {(message: string) => void} [options.log]
+ * @param {() => number} [options.now]
+ * @param {typeof fs.watch} [options.watch]
  */
 function createClaudeCodeMod({
   root,

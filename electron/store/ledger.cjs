@@ -15,6 +15,7 @@ const COMPACT_AFTER_MS = 60 * DAY_MS;
 // Omitting metadata keeps whatever the source already had. A failure path
 // reporting only a status must not erase facts it never gathered — the
 // Enable/Disable helper control reads one of them.
+/** @param {import('../store.cjs').Store} store */
 function setSourceStatus(store, id, status, detail, metadata, options = {}) {
   if (!KNOWN_SOURCE_IDS.has(id)) throw new Error(`Unknown source: ${id || 'missing'}.`);
   if (typeof status !== 'string' || !status.trim()) throw new Error('Source status is required.');
@@ -40,6 +41,7 @@ function setSourceStatus(store, id, status, detail, metadata, options = {}) {
     `).run(status, detail || null, JSON.stringify(metadata), attemptedAt, successfulAt, id);
 }
 
+/** @param {import('../store.cjs').Store} store */
 function recordObservation(store, observation) {
   if (!KNOWN_SOURCE_IDS.has(observation.sourceId)) throw new Error(`Unknown source: ${observation.sourceId || 'missing'}.`);
   if (typeof observation.bucketId !== 'string' || !observation.bucketId.trim()) {
@@ -157,6 +159,7 @@ function recordObservation(store, observation) {
     .run(observedAt, observation.sourceId, observedAt);
 }
 
+/** @param {import('../store.cjs').Store} store */
 function recordUsageEvent(store, event) {
   if (!KNOWN_SOURCE_IDS.has(event.sourceId)) throw new Error(`Unknown source: ${event.sourceId || 'missing'}.`);
   if (typeof event.eventKey !== 'string' || !event.eventKey.trim()) throw new Error('Usage event key is required.');
@@ -241,6 +244,7 @@ function recordUsageEvent(store, event) {
   return result.changes;
 }
 
+/** @param {import('../store.cjs').Store} store */
 function getManualBucketId(store, sourceId) {
   if (sourceId === 'claude') return 'seven_day';
   if (sourceId === 'claude-fable') return 'fable_seven_day';
@@ -253,6 +257,7 @@ function getManualBucketId(store, sourceId) {
   return row?.bucket_id || 'codex:weekly';
 }
 
+/** @param {import('../store.cjs').Store} store */
 function upsertDailyUsage(store, sourceId, usageDate, tokens) {
   if (!KNOWN_SOURCE_IDS.has(sourceId) || !isForecastDate(usageDate) || !Number.isSafeInteger(tokens) || tokens < 0) {
     throw new Error('Invalid daily usage date or token count.');
@@ -267,12 +272,14 @@ function upsertDailyUsage(store, sourceId, usageDate, tokens) {
 // `state` carries whatever an incremental reader needs to resume mid-file
 // (the Codex reader's current model, for instance), so a growing transcript
 // is parsed once, not once per refresh.
+/** @param {import('../store.cjs').Store} store */
 function getImportedFile(store, filePath) {
   const row = store.prepare('SELECT * FROM imported_files WHERE file_path = ?').get(filePath);
   if (!row) return null;
   return { ...row, state: json(row.state_json, null) };
 }
 
+/** @param {import('../store.cjs').Store} store */
 function markImportedFile(store, filePath, modifiedMs, sizeBytes, state = null) {
   store.prepare(`
       INSERT INTO imported_files(file_path, modified_ms, size_bytes, imported_at, state_json)
@@ -285,12 +292,14 @@ function markImportedFile(store, filePath, modifiedMs, sizeBytes, state = null) 
     `).run(filePath, modifiedMs, sizeBytes, iso(), state == null ? null : JSON.stringify(state));
 }
 
+/** @param {import('../store.cjs').Store} store */
 function forgetImportedFile(store, filePath) {
   store.prepare('DELETE FROM imported_files WHERE file_path = ?').run(filePath);
 }
 
 // Housekeeping after a refresh: compact old polling rows so the table stops
 // growing with the refresh interval. Manual readings are never touched.
+/** @param {import('../store.cjs').Store} store */
 function compactObservations(store, nowMs = Date.now()) {
   const edge = new Date(nowMs - COMPACT_AFTER_MS);
   edge.setHours(0, 0, 0, 0);

@@ -114,6 +114,7 @@ function serveParentPort(port, service) {
 }
 
 if (process.parentPort) {
+  /** @type {any} What the host passed: paths only, checked by the service. */
   let config = {};
   try {
     config = JSON.parse(process.argv[2] || '{}');

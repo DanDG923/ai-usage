@@ -3,6 +3,13 @@
 // API-equivalent cost analytics over the usage ledger: period totals,
 // session and task pages, the CSV export and the Fable version split.
 
+/** @typedef {import('../../src/types').CostAnalytics} CostAnalytics */
+/** @typedef {{ sessions: import('../../src/types').SessionCost[], tasks: import('../../src/types').TaskCost[], costs: CostAnalytics }} Analytics One period's ledger, as cached. */
+/** @typedef {import('../../src/types').DailyUsage} DailyUsage */
+/** @typedef {import('../../src/types').FableActivity} FableActivity */
+/** @typedef {import('../../src/types').SessionPage} SessionPage */
+/** @typedef {import('../../src/types').TaskPage} TaskPage */
+
 const { periodStart } = require('../time.cjs');
 const { TaskUsage } = require('../task-usage.cjs');
 const { SOURCE_DEFINITIONS, DAY_MS, iso, round, dateKey, createLocalPartsLookup, WEEKDAY_INDEX } = require('./shared.cjs');
@@ -18,15 +25,24 @@ const ATTRIBUTION_METADATA = `CASE WHEN json_valid(metadata_json)
   THEN json_remove(metadata_json, '$.requestId', '$.entrypoint', '$.sidechain', '$.effort')
   ELSE metadata_json END`;
 
+/**
+ * @param {import('../store.cjs').Store} store
+ * @returns {CostAnalytics}
+ */
 function getCostAnalytics(store, days = 30, settings = store.getSettings(), nowMs = Date.now()) {
   return store.getAnalytics(days, settings, nowMs).costs;
 }
 
+/** @param {import('../store.cjs').Store} store */
 function analyticsRevision(store) {
   return store.prepare("SELECT COALESCE(SUM(revision), 0) AS revision FROM analytics_revisions WHERE domain IN ('usage', 'price')")
     .get().revision;
 }
 
+/**
+ * @param {import('../store.cjs').Store} store
+ * @returns {Analytics}
+ */
 function getAnalytics(store, days, settings, nowMs) {
   // Cache the ledger separately from the time-sensitive forecast snapshot.
   // SQLite tracks both writes on this connection and collector-process commits.
@@ -54,6 +70,10 @@ function getAnalytics(store, days, settings, nowMs) {
   return value;
 }
 
+/**
+ * @param {import('../store.cjs').Store} store
+ * @returns {CostAnalytics}
+ */
 function buildCostAnalytics(store, days, settings, nowMs) {
   return store.buildAnalytics(days, settings, nowMs).costs;
 }
@@ -61,6 +81,10 @@ function buildCostAnalytics(store, days, settings, nowMs) {
 // All session aggregates stay in the same bounded, privately held cache as
 // their period's costs. Snapshots expose only eight highlights; paginated
 // requests search the complete ledger without re-costing it for each page.
+/**
+ * @param {import('../store.cjs').Store} store
+ * @returns {SessionPage}
+ */
 function getSessionPage(store, { days = 30, query = '', page = 1, pageSize = 20 } = {}, nowMs = Date.now()) {
   const boundedInteger = (value, fallback, min, max) => {
     const number = Number(value);
@@ -80,6 +104,10 @@ function getSessionPage(store, { days = 30, query = '', page = 1, pageSize = 20 
     page: selectedPage, pageSize: size, totalPages };
 }
 
+/**
+ * @param {import('../store.cjs').Store} store
+ * @returns {TaskPage}
+ */
 function getTaskPage(store, { days = 30, query = '', page = 1, pageSize = 20 } = {}, nowMs = Date.now()) {
   const boundedInteger = (value, fallback, min, max) => {
     const number = Number(value);
@@ -100,6 +128,7 @@ function getTaskPage(store, { days = 30, query = '', page = 1, pageSize = 20 } =
     page: selectedPage, pageSize: size, totalPages };
 }
 
+/** @param {import('../store.cjs').Store} store */
 function analyticsEvents(store, since, until) {
   const revisions = new Map(store.prepare('SELECT day, revision FROM analytics_day_revisions WHERE day >= ? AND day <= ?')
     .all(since.slice(0, 10), until.slice(0, 10)).map((row) => [row.day, row.revision]));
@@ -141,6 +170,10 @@ function analyticsEvents(store, since, until) {
   return result;
 }
 
+/**
+ * @param {import('../store.cjs').Store} store
+ * @returns {Analytics}
+ */
 function buildAnalytics(store, days, settings, nowMs) {
   const since = iso(periodStart(days, nowMs));
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -336,6 +369,7 @@ function buildAnalytics(store, days, settings, nowMs) {
 // period is the dashboard's: the last N local calendar days. Given `write`,
 // text is handed over in batches as the ledger is read, so a long, busy
 // period is never held in memory as one string; otherwise it is returned.
+/** @param {import('../store.cjs').Store} store */
 function exportLedgerCsv(store, days = 90, nowMs = Date.now(), write = null) {
   const since = iso(periodStart(days, nowMs));
   const escape = (value) => {
@@ -382,6 +416,10 @@ function exportLedgerCsv(store, days = 90, nowMs = Date.now(), write = null) {
   return write ? { rows, since } : { csv: chunks.join(''), rows, since };
 }
 
+/**
+ * @param {import('../store.cjs').Store} store
+ * @returns {DailyUsage[]}
+ */
 function getDailyUsage(store, days = 90, nowMs = Date.now()) {
   const since = dateKey(nowMs - days * 24 * 60 * 60 * 1000);
   return store.prepare(`
@@ -396,6 +434,10 @@ function getDailyUsage(store, days = 90, nowMs = Date.now()) {
 // Fable activity in the current Fable window by version, with what those
 // tokens are worth at today's API prices. Only tokens and money are split:
 // the provider reports one percentage for both.
+/**
+ * @param {import('../store.cjs').Store} store
+ * @returns {FableActivity}
+ */
 function getFableActivity(store, fableQuota, settings = store.getSettings(), nowMs = Date.now()) {
   const resetMs = Date.parse(fableQuota?.resetsAt ?? '');
   const throughMs = nowMs;

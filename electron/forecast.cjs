@@ -26,6 +26,7 @@ function nextLocalHour(cursor) {
   return cursor + HOUR_MS - date.getMinutes() * 60_000 - date.getSeconds() * 1000 - date.getMilliseconds();
 }
 
+/** @returns {import('../src/types').ForecastState} */
 function forecastState(expectedRemaining, heavyRemaining, paceRatio, paceRiskThreshold, watchRemainingThreshold) {
   return expectedRemaining <= 0 ? 'critical'
     : heavyRemaining <= 0 || paceRatio > paceRiskThreshold ? 'risk'
@@ -430,6 +431,10 @@ function fetchMomentOf(row) {
 // `withoutStaleRestatements`), figures are compared in the allowance in force
 // now: after a fourfold upgrade a read of 40% shows the same use as a later
 // 10%, and a read of 10% does not.
+/**
+ * @param {any[]} rows
+ * @param {{ known?: boolean, nowMs?: number, allowanceChanges?: any[], sourceId?: string }} [options]
+ */
 function evidenceTimes(rows, { known = false, nowMs, allowanceChanges, sourceId } = {}) {
   const parsed = rescaleObservations(rows.map(normaliseObservation), { allowanceChanges, now: nowMs, sourceId });
   let firstShown = [];
@@ -473,6 +478,10 @@ function replenishedWithin(previous, row) {
 // unless a newer read agrees with it. The same figure from before an early
 // replenishment is no evidence for the allowance that replaced it. Readings
 // must be in time order. Options as for `evidenceTimes`.
+/**
+ * @param {any[]} rows
+ * @param {{ known?: boolean, nowMs?: number, allowanceChanges?: any[], sourceId?: string }} [options]
+ */
 function latestEvidenceAt(rows, { known = false, nowMs, allowanceChanges, sourceId } = {}) {
   const parsed = rescaleObservations(rows.map(normaliseObservation), { allowanceChanges, now: nowMs, sourceId });
   const current = parsed.at(-1);
@@ -526,6 +535,10 @@ function freshReadGraceFor(settings) {
   const minutes = Number(settings.refreshIntervalMinutes);
   return Math.max(FRESH_READ_GRACE_MS, minutes > 0 ? 2 * minutes * 60_000 : 0);
 }
+/**
+ * @param {any[]} rows
+ * @param {{ nowMs?: number, freshReadGraceMs?: number, allowanceChanges?: any[], sourceId?: string }} [options]
+ */
 function withoutStaleRestatements(rows, { nowMs = Date.now(), freshReadGraceMs = FRESH_READ_GRACE_MS, allowanceChanges, sourceId } = {}) {
   const parsed = rescaleObservations(rows.map(normaliseObservation), { allowanceChanges, now: nowMs, sourceId });
   const nextFresh = Array.from({ length: parsed.length }, () => null);
@@ -743,7 +756,7 @@ function createRateLookup(samples) {
   };
 }
 
-function contextualRate(samples, fallbackRate, recency = () => 1) {
+function contextualRate(samples, fallbackRate, recency = /** @type {(sample: any) => number} */ (() => 1)) {
   if (!samples.length) return fallbackRate;
   const entries = samples.map((sample) => ({ value: sample.rate,
     weight: sample.weight * sample.coveredHours * recency(sample), influence: sample.influence ?? 1 }));
@@ -832,6 +845,10 @@ function buildSeries(expectedStart, heavyStart, startMs, endMs, schedule, sample
   return { expected, heavy };
 }
 
+/**
+ * @param {{ expired?: boolean, observed?: import('../src/types').Point[], staleHours?: number }} [options]
+ * @returns {import('../src/types').Forecast}
+ */
 function unknownForecast({ expired = false, observed = [], staleHours = 0 } = {}) {
   return {
     state: 'unknown', expectedRemaining: null, heavyRemaining: null, confidence: 0,
@@ -1019,6 +1036,15 @@ function learnForecast({ normalised, current, currentCluster, clusters, schedule
   return { samples, modelSamples, rates, sustainableOffSchedulePace, recent, globalRate, anchor, windowPace };
 }
 
+/** @typedef {import('../src/types').Forecast} Forecast */
+/** @typedef {import('../src/types').ForecastState} ForecastState */
+
+/**
+ * @param {any[]} observations
+ * @param {Record<string, any>} [options]
+ * @param {Map<string, number> | null} [dayWeights]
+ * @returns {Forecast}
+ */
 function forecastQuotaWithLearning(observations, options = {}, dayWeights = null) {
   const nowMs = options.now != null ? new Date(options.now).getTime() : Date.now();
   if (!Number.isFinite(nowMs)) return unknownForecast();
@@ -1216,7 +1242,7 @@ function earlyResetAdjustment(observations, options, nowMs) {
   }
   const covered = (day, value) => {
     const [year, month, date] = day.split('-').map(Number);
-    const dayHours = (new Date(year, month - 1, date + 1) - new Date(year, month - 1, date)) / HOUR_MS;
+    const dayHours = (new Date(year, month - 1, date + 1).getTime() - new Date(year, month - 1, date).getTime()) / HOUR_MS;
     return !uncertainDays.has(day) && value.hours >= dayHours * 0.75;
   };
   const adjusted = [];
@@ -1263,6 +1289,11 @@ function collapseReadings(rows, nowMs) {
   return result;
 }
 
+/**
+ * @param {any[]} observations
+ * @param {Record<string, any>} [options]
+ * @returns {Forecast}
+ */
 function forecastQuota(observations, options = {}) {
   // Normalise once; each pass below would otherwise re-parse every timestamp.
   const nowMs = options.now != null ? new Date(options.now).getTime() : Date.now();

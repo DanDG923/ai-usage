@@ -9,22 +9,26 @@ const { buildSummaryText, buildTrayTooltip } = require('../notifications.cjs');
 const { paintStateDot } = require('../tray-icon.cjs');
 const { FLYOUT_BACKGROUND, FLYOUT_DOUBLE_CLICK_HOLD_MS, createTrayFlyout, flyoutPayload } = require('../flyout.cjs');
 const { resolveWindowTarget } = require('../app-lifecycle.cjs');
+const { closed } = require('./closed.cjs');
 
 // This file sits one folder below the main process's other modules.
 const ELECTRON_DIR = path.join(__dirname, '..');
 
 const TRAY_SIZE = 32;
 
+/** @param {import('./application.cjs').Application} main */
 function createTrayModule(main) {
   const { app, BrowserWindow, clipboard, Menu, nativeImage, screen, Tray } = main.electron;
-  const tray = {
-    icon: undefined,
+  const tray = closed({
+    icon: /** @type {import('electron').Tray} */ (undefined),
     // The tray flyout controller; its window exists only while shown or recently hidden.
-    flyout: null,
-    snoozeTimer: undefined,
+    flyout: /** @type {ReturnType<typeof createTrayFlyout> | null} */ (null),
+    snoozeTimer: /** @type {NodeJS.Timeout} */ (undefined),
     trayState: '',
-    trayMenuSnoozed: null,
-  };
+    trayMenuSnoozed: /** @type {boolean | null} */ (null),
+    applyFlyoutChrome, trayIconFor, alertsSnoozed, traySummary, buildTrayMenu, createTray, flyoutAnchor,
+    flyoutLoadTarget, createFlyoutWindow, flyoutSnapshot, pushFlyout, updateTray, scheduleSnoozeEnd, setSnooze,
+  });
 
   function applyFlyoutChrome() {
     const flyout = tray.flyout?.window();
@@ -219,10 +223,6 @@ function createTrayModule(main) {
     });
   }
 
-  Object.assign(tray, {
-    applyFlyoutChrome, trayIconFor, alertsSnoozed, traySummary, buildTrayMenu, createTray, flyoutAnchor,
-    flyoutLoadTarget, createFlyoutWindow, flyoutSnapshot, pushFlyout, updateTray, scheduleSnoozeEnd, setSnooze,
-  });
   return tray;
 }
 

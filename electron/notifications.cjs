@@ -81,6 +81,7 @@ function buildSummaryLines(snapshot, nowMs = Date.now()) {
       lines.push(`${source.label}: no allowance reading yet`);
       continue;
     }
+    /** @type {Partial<import('../src/types').Forecast>} */
     const forecast = window.forecast || {};
     const remaining = displayedRemaining(window);
     const estimated = isEstimated(window);
@@ -89,7 +90,7 @@ function buildSummaryLines(snapshot, nowMs = Date.now()) {
       continue;
     }
     const parts = [poolLimited(window)
-      ? `${estimated ? '~' : ''}${Math.round(remaining ?? 0)}% usable (Fable limit ${Math.round(window.sharedPool.capRemaining)}% left)`
+      ? `${estimated ? '~' : ''}${Math.round(remaining ?? 0)}% usable (Fable limit ${Math.round(/** @type {import('../src/types').SharedPoolApplied} */ (window.sharedPool).capRemaining)}% left)`
       : `${estimated ? '~' : ''}${Math.round(remaining ?? 0)}% left`];
     if (window.resetsAt) parts.push(`resets in ${resetDistance(window.resetsAt, nowMs)}`);
     if (forecast.expectedRemaining != null) parts.push(`expected ${Math.round(forecast.expectedRemaining)}% at reset`);

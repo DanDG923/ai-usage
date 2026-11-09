@@ -5,13 +5,16 @@
 
 const fs = require('node:fs');
 const { decideNotifications, emptyState } = require('../notifications.cjs');
+const { closed } = require('./closed.cjs');
 
+/** @param {import('./application.cjs').Application} main */
 function createAlertsModule(main) {
   const { Notification } = main.electron;
-  const alerts = {
+  const alerts = closed({
     notificationState: emptyState(),
     notifiedUpdates: new Set(),
-  };
+    loadNotificationState, saveNotificationState, showNotifications, publishUpdateStatus,
+  });
 
   function loadNotificationState() {
     try {
@@ -60,7 +63,6 @@ function createAlertsModule(main) {
     }
   }
 
-  Object.assign(alerts, { loadNotificationState, saveNotificationState, showNotifications, publishUpdateStatus });
   return alerts;
 }
 

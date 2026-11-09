@@ -21,8 +21,36 @@ const { createLifecycleModule } = require('./lifecycle.cjs');
 
 const systemTimers = { setTimeout, clearTimeout, setInterval, clearInterval };
 
+/**
+ * The application object every module receives as `main`.
+ *
+ * @typedef {object} Application
+ * @property {typeof import('electron')} electron
+ * @property {NodeJS.Process} process
+ * @property {Record<string, any>} pkg package.json
+ * @property {NodeJS.ProcessEnv} launchEnvironment
+ * @property {typeof systemTimers} timers
+ * @property {import('../store.cjs').Store | undefined} store
+ * @property {ReturnType<typeof import('../collector-host.cjs').createCollectorHost> | undefined} collectors
+ * @property {ReturnType<typeof import('../maintenance-host.cjs').createMaintenanceHost> | undefined} maintenance
+ * @property {ReturnType<typeof import('../updater.cjs').createUpdateChecker> | undefined} updateChecker
+ * @property {ReturnType<typeof import('../claude-setup.cjs').createClaudeSetup> | undefined} claudeSetup
+ * @property {ReturnType<typeof import('../claude-code-mod.cjs').createClaudeCodeMod> | null} claudeCodeMod
+ * @property {ReturnType<typeof createDatabaseQueue>} databaseJobs
+ * @property {ReturnType<typeof createPathsModule>} paths
+ * @property {ReturnType<typeof createLogsModule>} logs
+ * @property {ReturnType<typeof createSnapshotsModule>} snapshots
+ * @property {ReturnType<typeof createDashboardModule>} dashboard
+ * @property {ReturnType<typeof createTrayModule>} tray
+ * @property {ReturnType<typeof createAlertsModule>} alerts
+ * @property {ReturnType<typeof createRefreshModule>} refresh
+ * @property {ReturnType<typeof createIpcModule>} ipc
+ * @property {ReturnType<typeof createLifecycleModule>} lifecycle
+ */
+
 function createApplication({ electron, process, pkg, launchEnvironment, timers = systemTimers }) {
-  const main = {
+  /** @type {Application} */
+  const main = /** @type {any} */ ({
     electron,
     process,
     pkg,
@@ -39,7 +67,7 @@ function createApplication({ electron, process, pkg, launchEnvironment, timers =
     claudeSetup: undefined,
     claudeCodeMod: null,
     databaseJobs: createDatabaseQueue(),
-  };
+  });
   main.paths = createPathsModule(main);
   main.logs = createLogsModule(main);
   main.snapshots = createSnapshotsModule(main);

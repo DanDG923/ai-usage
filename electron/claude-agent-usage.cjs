@@ -14,6 +14,8 @@ class ClaudeUsageAdapterError extends Error {
   }
 }
 
+/** @typedef {ClaudeUsageAdapterError & { retryable?: boolean, collectionDiagnostics?: { attempts: object[] } }} UsageReadError */
+
 async function defaultLoadSdk() {
   return import('@anthropic-ai/claude-agent-sdk');
 }
@@ -229,6 +231,7 @@ function createClaudeAgentSdkUsagePort({
   timeoutMs = DEFAULT_TIMEOUT_MS,
   retryDelayMs = 1000,
 } = {}) {
+  /** @param {{ signal?: AbortSignal, expectSubscription?: boolean }} [options] */
   async function readOnce({ signal, expectSubscription = false } = {}) {
     const diagnostics = createUsageDiagnostics();
     let result;
@@ -347,6 +350,7 @@ function createClaudeAgentSdkUsagePort({
       throw new ClaudeUsageAdapterError('claude-usage-unverified', 'Claude returned allowance data without confirming a fresh fetch. The last fresh reading is retained.');
     }
     if (result.subscription_type && (!result.rate_limits_available || !result.rate_limits || !Object.keys(result.rate_limits).length)) {
+      /** @type {UsageReadError} */
       const error = new ClaudeUsageAdapterError('claude-usage-empty', 'Claude returned no current subscription allowance. The last fresh reading is retained.');
       error.retryable = fetch.outcome === 'verified';
       throw error;
@@ -362,6 +366,7 @@ function createClaudeAgentSdkUsagePort({
   return {
     // `expectSubscription`: the caller knows this account has a Claude
     // subscription, so a session reporting none is a failed read.
+    /** @param {{ signal?: AbortSignal, expectSubscription?: boolean }} [options] */
     async read({ signal, expectSubscription = false } = {}) {
       const attempts = [];
       for (let attempt = 1; attempt <= 2; attempt += 1) {
@@ -382,6 +387,7 @@ function createClaudeAgentSdkUsagePort({
           if (attempt === 2 || !retryable || error.retryable === false || signal?.aborted) throw error;
           try { await delay(retryDelayMs, undefined, { signal }); }
           catch {
+            /** @type {UsageReadError} */
             const cancelled = new ClaudeUsageAdapterError('claude-usage-aborted', 'Claude usage reading was cancelled.');
             cancelled.collectionDiagnostics = { attempts };
             throw cancelled;

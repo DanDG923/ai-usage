@@ -8,14 +8,18 @@ const { REFRESH_TRIGGERS, refreshOptionsFor } = require('../refresh-policy.cjs')
 const { buildSummaryText } = require('../notifications.cjs');
 const { flyoutPayload, normalizeNavigationTarget } = require('../flyout.cjs');
 const { relaunchApplication } = require('../installer-launch.cjs');
+const { closed } = require('./closed.cjs');
 
 const EMPTY_SESSION_PAGE = Object.freeze({ rows: [], total: 0, page: 1, pageSize: 20, totalPages: 0 });
 
+/** @param {import('./application.cjs').Application} main */
 function createIpcModule(main) {
   const { app, clipboard, dialog, ipcMain: electronIpcMain, shell } = main.electron;
-  const ipc = {
+  const ipc = closed({
     activeDashboardRequests: 0,
-  };
+    assertDashboardSender, handleIpc, assertFlyoutSender, handleFlyoutIpc, registerFlyoutIpc, hardenWebContents,
+    registerIpc,
+  });
 
   // Only the dashboard's own main frame may invoke the bridge. Every handler is
   // wrapped, not just setup: a restore or helper install changes files outside
@@ -144,7 +148,6 @@ function createIpcModule(main) {
     });
   }
 
-  Object.assign(ipc, { assertDashboardSender, handleIpc, assertFlyoutSender, handleFlyoutIpc, registerFlyoutIpc, hardenWebContents, registerIpc });
   return ipc;
 }
 

@@ -22,6 +22,7 @@ const BACKUP_ATTEMPT_KEY = 'maintenance.backup-attempt';
 // `exportJson: false` writes the SQLite copy alone. The JSON export is also
 // skipped once it outgrows what readExport accepts: the SQLite copy
 // restores a ledger of any size, and the export would only cost time.
+/** @param {import('../store.cjs').Store} store */
 function createBackup(store, options = {}) {
   const stamp = `${new Date().toISOString().replaceAll(':', '-').replaceAll('.', '-')}-${require('node:crypto').randomUUID()}`;
   const databasePath = path.join(store.backupDirectory, `ai-usage-${stamp}.sqlite`);
@@ -61,6 +62,7 @@ function createBackup(store, options = {}) {
 // Reading is a separate step so a caller can load the export into memory
 // before taking its own backup: creating one prunes old sets, and the file
 // the user chose from the backup folder can be among them.
+/** @param {import('../store.cjs').Store} store */
 function readExport(store, filePath) {
   if (/\.sqlite$/i.test(String(filePath || ''))) return store.readDatabaseBackup(filePath);
   return require('../backup-export.cjs').readExport(filePath);
@@ -69,6 +71,7 @@ function readExport(store, filePath) {
 // A SQLite backup restores a ledger of any size: its records are read as
 // the merge consumes them, in the export's shape, so restoreFromExport
 // applies the same validation and merge rules. The caller calls close().
+/** @param {import('../store.cjs').Store} store */
 function readDatabaseBackup(store, filePath) {
   if (!filePath || !fs.existsSync(filePath)) throw new Error('That backup file could not be found.');
   let database;
@@ -93,6 +96,7 @@ function readDatabaseBackup(store, filePath) {
   }
 }
 
+/** @param {import('../store.cjs').Store} store */
 function sweepPartialBackups(store, nowMs = Date.now()) {
   // Missing registrations can mean database recovery, not failed backups.
   // Completed files may be the only remaining history; only partials are disposable.
@@ -106,6 +110,7 @@ function sweepPartialBackups(store, nowMs = Date.now()) {
   }
 }
 
+/** @param {import('../store.cjs').Store} store */
 function restoreFromBackup(store, filePath) {
   const payload = store.readExport(filePath);
   try {
@@ -120,6 +125,7 @@ function restoreFromBackup(store, filePath) {
 // the exception — they are replaced, and reported separately so the caller
 // can say so. Records the export cannot supply validly are skipped and
 // counted, never guessed, and one bad row never costs the others.
+/** @param {import('../store.cjs').Store} store */
 function restoreFromExport(store, payload) {
   const nowMs = Date.now();
   const unreadable = () => new Error('That file is not a readable AI Usage export.');
@@ -414,6 +420,7 @@ function restoreFromExport(store, payload) {
   return counts;
 }
 
+/** @param {import('../store.cjs').Store} store */
 function pruneBackups(store, retentionCount = DEFAULT_SETTINGS.backupRetentionCount, keepPath = null) {
   const keep = Math.max(1, Math.min(365, Number(retentionCount) || DEFAULT_SETTINGS.backupRetentionCount));
   const protectedPath = keepPath ? path.resolve(keepPath) : null;
@@ -447,6 +454,7 @@ function pruneBackups(store, retentionCount = DEFAULT_SETTINGS.backupRetentionCo
 // Whether a scheduled backup is due, without writing anything. The window
 // process asks this after every collection, so the storage worker is only
 // started when there is a backup to make.
+/** @param {import('../store.cjs').Store} store */
 function scheduledBackupDue(store, nowMs = Date.now()) {
   const frequency = store.getSettings().backupFrequency;
   if (!frequency || frequency === 'off') return false;
@@ -458,6 +466,7 @@ function scheduledBackupDue(store, nowMs = Date.now()) {
   return !(latest && nowMs - new Date(latest.created_at).getTime() < interval);
 }
 
+/** @param {import('../store.cjs').Store} store */
 function maybeCreateScheduledBackup(store) {
   if (!store.scheduledBackupDue()) return null;
   store.prepare('INSERT OR REPLACE INTO settings(key, value_json, updated_at) VALUES (?, ?, ?)')

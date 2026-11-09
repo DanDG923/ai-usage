@@ -7,7 +7,7 @@
 const DEFAULT_REQUEST_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_IDLE_TIMEOUT_MS = 30_000;
 
-function createCollectorHost({ fork, modulePath, config, requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS, idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS, forkOptions = {}, onLog = () => {} }) {
+function createCollectorHost({ fork, modulePath, config, requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS, idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS, forkOptions = {}, onLog = /** @type {(message: string) => void} */ (() => {}) }) {
   let child = null;
   let idleTimer;
   let nextId = 1;

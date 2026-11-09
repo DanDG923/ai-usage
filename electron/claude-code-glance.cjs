@@ -118,6 +118,7 @@ function providerRow({ id, healthId, label }, snapshot) {
   const expired = Boolean(current?.forecast?.expired);
   const source = (snapshot.sources || []).find((entry) => entry.id === healthId) ?? null;
   const poolWindow = id === 'fable' ? stalePoolWindow(current, snapshot.quotas?.claude) : null;
+  /** @type {Partial<import('../src/types').Forecast>} */
   const forecast = current?.forecast || {};
   const live = Boolean(current && !expired);
   const aged = quotaWindows(quota).some((entry) => !entry.forecast?.expired && evidenceNeedsRefresh(entry)) || Boolean(poolWindow);
