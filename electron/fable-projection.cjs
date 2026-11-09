@@ -8,7 +8,8 @@
 // rows to go stale, so there is nothing to rescale, retire or discard.
 
 const { createAllowanceScaler } = require('./allowance-changes.cjs');
-const { clusterByWindow, evidenceTimes, fetchMomentOf, latestEvidenceAt, normaliseObservation, restatesSessionLimits, withoutStaleRestatements } = require('./forecast.cjs');
+const { clusterByWindow } = require('./forecast/windows.cjs');
+const { evidenceTimes, fetchMomentOf, latestEvidenceAt, normaliseObservation, restatesSessionLimits, withoutStaleRestatements } = require('./quota-evidence.cjs');
 const { CLAUDE, FABLE } = require('./providers.mjs');
 const { OFFICIAL_PROVENANCES } = require('./quota-provenance.mjs');
 

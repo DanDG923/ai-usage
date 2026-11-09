@@ -8,7 +8,7 @@ const path = require('node:path');
 const test = require('node:test');
 const { UsageStore } = require('../electron/store.cjs');
 const { CLAUDE_CODE_READING_FORMAT, importClaudeCodeReadings } = require('../electron/claude-collector.cjs');
-const { evidenceTimes } = require('../electron/forecast.cjs');
+const { evidenceTimes } = require('../electron/quota-evidence.cjs');
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;

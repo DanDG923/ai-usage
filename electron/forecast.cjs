@@ -21,10 +21,6 @@
 // stages six to eleven run a second time; forecast/tuning.cjs holds every
 // number the stages are tuned with.
 
-const {
-  evidenceTimes, fetchMomentOf, freshReadGraceFor, latestEvidenceAt, normaliseObservation, prepareObservation,
-  restatesSessionLimits, withoutStaleRestatements,
-} = require('./quota-evidence.cjs');
 const { assessForecast, forecastState, unknownForecast } = require('./forecast/assess.cjs');
 const { activeHoursBetween } = require('./forecast/calendar.cjs');
 const { earlyResetAdjustment, withEarlyReset } = require('./forecast/early-reset.cjs');
@@ -96,11 +92,9 @@ function forecastQuota(observations, options = {}) {
   return withEarlyReset(ordinary, adjusted, adjustment, settings);
 }
 
-// Everything this module has always exported. The evidence-dating names come
-// from quota-evidence.cjs, which is where a caller that only dates readings
-// should take them from.
+// The forecast and the pieces of it other modules and the tests use. A caller
+// that only dates readings takes those rules from quota-evidence.cjs.
 module.exports = {
-  activeHoursBetween, clusterByWindow, sameWindowDrift, normaliseObservation, prepareObservation, deriveLearningSamples,
-  evidenceTimes, exhaustionTime, fetchMomentOf, forecastQuota, forecastState, freshReadGraceFor, latestEvidenceAt,
-  percentile, restatesSessionLimits, withoutStaleRestatements,
+  activeHoursBetween, clusterByWindow, sameWindowDrift, deriveLearningSamples, exhaustionTime, forecastQuota,
+  forecastState, percentile,
 };

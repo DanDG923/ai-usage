@@ -195,7 +195,7 @@ export type UsageEventInput = {
 export type Schedule = { activeDays: number[]; startHour: number; endHour: number };
 
 /**
- * A reading with its times as numbers, as forecast.cjs's normaliseObservation
+ * A reading with its times as numbers, as quota-evidence.cjs's normaliseObservation
  * returns it. A reading may arrive either as a row or already in this shape.
  */
 export type Reading = {

@@ -8,7 +8,8 @@
 /** @typedef {import('../types').ImportedFileRow} ImportedFileRow */
 /** @typedef {import('../types').Reading & { id: number, original: ObservationRow }} CompactionRow A stored reading with its times as numbers. */
 
-const { normaliseObservation, clusterByWindow } = require('../forecast.cjs');
+const { clusterByWindow } = require('../forecast/windows.cjs');
+const { normaliseObservation } = require('../quota-evidence.cjs');
 const { MAX_QUOTA_RESET_AHEAD_MS, QUOTA_CLOCK_SKEW_MS } = require('../quota-time.cjs');
 const { CODEX, cachedInputInsideInput, isProviderId, providerById } = require('../providers.mjs');
 const { DAY_MS, iso, validIso, optionalText, json, dateKey } = require('./shared.cjs');

@@ -4,7 +4,8 @@ require('./setup.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const os = require('node:os');
-const { deriveLearningSamples, forecastQuota, latestEvidenceAt, withoutStaleRestatements } = require('../electron/forecast.cjs');
+const { deriveLearningSamples, forecastQuota } = require('../electron/forecast.cjs');
+const { latestEvidenceAt, withoutStaleRestatements } = require('../electron/quota-evidence.cjs');
 const { UsageStore } = require('../electron/store.cjs');
 
 const MINUTE = 60_000;

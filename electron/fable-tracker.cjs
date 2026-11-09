@@ -13,7 +13,7 @@ const FABLE_BUCKET_ID = FABLE.weeklyBucket;
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const { OFFICIAL_PROVENANCES, isProviderProvenance } = require('./quota-provenance.mjs');
 const { freshnessLimitHours } = require('./dashboard-decision.cjs');
-const { evidenceTimes, freshReadGraceFor, latestEvidenceAt, withoutStaleRestatements } = require('./forecast.cjs');
+const { evidenceTimes, freshReadGraceFor, latestEvidenceAt, withoutStaleRestatements } = require('./quota-evidence.cjs');
 const { PROVIDER_WINDOW_DESCRIPTORS } = require('./claude-window-descriptors.cjs');
 
 /** @typedef {import('./types').Store} Store */

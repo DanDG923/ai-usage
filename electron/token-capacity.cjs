@@ -2,7 +2,7 @@
 
 const { createAllowanceScaler } = require('./allowance-changes.cjs');
 const { FORECAST_LOOKBACK_MS } = require('./quota-time.cjs');
-const { evidenceTimes, normaliseObservation } = require('./forecast.cjs');
+const { evidenceTimes, normaliseObservation } = require('./quota-evidence.cjs');
 const { OFFICIAL_PROVENANCES: CALIBRATION_PROVENANCES } = require('./quota-provenance.mjs');
 const { present } = require('./present.cjs');
 const { CLAUDE, CLAUDE_MODEL_IDS, CODEX, cachedInputInsideInput, claudeModelFamily, isWeeklyBucket, providerById } = require('./providers.mjs');
