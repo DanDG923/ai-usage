@@ -401,7 +401,12 @@ const COPIED_HISTORY_MS = 1000;
 function* sessionEntries(lines, state, onRejected = /** @type {(message: string) => void} */ (() => {})) {
   for (const line of lines) {
     let entry;
-    try { entry = JSON.parse(line); } catch { continue; }
+    try { entry = JSON.parse(line); } catch {
+      // Only whole lines are read, so this is not a record still being
+      // written. Counted, or a damaged log looks like a quiet one.
+      if (line.trim()) onRejected('Codex session line is not valid JSON.');
+      continue;
+    }
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
       onRejected('Codex session record must be an object.');
       continue;

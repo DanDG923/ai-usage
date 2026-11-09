@@ -704,6 +704,12 @@ function importClaudeTranscripts(store, days = 120) {
         try {
           row = JSON.parse(line);
         } catch {
+          // Only whole lines are read, so this is not a record still being
+          // written. Counted, or a damaged transcript looks like a quiet one.
+          if (line.trim()) {
+            rejectedRows += 1;
+            lastRejection = 'Claude transcript line is not valid JSON.';
+          }
           continue;
         }
         if (!row || typeof row !== 'object' || Array.isArray(row)) {
