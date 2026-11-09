@@ -49,7 +49,7 @@ const render = (Component, props) => renderToStaticMarkup(React.createElement(Co
 const text = (html) => html.replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
 const noop = async () => {};
 const actions = {
-  dataOperation: null, onSetupClaude() {}, onSettings: noop, onPrice: noop, onInstallClaude: noop,
+  dataOperation: null, helperBusy: false, onSetupClaude() {}, onSettings: noop, onPrice: noop, onInstallClaude: noop,
   onUninstallClaude: noop, onBackup: noop, onRestore: noop, onOpenBackups: noop, onManual: async () => true,
   onExportCsv: noop, onCopySummary: noop, onSnooze: noop, onCheckUpdates: async () => null,
 };

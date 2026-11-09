@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { LOCALE, localDateKey } from '../../lib';
 import type { PriceRow, Settings, Snapshot } from '../../types';
 import { API_EQUIVALENT_EXPLAINER, InfoTip } from '../InfoTip';
@@ -84,17 +84,27 @@ function PriceEditor({
   const valid = FIELDS.every(
     (key) => draft[key].trim() !== '' && Number.isFinite(Number(draft[key])) && Number(draft[key]) >= 0,
   );
-  const save = () => {
-    if (!valid) return;
-    // Once a catalogue row is edited locally, its old official URL/date no
-    // longer describes the saved values. Mark the replacement as today's
-    // local row instead of displaying borrowed provenance.
-    void onSave({
-      ...row,
-      ...Object.fromEntries(FIELDS.map((key) => [key, Number(draft[key])])),
-      effective_from: localDateKey(new Date()),
-      source_url: null,
-    });
+  // One save per row at a time: a double-click must not write the price twice.
+  const saveInFlight = useRef(false);
+  const [saving, setSaving] = useState(false);
+  const save = async () => {
+    if (!valid || saveInFlight.current) return;
+    saveInFlight.current = true;
+    setSaving(true);
+    try {
+      // Once a catalogue row is edited locally, its old official URL/date no
+      // longer describes the saved values. Mark the replacement as today's
+      // local row instead of displaying borrowed provenance.
+      await onSave({
+        ...row,
+        ...Object.fromEntries(FIELDS.map((key) => [key, Number(draft[key])])),
+        effective_from: localDateKey(new Date()),
+        source_url: null,
+      });
+    } finally {
+      saveInFlight.current = false;
+      setSaving(false);
+    }
   };
   return (
     <tr className={unpricedSource ? 'unpriced-price-row' : ''}>
@@ -142,8 +152,9 @@ function PriceEditor({
           type="button"
           className="btn price-save"
           aria-label={`Save ${row.model} prices`}
-          disabled={!valid}
-          onClick={save}
+          disabled={!valid || saving}
+          aria-busy={saving || undefined}
+          onClick={() => void save()}
         >
           Save
         </button>

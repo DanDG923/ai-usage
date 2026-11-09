@@ -1,12 +1,7 @@
-import { CircleCheck, Eye, Hourglass, OctagonAlert, X } from 'lucide-react';
+import { CircleCheck, Eye, Hourglass, type LucideIcon, OctagonAlert, X } from 'lucide-react';
 import { useEffect, useSyncExternalStore } from 'react';
 
 const NOTICE_LIFETIME_MS = 12_000;
-
-/** Failures stay on screen until dismissed; confirmations clear themselves. */
-function noticeIsSticky(notice: string) {
-  return notice.startsWith('Refresh completed with') || /failed|could not/i.test(notice);
-}
 
 /**
  * How a notice is drawn. The words carry the meaning; the edge colour and the
@@ -14,46 +9,57 @@ function noticeIsSticky(notice: string) {
  * back to cached data is caution amber, the update-busy notice is neutral, and
  * every other confirmation is an ok check.
  */
-function noticeLook(notice: string, failure: boolean) {
-  if (failure) return { tone: 'warning', Icon: OctagonAlert };
-  if (/fallback data/i.test(notice)) return { tone: 'caution', Icon: Eye };
-  if (/finishing an update/i.test(notice)) return { tone: 'busy', Icon: Hourglass };
-  return { tone: 'ok', Icon: CircleCheck };
+export type NoticeTone = 'ok' | 'caution' | 'busy' | 'warning';
+
+/**
+ * A message and how it is drawn. The publisher states the tone: it is never
+ * read back out of the wording, where a success that mentions something that
+ * "could not" be done would be taken for a failure.
+ */
+export type Notice = { text: string; tone: NoticeTone };
+
+const TONE_ICON: Record<NoticeTone, LucideIcon> = {
+  ok: CircleCheck,
+  caution: Eye,
+  busy: Hourglass,
+  warning: OctagonAlert,
+};
+
+/** Failures stay on screen until dismissed; every other notice clears itself. */
+export function noticeIsSticky(notice: Notice) {
+  return notice.tone === 'warning';
 }
 
 /**
- * The notice text lives here rather than in App state: every handler in App
+ * The notice lives here rather than in App state: every handler in App
  * publishes to it, but only the toast needs to render when it changes. When
  * it was App state, each message and its twelve-second auto-clear re-rendered
  * whichever page was mounted, Settings and its price table included.
  */
 export type NoticeChannel = {
-  /** Publish a message; an empty string dismisses the current one. */
-  show: (text: string) => void;
+  /** Publish a message with its tone. */
+  show: (notice: Notice) => void;
+  /** Publish a failure: the warning tone, kept until dismissed. */
   fail: (text: string) => void;
-  isFailure: () => boolean;
-  current: () => string;
+  dismiss: () => void;
+  current: () => Notice | null;
   subscribe: (listener: () => void) => () => void;
 };
 
 export function createNoticeChannel(): NoticeChannel {
-  let notice = '';
-  let failure = false;
+  let notice: Notice | null = null;
   const listeners = new Set<() => void>();
+  // The same message published again keeps the notice already shown, so its
+  // remaining lifetime is not restarted.
+  const publish = (next: Notice | null) => {
+    if (next?.text === notice?.text && next?.tone === notice?.tone) return;
+    notice = next;
+    for (const listener of listeners) listener();
+  };
   return {
-    show(text) {
-      const nextFailure = noticeIsSticky(text);
-      if (text === notice && nextFailure === failure) return;
-      failure = nextFailure;
-      notice = text;
-      for (const listener of listeners) listener();
-    },
-    fail(text) {
-      failure = true;
-      notice = text;
-      for (const listener of listeners) listener();
-    },
-    isFailure: () => failure,
+    show: ({ text, tone }) => publish(text ? { text, tone } : null),
+    fail: (text) => publish(text ? { text, tone: 'warning' } : null),
+    dismiss: () => publish(null),
     current: () => notice,
     subscribe(listener) {
       listeners.add(listener);
@@ -63,40 +69,39 @@ export function createNoticeChannel(): NoticeChannel {
 }
 
 export function NoticeToast({ channel }: { channel: NoticeChannel }) {
-  const notice = useSyncExternalStore(channel.subscribe, channel.current);
-
-  const failure = useSyncExternalStore(channel.subscribe, channel.isFailure);
+  const notice = useSyncExternalStore(channel.subscribe, channel.current, channel.current);
+  const failure = Boolean(notice && noticeIsSticky(notice));
 
   // Informational notices clear themselves; the timer restarts whenever the
-  // text changes so a newer message gets its full lifetime.
+  // notice changes so a newer message gets its full lifetime.
   useEffect(() => {
-    if (!notice || failure) return;
-    const timer = window.setTimeout(() => channel.show(''), NOTICE_LIFETIME_MS);
+    if (!notice || noticeIsSticky(notice)) return;
+    const timer = window.setTimeout(channel.dismiss, NOTICE_LIFETIME_MS);
     return () => window.clearTimeout(timer);
-  }, [notice, failure, channel]);
+  }, [notice, channel]);
 
   return (
     <>
       <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
-        {!failure ? notice : ''}
+        {notice && !failure ? notice.text : ''}
       </div>
       <div className="sr-only" role="alert" aria-atomic="true">
-        {failure ? notice : ''}
+        {notice && failure ? notice.text : ''}
       </div>
-      {notice && <Toast notice={notice} failure={failure} onDismiss={() => channel.show('')} />}
+      {notice && <Toast notice={notice} onDismiss={channel.dismiss} />}
     </>
   );
 }
 
 /** The visible toast; the live regions above announce it, so it has no role of its own. */
-function Toast({ notice, failure, onDismiss }: { notice: string; failure: boolean; onDismiss: () => void }) {
-  const { tone, Icon } = noticeLook(notice, failure);
+function Toast({ notice, onDismiss }: { notice: Notice; onDismiss: () => void }) {
+  const Icon = TONE_ICON[notice.tone];
   return (
-    <div className={`toast ${tone}`}>
+    <div className={`toast ${notice.tone}`}>
       <span className="toast-icon">
         <Icon aria-hidden="true" />
       </span>
-      <span className="toast-text">{notice}</span>
+      <span className="toast-text">{notice.text}</span>
       <button type="button" className="ibtn" aria-label="Dismiss message" title="Dismiss (Esc)" onClick={onDismiss}>
         <X aria-hidden="true" />
       </button>

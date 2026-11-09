@@ -158,6 +158,103 @@ test('Activity renders the actual early cycle end and marks only the replacement
   assert.ok(!text(html).includes(lib.dayDate(ended.resetsAt)));
 });
 
+test('Activity and a provider page agree on which past windows reset early', async () => {
+  const { CycleHistory } = await server.ssrLoadModule('/src/components/details/CycleHistory.tsx');
+  const count = (html) => (html.match(/Reset early/g) || []).length;
+  // Every past Codex window ends where endsAtFor puts it; both pages then label the same rows.
+  const labelled = (endsAtFor) => {
+    const snapshot = structuredClone(demoSnapshot);
+    snapshot.cycles.codex = snapshot.cycles.codex.map((row) => (row.current ? row : { ...row, endsAt: endsAtFor(Date.parse(row.resetsAt)) }));
+    const page = render(ProviderDetail, { snapshot, provider: 'codex', onBack() {} })
+      .match(/<table class="cycle-detail-table">[\s\S]*?<\/table>/)?.[0];
+    assert.ok(page, 'the provider page rendered its cycle table');
+    const activity = render(CycleHistory, { cycles: { codex: snapshot.cycles.codex, claude: [], fable: [] }, currency: 'GBP' });
+    return { page: count(page), activity: count(activity) };
+  };
+  const past = demoSnapshot.cycles.codex.filter((row) => !row.current).length;
+  assert.ok(past > 0, 'the demo has past windows to label');
+  const iso = (ms) => new Date(ms).toISOString();
+  // A provider reports one reset a second or so apart across readings: an ordinary reset.
+  assert.deepEqual(labelled((reset) => iso(reset + 1_000)), { page: 0, activity: 0 });
+  assert.deepEqual(labelled((reset) => iso(reset - 1_000)), { page: 0, activity: 0 });
+  // The same moment written differently is still the same moment.
+  assert.deepEqual(labelled((reset) => iso(reset).replace('Z', '+00:00')), { page: 0, activity: 0 });
+  // The tolerance is one minute, on both pages.
+  assert.deepEqual(labelled((reset) => iso(reset - 60_000)), { page: 0, activity: 0 });
+  assert.deepEqual(labelled((reset) => iso(reset - 61_000)), { page: past, activity: past });
+  assert.deepEqual(labelled((reset) => iso(reset - 2 * 86_400_000)), { page: past, activity: past });
+});
+
+test('a notice is drawn by the tone it is published with, not by its wording', async () => {
+  const { NoticeToast, createNoticeChannel, noticeIsSticky } = await server.ssrLoadModule('/src/components/NoticeToast.tsx');
+  const channel = createNoticeChannel();
+  const region = (html, role) => text(html.match(new RegExp(`<div class="sr-only" role="${role}"[^>]*>([\\s\\S]*?)</div>`))[1]);
+  const drawn = () => {
+    const html = render(NoticeToast, { channel });
+    const notice = channel.current();
+    return { toast: html.match(/<div class="toast ([a-z]+)">/)?.[1] ?? null, status: region(html, 'status'),
+      alert: region(html, 'alert'), stays: notice ? noticeIsSticky(notice) : null };
+  };
+  assert.deepEqual(drawn(), { toast: null, status: '', alert: '', stays: null });
+  // The success that used to be read as a failure: its wording says something could not be done.
+  const removed = 'Claude allowance helper disabled and its status line removed. Fully restart Claude. The helper script is still in use and could not be deleted; it is no longer referenced.';
+  channel.show({ text: removed, tone: 'ok' });
+  assert.deepEqual(drawn(), { toast: 'ok', status: removed, alert: '', stays: false });
+  // The same words published as a failure are drawn and announced as one, and stay.
+  channel.show({ text: removed, tone: 'warning' });
+  assert.deepEqual(drawn(), { toast: 'warning', status: '', alert: removed, stays: true });
+  channel.fail('Backup failed.');
+  assert.deepEqual(drawn(), { toast: 'warning', status: '', alert: 'Backup failed.', stays: true });
+  // Wording that used to select a look no longer does.
+  channel.show({ text: 'Refresh completed using fallback data for Claude.', tone: 'caution' });
+  assert.deepEqual(drawn(), { toast: 'caution', status: 'Refresh completed using fallback data for Claude.', alert: '', stays: false });
+  channel.show({ text: 'AI Usage is finishing an update.', tone: 'busy' });
+  assert.deepEqual(drawn(), { toast: 'busy', status: 'AI Usage is finishing an update.', alert: '', stays: false });
+  channel.show({ text: 'Scheduled backup failed, fallback data, finishing an update.', tone: 'ok' });
+  assert.equal(drawn().toast, 'ok');
+  // Publishing the notice already shown keeps it, so its lifetime is not restarted.
+  let published = 0;
+  const release = channel.subscribe(() => { published += 1; });
+  const shown = channel.current();
+  channel.show({ text: shown.text, tone: shown.tone });
+  assert.equal(channel.current(), shown);
+  assert.equal(published, 0);
+  channel.dismiss();
+  release();
+  assert.equal(published, 1);
+  assert.deepEqual(drawn(), { toast: null, status: '', alert: '', stays: null });
+});
+
+test('App states the tone of every notice it publishes', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../src/App.tsx'), 'utf8');
+  const calls = source.match(/\bsetNotice\(/g) || [];
+  assert.ok(calls.length > 10, 'App publishes its notices through setNotice');
+  assert.equal((source.match(/\bsetNotice\(\{/g) || []).length, calls.length, 'every notice is published as { text, tone }');
+  // Disabling the helper succeeded even when its script stays on disk.
+  const removal = source.slice(source.indexOf('const uninstallClaude'), source.indexOf('const claudeCodeMod'));
+  assert.match(removal, /could not be deleted/);
+  assert.match(removal, /setNotice\(\{[\s\S]*?tone: 'ok',\s*\}\)/);
+  assert.doesNotMatch(removal, /tone: 'warning'/);
+});
+
+test('the Claude helper control cannot be pressed again while a change is in flight', async () => {
+  const { SourcesSection } = await server.ssrLoadModule('/src/components/settings/SourcesSection.tsx');
+  for (const helperInstalled of [true, false]) {
+    const snapshot = structuredClone(demoSnapshot);
+    const claude = snapshot.sources.find((source) => source.id === 'claude');
+    claude.metadata = { ...claude.metadata, helperInstalled };
+    const control = (helperBusy) => render(SourcesSection, { snapshot, helperBusy, update: async () => {},
+      onInstallClaude: async () => {}, onUninstallClaude: async () => {}, onSetupClaude() {}, onClaudeCodeMod: async () => null })
+      .match(/<button[^>]*>(?:Disable helper|Enable fallback helper)<\/button>/)?.[0];
+    assert.match(control(false), helperInstalled ? /Disable helper/ : /Enable fallback helper/);
+    assert.doesNotMatch(control(false), /disabled|aria-busy/);
+    assert.match(control(true), /disabled=""/);
+    assert.match(control(true), /aria-busy="true"/);
+    // The words on the control do not change while it is busy.
+    assert.equal(text(control(true)), text(control(false)));
+  }
+});
+
 test('expired allowance cards retain history without presenting a current balance or countdown', () => {
   const snapshot = expiredSnapshot();
   const view = providerViews(snapshot)[0];
