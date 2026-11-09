@@ -60,6 +60,9 @@ test('release audit requires every main-process source file, in whichever folder
   const directory = path.join(root, 'electron');
   assert.doesNotThrow(() => assertMainProcessSources(['electron/main.cjs', 'electron/app/lifecycle.cjs', 'dist/index.html'], directory));
   assert.throws(() => assertMainProcessSources(['electron/main.cjs'], directory), /absent from ASAR: electron\/app\/lifecycle\.cjs/);
+  // A type declaration is never loaded, and the packager leaves it out.
+  fs.writeFileSync(path.join(root, 'electron', 'types.d.ts'), '');
+  assert.doesNotThrow(() => assertMainProcessSources(['electron/main.cjs', 'electron/app/lifecycle.cjs'], directory));
   // The real tree: what the packager is configured to take covers all of it.
   const repo = path.resolve(__dirname, '..');
   const sources = fs.readdirSync(path.join(repo, 'electron'), { recursive: true })
