@@ -3,7 +3,9 @@ require('../setup.cjs');
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const os = require('node:os');
 const { deriveLearningSamples, forecastQuota, percentile } = require('../../electron/forecast.cjs');
+const { UsageStore } = require('../../electron/store.cjs');
 
 test('percentile interpolates a distribution', () => {
   assert.equal(percentile([1, 2, 3, 4, 5], 0.5), 3);
@@ -794,4 +796,38 @@ test('a forecast that runs out mid-hour reports the run-out inside that hour, no
   assert.ok(runOut > expected[zero - 1].at && runOut < expected[zero].at,
     `${result.exhaustsAt} should fall strictly inside the hour ending ${new Date(expected[zero].at).toISOString()}`);
   for (const point of result.series.heavy) assert.equal(typeof point.projected, 'number');
+});
+
+test('a latest reading with no usable figure gives an unknown forecast, never an exception', (t) => {
+  const now = Date.parse('2026-11-09T12:00:00Z');
+  const hour = 3_600_000;
+  const reading = (hoursAgo, figures) => ({
+    observedAt: new Date(now - hoursAgo * hour).toISOString(), resetsAt: new Date(now + 72 * hour).toISOString(),
+    windowMinutes: 10_080, provenance: 'official', ...figures,
+  });
+  const earlier = reading(2, { usedPercent: 20, remainingPercent: 80 });
+  for (const figures of [{}, { used_percent: null, remaining_percent: null }, { usedPercent: 'abc', remainingPercent: 'abc' },
+    { usedPercent: '', remainingPercent: ' ' }, { usedPercent: Infinity, remainingPercent: NaN }]) {
+    const result = forecastQuota([earlier, reading(1, figures)], { now });
+    assert.equal(result.state, 'unknown', JSON.stringify(figures));
+    assert.equal(result.expectedRemaining, null);
+    assert.equal(result.exhaustsAt, null);
+    assert.deepEqual(result.series.observed.map((point) => point.remaining), [80], 'only readings with a figure are drawn');
+  }
+  // One figure is enough, and a null beside it is absent rather than zero.
+  const partial = forecastQuota([earlier, reading(1, { usedPercent: 30, remainingPercent: null })], { now });
+  assert.notEqual(partial.state, 'unknown');
+  assert.equal(partial.series.observed.at(-1).remaining, 70);
+  // A malformed reading between two good ones does not stop the forecast.
+  assert.notEqual(forecastQuota([earlier, reading(1.5, {}), reading(1, { usedPercent: 30 })], { now }).state, 'unknown');
+
+  // The same through the store: a row an older build or an outside edit left
+  // with text in a figure column must not take the snapshot down.
+  const store = new UsageStore(':memory:', os.tmpdir());
+  t.after(() => store.close());
+  store.db.prepare(`INSERT INTO quota_observations
+    (source_id, bucket_id, observed_at, resets_at, used_percent, remaining_percent, window_minutes, provenance)
+    VALUES ('codex', 'codex:weekly', ?, ?, 'abc', 'abc', 10080, 'official')`)
+    .run(new Date(now - hour).toISOString(), new Date(now + 72 * hour).toISOString());
+  assert.equal(store.getDashboardSnapshot(7, now).quotas.codex.forecast.state, 'unknown');
 });

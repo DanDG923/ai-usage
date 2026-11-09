@@ -135,7 +135,10 @@ function viewCurrentWindow(rows, nowMs, evidence) {
   const firstVisible = currentCluster.rows.findIndex((row) => row.observedAt >= displayStart);
   const visibleRows = firstVisible < 0 ? currentCluster.rows.slice(-1) : currentCluster.rows.slice(Math.max(0, firstVisible - 1));
   const observed = visibleRows
-    .map((row) => ({ at: row.observedAt, remaining: clamp(Number.isFinite(row.remainingPercent) ? row.remainingPercent : 100 - row.usedPercent, 0, 100) }));
+    .map((row) => ({ at: row.observedAt, remaining: Number.isFinite(row.remainingPercent) ? row.remainingPercent : 100 - row.usedPercent }))
+    // A reading that carries neither figure has no place on the chart.
+    .filter((point) => Number.isFinite(point.remaining))
+    .map((point) => ({ at: point.at, remaining: clamp(point.remaining, 0, 100) }));
   // The current value is as old as its evidence, not its latest redraw. The
   // caller may have measured that before compacting away a newer read. Use
   // since then is caught up from where the figure is placed, but it is only

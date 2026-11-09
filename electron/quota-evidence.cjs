@@ -78,6 +78,10 @@ const RESET_EVIDENCE_PROVENANCES = new Set(OFFICIAL_PROVENANCES);
 // passes and the sample derivation inside them return it unchanged.
 const NORMALISED = Symbol('normalised');
 const PREPARED = Symbol('prepared');
+// A figure a reading does not carry is not a number. Number() alone reads a
+// null or a blank as zero, which would show an allowance as untouched or spent.
+/** @param {unknown} value */
+const figureOf = (value) => (value == null || (typeof value === 'string' && !value.trim()) ? Number.NaN : Number(value));
 /**
  * @template {RawReading} T
  * @param {T} row
@@ -110,8 +114,8 @@ function normaliseObservation(row) {
     // was no later. Kept for readings that cannot be dated from below.
     seenSince: seenSince == null ? null : new Date(seenSince).getTime(),
     resetsAt: new Date(/** @type {TimeInput} */ (row.resetsAt ?? row.resets_at)).getTime(),
-    usedPercent: Number(row.usedPercent ?? row.used_percent),
-    remainingPercent: Number(row.remainingPercent ?? row.remaining_percent),
+    usedPercent: figureOf(row.usedPercent ?? row.used_percent),
+    remainingPercent: figureOf(row.remainingPercent ?? row.remaining_percent),
     windowMinutes: windowMinutes == null ? null : Number(windowMinutes),
     provenance: row.provenance || 'official',
     // Judged on the provenance as supplied: an absent one is not evidence of

@@ -74,6 +74,8 @@ function forecastQuota(observations, options = {}) {
   if (!view) return unknownForecast();
   const { observed, staleHours } = view;
   if (view.expired) return unknownForecast({ expired: true, observed, staleHours });
+  // A latest reading that carries neither figure says nothing to project from.
+  if (!Number.isFinite(view.remaining)) return unknownForecast({ observed, staleHours });
 
   // Stages six to eleven, with each day at the influence it is given. They
   // run once with every day in full and, where an early reset followed an
