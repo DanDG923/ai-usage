@@ -2,15 +2,9 @@ import { ChevronRight, Database, Search, SearchX, X } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
+import { useDashboardActions, useDashboardState } from '../app/dashboard';
 import '../settings.css';
-import type {
-  ClaudeCodeModStatus,
-  ManualObservation,
-  PriceRow,
-  Settings as SettingsType,
-  Snapshot,
-  UpdateStatus,
-} from '../types';
+import type { Settings as SettingsType, Snapshot } from '../types';
 import { AlertsSection } from './settings/AlertsSection';
 import { AppearanceSection } from './settings/AppearanceSection';
 import { DiagnosticsSection } from './settings/DiagnosticsSection';
@@ -38,27 +32,6 @@ import {
 } from './settings/settings-sections';
 import { useScrollSpy } from './settings/useScrollSpy';
 
-export type SettingsActions = {
-  dataOperation: 'backup' | 'restore' | 'export' | null;
-  /** True while the Claude helper is being enabled or disabled. */
-  helperBusy: boolean;
-  onSetupClaude: () => void;
-  onSettings: (patch: Partial<SettingsType>) => Promise<void | boolean>;
-  onPrice: (row: PriceRow) => Promise<void>;
-  onInstallClaude: () => Promise<void>;
-  onUninstallClaude: () => Promise<void>;
-  /** Null in the browser preview, or when the step failed (the failure is shown as a notice). */
-  onClaudeCodeMod: (action: 'status' | 'install' | 'uninstall') => Promise<ClaudeCodeModStatus | null>;
-  onBackup: () => Promise<void>;
-  onRestore: () => Promise<void>;
-  onOpenBackups: () => Promise<void>;
-  onManual: (observation: ManualObservation) => Promise<boolean>;
-  onExportCsv: (days: number) => Promise<void>;
-  onCopySummary: () => Promise<void>;
-  onSnooze: (hours: number) => Promise<void>;
-  onCheckUpdates: () => Promise<UpdateStatus | null>;
-};
-
 const SECTION_IDS = SETTINGS_SECTIONS.map((section) => section.id);
 const ADVANCED_IDS = SETTINGS_SECTIONS.filter((section) => section.advanced).map((section) => section.id);
 
@@ -75,16 +48,23 @@ function sameMatches(a: ReadonlySet<SettingsSectionId> | null, b: ReadonlySet<Se
  * `initialSection` (a section id such as "forecast", or a block such as
  * "subscription-fees") is scrolled to and focused when the page opens. A
  * `#section` hash in the address does the same, on arrival or when it changes.
+ *
+ * The sections take their actions from the dashboard themselves. Sources is
+ * the exception: it is also drawn on its own with explicit props, so its
+ * helper state and actions are handed to it here.
  */
 export function Settings({
   snapshot,
-  actions,
   initialSection,
+  onSetupClaude,
 }: {
   snapshot: Snapshot;
-  actions: SettingsActions;
   initialSection?: string | null;
+  /** Opens the Claude setup guide, which App owns. */
+  onSetupClaude: () => void;
 }) {
+  const { updateSettings, installClaudeHelper, uninstallClaudeHelper, claudeCodeMod } = useDashboardActions();
+  const helperBusy = useDashboardState((state) => state.helperBusy);
   // Saves can overlap (a toggle, then a field), so they are counted: the
   // first to finish must not clear "Saving locally…" while another runs.
   const [savesInFlight, setSavesInFlight] = useState(0);
@@ -92,7 +72,7 @@ export function Settings({
   const update = async (patch: Partial<SettingsType>) => {
     setSavesInFlight((count) => count + 1);
     try {
-      return await actions.onSettings(patch);
+      return await updateSettings(patch);
     } finally {
       setSavesInFlight((count) => count - 1);
     }
@@ -295,35 +275,20 @@ export function Settings({
               {slot(
                 'sources',
                 <SourcesSection
-                  onSetupClaude={actions.onSetupClaude}
+                  onSetupClaude={onSetupClaude}
                   snapshot={snapshot}
                   update={update}
-                  helperBusy={actions.helperBusy}
-                  onInstallClaude={actions.onInstallClaude}
-                  onUninstallClaude={actions.onUninstallClaude}
-                  onClaudeCodeMod={actions.onClaudeCodeMod}
+                  helperBusy={helperBusy}
+                  onInstallClaude={installClaudeHelper}
+                  onUninstallClaude={uninstallClaudeHelper}
+                  onClaudeCodeMod={claudeCodeMod}
                 />,
               )}
               {slot('forecast', <ForecastSection snapshot={snapshot} update={update} />)}
-              {slot('alerts', <AlertsSection snapshot={snapshot} update={update} onSnooze={actions.onSnooze} />)}
-              {slot('pricing', <PricingSection snapshot={snapshot} update={update} onPrice={actions.onPrice} />)}
-              {slot(
-                'storage',
-                <StorageSection
-                  dataOperation={actions.dataOperation}
-                  snapshot={snapshot}
-                  update={update}
-                  onBackup={actions.onBackup}
-                  onRestore={actions.onRestore}
-                  onOpenBackups={actions.onOpenBackups}
-                  onExportCsv={actions.onExportCsv}
-                  onCopySummary={actions.onCopySummary}
-                />,
-              )}
-              {slot(
-                'appearance',
-                <AppearanceSection snapshot={snapshot} update={update} onCheckUpdates={actions.onCheckUpdates} />,
-              )}
+              {slot('alerts', <AlertsSection snapshot={snapshot} update={update} />)}
+              {slot('pricing', <PricingSection snapshot={snapshot} update={update} />)}
+              {slot('storage', <StorageSection snapshot={snapshot} update={update} />)}
+              {slot('appearance', <AppearanceSection snapshot={snapshot} update={update} />)}
 
               <details
                 className="settings-disclosure advanced-disclosure"
@@ -335,7 +300,7 @@ export function Settings({
                   <span>— Manual observations and diagnostics</span>
                 </summary>
                 <div className="settings-disclosure-body">
-                  {slot('manual', <ManualSection onManual={actions.onManual} />)}
+                  {slot('manual', <ManualSection />)}
                   {slot('diagnostics', <DiagnosticsSection snapshot={snapshot} />)}
                 </div>
               </details>

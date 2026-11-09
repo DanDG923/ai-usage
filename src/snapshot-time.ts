@@ -1,4 +1,5 @@
 import { buildDashboardVerdict } from '../electron/dashboard-decision.mjs';
+import { quotaWindows } from './lib';
 import type { Quota, QuotaWindow, Snapshot, TokenCapacityEstimate } from './types';
 
 // Claude reports one weekly reset up to a second apart across readings.
@@ -12,6 +13,17 @@ const STALE_REMAINDER_WARNING =
 /** The time a view should treat as now: the display clock, or the build time before it first advances. */
 export function snapshotNowMs(snapshot: Snapshot): number {
   return Date.parse(snapshot.clockAt ?? snapshot.generatedAt);
+}
+
+/**
+ * How long until the display clock should next advance: at the first reset
+ * still ahead, and at least once a minute.
+ */
+export function clockDelayMs(snapshot: Snapshot, nowMs: number): number {
+  const resetTimes = Object.values(snapshot.quotas)
+    .flatMap((quota) => quotaWindows(quota).map((entry) => Date.parse(entry.resetsAt)))
+    .filter((at) => at > nowMs);
+  return Math.max(1, Math.min(60_000, ...resetTimes.map((at) => at - nowMs)));
 }
 
 /**

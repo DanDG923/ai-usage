@@ -1,6 +1,6 @@
 import { AlertOctagon, AlertTriangle, CheckCircle2, CircleDashed, type LucideIcon } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { HEALTHY_SOURCE_STATUSES, shortDate } from '../../lib';
+import { HEALTHY_SOURCE_STATUSES, STALE_SOURCE_STATUSES, shortDate, sourceNeedsAttention } from '../../lib';
 import type { ClaudeCodeModStatus, Settings, Snapshot } from '../../types';
 import { SelectSetting, SettingBlock, SettingColumns, SettingRow, SettingsSection } from './fields';
 
@@ -8,17 +8,16 @@ export function sourceMark(id: string) {
   return id === 'codex' ? 'Cx' : id === 'claude-fable' ? 'Fb' : 'Cl';
 }
 
-// Statuses every consumer treats as stale data (see electron/store.cjs
-// setSourceStatus); a failing collector is the critical one.
-const STALE_STATUSES = new Set(['stale', 'degraded']);
-
 export type SourceTone = 'ok' | 'caution' | 'warning' | 'unknown';
 
-/** A collector status as a tone and its icon: connected, serving stale data, failing, or not reported yet. */
+/**
+ * A collector status as a tone and its icon: connected, serving stale data,
+ * failing (the critical one), or not reported yet.
+ */
 export function sourceTone(status: string): { tone: SourceTone; Icon: LucideIcon } {
   if (HEALTHY_SOURCE_STATUSES.has(status)) return { tone: 'ok', Icon: CheckCircle2 };
   if (status === 'error') return { tone: 'warning', Icon: AlertOctagon };
-  if (STALE_STATUSES.has(status)) return { tone: 'caution', Icon: AlertTriangle };
+  if (STALE_SOURCE_STATUSES.has(status)) return { tone: 'caution', Icon: AlertTriangle };
   return { tone: 'unknown', Icon: CircleDashed };
 }
 
@@ -57,7 +56,7 @@ export function ClaudeCodeModSetting({
   const [status, setStatus] = useState<ClaudeCodeModStatus | null>(null);
   const [checked, setChecked] = useState(false);
   const [pending, setPending] = useState<'install' | 'uninstall' | null>(null);
-  // The dashboard rebuilds its actions with every snapshot; the check runs once per visit.
+  // The action is read through a ref, so the check runs once per visit whatever the caller passes on later renders.
   const act = useRef(onClaudeCodeMod);
   useEffect(() => {
     act.current = onClaudeCodeMod;
@@ -184,7 +183,7 @@ export function SourcesSection({
                   <dt>Scan</dt>
                   <dd>{shortDate(source.last_attempt_at)}</dd>
                 </div>
-                {['error', 'stale', 'degraded'].includes(source.status) && (
+                {sourceNeedsAttention(source.status) && (
                   <div className="source-last-good">
                     <dt>Last good</dt>
                     <dd>{shortDate(source.last_success_at)}</dd>

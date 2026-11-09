@@ -1,4 +1,4 @@
-import { dayDate } from './lib';
+import { dayDate, localDateKey } from './lib';
 import type { ProviderId } from './provider-view';
 import type { Snapshot } from './types';
 
@@ -9,11 +9,6 @@ export type BankedResets = {
   /** Where the count comes from: the provider's own report, or the user's record. */
   source: 'provider' | 'manual';
 };
-
-function localDayKey(ms: number) {
-  const date = new Date(ms);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-}
 
 /**
  * Resets a provider lets you claim, shown on that provider's card. Codex
@@ -39,7 +34,7 @@ export function bankedResetsFor(
   if (provider === 'claude') {
     const count = Number(snapshot.settings.claudeFreeResets) || 0;
     const expiresOn = snapshot.settings.claudeFreeResetsExpireOn ?? null;
-    if (!(count > 0) || (expiresOn && localDayKey(nowMs) > expiresOn)) return null;
+    if (!(count > 0) || (expiresOn && localDateKey(new Date(nowMs)) > expiresOn)) return null;
     const [year, month, day] = (expiresOn ?? '').split('-').map(Number);
     const expiry = expiresOn ? ` Expires ${dayDate(new Date(year, month - 1, day, 12).getTime())}.` : '';
     return {

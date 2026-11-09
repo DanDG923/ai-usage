@@ -1,21 +1,25 @@
-import { AlertOctagon, AlertTriangle, CheckCircle2, CircleDashed, Eye } from 'lucide-react';
+import { AlertOctagon, AlertTriangle, CheckCircle2, CircleDashed, Eye, type LucideIcon } from 'lucide-react';
+import { STATE_WORD } from '../lib';
 import type { ForecastState } from '../types';
 
-export const STATE_WORD: Record<ForecastState, string> = {
-  safe: 'On track',
-  watch: 'Watch',
-  risk: 'At risk',
-  critical: 'Critical',
-  unknown: 'Learning',
-};
-
-const STATE_ICON = {
+/**
+ * The icon that goes with each state's word, so a state never rests on colour
+ * alone. The pills and the glareshield's source health draw watch as an eye.
+ */
+export const STATE_ICON: Record<ForecastState, LucideIcon> = {
   safe: CheckCircle2,
   watch: Eye,
   risk: AlertTriangle,
   critical: AlertOctagon,
   unknown: CircleDashed,
-} as const;
+};
+
+/**
+ * The same table with watch as the warning triangle, as the annunciators (the
+ * Overview's status line and the tray flyout) and the Activity source column
+ * have always drawn it. The two looks are deliberate; only the table is shared.
+ */
+export const ALERT_STATE_ICON: Record<ForecastState, LucideIcon> = { ...STATE_ICON, watch: AlertTriangle };
 
 /** A forecast state as an icon and a word, so the state never rests on colour alone. */
 export function StatePill({ state, label }: { state: ForecastState; label?: string }) {

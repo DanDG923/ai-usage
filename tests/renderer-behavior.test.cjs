@@ -226,7 +226,7 @@ test('a notice is drawn by the tone it is published with, not by its wording', a
 });
 
 test('App states the tone of every notice it publishes', () => {
-  const source = fs.readFileSync(path.join(__dirname, '../src/App.tsx'), 'utf8');
+  const source = fs.readFileSync(path.join(__dirname, '../src/app/dashboard-actions.ts'), 'utf8');
   const calls = source.match(/\bsetNotice\(/g) || [];
   assert.ok(calls.length > 10, 'App publishes its notices through setNotice');
   assert.equal((source.match(/\bsetNotice\(\{/g) || []).length, calls.length, 'every notice is published as { text, tone }');

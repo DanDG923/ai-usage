@@ -4,6 +4,7 @@ import { bankedResetsFor } from '../banked-resets';
 import { dailyBudget, forecastReserve, paceLabel, scheduleOf } from '../budget';
 import { currentCycleFor, cycleEndedEarly } from '../cycle-match';
 import {
+  DAY_NAMES,
   capVisible,
   compactNumber,
   extraUsageAtLastRefresh,
@@ -16,7 +17,7 @@ import {
   shortDate,
   whenLabel,
 } from '../lib';
-import { providerViews, type ProviderId, type ProviderView } from '../provider-view';
+import { hasProjection, providerViews, type ProviderId, type ProviderView } from '../provider-view';
 import { snapshotNowMs } from '../snapshot-time';
 import type { CycleRow, Settings, Snapshot } from '../types';
 import { RunwayChart } from './Charts';
@@ -25,8 +26,6 @@ import { SessionWindows } from './ProviderSummary';
 import { StatePill } from './StatePill';
 import { TokenCapacity } from './TokenCapacity';
 import '../styles/provider.css';
-
-const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 function scheduleSummary(settings: Settings) {
   const days = [...(settings.activeDays ?? [])].sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7));
@@ -65,11 +64,6 @@ function windowNoun(view: ProviderView) {
   if (minutes != null && minutes >= 10_080 && minutes < 20_160) return 'week';
   if (minutes != null && minutes >= 40_320) return 'month';
   return 'window';
-}
-
-/** Whether the runway draws an expected path, a heavier range and the fuel tape. */
-function hasProjection(view: ProviderView) {
-  return view.state !== 'unknown' && view.expectedRemaining != null && view.heavyRemaining != null;
 }
 
 /** A status value: the tone's icon, then the words, in the tone's colour. */

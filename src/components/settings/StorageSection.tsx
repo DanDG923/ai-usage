@@ -1,27 +1,18 @@
 import { FolderOpen } from 'lucide-react';
 import { useState } from 'react';
+import { useDashboardActions, useDashboardState } from '../../app/dashboard';
 import type { Settings, Snapshot } from '../../types';
 import { NumericSetting, SelectSetting, SettingColumns, SettingRow, SettingsSection } from './fields';
 
 export function StorageSection({
-  dataOperation,
   snapshot,
   update,
-  onBackup,
-  onRestore,
-  onOpenBackups,
-  onExportCsv,
-  onCopySummary,
 }: {
-  dataOperation: 'backup' | 'restore' | 'export' | null;
   snapshot: Snapshot;
   update: (patch: Partial<Settings>) => Promise<void | boolean>;
-  onBackup: () => Promise<void>;
-  onRestore: () => Promise<void>;
-  onOpenBackups: () => Promise<void>;
-  onExportCsv: (days: number) => Promise<void>;
-  onCopySummary: () => Promise<void>;
 }) {
+  const dataOperation = useDashboardState((state) => state.dataOperation);
+  const { backup, restore, openBackups, exportCsv, copySummary } = useDashboardActions();
   const [exportDays, setExportDays] = useState(90);
   return (
     <SettingsSection
@@ -69,7 +60,7 @@ export function StorageSection({
                 className="btn"
                 disabled={Boolean(dataOperation)}
                 aria-busy={dataOperation === 'backup' || undefined}
-                onClick={onBackup}
+                onClick={backup}
               >
                 {dataOperation === 'backup' ? 'Backing up…' : 'Back up now'}
               </button>
@@ -78,7 +69,7 @@ export function StorageSection({
                 className="btn"
                 disabled={Boolean(dataOperation)}
                 aria-busy={dataOperation === 'restore' || undefined}
-                onClick={onRestore}
+                onClick={restore}
               >
                 {dataOperation === 'restore' ? 'Restoring…' : 'Restore from backup…'}
               </button>
@@ -87,7 +78,7 @@ export function StorageSection({
                 className="ibtn"
                 aria-label="Open backup folder"
                 title="Open backup folder"
-                onClick={onOpenBackups}
+                onClick={openBackups}
               >
                 <FolderOpen aria-hidden="true" />
               </button>
@@ -138,11 +129,11 @@ export function StorageSection({
                 className="btn"
                 disabled={Boolean(dataOperation)}
                 aria-busy={dataOperation === 'export' || undefined}
-                onClick={() => onExportCsv(exportDays)}
+                onClick={() => exportCsv(exportDays)}
               >
                 {dataOperation === 'export' ? 'Exporting…' : 'Export CSV…'}
               </button>
-              <button type="button" className="btn" onClick={onCopySummary}>
+              <button type="button" className="btn" onClick={copySummary}>
                 Copy summary
               </button>
             </div>

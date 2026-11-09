@@ -1,5 +1,6 @@
 import { AlertOctagon, CheckCircle2, ChevronRight, Hourglass, Info, RefreshCw, type LucideIcon } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { useDashboardActions } from '../../app/dashboard';
 import { shortDate } from '../../lib';
 import type { RenderingMode, Settings, Snapshot, Theme, UpdateStatus } from '../../types';
 import { SelectSetting, SettingColumns, SettingsSection, ToggleRow } from './fields';
@@ -78,12 +79,11 @@ function updateDescription(status: UpdateStatus | null, preview: boolean) {
 export function AppearanceSection({
   snapshot,
   update,
-  onCheckUpdates,
 }: {
   snapshot: Snapshot;
   update: (patch: Partial<Settings>) => Promise<void | boolean>;
-  onCheckUpdates: () => Promise<UpdateStatus | null>;
 }) {
+  const { checkUpdates } = useDashboardActions();
   const [version, setVersion] = useState('');
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [pending, setPending] = useState<'check' | 'download' | 'install' | null>(null);
@@ -138,7 +138,7 @@ export function AppearanceSection({
     setPending(action);
     try {
       const result = await (action === 'check'
-        ? onCheckUpdates()
+        ? checkUpdates()
         : action === 'download'
           ? bridge.downloadUpdate()
           : bridge.installUpdate());

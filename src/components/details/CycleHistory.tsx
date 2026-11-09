@@ -1,9 +1,9 @@
 import { cycleEndedEarly } from '../../cycle-match';
-import { compactNumber, dayDate, money, percent } from '../../lib';
+import { compactNumber, dayDate, money, percent, sourceLabel } from '../../lib';
 import type { CycleRow, Snapshot } from '../../types';
 
 type CycleKey = keyof Snapshot['cycles'];
-const LABELS: Record<CycleKey, string> = { codex: 'Codex', claude: 'Claude', fable: 'Fable' };
+const CYCLE_KEYS: CycleKey[] = ['codex', 'claude', 'fable'];
 
 /** "Mon 14 Sept: 74% used", with the open window named, for the tooltip and the text alternative. */
 function cycleLabel(row: CycleRow) {
@@ -24,7 +24,7 @@ function CycleBars({ rows, provider }: { rows: CycleRow[]; provider: CycleKey })
   // Copy first; toReversed needs the ES2023 lib the renderer does not target.
   // oxlint-disable-next-line unicorn/no-array-reverse
   const ordered = [...rows].reverse();
-  const description = `${LABELS[provider]} peak allowance used per reset cycle, oldest first: ${ordered.map(cycleLabel).join('; ')}.`;
+  const description = `${sourceLabel(provider)} peak allowance used per reset cycle, oldest first: ${ordered.map(cycleLabel).join('; ')}.`;
   return (
     <div className={`cycle-bars ${provider}`} role="img" aria-label={description}>
       <span className="cycle-limit" aria-hidden="true">
@@ -54,7 +54,7 @@ function CycleBars({ rows, provider }: { rows: CycleRow[]; provider: CycleKey })
 }
 
 export function CycleHistory({ cycles, currency }: { cycles: Snapshot['cycles']; currency: string }) {
-  const keys = (Object.keys(LABELS) as CycleKey[]).filter((key) => cycles[key]?.length);
+  const keys = CYCLE_KEYS.filter((key) => cycles[key]?.length);
   return (
     <section className="log-cycles" aria-labelledby="cycles-heading">
       <div className="log-cycles-heading">
@@ -73,7 +73,7 @@ export function CycleHistory({ cycles, currency }: { cycles: Snapshot['cycles'];
               <header>
                 <strong>
                   <span className={`swatch ${key}`} aria-hidden="true" />
-                  {LABELS[key]}
+                  {sourceLabel(key)}
                 </strong>
                 <span>
                   {cycles[key].length} window{cycles[key].length === 1 ? '' : 's'}
@@ -82,7 +82,7 @@ export function CycleHistory({ cycles, currency }: { cycles: Snapshot['cycles'];
               <CycleBars rows={cycles[key]} provider={key} />
               <div className="table-scroll">
                 <table className="cycle-table">
-                  <caption className="sr-only">{LABELS[key]} reset windows, newest first</caption>
+                  <caption className="sr-only">{sourceLabel(key)} reset windows, newest first</caption>
                   <thead>
                     <tr>
                       <th scope="col">Window ends</th>

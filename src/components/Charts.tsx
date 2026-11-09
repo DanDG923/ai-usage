@@ -5,7 +5,7 @@ import { inactiveRanges, isActiveAt, type Schedule } from '../budget';
 import { niceScale } from '../chart-scale';
 import type { CostAnalytics, DailyUsage, Point } from '../types';
 import { LOCALE, compactNumber, dateTimeLabel, formatInt, money, percent, whenLabel } from '../lib';
-import type { ProviderView } from '../provider-view';
+import { hasProjection, type ProviderView } from '../provider-view';
 import { recentDayKeys } from './details/cost-math';
 import { spreadRunwayLabels } from './details/runway-labels';
 
@@ -144,11 +144,6 @@ function windowStartOf(view: ProviderView) {
     return resetAt - current.windowMinutes * 60_000;
   }
   return current.forecast.series.observed[0]?.at ?? resetAt - 7 * 86_400_000;
-}
-
-/** Whether a view has an expected and heavier projection worth drawing. */
-function hasProjection(view: ProviderView) {
-  return view.state !== 'unknown' && view.expectedRemaining != null && view.heavyRemaining != null;
 }
 
 export function runwaySummary(view: ProviderView) {

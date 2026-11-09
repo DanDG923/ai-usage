@@ -20,7 +20,7 @@ function render(bridge?: FlyoutBridge) {
   );
 }
 
-// Demo data is a browser-preview adapter only, guarded as in App.tsx: Electron
+// Demo data is a browser-preview adapter only, guarded as in app/bridge.ts: Electron
 // always has window.aiUsageFlyout (from the flyout preload), so an installed
 // flyout can never show demo figures. The adapter loads on demand.
 const isBrowserPreview = !window.aiUsageFlyout && window.location.protocol !== 'file:';

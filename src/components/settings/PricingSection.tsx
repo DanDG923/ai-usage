@@ -1,4 +1,5 @@
 import { useId, useRef, useState } from 'react';
+import { useDashboardActions } from '../../app/dashboard';
 import { LOCALE, localDateKey } from '../../lib';
 import type { PriceRow, Settings, Snapshot } from '../../types';
 import { API_EQUIVALENT_EXPLAINER, InfoTip } from '../InfoTip';
@@ -166,13 +167,12 @@ function PriceEditor({
 export function PricingSection({
   snapshot,
   update,
-  onPrice,
 }: {
   snapshot: Snapshot;
   update: (patch: Partial<Settings>) => Promise<void | boolean>;
-  onPrice: (row: PriceRow) => Promise<void>;
 }) {
   const { settings } = snapshot;
+  const { updatePrice } = useDashboardActions();
   const id = useId();
   const [pendingCurrency, setPendingCurrency] = useState<string | null>(null);
   const [rateDraft, setRateDraft] = useState('');
@@ -340,12 +340,12 @@ export function PricingSection({
                 key={`unpriced:${sourceId}:${row.model}`}
                 row={row}
                 unpricedSource={sourceId}
-                onSave={onPrice}
+                onSave={updatePrice}
                 templates={snapshot.priceCatalog}
               />
             ))}
             {snapshot.priceCatalog.map((row) => (
-              <PriceEditor key={row.model} row={row} onSave={onPrice} templates={[]} />
+              <PriceEditor key={row.model} row={row} onSave={updatePrice} templates={[]} />
             ))}
           </tbody>
         </table>

@@ -1,13 +1,13 @@
-import { AlertOctagon, AlertTriangle, CheckCircle2, CircleDashed } from 'lucide-react';
+import { subscriptionVisible } from '../../electron/dashboard-decision.mjs';
 import { dateTimeLabel, percent, relativeTime, shortDate } from '../lib';
-import type { ProviderView } from '../provider-view';
-import { providerViews } from '../provider-view';
+import { providerViews, visibleOnly, type ProviderView } from '../provider-view';
 import { snapshotNowMs } from '../snapshot-time';
-import type { Snapshot } from '../types';
+import type { ForecastState, Snapshot } from '../types';
 import { DailyUsageChart } from './Charts';
 import { ActivityHeatmap } from './details/ActivityHeatmap';
 import { CycleHistory } from './details/CycleHistory';
 import { RelativeTime } from './details/RelativeTime';
+import { ALERT_STATE_ICON } from './StatePill';
 import '../pages.css';
 import '../styles/activity.css';
 
@@ -18,13 +18,13 @@ import '../styles/activity.css';
  * waits for a reading (neutral). A source that collected successfully is not
  * current while the balance it shows is older than the freshness rule allows.
  */
-function sourceState(view: ProviderView) {
+function sourceState(view: ProviderView): { label: string; tone: ForecastState } {
   const status = view.source?.status ?? 'waiting';
-  if (view.expired) return { label: 'Needs reading', tone: 'unknown', icon: CircleDashed };
-  if (status === 'error') return { label: 'Unavailable', tone: 'critical', icon: AlertOctagon };
-  if (view.stale) return { label: 'Needs refresh', tone: 'watch', icon: AlertTriangle };
-  if (status === 'connected') return { label: 'Current', tone: 'safe', icon: CheckCircle2 };
-  return { label: status || 'Waiting', tone: 'unknown', icon: CircleDashed };
+  if (view.expired) return { label: 'Needs reading', tone: 'unknown' };
+  if (status === 'error') return { label: 'Unavailable', tone: 'critical' };
+  if (view.stale) return { label: 'Needs refresh', tone: 'watch' };
+  if (status === 'connected') return { label: 'Current', tone: 'safe' };
+  return { label: status || 'Waiting', tone: 'unknown' };
 }
 
 /**
@@ -65,13 +65,9 @@ function EvidenceTape({ view }: { view: ProviderView }) {
 export function Activity({ snapshot, days }: { snapshot: Snapshot; days: number }) {
   const views = providerViews(snapshot);
   const nowMs = snapshotNowMs(snapshot);
-  const visibleCycles = {
-    codex: snapshot.settings.showCodexSubscription !== false ? snapshot.cycles.codex : [],
-    claude: snapshot.settings.showClaudeSubscription !== false ? snapshot.cycles.claude : [],
-    fable: snapshot.settings.showClaudeSubscription !== false ? snapshot.cycles.fable : [],
-  };
+  const visibleCycles = visibleOnly(snapshot.settings, snapshot.cycles, []);
   const cycleCount = Object.values(visibleCycles).reduce((total, rows) => total + rows.length, 0);
-  const showDaily = snapshot.settings.showCodexSubscription !== false;
+  const showDaily = subscriptionVisible(snapshot.settings, 'codex');
   const tapeKey = views.some((view) => view.remaining != null && view.expectedRemaining != null);
   return (
     <main>
@@ -125,7 +121,7 @@ export function Activity({ snapshot, days }: { snapshot: Snapshot; days: number 
                 <tbody>
                   {views.map((view) => {
                     const state = sourceState(view);
-                    const Icon = state.icon;
+                    const Icon = ALERT_STATE_ICON[state.tone];
                     return (
                       <tr key={view.id}>
                         <td className="log-provider">
