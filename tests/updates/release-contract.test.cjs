@@ -2,19 +2,15 @@
 require('../setup.cjs');
 
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const test = require('node:test');
 
-const root = path.join(__dirname, '..', '..');
-const readJson = (name) => JSON.parse(fs.readFileSync(path.join(root, name), 'utf8'));
-const readText = (name) => fs.readFileSync(path.join(root, name), 'utf8');
+const { repoRoot, readRepoFile } = require('../helpers/repo.cjs');
 
 test('release metadata, dependency pin, package exclusions, and docs agree', () => {
-  const pkg = readJson('package.json');
-  const lock = readJson('package-lock.json');
+  const pkg = JSON.parse(readRepoFile('package.json'));
+  const lock = JSON.parse(readRepoFile('package-lock.json'));
 
-  assert.equal(require('../../tools/bump-version.cjs').checkVersion(root, pkg.version), pkg.version);
+  assert.equal(require('../../tools/bump-version.cjs').checkVersion(repoRoot, pkg.version), pkg.version);
   assert.equal(lock.version, pkg.version);
   assert.equal(lock.packages[''].version, pkg.version);
   assert.match(pkg.dependencies['@anthropic-ai/claude-agent-sdk'], /^\d+\.\d+\.\d+$/);
@@ -48,20 +44,20 @@ test('release metadata, dependency pin, package exclusions, and docs agree', () 
   assert.equal(pkg.build.electronDist, 'node_modules/electron/dist');
   assert.match(pkg.scripts.build, /release:audit/);
   assert.equal(pkg.scripts['release:audit'], 'node tools/audit-release.cjs');
-  const releaseAudit = readText('tools/audit-release.cjs');
+  const releaseAudit = readRepoFile('tools/audit-release.cjs');
   assert.match(releaseAudit, /listPackage/);
   assert.match(releaseAudit, /SHA256SUMS\.txt/);
   assert.match(releaseAudit, /source map/i);
   assert.match(releaseAudit, /private local data/i);
   // The Fable tracking notes moved from the README to the forecasting guide.
-  const forecasting = readText('docs/forecasting.md');
+  const forecasting = readRepoFile('docs/forecasting.md');
   assert.match(forecasting, /actual local Fable token activity/i);
   assert.match(forecasting, /experimental/i);
 });
 
 test('public releases build without credentials and publish complete verified assets', () => {
   const yaml = require('js-yaml');
-  const workflow = yaml.load(readText('.github/workflows/release.yml'));
+  const workflow = yaml.load(readRepoFile('.github/workflows/release.yml'));
   assert.deepEqual(workflow.on.push.tags, ['v*']);
   assert.equal(workflow.on.workflow_dispatch.inputs.tag.required, true);
   assert.equal(workflow.env.RELEASE_TAG, '${{ inputs.tag || github.ref_name }}');
@@ -159,7 +155,7 @@ test('public releases build without credentials and publish complete verified as
   assert.ok(exactFiles > 0 && exactFiles < createsDraft, 'unexpected files stop the release before upload');
   assert.ok(checksums > 0 && checksums < createsDraft, 'SHA256SUMS.txt is verified before upload');
   assert.match(publish.run, /\$checksumLines\.Count -ne \$checksummed\.Count/);
-  assert.match(readText('tools/audit-release.cjs'), /toUpperCase\(\)\} \*\$\{name\}/, 'the audit writes the line format the publish job compares');
+  assert.match(readRepoFile('tools/audit-release.cjs'), /toUpperCase\(\)\} \*\$\{name\}/, 'the audit writes the line format the publish job compares');
   assert.match(publish.run, /Get-FileHash[\s\S]*SHA256/);
   assert.match(publish.run, /\.digest -cne "sha256:\$sha256"/);
   assert.match(publish.run, /\.size -ne \$local\.Length/);
@@ -167,8 +163,8 @@ test('public releases build without credentials and publish complete verified as
   assert.match(publish.run, /--draft=false --latest/);
 
   // CI and the release build read one Node version from one place.
-  assert.match(readText('.nvmrc'), /^\d+\.\d+\.\d+\r?\n$/);
-  const ci = yaml.load(readText('.github/workflows/ci.yml'));
+  assert.match(readRepoFile('.nvmrc'), /^\d+\.\d+\.\d+\r?\n$/);
+  const ci = yaml.load(readRepoFile('.github/workflows/ci.yml'));
   assert.ok(ci.jobs.verify, 'CI keeps the verify job');
   // Packaging is exercised on every push so a broken ASAR or update feed is
   // caught before a tag ever reaches the release workflow. The nsis target is
@@ -195,7 +191,7 @@ test('public releases build without credentials and publish complete verified as
   assert.equal(builder.env.GH_TOKEN, undefined);
   assert.equal(builder.env.GITHUB_TOKEN, undefined);
   assert.ok(packRuns.includes('node tools/audit-release.cjs --unpacked'));
-  assert.match(readText('tools/audit-release.cjs'), /--unpacked/);
+  assert.match(readRepoFile('tools/audit-release.cjs'), /--unpacked/);
 
   // A second job runs the checks and the Node test suite on Linux, so code
   // that assumes Windows paths by accident is caught. It only checks: it never

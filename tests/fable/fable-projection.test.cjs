@@ -9,11 +9,11 @@ const test = require('node:test');
 const { projectFableAllowance } = require('../../electron/fable-projection.cjs');
 const { getLastCurrentOfficial } = require('../../electron/fable-tracker.cjs');
 const { UsageStore } = require('../../electron/store.cjs');
+const { iso } = require('../helpers/time.cjs');
 
 const HOUR = 3_600_000;
 const RESET = '2026-09-02T00:00:00.000Z';
 const NOW = Date.parse('2026-08-29T13:00:00Z');
-const iso = (at) => new Date(at).toISOString();
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-fable-projection-'));

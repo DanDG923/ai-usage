@@ -4,11 +4,11 @@ require('../setup.cjs');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { estimateTokenCapacity, LOOKBACK_MS, STALENESS_MS } = require('../../electron/token-capacity.cjs');
+const { iso } = require('../helpers/time.cjs');
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const NOW = Date.parse('2026-09-07T12:00:00Z');
-const iso = (at) => new Date(at).toISOString();
 function observation(at, used, overrides = {}) {
   return { source_id: 'codex', bucket_id: 'codex:weekly', observed_at: iso(at),
     resets_at: iso(NOW + 4 * DAY), window_minutes: 10080, used_percent: used,

@@ -6,17 +6,13 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { UsageStore } = require('../../electron/store.cjs');
+const { withTempStore } = require('../helpers/stores.cjs');
 const { exhaustionTime, forecastQuota } = require('../../electron/forecast.cjs');
+const { iso } = require('../helpers/time.cjs');
 
-function withStore(run) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-maint-'));
-  const store = new UsageStore(path.join(root, 'test.sqlite'), path.join(root, 'Backups'));
-  try { return run(store); } finally { store.close(); }
-}
+const withStore = (run) => withTempStore('ai-usage-maint-', run);
 
 const NOW = Date.parse('2026-09-01T12:00:00Z');
-const iso = (ms) => new Date(ms).toISOString();
 const DAY = 86_400_000;
 
 function poll(store, observedAt, usedPercent, resetsAt, provenance = 'official') {

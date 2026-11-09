@@ -2,22 +2,16 @@
 require('../setup.cjs');
 
 const assert = require('node:assert/strict');
-const os = require('node:os');
 const test = require('node:test');
-const { UsageStore } = require('../../electron/store.cjs');
+const { memoryStore } = require('../helpers/stores.cjs');
 const { primaryWindow } = require('../../electron/notifications.cjs');
 const { estimateTokenCapacity } = require('../../electron/token-capacity.cjs');
+const { iso } = require('../helpers/time.cjs');
 
 const HOUR = 3_600_000;
 const WEEK = 168 * HOUR;
 const NOW = Date.parse('2026-09-09T12:00:00Z');
-const iso = (at) => new Date(at).toISOString();
-function fixture(t) {
-  const store = new UsageStore(':memory:', os.tmpdir());
-  t.after(() => store.close());
-  store.updateSettings({ currency: 'USD' });
-  return store;
-}
+const fixture = (t) => memoryStore(t, { currency: 'USD' });
 function reading(store, at, reset, used, overrides = {}) {
   store.recordObservation({ sourceId: 'codex', bucketId: 'codex:primary', bucketName: 'Weekly',
     observedAt: iso(at), resetsAt: iso(reset), usedPercent: used, windowMinutes: 10080,

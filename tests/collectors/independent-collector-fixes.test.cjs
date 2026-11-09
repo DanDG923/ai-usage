@@ -2,10 +2,8 @@
 require('../setup.cjs');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
 const test = require('node:test');
-const { UsageStore } = require('../../electron/store.cjs');
+const { providerHome } = require('../helpers/provider-home.cjs');
 const { importLocalSessions } = require('../../electron/codex-collector.cjs');
 const { importClaudeTranscripts } = require('../../electron/claude-collector.cjs');
 
@@ -19,28 +17,7 @@ const codexEvent = (inputTokens, time = timestamp) => ({ type: 'event_msg', time
 const claudeEvent = (id, session = 'session-a') => ({ type: 'assistant', timestamp, sessionId: session,
   message: { id, model: 'claude-fable-5', usage: { input_tokens: 100, output_tokens: 10 } } });
 
-function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-independent-collector-fixes-'));
-  const previous = Object.fromEntries(['USERPROFILE', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME'].map((key) => [key, process.env[key]]));
-  process.env.USERPROFILE = root;
-  process.env.CLAUDE_CONFIG_DIR = path.join(root, '.claude');
-  process.env.CODEX_HOME = path.join(root, '.codex');
-  const store = new UsageStore(path.join(root, 'usage.sqlite'), path.join(root, 'Backups'));
-  t.after(() => {
-    store.close();
-    for (const [key, value] of Object.entries(previous)) {
-      if (value === undefined) delete process.env[key]; else process.env[key] = value;
-    }
-    fs.rmSync(root, { recursive: true, force: true });
-  });
-  const write = (relative, rows) => {
-    const file = path.join(root, relative);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, rows.map(JSON.stringify).join('\n') + '\n');
-    return file;
-  };
-  return { store, write };
-}
+const fixture = (t) => providerHome(t, 'ai-usage-independent-collector-fixes-');
 
 test('a restored Codex ledger without cursors preserves conflicting collision groups and single records', (t) => {
   const { store, write } = fixture(t);

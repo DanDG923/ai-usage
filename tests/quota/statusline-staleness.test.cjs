@@ -7,6 +7,7 @@ const os = require('node:os');
 const { deriveLearningSamples, forecastQuota } = require('../../electron/forecast.cjs');
 const { latestEvidenceAt, withoutStaleRestatements } = require('../../electron/quota-evidence.cjs');
 const { UsageStore } = require('../../electron/store.cjs');
+const { startRendererServer } = require('../helpers/renderer-server.cjs');
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -586,11 +587,7 @@ test('an undated lower status-line reading reaches the card once the provider re
 });
 
 test('the dashboard clock ages a window from its evidence, not from its latest redraw', async () => {
-  const path = require('node:path');
-  const { createServer } = await import('vite');
-  const server = await createServer({ root: path.resolve(__dirname, '..', '..'), configFile: false,
-    server: { middlewareMode: true, watch: null, hmr: false, ws: false },
-    optimizeDeps: { noDiscovery: true, include: [] }, appType: 'custom' });
+  const server = await startRendererServer({ react: false });
   try {
     const { snapshotAtTime } = await server.ssrLoadModule('/src/snapshot-time.ts');
     const builtAt = Date.parse('2026-09-23T09:00:00.000Z');

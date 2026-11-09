@@ -9,10 +9,10 @@ const test = require('node:test');
 const { UsageStore } = require('../../electron/store.cjs');
 const { CLAUDE_CODE_READING_FORMAT, importClaudeCodeReadings } = require('../../electron/claude-collector.cjs');
 const { evidenceTimes } = require('../../electron/quota-evidence.cjs');
+const { iso } = require('../helpers/time.cjs');
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
-const iso = (ms) => new Date(ms).toISOString();
 
 function setup(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-claude-code-readings-'));

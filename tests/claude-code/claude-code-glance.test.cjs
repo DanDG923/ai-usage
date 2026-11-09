@@ -2,15 +2,14 @@
 require('../setup.cjs');
 
 const assert = require('node:assert/strict');
-const path = require('node:path');
 const test = require('node:test');
 const React = require('react');
 const { renderToStaticMarkup } = require('react-dom/server');
 const { buildGlance } = require('../../electron/claude-code-glance.cjs');
 const { flyoutPayload } = require('../../electron/flyout.cjs');
 const { buildDashboardVerdict } = require('../../electron/dashboard-decision.cjs');
-
-const root = path.resolve(__dirname, '..', '..');
+const { startRendererServer } = require('../helpers/renderer-server.cjs');
+const { decodedText: text } = require('../helpers/markup.cjs');
 
 // The glance is the flyout's figures for the Claude Code mod, built in the
 // main process. These tests hold it to the renderer's own rules.
@@ -20,15 +19,7 @@ let flyoutModule;
 let providerViews;
 
 test.before(async () => {
-  const [{ createServer }, { default: react }] = await Promise.all([import('vite'), import('@vitejs/plugin-react')]);
-  server = await createServer({
-    root,
-    configFile: false,
-    plugins: [react()],
-    server: { middlewareMode: true, watch: null, hmr: false, ws: false },
-    optimizeDeps: { noDiscovery: true, include: [] },
-    appType: 'custom',
-  });
+  server = await startRendererServer();
   [demo, flyoutModule, { providerViews }] = await Promise.all([
     server.ssrLoadModule('/src/data/demo.ts'),
     server.ssrLoadModule('/src/components/TrayFlyout.tsx'),
@@ -38,7 +29,6 @@ test.before(async () => {
 
 test.after(async () => { await server?.close(); });
 
-const text = (html) => html.replace(/<[^>]+>/g, ' ').replace(/&#x27;/g, "'").replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
 const flyoutText = (snapshot) => text(renderToStaticMarkup(React.createElement(flyoutModule.TrayFlyout, {
   snapshot, nowMs: Date.parse(snapshot.generatedAt),
 })));

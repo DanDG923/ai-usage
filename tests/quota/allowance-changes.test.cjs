@@ -13,6 +13,7 @@ const { deriveFableEstimate } = require('../../electron/claude-collector.cjs');
 const { forecastQuota } = require('../../electron/forecast.cjs');
 const { UsageStore } = require('../../electron/store.cjs');
 const { estimateTokenCapacity } = require('../../electron/token-capacity.cjs');
+const { iso } = require('../helpers/time.cjs');
 
 const HOUR = 3_600_000;
 const schedule = { activeDays: [0, 1, 2, 3, 4, 5, 6], startHour: 0, endHour: 24 };
@@ -189,7 +190,6 @@ test('a recorded change rescales earlier readings so the step at the change is n
 
 test('token capacity rescales earlier intervals to the current allowance and says so', () => {
   const NOW = local(13, 12);
-  const iso = (at) => new Date(at).toISOString();
   const observation = (at, used) => ({ source_id: 'claude', bucket_id: 'seven_day', observed_at: iso(at), resets_at: iso(RESET),
     window_minutes: 10_080, used_percent: used, remaining_percent: 100 - used, provenance: 'official', plan_type: 'max', metadata_json: '{}' });
   const event = (at, tokens) => ({ source_id: 'claude', occurred_at: iso(at), model: 'claude-opus-5', input_tokens: tokens,

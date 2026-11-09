@@ -8,14 +8,12 @@ const path = require('node:path');
 const test = require('node:test');
 const { projectFableAllowance } = require('../../electron/fable-projection.cjs');
 const { UsageStore } = require('../../electron/store.cjs');
+const { iso, near } = require('../helpers/time.cjs');
 
 const HOUR = 3_600_000;
 const MILLION = 1_000_000;
 const NOW = Date.parse('2026-10-07T13:00:00Z');
 const RESET = '2026-10-10T08:00:00.000Z';
-const iso = (at) => new Date(at).toISOString();
-const near = (actual, expected, tolerance, message) => assert.ok(Math.abs(actual - expected) <= tolerance,
-  `${message ?? 'value'}: ${actual} is not within ${tolerance} of ${expected}`);
 
 function fixture(t, name = 'sonnet-5-5') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `ai-usage-${name}-`));

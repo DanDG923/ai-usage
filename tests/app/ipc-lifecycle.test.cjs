@@ -1,12 +1,11 @@
 'use strict';
 require('../setup.cjs');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const vm = require('node:vm');
 const test = require('node:test');
 const { registerIpc } = require('../../electron/ipc-handlers.cjs');
 const { mainApplication } = require('../helpers/main-application.cjs');
+const { readRepoFile } = require('../helpers/repo.cjs');
 
 function mainHarness() {
   const timers = [];
@@ -185,7 +184,7 @@ test('preload removes IPC transport prefixes and does not expose events to liste
       },
     }),
   };
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../../electron/preload.cjs'), 'utf8'), context);
+  vm.runInNewContext(readRepoFile('electron', 'preload.cjs'), context);
   await assert.rejects(bridge.createBackup(), { message: 'Disk is full.' });
   let args;
   const off = bridge.onUpdated((...values) => { args = values; });

@@ -8,12 +8,12 @@ const path = require('node:path');
 const test = require('node:test');
 const { UsageStore } = require('../../electron/store.cjs');
 const { forecastQuota, deriveLearningSamples } = require('../../electron/forecast.cjs');
+const { iso } = require('../helpers/time.cjs');
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const SKEW = 5 * 60_000;
 const NOW = Date.parse('2026-09-01T12:00:00Z');
-const iso = (ms) => new Date(ms).toISOString();
 const schedule = { activeDays: [0, 1, 2, 3, 4, 5, 6], startHour: 0, endHour: 24 };
 const observation = (observedAt = NOW, resetsAt = NOW + 7 * DAY) => ({
   observedAt: iso(observedAt), resetsAt: iso(resetsAt),

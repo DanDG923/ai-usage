@@ -2,10 +2,11 @@
 require('../setup.cjs');
 
 const assert = require('node:assert/strict');
-const path = require('node:path');
 const test = require('node:test');
 const React = require('react');
 const { renderToStaticMarkup } = require('react-dom/server');
+const { startRendererServer } = require('../helpers/renderer-server.cjs');
+const { text } = require('../helpers/markup.cjs');
 
 let server;
 let demoSnapshot;
@@ -15,12 +16,7 @@ let ProviderDetail;
 let snapshotAtTime;
 
 test.before(async () => {
-  const [{ createServer }, { default: react }] = await Promise.all([import('vite'), import('@vitejs/plugin-react')]);
-  server = await createServer({
-    root: path.resolve(__dirname, '..', '..'), configFile: false, plugins: [react()],
-    server: { middlewareMode: true, watch: null, hmr: false, ws: false },
-    optimizeDeps: { noDiscovery: true, include: [] }, appType: 'custom',
-  });
+  server = await startRendererServer();
   [{ demoSnapshot }, { TokenCapacity }, { Overview }, { ProviderDetail }, { snapshotAtTime }] = await Promise.all([
     server.ssrLoadModule('/src/data/demo.ts'),
     server.ssrLoadModule('/src/components/TokenCapacity.tsx'),
@@ -33,7 +29,6 @@ test.before(async () => {
 test.after(async () => { await server?.close(); });
 
 const render = (snapshot) => renderToStaticMarkup(React.createElement(TokenCapacity, { snapshot }));
-const text = (html) => html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 
 function fixture() {
   const snapshot = structuredClone(demoSnapshot);

@@ -2,18 +2,12 @@
 require('../setup.cjs');
 
 const assert = require('node:assert/strict');
-const os = require('node:os');
 const test = require('node:test');
-const { UsageStore } = require('../../electron/store.cjs');
+const { memoryStore } = require('../helpers/stores.cjs');
 const NOW = Date.parse('2026-09-05T12:00:00Z');
 const DAY = 86400000;
 
-function fixture(t) {
-  const store = new UsageStore(':memory:', os.tmpdir());
-  t.after(() => store.close());
-  store.updateSettings({ currency: 'USD' });
-  return store;
-}
+const fixture = (t) => memoryStore(t, { currency: 'USD' });
 function add(store, index, overrides = {}) {
   store.recordUsageEvent({ eventKey: `event-${index}`, sourceId: 'claude', model: 'claude-fable-5',
     sessionId: `session-${index}`, project: `C:\\work\\project-${index}`,

@@ -4,10 +4,10 @@ require('../setup.cjs');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { isMainWindow, isOfficialWindow, orderWindows, selectDisplayedWindows } = require('../../electron/quota-selection.cjs');
+const { iso } = require('../helpers/time.cjs');
 
 const NOW = Date.parse('2026-09-14T12:00:00Z');
 const HOUR = 3_600_000;
-const iso = (ms) => new Date(ms).toISOString();
 const window = (bucketId, overrides = {}) => ({
   bucketId, observedAt: iso(NOW - HOUR), resetsAt: iso(NOW + 3 * 24 * HOUR), windowMinutes: 10_080,
   provenance: 'official', metadata: {}, forecast: { expired: false }, ...overrides,

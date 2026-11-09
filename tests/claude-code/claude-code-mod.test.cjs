@@ -7,8 +7,9 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { MOD_FILES, PLUGIN_ID, createClaudeCodeMod } = require('../../electron/claude-code-mod.cjs');
+const { repoRoot } = require('../helpers/repo.cjs');
 
-const SOURCE = path.resolve(__dirname, '..', '..', 'claude-code-mod');
+const SOURCE = path.join(repoRoot, 'claude-code-mod');
 const BINARY = 'C:\\Tools\\claude.exe';
 
 // A stand-in for the user's Claude Code: it answers `claude plugin … --json`

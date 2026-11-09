@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { UsageStore } = require('../../electron/store.cjs');
+const { startRendererServer } = require('../helpers/renderer-server.cjs');
 const DAY = 86400000;
 
 function fixture(t) {
@@ -76,10 +77,7 @@ test('alternate official Fable bucket leaves complete forecasts and renders actu
   assert.equal(quota.bucketId, 'fable:seven_day_fable');
   assert.equal(quota.windows.length, 2);
   assert.ok(quota.windows.every((window) => window.forecast && typeof window.forecast.expired === 'boolean'));
-  const { createServer } = await import('vite');
-  const server = await createServer({ root: path.resolve(__dirname, '..', '..'), configFile: false,
-    server: { middlewareMode: true, watch: null, hmr: false, ws: false },
-    optimizeDeps: { noDiscovery: true, include: [] }, appType: 'custom' });
+  const server = await startRendererServer({ react: false });
   try {
     const { providerViews } = await server.ssrLoadModule('/src/provider-view.ts');
     assert.doesNotThrow(() => providerViews(snapshot));

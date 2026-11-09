@@ -2,11 +2,11 @@
 require('../setup.cjs');
 
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const test = require('node:test');
-const React = require('react');
-const { renderToStaticMarkup } = require('react-dom/server');
+const { readRepoFile } = require('../helpers/repo.cjs');
+const { startRendererServer } = require('../helpers/renderer-server.cjs');
+const { render, text } = require('../helpers/markup.cjs');
+const { iso } = require('../helpers/time.cjs');
 
 let server;
 let demoSnapshot;
@@ -19,15 +19,7 @@ let ErrorFallback;
 let lib;
 
 test.before(async () => {
-  const [{ createServer }, { default: react }] = await Promise.all([import('vite'), import('@vitejs/plugin-react')]);
-  server = await createServer({
-    root: path.resolve(__dirname, '..', '..'),
-    configFile: false,
-    plugins: [react()],
-    server: { middlewareMode: true, watch: null, hmr: false, ws: false },
-    optimizeDeps: { noDiscovery: true, include: [] },
-    appType: 'custom',
-  });
+  server = await startRendererServer();
   [
     { demoSnapshot }, { providerViews }, { ProviderSummary }, { Overview }, { Activity }, { ForecastSection },
     { ErrorFallback }, lib,
@@ -48,9 +40,6 @@ test.before(async () => {
 let ProviderDetail;
 
 test.after(async () => { await server?.close(); });
-
-const render = (Component, props) => renderToStaticMarkup(React.createElement(Component, props));
-const text = (html) => html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 
 test('Claude headlines the overall pool ahead of model windows and uses its own Pro label', () => {
   for (const modelFirst of [true, false]) {
@@ -173,7 +162,6 @@ test('Activity and a provider page agree on which past windows reset early', asy
   };
   const past = demoSnapshot.cycles.codex.filter((row) => !row.current).length;
   assert.ok(past > 0, 'the demo has past windows to label');
-  const iso = (ms) => new Date(ms).toISOString();
   // A provider reports one reset a second or so apart across readings: an ordinary reset.
   assert.deepEqual(labelled((reset) => iso(reset + 1_000)), { page: 0, activity: 0 });
   assert.deepEqual(labelled((reset) => iso(reset - 1_000)), { page: 0, activity: 0 });
@@ -226,7 +214,7 @@ test('a notice is drawn by the tone it is published with, not by its wording', a
 });
 
 test('App states the tone of every notice it publishes', () => {
-  const source = fs.readFileSync(path.join(__dirname, '../../src/app/dashboard-actions.ts'), 'utf8');
+  const source = readRepoFile('src', 'app', 'dashboard-actions.ts');
   const calls = source.match(/\bsetNotice\(/g) || [];
   assert.ok(calls.length > 10, 'App publishes its notices through setNotice');
   assert.equal((source.match(/\bsetNotice\(\{/g) || []).length, calls.length, 'every notice is published as { text, tone }');
@@ -480,7 +468,7 @@ test('the error fallback names the failure and offers a reload, and main.tsx mou
   assert.match(text(html), /AI Usage hit a rendering error/);
   assert.match(text(html), /Cannot read properties of undefined \(reading windows\)/);
   assert.match(text(html), /Reload dashboard/);
-  const main = fs.readFileSync(path.resolve(__dirname, '../../src/main.tsx'), 'utf8');
+  const main = readRepoFile('src', 'main.tsx');
   assert.match(main, /<ErrorBoundary>\s*<App \/>\s*<\/ErrorBoundary>/);
 });
 

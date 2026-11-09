@@ -7,13 +7,10 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { UsageStore } = require('../../electron/store.cjs');
+const { withTempStore } = require('../helpers/stores.cjs');
 const { deriveFableEstimate, epochToIso, findClaudeBinary, importClaudeInbox, importClaudeTranscripts, installClaudeHelper, isClaudeHelperInstalled, makeHelperScript, refreshClaude, uninstallClaudeHelper } = require('../../electron/claude-collector.cjs');
 
-function withStore(run) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-fable-'));
-  const store = new UsageStore(path.join(root, 'test.sqlite'), path.join(root, 'Backups'));
-  try { return run(store); } finally { store.close(); }
-}
+const withStore = (run) => withTempStore('ai-usage-fable-', run);
 
 function fableEvent(store, key, occurredAt, tokens) {
   store.recordUsageEvent({

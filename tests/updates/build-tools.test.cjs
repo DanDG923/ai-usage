@@ -8,6 +8,7 @@ const test = require('node:test');
 const { checkVersion, bumpVersion } = require('../../tools/bump-version.cjs');
 const { assertArchive, assertMainProcessSources } = require('../../tools/audit-release.cjs');
 const { buildDirectory } = require('../../tools/build-paths.cjs');
+const { repoRoot } = require('../helpers/repo.cjs');
 
 test('version tool updates all current metadata while preserving historical changelog entries', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-version-'));
@@ -64,9 +65,8 @@ test('release audit requires every main-process source file, in whichever folder
   fs.writeFileSync(path.join(root, 'electron', 'types.d.ts'), '');
   assert.doesNotThrow(() => assertMainProcessSources(['electron/main.cjs', 'electron/app/lifecycle.cjs'], directory));
   // The real tree: what the packager is configured to take covers all of it.
-  const repo = path.resolve(__dirname, '..', '..');
-  const sources = fs.readdirSync(path.join(repo, 'electron'), { recursive: true })
-    .filter((name) => fs.statSync(path.join(repo, 'electron', name)).isFile())
+  const sources = fs.readdirSync(path.join(repoRoot, 'electron'), { recursive: true })
+    .filter((name) => fs.statSync(path.join(repoRoot, 'electron', name)).isFile())
     .map((name) => `electron/${name.replaceAll('\\', '/')}`);
   assert.ok(sources.includes('electron/app/application.cjs') && sources.includes('electron/store/schema.cjs'));
   assert.doesNotThrow(() => assertMainProcessSources(sources));

@@ -18,6 +18,7 @@ const { createCollectorHost, createInlineCollectorHost } = require('../../electr
 const { createCollectorService } = require('../../electron/collector-service.cjs');
 const { registerIpc } = require('../../electron/ipc-handlers.cjs');
 const { mainApplication } = require('../helpers/main-application.cjs');
+const { repoRoot, readRepoFile } = require('../helpers/repo.cjs');
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 const plain = (value) => JSON.parse(JSON.stringify(value));
@@ -194,11 +195,11 @@ test('the Claude Code mod never reads plan usage: its sync and its readings coll
 
 // The main process's own modules, and the handlers the renderer reaches.
 function mainProcessSources() {
-  const directory = path.resolve(__dirname, '../../electron/app');
+  const directory = path.join(repoRoot, 'electron', 'app');
   return [
     ['electron/app', fs.readdirSync(directory).filter((name) => name.endsWith('.cjs')).sort()
-      .map((name) => fs.readFileSync(path.join(directory, name), 'utf8')).join('\n')],
-    ['ipc-handlers.cjs', fs.readFileSync(path.resolve(__dirname, '../../electron/ipc-handlers.cjs'), 'utf8')],
+      .map((name) => readRepoFile('electron', 'app', name)).join('\n')],
+    ['ipc-handlers.cjs', readRepoFile('electron', 'ipc-handlers.cjs')],
   ];
 }
 
@@ -245,7 +246,7 @@ test('the launch and wake collections go through refreshIfStale as automatic tri
   assert.deepEqual(h.calls(), [], 'neither calls refreshAll directly');
 
   // Startup wires exactly these two.
-  const lifecycle = fs.readFileSync(path.resolve(__dirname, '../../electron/app/lifecycle.cjs'), 'utf8');
+  const lifecycle = readRepoFile('electron', 'app', 'lifecycle.cjs');
   assert.match(lifecycle, /\n\s+main\.refresh\.scheduleLaunchRefresh\(\);\n/);
   assert.match(lifecycle, /powerMonitor\.on\('resume', main\.refresh\.onResume\)/);
 });

@@ -7,12 +7,9 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { UsageStore } = require('../../electron/store.cjs');
+const { withTempStore } = require('../helpers/stores.cjs');
 
-function withStore(run) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-test-'));
-  const store = new UsageStore(path.join(root, 'test.sqlite'), path.join(root, 'Backups'));
-  try { return run(store); } finally { store.close(); }
-}
+const withStore = (run) => withTempStore('ai-usage-test-', run);
 
 test('releasing dashboard caches preserves the complete rebuilt snapshot and stored ledger', () => withStore((store) => {
   const now = Date.parse('2026-09-18T12:00:00Z');

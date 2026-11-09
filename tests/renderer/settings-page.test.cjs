@@ -2,10 +2,9 @@
 require('../setup.cjs');
 
 const assert = require('node:assert/strict');
-const path = require('node:path');
 const test = require('node:test');
-const React = require('react');
-const { renderToStaticMarkup } = require('react-dom/server');
+const { startRendererServer } = require('../helpers/renderer-server.cjs');
+const { render } = require('../helpers/markup.cjs');
 
 let server;
 let demoSnapshot;
@@ -19,15 +18,7 @@ let fields;
 let lib;
 
 test.before(async () => {
-  const [{ createServer }, { default: react }] = await Promise.all([import('vite'), import('@vitejs/plugin-react')]);
-  server = await createServer({
-    root: path.resolve(__dirname, '..', '..'),
-    configFile: false,
-    plugins: [react()],
-    server: { middlewareMode: true, watch: null, hmr: false, ws: false },
-    optimizeDeps: { noDiscovery: true, include: [] },
-    appType: 'custom',
-  });
+  server = await startRendererServer();
   [
     { demoSnapshot }, sections, budget, preview, { Settings }, { SubscriptionsSection }, { ForecastSection }, fields, lib,
   ] = await Promise.all([
@@ -45,7 +36,6 @@ test.before(async () => {
 
 test.after(async () => { await server?.close(); });
 
-const render = (Component, props) => renderToStaticMarkup(React.createElement(Component, props));
 const text = (html) => html.replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
 const noop = async () => {};
 const actions = {

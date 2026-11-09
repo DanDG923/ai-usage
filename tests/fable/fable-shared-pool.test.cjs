@@ -12,15 +12,14 @@ const { exhaustionTime } = require('../../electron/forecast.cjs');
 const { flyoutPayload } = require('../../electron/flyout.cjs');
 const { buildSummaryLines, buildTrayTooltip, decideNotifications } = require('../../electron/notifications.cjs');
 const { UsageStore } = require('../../electron/store.cjs');
+const { startRendererServer } = require('../helpers/renderer-server.cjs');
+const { iso, near } = require('../helpers/time.cjs');
 
 const HOUR = 3_600_000;
 const MINUTE = 60_000;
 const NOW = Date.parse('2026-09-16T13:00:00Z');
 const RESET = '2026-09-19T08:00:00.000Z';
 const RESET_MS = Date.parse(RESET);
-const iso = (at) => new Date(at).toISOString();
-const near = (actual, expected, tolerance, message) => assert.ok(Math.abs(actual - expected) <= tolerance,
-  `${message ?? 'value'}: ${actual} is not within ${tolerance} of ${expected}`);
 
 // ---------------------------------------------------------------------------
 // Store fixture: real readings through getTraySnapshot.
@@ -652,10 +651,7 @@ test('the flyout keeps the shared-pool figures but drops its chart lines', (t) =
 });
 
 test('the renderer clock releases an applied pool a minute after the pool resets', async () => {
-  const { createServer } = await import('vite');
-  const server = await createServer({ root: path.resolve(__dirname, '..', '..'), configFile: false,
-    server: { middlewareMode: true, watch: null, hmr: false, ws: false },
-    optimizeDeps: { noDiscovery: true, include: [] }, appType: 'custom' });
+  const server = await startRendererServer({ react: false });
   try {
     const { snapshotAtTime } = await server.ssrLoadModule('/src/snapshot-time.ts');
     const snapshot = verdictSnapshot();
@@ -693,10 +689,7 @@ test('the renderer clock releases an applied pool a minute after the pool resets
 });
 
 test('releasing an expired cap restores every Fable figure the cap replaced, token capacity included', async () => {
-  const { createServer } = await import('vite');
-  const server = await createServer({ root: path.resolve(__dirname, '..', '..'), configFile: false,
-    server: { middlewareMode: true, watch: null, hmr: false, ws: false },
-    optimizeDeps: { noDiscovery: true, include: [] }, appType: 'custom' });
+  const server = await startRendererServer({ react: false });
   try {
     const { snapshotAtTime } = await server.ssrLoadModule('/src/snapshot-time.ts');
     const capacity = {
@@ -819,10 +812,7 @@ test('a Claude weekly reading that needs a Refresh keeps a capped Fable out of o
 });
 
 test('releasing a cap that had taken the tokens to zero restores the original estimate', async () => {
-  const { createServer } = await import('vite');
-  const server = await createServer({ root: path.resolve(__dirname, '..', '..'), configFile: false,
-    server: { middlewareMode: true, watch: null, hmr: false, ws: false },
-    optimizeDeps: { noDiscovery: true, include: [] }, appType: 'custom' });
+  const server = await startRendererServer({ react: false });
   try {
     const { snapshotAtTime } = await server.ssrLoadModule('/src/snapshot-time.ts');
     const budget = await server.ssrLoadModule('/src/budget.ts');
@@ -874,10 +864,7 @@ test('rounding never leaves Fable a balance after the Claude weekly limit has ru
   for (const point of result.sharedPool.ceiling.expected.filter((entry) => entry.at > Date.parse(pool.forecast.exhaustsAt))) {
     assert.equal(point.remaining, 0, 'the cap line stays at zero once the week is empty');
   }
-  const { createServer } = await import('vite');
-  const server = await createServer({ root: path.resolve(__dirname, '..', '..'), configFile: false,
-    server: { middlewareMode: true, watch: null, hmr: false, ws: false },
-    optimizeDeps: { noDiscovery: true, include: [] }, appType: 'custom' });
+  const server = await startRendererServer({ react: false });
   try {
     const budget = await server.ssrLoadModule('/src/budget.ts');
     const settings = { activeDays: [0, 1, 2, 3, 4, 5, 6], activeStartHour: 0, activeEndHour: 24, reservePercent: 0 };
@@ -913,10 +900,7 @@ test('a capped Fable follows a stale Claude reading even when only its heavier w
     { staleHours: 25 }));
   assert.ok(stalePoolWindow(fable, quotaOf(stale)), 'the heavier-week dependency counts');
   // The card follows the same rule.
-  const { createServer } = await import('vite');
-  const server = await createServer({ root: path.resolve(__dirname, '..', '..'), configFile: false,
-    server: { middlewareMode: true, watch: null, hmr: false, ws: false },
-    optimizeDeps: { noDiscovery: true, include: [] }, appType: 'custom' });
+  const server = await startRendererServer({ react: false });
   t.after(() => server.close());
   const { providerViews } = await server.ssrLoadModule('/src/provider-view.ts');
   const snapshot = {

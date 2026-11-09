@@ -3,34 +3,16 @@ require('../setup.cjs');
 require('../setup.cjs');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { UsageStore } = require('../../electron/store.cjs');
+const { providerHome } = require('../helpers/provider-home.cjs');
 const { readCompleteLines } = require('../../electron/incremental-file.cjs');
 const { importClaudeTranscripts, importClaudeInbox, refreshClaude } = require('../../electron/claude-collector.cjs');
 const { collectFromAppServer } = require('../../electron/codex-collector.cjs');
 const { createClaudeAgentSdkUsagePort } = require('../../electron/claude-agent-usage.cjs');
 const { createCollectorService } = require('../../electron/collector-service.cjs');
 
-function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-review-collectors-'));
-  const previous = Object.fromEntries(['USERPROFILE', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME'].map((key) => [key, process.env[key]]));
-  process.env.USERPROFILE = root;
-  process.env.CLAUDE_CONFIG_DIR = path.join(root, '.claude');
-  process.env.CODEX_HOME = path.join(root, '.codex');
-  const store = new UsageStore(path.join(root, 'usage.sqlite'), path.join(root, 'Backups'));
-  t.after(() => { store.close(); for (const [key, value] of Object.entries(previous)) {
-    if (value === undefined) delete process.env[key]; else process.env[key] = value;
-  } fs.rmSync(root, { recursive: true, force: true }); });
-  const write = (relative, rows) => {
-    const file = path.join(root, relative);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, rows.map(JSON.stringify).join('\n') + '\n');
-    return file;
-  };
-  return { root, store, write };
-}
+const fixture = (t) => providerHome(t, 'ai-usage-review-collectors-');
 
 test('chunked transcript reading preserves UTF-8, partial lines, and repeatable streaming passes', (t) => {
   const { root } = fixture(t);

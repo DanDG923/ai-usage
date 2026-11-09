@@ -12,7 +12,7 @@ const vm = require('node:vm');
 const test = require('node:test');
 const { mainApplication } = require('../helpers/main-application.cjs');
 
-const root = path.resolve(__dirname, '..', '..');
+const { repoRoot: root, readRepoFile } = require('../helpers/repo.cjs');
 
 // Runs a preload against a recording ipcRenderer and calls every method once.
 function bridgeOf(file) {
@@ -20,7 +20,7 @@ function bridgeOf(file) {
   const invoked = new Set();
   const listened = new Set();
   const listeners = [];
-  vm.runInNewContext(fs.readFileSync(path.join(root, 'electron', file), 'utf8'), {
+  vm.runInNewContext(readRepoFile('electron', file), {
     require: () => ({
       contextBridge: { exposeInMainWorld: (_name, value) => { bridge = value; } },
       ipcRenderer: {
@@ -49,14 +49,14 @@ function mainProcess() {
   main.ipc.registerIpc();
   const sources = ['app', '.'].flatMap((folder) => fs.readdirSync(path.join(root, 'electron', folder))
     .filter((name) => name.endsWith('.cjs') && !name.endsWith('preload.cjs'))
-    .map((name) => fs.readFileSync(path.join(root, 'electron', folder, name), 'utf8'))).join('\n');
+    .map((name) => readRepoFile('electron', folder, name))).join('\n');
   const sent = new Set([...sources.matchAll(/\.send\('([a-z-]+:[a-z-]+)'/g)].map((match) => match[1]));
   return { handled: new Set(handlers.keys()), sent };
 }
 
 // The method names of a bridge type in src/types.ts.
 function typedMethods(typeName) {
-  const source = fs.readFileSync(path.join(root, 'src', 'types.ts'), 'utf8');
+  const source = readRepoFile('src', 'types.ts');
   const start = source.indexOf(`export type ${typeName} = {`);
   assert.notEqual(start, -1, `${typeName} is declared in src/types.ts`);
   const body = source.slice(start, source.indexOf('\n};', start));

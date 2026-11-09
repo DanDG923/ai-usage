@@ -17,7 +17,9 @@ const {
 const { assertArchive } = require('../../tools/audit-release.cjs');
 const { mainApplication } = require('../helpers/main-application.cjs');
 
-const root = path.resolve(__dirname, '..', '..');
+const { repoRoot: root, readRepoFile } = require('../helpers/repo.cjs');
+const { startRendererServer } = require('../helpers/renderer-server.cjs');
+const { decodedText: text } = require('../helpers/markup.cjs');
 const size = { width: 380, height: 540 };
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
@@ -711,7 +713,7 @@ function loadPreload(file, respond = () => undefined) {
       };
     },
   };
-  vm.runInNewContext(fs.readFileSync(path.join(root, 'electron', file), 'utf8'), context);
+  vm.runInNewContext(readRepoFile('electron', file), context);
   const emit = (channel, ...args) => { for (const listener of Array.from(listeners.get(channel) ?? [])) listener({ senderId: 'hidden' }, ...args); };
   return { exposedName, bridge, invoked, listeners, emit };
 }
@@ -768,8 +770,8 @@ test('dashboard onNavigate collects a pending page on subscribe and on each sign
 
 test('the flyout page shares the dashboard CSP, is built as its own entry and is required in the package', async () => {
   const csp = (html) => html.match(/http-equiv="Content-Security-Policy" content="([^"]+)"/)[1];
-  const flyoutHtml = fs.readFileSync(path.join(root, 'flyout.html'), 'utf8');
-  assert.equal(csp(flyoutHtml), csp(fs.readFileSync(path.join(root, 'index.html'), 'utf8')));
+  const flyoutHtml = readRepoFile('flyout.html');
+  assert.equal(csp(flyoutHtml), csp(readRepoFile('index.html')));
   assert.doesNotMatch(csp(flyoutHtml), /https?:|ws:/);
   assert.match(flyoutHtml, /<title>AI Usage<\/title>/);
   assert.match(flyoutHtml, /src="\/src\/flyout\.tsx"/);
@@ -779,7 +781,7 @@ test('the flyout page shares the dashboard CSP, is built as its own entry and is
   assert.deepEqual(Object.values(input).map((file) => path.basename(file)).sort(), ['flyout.html', 'index.html']);
   const devCsp = loaded.config.plugins.flat().find((plugin) => plugin?.name === 'dev-loopback-csp');
   assert.match(devCsp.transformIndexHtml(flyoutHtml), /connect-src 'self' http:\/\/127\.0\.0\.1:\* ws:\/\/127\.0\.0\.1:\*/);
-  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  const pkg = JSON.parse(readRepoFile('package.json'));
   assert.ok(pkg.build.files.includes('dist/**/*') && pkg.build.files.includes('electron/**/*'));
   for (const previewOnly of ['!dist/assets/demo-*.js', '!dist/assets/flyout-preview-*.js'])
     assert.ok(pkg.build.files.includes(previewOnly), `the release leaves out ${previewOnly.slice(1)}`);
@@ -800,15 +802,7 @@ let providerViews;
 let budget;
 
 test.before(async () => {
-  const [{ createServer }, { default: react }] = await Promise.all([import('vite'), import('@vitejs/plugin-react')]);
-  server = await createServer({
-    root,
-    configFile: false,
-    plugins: [react()],
-    server: { middlewareMode: true, watch: null, hmr: false, ws: false },
-    optimizeDeps: { noDiscovery: true, include: [] },
-    appType: 'custom',
-  });
+  server = await startRendererServer();
   [{ demoSnapshot }, flyoutModule, { providerViews }, budget] = await Promise.all([
     server.ssrLoadModule('/src/data/demo.ts'),
     server.ssrLoadModule('/src/components/TrayFlyout.tsx'),
@@ -818,8 +812,6 @@ test.before(async () => {
 });
 
 test.after(async () => { await server?.close(); });
-
-const text = (html) => html.replace(/<[^>]+>/g, ' ').replace(/&#x27;/g, "'").replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
 
 function renderFlyout(snapshot, props = {}) {
   const nowMs = snapshot?.generatedAt ? Date.parse(snapshot.generatedAt) : Date.parse('2026-09-23T10:00:00.000Z');
@@ -1007,7 +999,7 @@ test('an allowance on watch keeps the warning triangle and the word in its row',
 });
 
 test('demo data reaches only the browser preview of the flyout; Electron renders from the preload bridge', () => {
-  const entry = fs.readFileSync(path.join(root, 'src', 'flyout.tsx'), 'utf8');
+  const entry = readRepoFile('src', 'flyout.tsx');
   assert.match(entry, /const isBrowserPreview = !window\.aiUsageFlyout && window\.location\.protocol !== 'file:';/);
   assert.match(entry, /if \(isBrowserPreview\) \{\s*void import\('\.\/flyout-preview'\)/);
   assert.match(entry, /\} else \{\s*render\(\);\s*\}/, 'Electron passes no bridge prop');
@@ -1017,6 +1009,6 @@ test('demo data reaches only the browser preview of the flyout; Electron renders
     const source = fs.readFileSync(file, 'utf8');
     assert.doesNotMatch(source, /(from|import)\s+['"][./]*flyout-preview['"]/, `${file} must not import the preview adapter statically`);
   }
-  const flyout = fs.readFileSync(path.join(root, 'src', 'components', 'TrayFlyout.tsx'), 'utf8');
+  const flyout = readRepoFile('src', 'components', 'TrayFlyout.tsx');
   assert.match(flyout, /previewBridge \?\? \(typeof window === 'undefined' \? undefined : window\.aiUsageFlyout\)/);
 });
