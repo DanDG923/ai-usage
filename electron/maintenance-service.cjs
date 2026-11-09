@@ -21,7 +21,7 @@ async function replaceFile(from, to, attempts = 8) {
       fs.renameSync(from, to);
       return;
     } catch (error) {
-      if (attempt >= attempts || !BUSY_FILE_CODES.has(error?.code)) throw error;
+      if (attempt >= attempts || !BUSY_FILE_CODES.has(/** @type {any} */ (error)?.code)) throw error;
       await new Promise((resolve) => setTimeout(resolve, 100 * attempt));
     }
   }
@@ -168,7 +168,7 @@ if (parentPort) {
       answer({ id, ok: true, result });
       if (type === 'close') port.close();
     } catch (error) {
-      answer({ id, ok: false, error: { message: error?.message || String(error) } });
+      answer({ id, ok: false, error: { message: /** @type {Error} */ (error)?.message || String(error) } });
     }
   });
 }

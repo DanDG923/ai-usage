@@ -15,6 +15,7 @@ const { createUpdateChecker } = require('../updater.cjs');
 const { installDirectoryWritable, launchInstaller, relaunchApplication, preserveInstallerEnvironment } = require('../installer-launch.cjs');
 const { initializeWithVisibleFailure, registerSingleInstance, createDeadline, settleWithin } = require('../app-lifecycle.cjs');
 const { closed } = require('./closed.cjs');
+const { errorMessage } = require('../caught.cjs');
 
 // This file sits one folder below the main process's other modules.
 const ELECTRON_DIR = path.join(__dirname, '..');
@@ -120,7 +121,7 @@ function createLifecycleModule(main) {
         deadline.expiry,
       ]);
     } catch (error) {
-      main.logs.updateLog(`Preparation failed${deadline.expired ? ' (timed out)' : ''}: ${error?.message || 'unknown error'}`);
+      main.logs.updateLog(`Preparation failed${deadline.expired ? ' (timed out)' : ''}: ${errorMessage(error) || 'unknown error'}`);
       if (deadline.expired) {
         // Accepted work or the backup is still running in the worker, so writes
         // cannot safely resume and nothing may install: reopen without updating.
@@ -154,7 +155,7 @@ function createLifecycleModule(main) {
         main.logs.updateLog('Storage did not close in time; installing with the backup taken.');
         lifecycle.shutdownComplete = true;
       } else {
-        main.logs.updateLog(`Storage close failed: ${error?.message || 'unknown error'}`);
+        main.logs.updateLog(`Storage close failed: ${errorMessage(error) || 'unknown error'}`);
         lifecycle.recoverFromUpdateInstallFailure();
         throw error;
       }

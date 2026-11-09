@@ -20,6 +20,7 @@ const { DatabaseSync } = require('node:sqlite');
 const { MAX_QUOTA_RESET_AHEAD_MS, validQuotaTime } = require('../quota-time.cjs');
 const { CLAUDE, CODEX, cachedInputInsideInput, isProviderId } = require('../providers.mjs');
 const { DAY_MS, iso, validIso, json, quotaMetadata } = require('./shared.cjs');
+const { errorCode } = require('../caught.cjs');
 const {
   DEFAULT_SETTINGS, SETTING_ALIASES, isForecastDate, normalizedSetting, settingValidator, backupSettings,
   storedSettings,
@@ -55,7 +56,7 @@ function createBackup(store, options = {}) {
       try {
         writeExport(partialExport, copy, backupSettings(copy), { maxBytes: MAX_RESTORE_BYTES });
       } catch (error) {
-        if (error?.code !== 'EXPORT_TOO_LARGE') throw error;
+        if (errorCode(error) !== 'EXPORT_TOO_LARGE') throw error;
         exported = false;
       } finally { copy.close(); }
       if (!exported) fs.rmSync(partialExport, { force: true });
@@ -240,7 +241,7 @@ function restoreFromExport(store, payload) {
   try {
     store.db.exec('BEGIN IMMEDIATE');
   } catch (error) {
-    throw new Error(`The database was busy and the restore did not start: ${error.message}`);
+    throw new Error(`The database was busy and the restore did not start: ${/** @type {Error} */ (error).message}`);
   }
   try {
     const exported = payload.settings && typeof payload.settings === 'object' ? payload.settings : {};
@@ -321,7 +322,7 @@ function restoreFromExport(store, payload) {
       } catch (error) {
         // Database errors may roll back the transaction. Continuing after
         // one would autocommit later records outside the failed restore.
-        if (error?.code || !store.db.isTransaction) throw error;
+        if (errorCode(error) || !store.db.isTransaction) throw error;
         counts.skipped += 1;
       }
     }
@@ -370,7 +371,7 @@ function restoreFromExport(store, payload) {
       } catch (error) {
         // Database errors may roll back the transaction. Continuing after
         // one would autocommit later records outside the failed restore.
-        if (error?.code || !store.db.isTransaction) throw error;
+        if (errorCode(error) || !store.db.isTransaction) throw error;
         counts.skipped += 1;
       }
     }
@@ -403,7 +404,7 @@ function restoreFromExport(store, payload) {
       } catch (error) {
         // Database errors may roll back the transaction. Continuing after
         // one would autocommit later records outside the failed restore.
-        if (error?.code || !store.db.isTransaction) throw error;
+        if (errorCode(error) || !store.db.isTransaction) throw error;
         counts.skipped += 1;
       }
     }
@@ -425,7 +426,7 @@ function restoreFromExport(store, payload) {
       } catch (error) {
         // Database errors may roll back the transaction. Continuing after
         // one would autocommit later records outside the failed restore.
-        if (error?.code || !store.db.isTransaction) throw error;
+        if (errorCode(error) || !store.db.isTransaction) throw error;
         counts.skipped += 1;
       }
     }
@@ -437,7 +438,7 @@ function restoreFromExport(store, payload) {
         try {
           counts.desktopEstimates += require('../desktop-estimates.cjs').insertDesktopEstimate(store, row, models);
         } catch (error) {
-          if (error?.code) throw error;
+          if (errorCode(error)) throw error;
           counts.skipped += 1;
         }
       }

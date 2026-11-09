@@ -9,6 +9,7 @@ const { createCollectorService } = require('../collector-service.cjs');
 const { CLAUDE, CODEX, PROVIDERS } = require('../providers.mjs');
 const { REFRESH_TRIGGERS, createRefreshCoalescer, refreshOptionsFor } = require('../refresh-policy.cjs');
 const { closed } = require('./closed.cjs');
+const { errorMessage } = require('../caught.cjs');
 
 // This file sits one folder below the main process's other modules.
 const ELECTRON_DIR = path.join(__dirname, '..');
@@ -149,7 +150,7 @@ function createRefreshModule(main) {
     try {
       outcomes = await main.databaseJobs.collect(() => main.collectors.refreshAll({ readPlanUsage }));
     } catch (error) {
-      const detail = `Local collection failed: ${error?.message || 'Unknown local error.'}`;
+      const detail = `Local collection failed: ${errorMessage(error) || 'Unknown local error.'}`;
       outcomes = {
         codex: { status: 'rejected', reason: { message: detail } },
         claude: { status: 'rejected', reason: { message: detail } },
@@ -190,7 +191,7 @@ function createRefreshModule(main) {
         if (backup) main.snapshots.invalidateSnapshot();
       }
     } catch (error) {
-      backupError = error.message;
+      backupError = /** @type {Error} */ (error).message;
     }
     return {
       // Collection publishes once. Returning a second snapshot repeats renders

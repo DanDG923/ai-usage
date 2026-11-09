@@ -59,7 +59,7 @@ The Claude Code mod in `claude-code-mod/` has its own tests, run by Claude Code'
 - Null checking is on, so reading a window, timer or reading that may not exist yet has to be guarded or carry a comment saying why it is there.
 - Implicit `any` is off limits too: every parameter says what it is, and `electron/types.d.ts` holds the shapes they share, a row of each table among them.
 - Where a value really is of unknown shape, such as a line of a transcript or a restored export, it is typed `unknown` or `Record<string, any>` on purpose and picked apart field by field.
-- The one strict mode still off is the one that types a caught error as `unknown`.
+- Every strict mode is on (`"strict": true`), including the one that types a caught error as `unknown`: a `catch` reads `code` or `message` through `errorCode` and `errorMessage` in `electron/caught.cjs`, which give what `error?.code` and `error?.message` would, or says with a cast what it expects to have caught.
 
 ## Benchmarks
 

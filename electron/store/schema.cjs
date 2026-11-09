@@ -29,7 +29,7 @@ function openDatabase(databasePath) {
   try {
     return { db: open(), recoveredFrom: null };
   } catch (error) {
-    if (databasePath === ':memory:' || !UNREADABLE_DATABASE_CODES.has(Number(error?.errcode) & 0xff)) throw error;
+    if (databasePath === ':memory:' || !UNREADABLE_DATABASE_CODES.has(Number(/** @type {{ errcode?: number } | null | undefined} */ (error)?.errcode) & 0xff)) throw error;
     // A file SQLite cannot read used to make every launch fatal. Set it aside
     // under a dated name so the app can start again; the daily backups remain
     // the way to get the history back.

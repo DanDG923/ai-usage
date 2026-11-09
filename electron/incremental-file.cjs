@@ -75,7 +75,7 @@ function readCompleteLines(filePath, startOffset, size, { chunkBytes = 1024 * 10
       // Iteration happens after the caller opens its file transaction. Tag
       // only reader failures so collectors can retry this file without
       // mistaking a database failure for an unreadable transcript.
-      throw new IncrementalReadError(error);
+      throw new IncrementalReadError(/** @type {NodeJS.ErrnoException} */ (error));
     }
   }
   const iterable = { [Symbol.iterator]: scan };

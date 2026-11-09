@@ -54,7 +54,7 @@ function readExport(filePath) {
       ? gunzipSync(bytes, { maxOutputLength: MAX_RESTORE_BYTES }) : bytes;
     return JSON.parse(decoded.toString('utf8').replace(/^\uFEFF/, ''));
   } catch (error) {
-    if (error.code === 'ERR_BUFFER_TOO_LARGE') throw new Error('This export exceeds the 64 MB restore limit. Restore its paired .sqlite backup instead.');
+    if (/** @type {NodeJS.ErrnoException} */ (error).code === 'ERR_BUFFER_TOO_LARGE') throw new Error('This export exceeds the 64 MB restore limit. Restore its paired .sqlite backup instead.');
     throw new Error('That file is not a readable AI Usage export.');
   }
 }

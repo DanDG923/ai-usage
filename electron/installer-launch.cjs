@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const nodePath = require('node:path');
 const { spawn } = require('node:child_process');
 const { setTimeout: delay } = require('node:timers/promises');
+const { errorCode } = require('./caught.cjs');
 
 // electron-updater launches the installer and quits in the same tick, so a
 // launch the operating system refuses (a freshly downloaded executable still
@@ -155,7 +156,7 @@ function installerLaunch(path = process.platform === 'win32' ? nodePath.win32 : 
         onLog(`Installer launched on attempt ${attempt}${pid ? ` (pid ${pid})` : ''}.`);
         return { attempt, pid };
       } catch (error) {
-        const code = /^[A-Z0-9_]{1,40}$/i.test(String(error?.code || '')) ? String(error.code) : 'UNKNOWN';
+        const code = /^[A-Z0-9_]{1,40}$/i.test(String(errorCode(error) || '')) ? String(errorCode(error)) : 'UNKNOWN';
         onLog(`Installer launch attempt ${attempt} of ${attempts} failed (${code}).`);
         if (!RETRYABLE_CODES.has(code) || attempt === attempts) break;
         await delay(retryDelayMs);

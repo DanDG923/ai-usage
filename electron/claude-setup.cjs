@@ -6,6 +6,7 @@ const { execFile, spawn } = require('node:child_process');
 const { findClaudeBinary, providerProcessOptions } = require('./provider-executable.cjs');
 const { fetchInstaller: downloadInstaller, verifyInstallerScript } = require('./claude-installer.cjs');
 const shippedPin = require('./claude-installer-pin.json');
+const { errorCode } = require('./caught.cjs');
 
 // The vendor installer is fetched, checked against the digest pinned at
 // release time, written beside the setup state, and only then run from that
@@ -136,8 +137,8 @@ function createClaudeSetup({
       if (cancelled) throw Object.assign(new Error(CANCELLED), { code: 'CLAUDE_INSTALLER_DOWNLOAD_CANCELLED' });
       return bytes;
     } catch (error) {
-      if (cancelled || error?.code === 'CLAUDE_INSTALLER_DOWNLOAD_CANCELLED') throw Object.assign(new Error(CANCELLED), { code: 'CLAUDE_INSTALLER_DOWNLOAD_CANCELLED' });
-      log(`Claude installer download failed${error?.code ? ` (${error.code})` : ''}.`);
+      if (cancelled || errorCode(error) === 'CLAUDE_INSTALLER_DOWNLOAD_CANCELLED') throw Object.assign(new Error(CANCELLED), { code: 'CLAUDE_INSTALLER_DOWNLOAD_CANCELLED' });
+      log(`Claude installer download failed${errorCode(error) ? ` (${errorCode(error)})` : ''}.`);
       throw new Error('The Claude Code installer could not be downloaded. Check your connection and try again.');
     } finally {
       if (cancelPending === handle) cancelPending = null;

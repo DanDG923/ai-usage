@@ -2,6 +2,7 @@
 
 const crypto = require('node:crypto');
 const https = require('node:https');
+const { errorCode } = require('./caught.cjs');
 
 // Anthropic publishes Claude Code's Windows installer as a short PowerShell
 // bootstrap script that is not Authenticode-signed. Running whatever that URL
@@ -90,7 +91,7 @@ function requestOnce(url, get, timeoutMs, signal) {
         response.on('end', () => resolve({ bytes: Buffer.concat(chunks) }));
       });
     } catch (error) {
-      reject(coded(`Installer download could not start: ${error?.code || 'request error'}.`, 'CLAUDE_INSTALLER_DOWNLOAD_FAILED'));
+      reject(coded(`Installer download could not start: ${errorCode(error) || 'request error'}.`, 'CLAUDE_INSTALLER_DOWNLOAD_FAILED'));
       return;
     }
     request.on('error', (/** @type {NodeJS.ErrnoException} */ error) => {

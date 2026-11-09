@@ -15,6 +15,7 @@ const { IncrementalReadError, planIncrementalRead, readCompleteLines } = require
 const { asIso, epochToIso } = require('./time.cjs');
 const { claudeWindowDescriptor } = require('./claude-window-descriptors.cjs');
 const { writeFileAtomically } = require('./atomic-write.cjs');
+const { errorCode } = require('./caught.cjs');
 
 /** @typedef {import('./types').Store} Store */
 /** @typedef {import('./types').IsoTime} IsoTime */
@@ -284,7 +285,7 @@ function recordStatusLineLimits(store, payload, capturedAt, { fetchedAfter, seen
         seenSince,
       });
     } catch (error) {
-      if (error?.code) throw error;
+      if (errorCode(error)) throw error;
       result.rejectedRecords += 1;
       continue;
     }
@@ -492,7 +493,7 @@ function importClaudeCodeReadings(store, directory, { nowMs = Date.now() } = {})
     names = fs.readdirSync(directory).filter((name) => name.endsWith('.json')).sort().slice(-MAX_CLAUDE_CODE_READINGS);
   } catch (error) {
     // The mod creates the folder with its first reading.
-    return error?.code === 'ENOENT' ? result : emptyInboxResult({ files: 0, readErrors: 1 });
+    return errorCode(error) === 'ENOENT' ? result : emptyInboxResult({ files: 0, readErrors: 1 });
   }
   for (const name of names) {
     const filePath = path.join(directory, name);
@@ -691,7 +692,7 @@ function importClaudeTranscripts(store, days = 120) {
     } catch (error) {
       // Retried next refresh; counted so the status can say data is missing.
       readErrors += 1;
-      lastReadError = error?.code || (error instanceof Error ? error.message : String(error));
+      lastReadError = /** @type {NodeJS.ErrnoException} */ (error)?.code || (error instanceof Error ? error.message : String(error));
       continue;
     }
     /** @type {Map<string, TranscriptRow>} */
@@ -757,7 +758,7 @@ function importClaudeTranscripts(store, days = 120) {
         try {
           store.recordUsageEvent(event);
         } catch (error) {
-          if (error?.code) throw error;
+          if (errorCode(error)) throw error;
           rejectedRows += 1;
           lastRejection = error instanceof Error ? error.message : String(error);
           continue;
@@ -1134,14 +1135,14 @@ async function refreshClaude(store, inboxPath, options = {}) {
   } catch (error) {
     // The status-line helper is an optional fallback. Its inbox must never
     // prevent the primary SDK read or the independent transcript import.
-    statusLine = emptyInboxResult({ readErrors: 1, error: error.message });
+    statusLine = emptyInboxResult({ readErrors: 1, error: /** @type {Error} */ (error).message });
   }
   // Readings the Claude Code mod left, each dated by the request that fetched it.
   let claudeCodeReadings;
   try {
     claudeCodeReadings = importClaudeCodeReadings(store, options.claudeCodeReadingsDirectory);
   } catch (error) {
-    claudeCodeReadings = emptyInboxResult({ files: 0, readErrors: 1, error: error.message });
+    claudeCodeReadings = emptyInboxResult({ files: 0, readErrors: 1, error: /** @type {Error} */ (error).message });
   }
   const usagePort = !readPlanUsage ? null : options.usagePort || createClaudeAgentSdkUsagePort({
     // Reuse this refresh's discovery result so the SDK launches precisely the
@@ -1178,7 +1179,7 @@ async function refreshClaude(store, inboxPath, options = {}) {
       fableDerived = deriveFableEstimate(store, nowMs);
     } catch (error) {
       // A bad Fable estimate must never take down the whole Claude refresh.
-      fableDerived = { derived: false, reason: `derive-failed: ${error.message}` };
+      fableDerived = { derived: false, reason: `derive-failed: ${/** @type {Error} */ (error).message}` };
     }
   }
   // One definition of where the helper lives, shared with install and uninstall:

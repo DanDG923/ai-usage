@@ -490,13 +490,13 @@ function createClaudeAgentSdkUsagePort({
           Object.defineProperty(result, 'collectionDiagnostics', { value: { attempts } });
           return result;
         } catch (error) {
-          attempts.push({ startedAt, durationMs: Date.now() - started, outcome: 'failed', errorCode: error.code });
-          error.collectionDiagnostics = { attempts };
-          const retryable = /^claude-usage-(?:empty|signed-out|fetch-failed|econnrefused|econnreset|etimedout|enotfound|eai_again|http-50[0234]|http-529)$/.test(error.code);
+          attempts.push({ startedAt, durationMs: Date.now() - started, outcome: 'failed', errorCode: /** @type {any} */ (error).code });
+          /** @type {any} */ (error).collectionDiagnostics = { attempts };
+          const retryable = /^claude-usage-(?:empty|signed-out|fetch-failed|econnrefused|econnreset|etimedout|enotfound|eai_again|http-50[0234]|http-529)$/.test(/** @type {any} */ (error).code);
           // Do not immediately retry throttling, authentication, schema, or
           // cleanup failures. A missing sign-in is retried once, since it
           // can be momentary. Each retry starts only after cleanup completes.
-          if (attempt === 2 || !retryable || error.retryable === false || signal?.aborted) throw error;
+          if (attempt === 2 || !retryable || /** @type {any} */ (error).retryable === false || signal?.aborted) throw error;
           try { await delay(retryDelayMs, undefined, { signal }); }
           catch {
             /** @type {UsageReadError} */

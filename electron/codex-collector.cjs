@@ -11,6 +11,7 @@ const { MAX_QUOTA_RESET_AHEAD_MS } = require('./quota-time.cjs');
 const { codexQuotaLabel, durationLabel } = require('./codex-quota-label.cjs');
 const { CODEX } = require('./providers.mjs');
 const { codexAgentMetadata, textId } = require('./task-usage.cjs');
+const { errorCode } = require('./caught.cjs');
 
 /** @typedef {import('./types').Store} Store */
 /** @typedef {import('./types').IsoTime} IsoTime */
@@ -167,7 +168,7 @@ class JsonLineClient {
         if (error) this.fail(new Error(`Codex app server stdin write failed: ${error.message}`));
       });
     } catch (error) {
-      const failure = new Error(`Codex app server stdin write failed: ${error.message}`);
+      const failure = new Error(`Codex app server stdin write failed: ${/** @type {Error} */ (error).message}`);
       this.fail(failure);
       throw failure;
     }
@@ -263,7 +264,7 @@ function recordRateLimit(store, raw, observedAt, provenance, extra = {}, { onRej
       // fast. Coded runtime/SQLite failures always propagate, so the caller's
       // transaction rolls back and a log's cursor cannot advance past records
       // that failed to persist.
-      if (!onRejected || error?.code) throw error;
+      if (!onRejected || errorCode(error)) throw error;
       onRejected(error);
     }
   }
@@ -609,7 +610,7 @@ function collisionMigration(store, lines, initialState, { checkCollisions, check
           return store.prepare(`SELECT 1 FROM usage_events WHERE ${DUPLICATE_ROW_GUARD}`)
             .get(...duplicateRowParameters({ ...candidate, eventKey: event.eventKey }));
         } catch (error) {
-          if (error?.code) throw error;
+          if (errorCode(error)) throw error;
           return false;
         }
       })) conflict = true;
@@ -732,7 +733,7 @@ function importLocalSessions(store, days = 120) {
       chunk = readCompleteLines(fullPath, startOffset, stat.size, { streaming: true });
     } catch (error) {
       readErrors += 1;
-      lastReadError = error?.code || (error instanceof Error ? error.message : String(error));
+      lastReadError = /** @type {NodeJS.ErrnoException} */ (error)?.code || (error instanceof Error ? error.message : String(error));
       continue;
     }
     /** @type {Pick<SessionImportSummary, 'events' | 'observations' | 'rejected' | 'lastRejection' | 'duplicateEvents' | 'reconciledEvents'>} */
@@ -798,7 +799,7 @@ function importLocalSessions(store, days = 120) {
                 state.lastTokenSnapshot = fingerprint ? { fingerprint, eventKey: event.eventKey } : null;
                 events += 1;
               } catch (error) {
-                if (error?.code) throw error;
+                if (errorCode(error)) throw error;
                 state.lastTokenSnapshot = null;
                 rejected += 1;
                 lastRejection = error instanceof Error ? error.message : String(error);

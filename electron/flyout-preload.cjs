@@ -13,7 +13,7 @@ const { contextBridge, ipcRenderer } = require('electron');
  */
 async function invoke(channel, ...args) {
   try { return await ipcRenderer.invoke(channel, ...args); } catch (error) {
-    const message = String(error?.message || error).replace(/^Error invoking remote method ['"].+?['"]:\s*(?:Error:\s*)?/, '');
+    const message = String(/** @type {any} */ (error)?.message || error).replace(/^Error invoking remote method ['"].+?['"]:\s*(?:Error:\s*)?/, '');
     throw new Error(message);
   }
 }
