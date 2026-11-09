@@ -112,12 +112,11 @@ export function createDashboardStore({
       if (!next) return;
       // The selected period is committed with the data, never before it. A
       // snapshot for another period (a push that raced a period change) keeps
-      // the costs already on screen.
+      // the costs already on screen. Before the first snapshot there are none
+      // to keep, so it is shown under its own period until the read lands.
       const current = state.snapshot;
-      if (next.costs.periodDays === expectedPeriod) set({ snapshot: next, period: next.costs.periodDays });
-      else if (current)
-        set({ snapshot: { ...next, costs: current.costs, desktopEstimates: current.desktopEstimates } });
-      else set({ snapshot: next });
+      if (next.costs.periodDays === expectedPeriod || !current) set({ snapshot: next, period: next.costs.periodDays });
+      else set({ snapshot: { ...next, costs: current.costs, desktopEstimates: current.desktopEstimates } });
     },
     runClock() {
       clockRunning = true;

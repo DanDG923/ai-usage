@@ -238,3 +238,31 @@ test('backup, restore and export refuse to start while another data operation ru
   await exported;
   assert.equal(store.get().dataOperation, null);
 });
+
+test('a push for another period that lands before the first read is shown under its own period', async (t) => {
+  let pushed;
+  let answer;
+  const { store, actions } = await dashboardWith({
+    getSnapshot: () => new Promise((resolve) => { answer = resolve; }),
+    onUpdated(listener) { pushed = listener; return () => {}; },
+  }, 30);
+  // The display clock runs while connected; stopping it lets the test exit.
+  t.after(actions.connect());
+  const ninety = structuredClone(demoSnapshot);
+  ninety.costs.periodDays = 90;
+  pushed(ninety);
+  // The costs on screen are the 90-day costs, so the period shown is 90 days.
+  assert.equal(store.get().snapshot.costs.periodDays, 90);
+  assert.equal(store.get().period, 90);
+  // The read the window asked for still lands, under its own period.
+  const thirty = structuredClone(demoSnapshot);
+  thirty.costs.periodDays = 30;
+  answer(thirty);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(store.get().snapshot, thirty);
+  assert.equal(store.get().period, 30);
+  // A later push for another period keeps the 30-day costs, as before.
+  pushed(ninety);
+  assert.equal(store.get().snapshot.costs, thirty.costs);
+  assert.equal(store.get().period, 30);
+});
