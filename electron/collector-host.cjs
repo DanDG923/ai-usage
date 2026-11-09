@@ -3,25 +3,19 @@
 // Main-process side of the collector utility process: spawns it on demand,
 // correlates replies by id, and fails every in-flight request if the child
 // dies so a refresh can never hang on a process that is no longer there.
+// The protocol itself is the shared one in process-host.cjs; this module says
+// how a utility process is started, reached and stopped.
+
+const { createProcessHost } = require('./process-host.cjs');
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_IDLE_TIMEOUT_MS = 30_000;
+// A released child closes its store and answers; one that does not is ended.
+const RETIRE_TIMEOUT_MS = 5_000;
 
 /** @typedef {import('electron').UtilityProcess} UtilityProcess */
 /** @typedef {import('electron').ForkOptions} ForkOptions */
-/** @typedef {import('./collector-service.cjs').CollectorMessage} CollectorMessage */
-/** @typedef {import('./collector-service.cjs').CollectorReply} CollectorReply */
 /** @typedef {import('./collector-service.cjs').SettledOutcome} SettledOutcome */
-
-/**
- * A request waiting for its reply, and the child it was sent to.
- *
- * @typedef {object} PendingRequest
- * @property {(result: unknown) => void} resolve
- * @property {(error: unknown) => void} reject
- * @property {NodeJS.Timeout} timer
- * @property {UtilityProcess} child
- */
 
 /**
  * What the main process holds: the collectors, wherever they run.
@@ -46,143 +40,57 @@ const DEFAULT_IDLE_TIMEOUT_MS = 30_000;
  * @returns {CollectorHost}
  */
 function createCollectorHost({ fork, modulePath, config, requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS, idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS, forkOptions = {}, onLog = /** @type {(message: string) => void} */ (() => {}) }) {
-  /** @type {UtilityProcess | null} */
-  let child = null;
-  /** @type {NodeJS.Timeout | undefined} */
-  let idleTimer;
-  let nextId = 1;
-  /** @type {Map<number, PendingRequest>} */
-  const pending = new Map();
-  // Children asked to close: the id of that request, and the timer that
-  // ends a child which does not answer it.
-  /** @type {Map<UtilityProcess, { id: number, timer: NodeJS.Timeout }>} */
-  const retiring = new Map();
-
-  /** @param {UtilityProcess} target */
-  function finishRetirement(target) {
-    clearTimeout(retiring.get(target)?.timer);
-    retiring.delete(target);
-    try { target.kill(); } catch { /* Already gone. */ }
-  }
-
-  function scheduleIdle() {
-    clearTimeout(idleTimer);
-    if (!child || pending.size || !(idleTimeoutMs > 0)) return;
-    const target = child;
-    idleTimer = setTimeout(() => {
-      if (child !== target || pending.size) return;
-      // Detach before asking it to close: a new refresh gets a fresh child,
-      // never a connection which is already being closed. No work is pending.
-      child = null;
-      const id = nextId++;
-      const timer = setTimeout(() => finishRetirement(target), 5_000);
-      timer.unref?.();
-      retiring.set(target, { id, timer });
-      try {
-        // oxlint-disable-next-line unicorn/require-post-message-target-origin
-        target.postMessage({ id, type: 'close', payload: {} });
-      } catch { finishRetirement(target); }
-    }, idleTimeoutMs);
-    idleTimer.unref?.();
-  }
-
-  // Fail the in-flight requests of one child (or of every child when no
-  // owner is given). A recycled child's late exit event must not reject a
-  // request that was already registered against its replacement.
-  /**
-   * @param {Error} error
-   * @param {UtilityProcess | null} [owner]
-   */
-  function failAll(error, owner = /** @type {UtilityProcess | null} */ (null)) {
-    for (const [id, entry] of pending) {
-      if (owner && entry.child !== owner) continue;
-      clearTimeout(entry.timer);
-      pending.delete(id);
-      entry.reject(error);
-    }
-  }
-
-  function spawn() {
-    const spawned = fork(modulePath, [JSON.stringify(config)], { serviceName: 'AI Usage collectors', ...forkOptions });
-    spawned.on('message', (/** @type {CollectorReply} */ message) => {
-      if (retiring.get(spawned)?.id === message?.id) {
-        finishRetirement(spawned);
-        return;
-      }
-      const entry = pending.get(message?.id);
-      if (!entry || entry.child !== spawned) return;
-      pending.delete(message.id);
-      clearTimeout(entry.timer);
-      if (message.ok) entry.resolve(message.result);
-      else entry.reject(new Error(message.error?.message || 'Collector request failed.'));
-      scheduleIdle();
-    });
-    // A fatal V8 error (such as running out of memory) is reported here before
-    // the exit below fails the child's requests. An EventEmitter 'error' with no
-    // listener would throw in the main process instead.
-    spawned.on('error', (type, location) => {
-      onLog(`Collector process error: ${type}${location ? ` at ${location}` : ''}.`);
-    });
-    spawned.on('exit', (code) => {
-      if (child === spawned) child = null;
-      clearTimeout(retiring.get(spawned)?.timer);
-      retiring.delete(spawned);
-      onLog(`Collector process exited with code ${code}.`);
-      failAll(new Error(`The collector process stopped unexpectedly (code ${code}).`), spawned);
-    });
-    child = spawned;
-  }
-
-  /**
-   * @param {string} type
-   * @param {Record<string, unknown>} [payload]
-   * @returns {Promise<any>} the reply's result, whose shape depends on the type
-   */
-  function request(type, payload = {}) {
-    clearTimeout(idleTimer);
-    if (!child) spawn();
-    // spawn() has just set it if it was empty.
-    const target = /** @type {UtilityProcess} */ (child);
-    const id = nextId++;
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        pending.delete(id);
-        reject(new Error(`Timed out waiting for the collector process (${type}).`));
-        // A request that never answers is a stuck child; recycle it.
-        if (child === target) stop();
-      }, requestTimeoutMs);
-      pending.set(id, { resolve, reject, timer, child: target });
-      try {
-        // A UtilityProcess port, not a window: there is no target origin.
-        // oxlint-disable-next-line unicorn/require-post-message-target-origin
-        target.postMessage({ id, type, payload });
-      } catch (error) {
-        pending.delete(id);
-        clearTimeout(timer);
-        reject(error);
-        scheduleIdle();
-      }
-    });
-  }
-
-  function stop() {
-    clearTimeout(idleTimer);
-    for (const target of retiring.keys()) finishRetirement(target);
-    const current = child;
-    child = null;
-    if (!current) return;
-    try { current.kill(); } catch { /* Already gone. */ }
-    failAll(new Error('The collector process was stopped.'), current);
-  }
+  const host = createProcessHost({
+    name: 'Collector process',
+    spawn: () => fork(modulePath, [JSON.stringify(config)], { serviceName: 'AI Usage collectors', ...forkOptions }),
+    listen(child, events) {
+      child.on('message', events.reply);
+      // A fatal V8 error (such as running out of memory) is reported here before
+      // the exit below fails the child's requests. An EventEmitter 'error' with no
+      // listener would throw in the main process instead.
+      child.on('error', (type, location) => {
+        onLog(`Collector process error: ${type}${location ? ` at ${location}` : ''}.`);
+      });
+      child.on('exit', events.exited);
+    },
+    // A UtilityProcess port, not a window: there is no target origin.
+    // oxlint-disable-next-line unicorn/require-post-message-target-origin
+    send: (child, message) => child.postMessage(message),
+    stop: (child) => { child.kill(); },
+    log: onLog,
+    exitLog: (code) => `Collector process exited with code ${code}.`,
+    errors: {
+      timedOut: (type) => new Error(`Timed out waiting for the collector process (${type}).`),
+      exited: (code) => new Error(`The collector process stopped unexpectedly (code ${code}).`),
+      stopped: () => new Error('The collector process was stopped.'),
+      closing: () => new Error('The collector process is closing.'),
+      failed: 'Collector request failed.',
+    },
+    // Every request is timed, a close asked for by a caller included, and a
+    // request still waiting keeps its timer alive.
+    requestTimeoutMs: () => requestTimeoutMs,
+    unrefRequestTimers: false,
+    // The request that was not answered fails as timed out; the child is then
+    // stopped, which fails its other requests as stopped.
+    onTimeout: 'stop',
+    spawnFailure: 'throw',
+    idleAfterSendFailure: true,
+    idleTimeoutMs,
+    retireGraceMs: RETIRE_TIMEOUT_MS,
+    // The utility process does not exit once its store is closed, so it is
+    // ended as soon as it says the store is closed.
+    stopOnCloseReply: true,
+    retirePayload: {},
+  });
 
   return {
     // Claude plan usage is read only when the caller explicitly asks; a
     // Claude-only refresh never reads it.
-    refreshAll: ({ readPlanUsage = false } = {}) => request('refresh-all', { readPlanUsage: readPlanUsage === true }),
-    refreshClaude: () => request('refresh-claude', { readPlanUsage: false }),
-    request,
-    stop,
-    get running() { return Boolean(child); },
+    refreshAll: ({ readPlanUsage = false } = {}) => host.request('refresh-all', { readPlanUsage: readPlanUsage === true }),
+    refreshClaude: () => host.request('refresh-claude', { readPlanUsage: false }),
+    request: host.request,
+    stop: host.stop,
+    get running() { return host.running; },
   };
 }
 

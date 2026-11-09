@@ -24,13 +24,11 @@ const { runCollectors } = require('./collector-runner.cjs');
  * @property {string | null} [claudeCodeReadingsDirectory] where the Claude Code mod leaves its readings
  */
 
-/**
- * The protocol between the host and this process. A request carries an id;
- * its reply carries the same id and either a result or an error message.
- *
- * @typedef {{ id: number, type: string, payload?: Record<string, unknown> }} CollectorMessage
- * @typedef {{ id: number, ok: boolean, result?: unknown, error?: { message?: string } }} CollectorReply
- */
+// The protocol between the host and this process is the shared one: a request
+// carries an id; its reply carries the same id and either a result or an
+// error message.
+/** @typedef {import('./process-protocol.cjs').RequestEnvelope} RequestEnvelope */
+/** @typedef {import('./process-protocol.cjs').ReplyEnvelope} ReplyEnvelope */
 
 /**
  * A request as the service handles it: its type, with the payload's fields
@@ -169,13 +167,16 @@ function createCollectorService({
  * @param {{ handle: (request: CollectorRequest) => Promise<unknown> }} service
  */
 function serveParentPort(port, service) {
+  /** @param {ReplyEnvelope} reply */
+  const answer = (reply) => port.postMessage(reply);
   port.on('message', async (event) => {
-    const { id, type, payload } = event?.data || {};
+    // The host in this app wrote the message; handle() refuses a type it does not know.
+    const { id, type, payload } = /** @type {RequestEnvelope} */ (event?.data || {});
     try {
       const result = await service.handle({ type, ...payload });
-      port.postMessage({ id, ok: true, result });
+      answer({ id, ok: true, result });
     } catch (error) {
-      port.postMessage({ id, ok: false, error: { message: error instanceof Error ? error.message : String(error) } });
+      answer({ id, ok: false, error: { message: error instanceof Error ? error.message : String(error) } });
     }
   });
   if (typeof port.start === 'function') port.start();

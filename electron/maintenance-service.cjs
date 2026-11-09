@@ -29,13 +29,11 @@ async function replaceFile(from, to, attempts = 8) {
 
 /** @typedef {import('./store.cjs').Store} Store */
 
-/**
- * The protocol between the host and this worker. A request carries an id; its
- * reply carries the same id and either a result or an error message.
- *
- * @typedef {{ id: number, type: string, payload?: Record<string, unknown> }} MaintenanceMessage
- * @typedef {{ id: number, ok: boolean, result?: unknown, error?: { message?: string } }} MaintenanceReply
- */
+// The protocol between the host and this worker is the shared one: a request
+// carries an id; its reply carries the same id and either a result or an
+// error message.
+/** @typedef {import('./process-protocol.cjs').RequestEnvelope} RequestEnvelope */
+/** @typedef {import('./process-protocol.cjs').ReplyEnvelope} ReplyEnvelope */
 
 /**
  * A request as the service runs it: its type, with the payload's fields
@@ -157,17 +155,20 @@ function createMaintenanceService({ databasePath, backupDirectory, openStore = (
 if (parentPort) {
   const port = parentPort;
   const service = createMaintenanceService(workerData);
-  port.on('message', async (/** @type {MaintenanceMessage} */ { id, type, payload }) => {
+  /** @param {ReplyEnvelope} reply */
+  const answer = (reply) => {
+    // Worker ports do not have a browser target origin.
+    // oxlint-disable-next-line unicorn/require-post-message-target-origin
+    port.postMessage(reply);
+  };
+  port.on('message', async (/** @type {RequestEnvelope} */ { id, type, payload }) => {
     try {
       // The host in this app wrote the message; run() refuses a type it does not know.
       const result = await service.handle(/** @type {MaintenanceJob} */ ({ ...payload, type }));
-      // Worker ports do not have a browser target origin.
-      // oxlint-disable-next-line unicorn/require-post-message-target-origin
-      port.postMessage({ id, ok: true, result });
+      answer({ id, ok: true, result });
       if (type === 'close') port.close();
     } catch (error) {
-      // oxlint-disable-next-line unicorn/require-post-message-target-origin
-      port.postMessage({ id, ok: false, error: { message: error?.message || String(error) } });
+      answer({ id, ok: false, error: { message: error?.message || String(error) } });
     }
   });
 }
