@@ -265,11 +265,13 @@ export function createDashboardActions({
   };
 
   // Backup, restore and export share one slot, `dataOperation`, and all three
-  // controls are disabled while it is taken. That is the whole guard, as it
-  // always was: unlike the helper's in-flight flag it is not checked here, so
-  // two calls made in the same tick, before the controls are redrawn, both run.
+  // controls are disabled while it is taken. Each action also checks the slot
+  // in the store as it starts, so two calls made in the same tick, before the
+  // controls are redrawn, cannot both run.
+  const dataOperationRunning = () => store.get().dataOperation !== null;
+
   const backup = async () => {
-    if (!bridge) return;
+    if (!bridge || dataOperationRunning()) return;
     store.set({ dataOperation: 'backup' });
     try {
       const result = await bridge.createBackup();
@@ -283,7 +285,7 @@ export function createDashboardActions({
   };
 
   const restore = async () => {
-    if (!bridge) return;
+    if (!bridge || dataOperationRunning()) return;
     store.set({ dataOperation: 'restore' });
     try {
       const result = await bridge.restoreBackup();
@@ -334,7 +336,7 @@ export function createDashboardActions({
   };
 
   const exportCsv = async (period: number) => {
-    if (!bridge) return;
+    if (!bridge || dataOperationRunning()) return;
     store.set({ dataOperation: 'export' });
     try {
       const result = await bridge.exportCsv(period);

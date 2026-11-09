@@ -196,3 +196,45 @@ test('heatmap cells and cycle bars name their value, not only in a tooltip', () 
     assert.match(title, /\d+% used/);
   }
 });
+
+// ---------- 12. Store and actions: one data operation at a time, periods matched ----------
+
+async function dashboardWith(desktop, period = 30) {
+  const { createDashboard } = await server.ssrLoadModule('/src/app/dashboard.ts');
+  return createDashboard({ source: { desktop, preview: null }, period });
+}
+
+test('backup, restore and export refuse to start while another data operation runs', async () => {
+  const held = [];
+  const calls = { createBackup: 0, restoreBackup: 0, exportCsv: 0 };
+  const hold = (name, value) => () => {
+    calls[name] += 1;
+    return new Promise((resolve) => held.push(() => resolve(value)));
+  };
+  const snapshot = structuredClone(demoSnapshot);
+  const { store, actions } = await dashboardWith({
+    createBackup: hold('createBackup', { snapshot, result: { databasePath: 'backup.sqlite' } }),
+    restoreBackup: hold('restoreBackup', { cancelled: true }),
+    exportCsv: hold('exportCsv', { cancelled: true }),
+  });
+  // Two presses in the same tick, before the controls are redrawn.
+  const first = actions.backup();
+  const again = [actions.backup(), actions.restore(), actions.exportCsv(30)];
+  assert.deepEqual(calls, { createBackup: 1, restoreBackup: 0, exportCsv: 0 });
+  await Promise.all(again);
+  assert.equal(store.get().dataOperation, 'backup', 'a refused call does not release the slot it did not take');
+  held.shift()();
+  await first;
+  assert.equal(store.get().dataOperation, null);
+  // Once the slot is free each operation runs again, still one at a time.
+  const restore = actions.restore();
+  await actions.exportCsv(30);
+  assert.deepEqual(calls, { createBackup: 1, restoreBackup: 1, exportCsv: 0 });
+  held.shift()();
+  await restore;
+  const exported = actions.exportCsv(30);
+  assert.equal(calls.exportCsv, 1);
+  held.shift()();
+  await exported;
+  assert.equal(store.get().dataOperation, null);
+});
