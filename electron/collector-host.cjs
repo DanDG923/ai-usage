@@ -106,7 +106,8 @@ function createInlineCollectorHost(service) {
     // refresh-all with both outcomes and refresh-claude with Claude's.
     refreshAll: ({ readPlanUsage = false } = {}) => /** @type {ReturnType<CollectorHost['refreshAll']>} */ (service.handle({ type: 'refresh-all', readPlanUsage: readPlanUsage === true })),
     refreshClaude: () => /** @type {ReturnType<CollectorHost['refreshClaude']>} */ (service.handle({ type: 'refresh-claude', readPlanUsage: false })),
-    request: (type, payload = {}) => service.handle({ type, ...payload }),
+    // The type is written last: a field of the payload never chooses the operation.
+    request: (type, payload = {}) => service.handle({ ...payload, type }),
     stop: () => service.close(),
     get running() { return true; },
   };

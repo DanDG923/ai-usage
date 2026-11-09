@@ -180,7 +180,8 @@ function serveParentPort(port, service) {
     // The host in this app wrote the message; handle() refuses a type it does not know.
     const { id, type, payload } = /** @type {RequestEnvelope} */ (event?.data || {});
     try {
-      const result = await service.handle({ type, ...payload });
+      // The type is written last: a field of the payload never chooses the operation.
+      const result = await service.handle({ ...payload, type });
       answer({ id, ok: true, result });
     } catch (error) {
       answer({ id, ok: false, error: { message: error instanceof Error ? error.message : String(error) } });

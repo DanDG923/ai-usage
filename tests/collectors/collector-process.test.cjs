@@ -287,3 +287,20 @@ test('the host forwards fork options so the collector child inherits the launch 
   assert.deepEqual(forks[0].env, { GH_TOKEN: 'kept-for-providers', PATH: 'C:\\Windows' });
   host.stop();
 });
+
+test('a payload field named type cannot change which collector request runs', async () => {
+  const seen = [];
+  const service = { handle: async (request) => { seen.push(request.type); return { ran: request.type, extra: request.extra }; }, close() {} };
+  // Across the process boundary.
+  const port = new EventEmitter();
+  const sent = [];
+  port.postMessage = (message) => sent.push(message);
+  serveParentPort(port, service);
+  port.emit('message', { data: { id: 1, type: 'ping', payload: { type: 'close', extra: 'x' } } });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(sent, [{ id: 1, ok: true, result: { ran: 'ping', extra: 'x' } }]);
+  // In process.
+  const inline = createInlineCollectorHost(service);
+  assert.deepEqual(await inline.request('ping', { type: 'close', extra: 'y' }), { ran: 'ping', extra: 'y' });
+  assert.deepEqual(seen, ['ping', 'ping']);
+});
