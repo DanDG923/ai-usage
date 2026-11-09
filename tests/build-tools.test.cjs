@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { checkVersion, bumpVersion } = require('../tools/bump-version.cjs');
-const { assertArchive } = require('../tools/audit-release.cjs');
+const { assertArchive, assertMainProcessSources } = require('../tools/audit-release.cjs');
 const { buildDirectory } = require('../tools/build-paths.cjs');
 
 test('version tool updates all current metadata while preserving historical changelog entries', () => {
@@ -50,6 +50,24 @@ test('release audit rejects missing runtime code, private data, source maps and 
   for (const name of ['dist/app.js.map', '.codex/auth.json', 'private/ledger.sqlite', 'node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/claude.exe', 'dist/assets/demo-grDXqB6S.js', 'dist/assets/flyout-preview-CuXK6gLk.js']) {
     assert.throws(() => assertArchive([...entries, name]), /Release audit failed/);
   }
+});
+
+test('release audit requires every main-process source file, in whichever folder, in the archive', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-audit-sources-'));
+  fs.mkdirSync(path.join(root, 'electron', 'app'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'electron', 'main.cjs'), '');
+  fs.writeFileSync(path.join(root, 'electron', 'app', 'lifecycle.cjs'), '');
+  const directory = path.join(root, 'electron');
+  assert.doesNotThrow(() => assertMainProcessSources(['electron/main.cjs', 'electron/app/lifecycle.cjs', 'dist/index.html'], directory));
+  assert.throws(() => assertMainProcessSources(['electron/main.cjs'], directory), /absent from ASAR: electron\/app\/lifecycle\.cjs/);
+  // The real tree: what the packager is configured to take covers all of it.
+  const repo = path.resolve(__dirname, '..');
+  const sources = fs.readdirSync(path.join(repo, 'electron'), { recursive: true })
+    .filter((name) => fs.statSync(path.join(repo, 'electron', name)).isFile())
+    .map((name) => `electron/${name.replaceAll('\\', '/')}`);
+  assert.ok(sources.includes('electron/app/application.cjs') && sources.includes('electron/store/schema.cjs'));
+  assert.doesNotThrow(() => assertMainProcessSources(sources));
+  assert.ok(require('../package.json').build.files.includes('electron/**/*'));
 });
 
 test('local build outputs leave the synced project while CI output remains predictable', () => {

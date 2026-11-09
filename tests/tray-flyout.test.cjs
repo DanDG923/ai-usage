@@ -5,7 +5,6 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { createRequire } = require('node:module');
 const { EventEmitter } = require('node:events');
 const test = require('node:test');
 const React = require('react');
@@ -16,6 +15,7 @@ const {
   isMainFrameOf, normalizeNavigationTarget,
 } = require('../electron/flyout.cjs');
 const { assertArchive } = require('../tools/audit-release.cjs');
+const { mainApplication } = require('./helpers/main-application.cjs');
 
 const root = path.resolve(__dirname, '..');
 const size = { width: 380, height: 540 };
@@ -387,12 +387,8 @@ test('the flyout payload keeps the tray fields and drops analytics, capacity and
   assert.equal(flyoutPayload(null), null);
 });
 
-// The real main module, with Electron replaced by stand-ins.
+// The real main-process application, with Electron replaced by stand-ins.
 function mainHarness({ env = {} } = {}) {
-  const handlers = new Map();
-  const app = new EventEmitter();
-  app.requestSingleInstanceLock = () => false;
-  app.quit = () => {};
   class HarnessWindow extends FakeWindow {}
   class FakeTray extends EventEmitter {
     setToolTip() {}
@@ -401,33 +397,24 @@ function mainHarness({ env = {} } = {}) {
     isDestroyed() { return false; }
     getBounds() { return { x: 1700, y: 1044, width: 24, height: 24 }; }
   }
-  const electron = {
-    app,
-    ipcMain: { handle: (name, fn) => handlers.set(name, fn) },
-    BrowserWindow: HarnessWindow,
-    Tray: FakeTray,
-    Menu: { buildFromTemplate: (template) => template },
-    nativeImage: { createFromPath: () => ({ isEmpty: () => true }), createEmpty: () => ({}) },
-    nativeTheme: { shouldUseDarkColors: true },
-    screen: {
-      getCursorScreenPoint: () => ({ x: 1710, y: 1050 }),
-      getDisplayMatching: () => ({ bounds: display('bottom').displayBounds, workArea: display('bottom').workArea }),
-      getAllDisplays: () => [{ bounds: display('bottom').displayBounds, workArea: display('bottom').workArea }],
+  const { main, handlers, app } = mainApplication({
+    env,
+    electron: {
+      BrowserWindow: HarnessWindow,
+      Tray: FakeTray,
+      Menu: { buildFromTemplate: (template) => template },
+      nativeImage: { createFromPath: () => ({ isEmpty: () => true }), createEmpty: () => ({}) },
+      nativeTheme: { shouldUseDarkColors: true },
+      screen: {
+        getCursorScreenPoint: () => ({ x: 1710, y: 1050 }),
+        getDisplayMatching: () => ({ bounds: display('bottom').displayBounds, workArea: display('bottom').workArea }),
+        getAllDisplays: () => [{ bounds: display('bottom').displayBounds, workArea: display('bottom').workArea }],
+      },
     },
-  };
-  const filename = path.resolve(__dirname, '../electron/main.cjs');
-  const localRequire = createRequire(filename);
-  const context = vm.createContext({
-    require: (id) => (id === 'electron' ? electron : localRequire(id)),
-    __dirname: path.dirname(filename), Buffer, console, URL,
-    process: { env, argv: [], on() {}, execPath: process.execPath, stderr: process.stderr },
-    setTimeout, clearTimeout, setInterval, clearInterval,
   });
-  vm.runInContext(fs.readFileSync(filename, 'utf8'), context);
-  const run = (code) => vm.runInContext(code, context);
   const windowsBefore = FakeWindow.created.length;
   return {
-    handlers, electron, context, run,
+    main, handlers, electron: { ...main.electron, app },
     created: () => FakeWindow.created.slice(windowsBefore).filter((entry) => entry instanceof HarnessWindow),
   };
 }
@@ -436,9 +423,11 @@ const plain = (value) => JSON.parse(JSON.stringify(value));
 
 test('the tray creates no flyout at startup; left click opens it and double click opens the dashboard instead', () => {
   const h = mainHarness();
-  h.run('globalThis.dashboardShows = 0; showMainWindow = () => { dashboardShows++; }; createTray();');
+  let dashboardShows = 0;
+  h.main.dashboard.showMainWindow = () => { dashboardShows++; };
+  h.main.tray.createTray();
   assert.equal(h.created().length, 0, 'no flyout renderer exists until the first click');
-  const tray = h.run('tray');
+  const tray = h.main.tray.icon;
   tray.emit('click');
   const [flyout] = h.created();
   assert.ok(flyout);
@@ -448,7 +437,7 @@ test('the tray creates no flyout at startup; left click opens it and double clic
   assert.deepEqual(flyout.bounds, { x: 1522, y: 484, width: 380, height: 540 });
   tray.emit('double-click');
   assert.equal(flyout.visible, false);
-  assert.equal(h.run('dashboardShows'), 1);
+  assert.equal(dashboardShows, 1);
   tray.emit('click');
   assert.equal(flyout.visible, false, 'the click after a double click does not reopen the flyout');
   // Right click keeps the native context menu.
@@ -457,7 +446,7 @@ test('the tray creates no flyout at startup; left click opens it and double clic
 
 test('the flyout window is hardened like the dashboard and loads its own page', async () => {
   const h = mainHarness();
-  h.run('createFlyoutWindow({ width: 380, height: 540 })');
+  h.main.tray.createFlyoutWindow({ width: 380, height: 540 });
   const [flyout] = h.created();
   const { options } = flyout;
   assert.equal(options.show, false);
@@ -474,36 +463,38 @@ test('the flyout window is hardened like the dashboard and loads its own page', 
   assert.deepEqual(flyout.loaded, { kind: 'file', value: path.join(root, 'dist', 'flyout.html') });
 
   const dev = mainHarness({ env: { VITE_DEV_SERVER_URL: 'http://127.0.0.1:5173' } });
-  dev.run('createFlyoutWindow({ width: 380, height: 540 })');
+  dev.main.tray.createFlyoutWindow({ width: 380, height: 540 });
   assert.deepEqual(dev.created()[0].loaded, { kind: 'url', value: 'http://127.0.0.1:5173/flyout.html' });
   dev.electron.app.isPackaged = true;
-  dev.run('createFlyoutWindow({ width: 380, height: 540 })');
+  dev.main.tray.createFlyoutWindow({ width: 380, height: 540 });
   assert.equal(dev.created()[1].loaded.kind, 'file', 'a packaged build never loads a development URL');
 
   // A page that fails to load is dropped; the next click tries again.
   const failing = mainHarness();
-  failing.run('createTray()');
+  failing.main.tray.createTray();
   const previous = FakeWindow.loadResult;
   FakeWindow.loadResult = () => Promise.reject(new Error('missing flyout.html'));
   try {
-    failing.run('tray').emit('click');
+    failing.main.tray.icon.emit('click');
     await flush();
   } finally {
     FakeWindow.loadResult = previous;
   }
   assert.equal(failing.created()[0].destroyed, true);
-  assert.equal(failing.run('trayFlyout.window()'), null);
-  failing.run('tray').emit('click');
+  assert.equal(failing.main.tray.flyout.window(), null);
+  failing.main.tray.icon.emit('click');
   assert.equal(failing.created().length, 2);
 });
 
 function wiredHarness() {
   const h = mainHarness();
-  h.run('registerIpc(); createTray();');
-  h.context.dashboardWindow = new h.electron.BrowserWindow({});
-  h.run('window = dashboardWindow; trayFlyout.show();');
-  const dashboard = h.run('window');
-  const flyout = h.run('trayFlyout.window()');
+  const { main } = h;
+  main.ipc.registerIpc();
+  main.tray.createTray();
+  main.dashboard.window = new h.electron.BrowserWindow({});
+  main.tray.flyout.show();
+  const dashboard = main.dashboard.window;
+  const flyout = main.tray.flyout.window();
   flyout.emit('ready-to-show');
   return {
     ...h,
@@ -530,29 +521,32 @@ test('flyout channels refuse the dashboard and every dashboard channel refuses t
       assert.throws(() => handler(h.fromFlyout), /only available from the AI Usage window/, channel);
     }
   }
-  assert.equal(h.run('activeDashboardRequests'), 0);
+  assert.equal(h.main.ipc.activeDashboardRequests, 0);
   // Once the flyout is released, its old frame is refused too.
-  h.run('trayFlyout.destroy()');
+  h.main.tray.flyout.destroy();
   assert.throws(() => h.handlers.get('flyout:close')(h.fromFlyout), /tray flyout/);
 });
 
 test('flyout channels read the tray snapshot, refresh, snooze and close through the main process', async () => {
   const h = wiredHarness();
-  h.run(`globalThis.traySnapshots = 0; globalThis.refreshes = 0; globalThis.snoozes = [];
-    store = {
-      getTraySnapshot: () => { traySnapshots++; return { generatedAt: 'now', settings: { theme: 'light' }, sources: [],
-        quotas: { codex: { forecast: { state: 'safe', series: { observed: [1], expected: [1], heavy: [1] } }, windows: [] } },
-        dashboardVerdict: { state: 'safe' } }; },
-      getDashboardSnapshot: () => { throw new Error('The flyout must not build a full dashboard snapshot'); },
-    };
-    refreshAll = async () => { refreshes++; };
-    setSnooze = async (hours) => { snoozes.push(hours); return { settings: { alertsSnoozedUntil: hours ? 'later' : null }, quotas: {}, costs: { actual: 1 } }; };`);
+  const { main } = h;
+  let traySnapshots = 0;
+  let refreshes = 0;
+  const snoozes = [];
+  main.store = {
+    getTraySnapshot: () => { traySnapshots++; return { generatedAt: 'now', settings: { theme: 'light' }, sources: [],
+      quotas: { codex: { forecast: { state: 'safe', series: { observed: [1], expected: [1], heavy: [1] } }, windows: [] } },
+      dashboardVerdict: { state: 'safe' } }; },
+    getDashboardSnapshot: () => { throw new Error('The flyout must not build a full dashboard snapshot'); },
+  };
+  main.refresh.refreshAll = async () => { refreshes++; };
+  main.tray.setSnooze = async (hours) => { snoozes.push(hours); return { settings: { alertsSnoozedUntil: hours ? 'later' : null }, quotas: {}, costs: { actual: 1 } }; };
   const call = (channel, ...args) => h.handlers.get(channel)(h.fromFlyout, ...args);
   const first = await call('flyout:get-snapshot');
   assert.equal(first.quotas.codex.forecast.series.observed.length, 0);
-  assert.equal(h.run('traySnapshots'), 1);
+  assert.equal(traySnapshots, 1);
   const refreshed = await call('flyout:refresh');
-  assert.equal(h.run('refreshes'), 1);
+  assert.equal(refreshes, 1);
   assert.equal(refreshed.generatedAt, 'now');
   await assert.rejects(async () => call('flyout:snooze', -1), /Invalid snooze duration/);
   await assert.rejects(async () => call('flyout:snooze', 'soon'), /Invalid snooze duration/);
@@ -561,10 +555,11 @@ test('flyout channels read the tray snapshot, refresh, snooze and close through 
   assert.equal('costs' in snoozed, false);
   await call('flyout:snooze', 500);
   await call('flyout:snooze', 0);
-  assert.deepEqual(plain(h.run('snoozes')), [1, 72, 0]);
+  assert.deepEqual(snoozes, [1, 72, 0]);
   call('flyout:close');
   assert.equal(h.flyout.visible, false);
-  h.run('isQuitting = true; shutdownPromise = Promise.resolve();');
+  main.lifecycle.isQuitting = true;
+  main.lifecycle.shutdownPromise = Promise.resolve();
   assert.equal(await call('flyout:get-snapshot'), null, 'no snapshot while storage closes');
 });
 
@@ -572,38 +567,43 @@ test('flyout channels read the tray snapshot, refresh, snooze and close through 
 // the dashboard is automatic collection and must say so.
 test('showing the flyout or the dashboard asks only for an automatic refresh', async () => {
   const h = mainHarness();
-  h.run('globalThis.staleRequests = []; refreshIfStale = (options) => { staleRequests.push(options); }; createTray();');
-  h.run('tray').emit('click');
+  const staleRequests = [];
+  h.main.refresh.refreshIfStale = (options) => { staleRequests.push(options); };
+  h.main.tray.createTray();
+  h.main.tray.icon.emit('click');
   const [flyout] = h.created();
   flyout.emit('ready-to-show');
-  assert.deepEqual(plain(h.run('staleRequests')), [{ trigger: 'flyout-show' }]);
-  h.run('createWindow()');
+  assert.deepEqual(staleRequests, [{ trigger: 'flyout-show' }]);
+  h.main.dashboard.createWindow();
   const dashboard = h.created().at(-1);
   dashboard.emit('show');
-  assert.deepEqual(plain(h.run('staleRequests')).at(-1), { trigger: 'window-show' });
+  assert.deepEqual(staleRequests.at(-1), { trigger: 'window-show' });
   await flush();
 });
 
 test('showing the dashboard while an update has closed storage does not read the closed database', () => {
   const h = mainHarness();
-  h.run("preparingUpdate = true; store = { getSettings() { throw new Error('database is not open'); } };");
-  assert.doesNotThrow(() => h.run("refreshIfStale({ trigger: 'window-show' })"));
+  h.main.lifecycle.preparingUpdate = true;
+  h.main.store = { getSettings() { throw new Error('database is not open'); } };
+  assert.doesNotThrow(() => h.main.refresh.refreshIfStale({ trigger: 'window-show' }));
 });
 
 test('a released dashboard reopens where it was only while that place is still on a display', () => {
   const h = mainHarness();
   const [{ workArea }] = h.electron.screen.getAllDisplays();
-  h.run(`savedWindowBounds = { x: ${workArea.x + 40}, y: ${workArea.y + 30}, width: 900, height: 700 }; createWindow()`);
+  h.main.dashboard.savedWindowBounds = { x: workArea.x + 40, y: workArea.y + 30, width: 900, height: 700 };
+  h.main.dashboard.createWindow();
   assert.deepEqual(plain(h.created().at(-1).options).x, workArea.x + 40);
   // Released on a monitor that has since been disconnected: keep the size only.
-  h.run(`savedWindowBounds = { x: ${workArea.x + workArea.width + 500}, y: ${workArea.y}, width: 900, height: 700 }; createWindow()`);
+  h.main.dashboard.savedWindowBounds = { x: workArea.x + workArea.width + 500, y: workArea.y, width: 900, height: 700 };
+  h.main.dashboard.createWindow();
   const { x, y, width, height } = h.created().at(-1).options;
   assert.deepEqual({ x, y, width, height }, { x: undefined, y: undefined, width: 900, height: 700 });
 });
 
 test('a crashed dashboard renderer is reloaded on screen and released when hidden or failing again', () => {
   const h = mainHarness();
-  h.run('createWindow()');
+  h.main.dashboard.createWindow();
   const dashboard = h.created().at(-1);
   let reloads = 0;
   dashboard.webContents.reload = () => { reloads += 1; };
@@ -619,10 +619,10 @@ test('a crashed dashboard renderer is reloaded on screen and released when hidde
   dashboard.webContents.emit('render-process-gone', {}, { reason: 'crashed' });
   assert.equal(reloads, 1);
   assert.equal(dashboard.destroyed, true);
-  assert.deepEqual(plain(h.run('savedWindowBounds')), { x: 10, y: 20, width: 900, height: 700 });
-  assert.equal(h.run('window'), null, 'the next open builds a fresh window');
+  assert.deepEqual(plain(h.main.dashboard.savedWindowBounds), { x: 10, y: 20, width: 900, height: 700 });
+  assert.equal(h.main.dashboard.window, null, 'the next open builds a fresh window');
 
-  h.run('createWindow()');
+  h.main.dashboard.createWindow();
   const hidden = h.created().at(-1);
   hidden.webContents.reload = () => { reloads += 1; };
   hidden.getNormalBounds = () => ({ x: 0, y: 0, width: 800, height: 600 });
@@ -634,34 +634,39 @@ test('a crashed dashboard renderer is reloaded on screen and released when hidde
 
 test('publishes reach an existing flyout as a light payload, and the theme sets its background', () => {
   const h = wiredHarness();
-  h.run("trayIconFor = () => ({}); buildTrayMenu = () => null; store = { getSettings: () => ({}) };");
-  h.run(`updateTray({ generatedAt: 'now', settings: { theme: 'dark' }, sources: [], dashboardVerdict: { state: 'safe', affected: [], details: [] },
-    quotas: { codex: null, claude: null, fable: null }, costs: { actual: 12 }, storage: { databasePath: 'C:\\\\data.sqlite' } })`);
+  const { main } = h;
+  main.tray.trayIconFor = () => ({});
+  main.tray.buildTrayMenu = () => null;
+  main.store = { getSettings: () => ({}) };
+  main.tray.updateTray({ generatedAt: 'now', settings: { theme: 'dark' }, sources: [], dashboardVerdict: { state: 'safe', affected: [], details: [] },
+    quotas: { codex: null, claude: null, fable: null }, costs: { actual: 12 }, storage: { databasePath: 'C:\\data.sqlite' } });
   const [channel, payload] = h.flyout.webContents.sent.at(-1);
   assert.equal(channel, 'flyout:updated');
   assert.equal(payload.generatedAt, 'now');
   assert.equal('costs' in payload, false);
   assert.equal('storage' in payload, false);
   h.electron.nativeTheme.shouldUseDarkColors = false;
-  h.run("applyTheme('light')");
+  main.dashboard.applyTheme('light');
   assert.equal(h.flyout.background, FLYOUT_BACKGROUND.light);
-  h.run('trayFlyout.destroy()');
-  assert.doesNotThrow(() => h.run("updateTray({ dashboardVerdict: { state: 'safe' } })"));
+  main.tray.flyout.destroy();
+  assert.doesNotThrow(() => main.tray.updateTray({ dashboardVerdict: { state: 'safe' } }));
 });
 
 test('opening the dashboard from the flyout queues the page until the dashboard renderer collects it', () => {
   const h = wiredHarness();
-  h.run('globalThis.dashboardShows = 0; showMainWindow = () => { dashboardShows++; };');
+  const { main } = h;
+  let dashboardShows = 0;
+  main.dashboard.showMainWindow = () => { dashboardShows++; };
   const open = (value) => h.handlers.get('flyout:open-dashboard')(h.fromFlyout, value);
   const take = (event = h.fromDashboard) => h.handlers.get('dashboard:take-navigation')(event);
   for (const invalid of [{ tab: 'secrets' }, { tab: 'overview', provider: 'openai' }, { tab: 'settings', extra: 1 }, 'settings', null]) {
     assert.throws(() => open(invalid), /Unknown dashboard page/);
   }
-  assert.equal(h.run('dashboardShows'), 0, 'an invalid page opens nothing');
+  assert.equal(dashboardShows, 0, 'an invalid page opens nothing');
   assert.equal(take(), null);
 
   open({ tab: 'overview', provider: 'fable' });
-  assert.equal(h.run('dashboardShows'), 1);
+  assert.equal(dashboardShows, 1);
   assert.equal(h.flyout.visible, false, 'the flyout closes when the dashboard opens');
   assert.deepEqual(h.dashboard.webContents.sent.at(-1), ['dashboard:navigation-pending']);
   assert.deepEqual(take(), { tab: 'overview', provider: 'fable' });
@@ -672,10 +677,11 @@ test('opening the dashboard from the flyout queues the page until the dashboard 
   assert.deepEqual(take(), { tab: 'overview' });
 
   // A released dashboard is recreated; its new renderer collects the page when it subscribes.
-  h.context.recreated = new h.electron.BrowserWindow({});
-  h.run('window = null; showMainWindow = () => { window = recreated; };');
+  const recreated = new h.electron.BrowserWindow({});
+  main.dashboard.window = null;
+  main.dashboard.showMainWindow = () => { main.dashboard.window = recreated; };
   open({ tab: 'settings' });
-  const recreated = h.run('window');
+  assert.equal(main.dashboard.window, recreated);
   assert.deepEqual(recreated.webContents.sent.at(-1), ['dashboard:navigation-pending']);
   assert.throws(() => take(h.fromDashboard), /only available/, 'the destroyed dashboard frame is no longer trusted');
   assert.deepEqual(take({ sender: recreated.webContents, senderFrame: recreated.webContents.mainFrame }), { tab: 'settings' });

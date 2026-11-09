@@ -10,8 +10,6 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const vm = require('node:vm');
-const { createRequire } = require('node:module');
 const { EventEmitter } = require('node:events');
 const test = require('node:test');
 const { UsageStore } = require('../electron/store.cjs');
@@ -19,6 +17,7 @@ const { REFRESH_TRIGGERS, createRefreshCoalescer, readsPlanUsage, refreshOptions
 const { createCollectorHost, createInlineCollectorHost } = require('../electron/collector-host.cjs');
 const { createCollectorService } = require('../electron/collector-service.cjs');
 const { registerIpc } = require('../electron/ipc-handlers.cjs');
+const { mainApplication } = require('./helpers/main-application.cjs');
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 const plain = (value) => JSON.parse(JSON.stringify(value));
@@ -118,76 +117,95 @@ test('a failed automatic run still lets the waiting user refresh read plan usage
 // The main process: every trigger passes its classification.
 
 function mainHarness({ stubRefreshAll = true, captureTimeouts = false } = {}) {
-  const handlers = new Map();
-  const app = new EventEmitter();
-  app.requestSingleInstanceLock = () => false;
-  app.quit = () => {};
   const timers = [];
   const timeouts = [];
-  const filename = path.resolve(__dirname, '../electron/main.cjs');
-  const localRequire = createRequire(filename);
-  const electron = { app, ipcMain: { handle: (name, fn) => handlers.set(name, fn) }, Menu: { buildFromTemplate: (template) => template } };
-  const context = vm.createContext({
-    require: (id) => (id === 'electron' ? electron : localRequire(id)),
-    __dirname: path.dirname(filename), Buffer, console, URL,
-    process: { env: {}, argv: [], on() {}, execPath: process.execPath, stderr: process.stderr },
-    setTimeout: captureTimeouts ? (fn, ms) => { const timer = { fn, ms, unref() {} }; timeouts.push(timer); return timer; } : setTimeout,
-    clearTimeout: captureTimeouts ? () => {} : clearTimeout,
-    setInterval: (fn) => { const timer = { fn }; timers.push(timer); return timer; },
-    clearInterval: () => {},
+  const refreshCalls = [];
+  const { main, handlers } = mainApplication({
+    electron: { Menu: { buildFromTemplate: (template) => template } },
+    timers: {
+      ...(captureTimeouts ? {
+        setTimeout: (fn, ms) => { const timer = { fn, ms, unref() {} }; timeouts.push(timer); return timer; },
+        clearTimeout: () => {},
+      } : {}),
+      setInterval: (fn) => { const timer = { fn }; timers.push(timer); return timer; },
+      clearInterval: () => {},
+    },
   });
-  vm.runInContext(fs.readFileSync(filename, 'utf8'), context);
-  const run = (code) => vm.runInContext(code, context);
-  if (stubRefreshAll) run('globalThis.refreshCalls = []; refreshAll = (options) => { refreshCalls.push(options); return Promise.resolve({}); };');
-  return { handlers, timers, timeouts, run, calls: () => plain(run('refreshCalls')) };
+  if (stubRefreshAll) main.refresh.refreshAll = (options) => { refreshCalls.push(options); return Promise.resolve({}); };
+  return { main, handlers, timers, timeouts, refreshCalls, calls: () => plain(refreshCalls) };
 }
 
 test('the tray menu and flyout refreshes are user requests that read plan usage', async () => {
   const h = mainHarness();
-  const menu = h.run('buildTrayMenu()');
+  const menu = h.main.tray.buildTrayMenu();
   menu.find((item) => item.label === 'Refresh').click();
   assert.deepEqual(h.calls(), [{ trigger: 'tray-menu-refresh', readPlanUsage: true }]);
 
-  h.run('trayFlyout = { isSender: () => true }; flyoutSnapshot = () => ({ flyout: true }); registerFlyoutIpc();');
+  h.main.tray.flyout = { isSender: () => true };
+  h.main.tray.flyoutSnapshot = () => ({ flyout: true });
+  h.main.ipc.registerFlyoutIpc();
   assert.deepEqual(plain(await h.handlers.get('flyout:refresh')({})), { flyout: true });
   assert.deepEqual(h.calls()[1], { trigger: 'flyout-refresh', readPlanUsage: true });
 });
 
 test('the schedule timer and every refreshIfStale trigger never read plan usage', () => {
   const h = mainHarness();
-  h.run('store = { getSettings: () => ({ refreshIntervalMinutes: 15 }) }; lastRefreshAt = 0; scheduleAutomaticRefresh();');
+  const { main } = h;
+  main.store = { getSettings: () => ({ refreshIntervalMinutes: 15 }) };
+  main.refresh.lastRefreshAt = 0;
+  main.refresh.scheduleAutomaticRefresh();
   h.timers[0].fn();
   assert.deepEqual(h.calls(), [{ trigger: 'schedule', readPlanUsage: false }]);
 
   for (const trigger of ['launch', 'window-show', 'flyout-show', 'wake']) {
-    h.run(`refreshCalls.length = 0; lastRefreshAt = 0; refreshIfStale({ trigger: '${trigger}', ignoreSchedule: true });`);
+    h.refreshCalls.length = 0;
+    main.refresh.lastRefreshAt = 0;
+    main.refresh.refreshIfStale({ trigger, ignoreSchedule: true });
     assert.deepEqual(h.calls(), [{ trigger, readPlanUsage: false }], trigger);
   }
   // A caller that names no trigger cannot read plan usage either.
-  h.run('refreshCalls.length = 0; lastRefreshAt = 0; refreshIfStale();');
+  h.refreshCalls.length = 0;
+  main.refresh.lastRefreshAt = 0;
+  main.refresh.refreshIfStale();
   assert.deepEqual(h.calls(), [{ readPlanUsage: false }]);
 });
 
 test('the Claude Code mod never reads plan usage: its sync and its readings collect locally', () => {
   const h = mainHarness();
-  h.run(`globalThis.claudeOnly = 0; refreshClaudeOnly = () => { claudeOnly += 1; return Promise.resolve(); };
-    globalThis.opened = []; openDashboardAt = (target) => { opened.push(target); };
-    store = { getSettings: () => ({ refreshIntervalMinutes: 15 }) }; isQuitting = false;`);
-  h.run("answerClaudeCodeRequest('sync'); answerClaudeCodeRequest('open'); answerClaudeCodeRequest('read-plan-usage');");
+  const { main } = h;
+  let claudeOnly = 0;
+  const opened = [];
+  main.refresh.refreshClaudeOnly = () => { claudeOnly += 1; return Promise.resolve(); };
+  main.dashboard.openDashboardAt = (target) => { opened.push(target); };
+  main.store = { getSettings: () => ({ refreshIntervalMinutes: 15 }) };
+  main.lifecycle.isQuitting = false;
+  main.refresh.answerClaudeCodeRequest('sync');
+  main.refresh.answerClaudeCodeRequest('open');
+  main.refresh.answerClaudeCodeRequest('read-plan-usage');
   assert.deepEqual(h.calls(), [{ trigger: 'claude-code-sync', readPlanUsage: false }]);
-  assert.deepEqual(plain(h.run('opened')), [{ tab: 'overview' }]);
-  h.run('importClaudeCodeReading()');
-  assert.equal(h.run('claudeOnly'), 1);
+  assert.deepEqual(opened, [{ tab: 'overview' }]);
+  main.refresh.importClaudeCodeReading();
+  assert.equal(claudeOnly, 1);
   // Collecting only on Refresh holds the reading until the next collection.
-  h.run('store = { getSettings: () => ({ refreshIntervalMinutes: 0 }) }; importClaudeCodeReading();');
-  assert.equal(h.run('claudeOnly'), 1);
+  main.store = { getSettings: () => ({ refreshIntervalMinutes: 0 }) };
+  main.refresh.importClaudeCodeReading();
+  assert.equal(claudeOnly, 1);
 });
 
+// The main process's own modules, and the handlers the renderer reaches.
+function mainProcessSources() {
+  const directory = path.resolve(__dirname, '../electron/app');
+  return [
+    ['electron/app', fs.readdirSync(directory).filter((name) => name.endsWith('.cjs')).sort()
+      .map((name) => fs.readFileSync(path.join(directory, name), 'utf8')).join('\n')],
+    ['ipc-handlers.cjs', fs.readFileSync(path.resolve(__dirname, '../electron/ipc-handlers.cjs'), 'utf8')],
+  ];
+}
+
 test('every refresh call site names its trigger', () => {
-  const main = fs.readFileSync(path.resolve(__dirname, '../electron/main.cjs'), 'utf8');
-  const ipc = fs.readFileSync(path.resolve(__dirname, '../electron/ipc-handlers.cjs'), 'utf8');
-  for (const [name, source] of [['main.cjs', main], ['ipc-handlers.cjs', ipc]]) {
-    const calls = [...source.matchAll(/(?<![.\w])refreshAll\(([^)]*)/g)].map((match) => match[1])
+  for (const [name, source] of mainProcessSources()) {
+    // The collector host has a refreshAll of its own, which takes the flag.
+    const calls = [...source.matchAll(/(?<!collectors\.)\brefreshAll\(([^)]*)/g)].map((match) => match[1])
       .filter((argument) => !argument.startsWith('{ readPlanUsage = false }'));
     assert.ok(calls.length > 0, name);
     // refreshIfStale forwards its own caller's trigger, checked below.
@@ -200,57 +218,68 @@ test('every refresh call site names its trigger', () => {
 
 test('the launch and wake collections go through refreshIfStale as automatic triggers', () => {
   const h = mainHarness({ captureTimeouts: true });
-  h.run(`globalThis.staleCalls = []; refreshIfStale = (options) => { staleCalls.push(options); };
-    isQuitting = false;`);
+  const { main } = h;
+  const staleCalls = [];
+  main.refresh.refreshIfStale = (options) => { staleCalls.push(options); };
+  main.lifecycle.isQuitting = false;
   const runTimers = () => { for (const timer of h.timeouts.splice(0)) timer.fn(); };
   h.timeouts.length = 0;
 
-  h.run('scheduleLaunchRefresh()');
+  main.refresh.scheduleLaunchRefresh();
   assert.deepEqual(h.timeouts.map((timer) => timer.ms), [900]);
   runTimers();
-  assert.deepEqual(plain(h.run('staleCalls')), [{ trigger: 'launch', ignoreSchedule: true }]);
+  assert.deepEqual(staleCalls, [{ trigger: 'launch', ignoreSchedule: true }]);
 
-  h.run('staleCalls.length = 0; onResume()');
+  staleCalls.length = 0;
+  main.refresh.onResume();
   assert.deepEqual(h.timeouts.map((timer) => timer.ms), [15_000]);
   runTimers();
-  assert.deepEqual(plain(h.run('staleCalls')), [{ trigger: 'wake' }]);
+  assert.deepEqual(staleCalls, [{ trigger: 'wake' }]);
 
   // A wake while quitting collects nothing.
-  h.run('staleCalls.length = 0; isQuitting = true; onResume()');
+  staleCalls.length = 0;
+  main.lifecycle.isQuitting = true;
+  main.refresh.onResume();
   runTimers();
-  assert.deepEqual(plain(h.run('staleCalls')), []);
+  assert.deepEqual(staleCalls, []);
   assert.deepEqual(h.calls(), [], 'neither calls refreshAll directly');
 
-  // whenReady wires exactly these two.
-  const main = fs.readFileSync(path.resolve(__dirname, '../electron/main.cjs'), 'utf8');
-  assert.match(main, /\n\s+scheduleLaunchRefresh\(\);\n/);
-  assert.match(main, /powerMonitor\.on\('resume', onResume\)/);
+  // Startup wires exactly these two.
+  const lifecycle = fs.readFileSync(path.resolve(__dirname, '../electron/app/lifecycle.cjs'), 'utf8');
+  assert.match(lifecycle, /\n\s+main\.refresh\.scheduleLaunchRefresh\(\);\n/);
+  assert.match(lifecycle, /powerMonitor\.on\('resume', main\.refresh\.onResume\)/);
 });
 
 test('the main refresh passes the flag to the collectors and queues one plan-usage run behind an automatic one', async () => {
-  const h = mainHarness({ stubRefreshAll: false });
-  const source = fs.readFileSync(path.resolve(__dirname, '../electron/main.cjs'), 'utf8');
-  h.run(`globalThis.runs = []; globalThis.gates = [];
-    collectAll = (options) => { runs.push(options.readPlanUsage); return new Promise((resolve) => gates.push(resolve)); };`);
-  const automatic = h.run('refreshAll(refreshOptionsFor(REFRESH_TRIGGERS.SCHEDULE))');
-  const show = h.run('refreshAll(refreshOptionsFor(REFRESH_TRIGGERS.WINDOW_SHOW))');
-  const user = h.run('refreshAll(refreshOptionsFor(REFRESH_TRIGGERS.DASHBOARD_REFRESH))');
-  const flyout = h.run('refreshAll(refreshOptionsFor(REFRESH_TRIGGERS.FLYOUT_REFRESH))');
+  const { main } = mainHarness({ stubRefreshAll: false });
+  const runs = [];
+  const gates = [];
+  main.refresh.collectAll = (options) => { runs.push(options.readPlanUsage); return new Promise((resolve) => gates.push(resolve)); };
+  const automatic = main.refresh.refreshAll(refreshOptionsFor(REFRESH_TRIGGERS.SCHEDULE));
+  const show = main.refresh.refreshAll(refreshOptionsFor(REFRESH_TRIGGERS.WINDOW_SHOW));
+  const user = main.refresh.refreshAll(refreshOptionsFor(REFRESH_TRIGGERS.DASHBOARD_REFRESH));
+  const flyout = main.refresh.refreshAll(refreshOptionsFor(REFRESH_TRIGGERS.FLYOUT_REFRESH));
   assert.equal(show, automatic);
   assert.equal(flyout, user);
-  assert.deepEqual(plain(h.run('runs')), [false]);
-  h.run("gates[0]('automatic')");
+  assert.deepEqual(runs, [false]);
+  gates[0]('automatic');
   assert.equal(await automatic, 'automatic');
   await flush();
-  assert.deepEqual(plain(h.run('runs')), [false, true]);
-  h.run("gates[1]('user')");
+  assert.deepEqual(runs, [false, true]);
+  gates[1]('user');
   assert.equal(await user, 'user');
   assert.equal(await flyout, 'user');
-  assert.equal(h.run('refreshRuns.running'), false);
+  assert.equal(main.refresh.refreshRuns.running, false);
 
   // The collection itself hands the flag to the collector host.
-  const collectSource = source.match(/async function collectAll\(\{ readPlanUsage \}\) \{[\s\S]*?\n\}/)[0];
-  assert.match(collectSource, /collectors\.refreshAll\(\{ readPlanUsage \}\)/);
+  const collecting = mainHarness({ stubRefreshAll: false }).main;
+  const handed = [];
+  collecting.collectors = { refreshAll: async (options) => { handed.push(options); return {}; } };
+  collecting.store = { compactObservations() {}, getTraySnapshot: () => ({}), scheduledBackupDue: () => false };
+  collecting.alerts.showNotifications = () => {};
+  await collecting.refresh.refreshAll(refreshOptionsFor(REFRESH_TRIGGERS.DASHBOARD_REFRESH));
+  await collecting.refresh.refreshAll(refreshOptionsFor(REFRESH_TRIGGERS.SCHEDULE));
+  assert.deepEqual(handed, [{ readPlanUsage: true }, { readPlanUsage: false }]);
 });
 
 // ---------------------------------------------------------------------------

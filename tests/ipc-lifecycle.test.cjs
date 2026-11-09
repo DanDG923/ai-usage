@@ -4,120 +4,127 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { createRequire } = require('node:module');
-const { EventEmitter } = require('node:events');
 const test = require('node:test');
 const { registerIpc } = require('../electron/ipc-handlers.cjs');
+const { mainApplication } = require('./helpers/main-application.cjs');
 
 function mainHarness() {
-  const handlers = new Map();
-  const app = new EventEmitter();
-  app.requestSingleInstanceLock = () => false;
-  app.quit = () => {};
   const timers = [];
   const cleared = [];
-  const filename = path.resolve(__dirname, '../electron/main.cjs');
-  const localRequire = createRequire(filename);
-  const context = vm.createContext({
-    require: (id) => id === 'electron' ? { app, ipcMain: { handle: (name, fn) => handlers.set(name, fn) } } : localRequire(id),
-    __dirname: path.dirname(filename), Buffer, console,
-    process: { env: {}, argv: [], on() {}, execPath: process.execPath, stderr: process.stderr },
-    setTimeout, clearTimeout,
+  const { main, handlers } = mainApplication({ timers: {
     setInterval: (fn) => { const timer = { fn }; timers.push(timer); return timer; },
     clearInterval: (timer) => cleared.push(timer),
-  });
-  vm.runInContext(fs.readFileSync(filename, 'utf8'), context);
-  return { handlers, timers, cleared, run: (code) => vm.runInContext(code, context), context };
+  } });
+  return { main, handlers, timers, cleared };
 }
 
 test('the actual main module protects every registered IPC handler against foreign frames', () => {
-  const h = mainHarness();
-  h.run("window = { isDestroyed: () => false, webContents: { mainFrame: {} } }; handleIpc('test', (_event, value) => value);");
-  const fn = h.handlers.get('test');
+  const { main, handlers } = mainHarness();
+  main.dashboard.window = { isDestroyed: () => false, webContents: { mainFrame: {} } };
+  main.ipc.handleIpc('test', (_event, value) => value);
+  const fn = handlers.get('test');
   assert.throws(() => fn({ sender: {}, senderFrame: {} }), /only available/);
-  const sender = h.run('window.webContents');
+  const sender = main.dashboard.window.webContents;
   assert.throws(() => fn({ sender, senderFrame: {} }), /only available/);
   assert.equal(fn({ sender, senderFrame: sender.mainFrame }, 42), 42);
-  h.run('window.isDestroyed = () => true;');
+  main.dashboard.window.isDestroyed = () => true;
   assert.throws(() => fn({ sender, senderFrame: sender.mainFrame }), /only available/);
 });
 
 test('unchanged settings preserve collection schedule and recent show refresh suppresses ticks', async () => {
-  const h = mainHarness();
-  h.run('globalThis.refreshes = 0; store = { getSettings: () => ({ refreshIntervalMinutes: 15 }) }; refreshAll = async () => { refreshes++; }; scheduleAutomaticRefresh(); scheduleAutomaticRefresh();');
-  assert.equal(h.timers.length, 1);
-  h.run('lastRefreshAt = Date.now();');
-  h.timers[0].fn();
-  assert.equal(h.run('refreshes'), 0);
-  h.run('lastRefreshAt = Date.now() - 16 * 60_000;');
-  h.timers[0].fn();
-  assert.equal(h.run('refreshes'), 1);
-  h.run('store.getSettings = () => ({ refreshIntervalMinutes: 0 }); scheduleAutomaticRefresh();');
-  assert.equal(h.cleared.at(-1), h.timers[0]);
+  const { main, timers, cleared } = mainHarness();
+  let refreshes = 0;
+  main.store = { getSettings: () => ({ refreshIntervalMinutes: 15 }) };
+  main.refresh.refreshAll = async () => { refreshes++; };
+  main.refresh.scheduleAutomaticRefresh();
+  main.refresh.scheduleAutomaticRefresh();
+  assert.equal(timers.length, 1);
+  main.refresh.lastRefreshAt = Date.now();
+  timers[0].fn();
+  assert.equal(refreshes, 0);
+  main.refresh.lastRefreshAt = Date.now() - 16 * 60_000;
+  timers[0].fn();
+  assert.equal(refreshes, 1);
+  main.store.getSettings = () => ({ refreshIntervalMinutes: 0 });
+  main.refresh.scheduleAutomaticRefresh();
+  assert.equal(cleared.at(-1), timers[0]);
 });
 
 test('hidden collection uses only tray data and pushes no dashboard payload', () => {
-  const h = mainHarness();
-  h.run("globalThis.sent = 0; store = { getTraySnapshot: () => ({ kind: 'tray' }), getDashboardSnapshot: () => { throw Error('Full snapshot must not be built'); } }; window = { isDestroyed: () => false, isVisible: () => false, webContents: { send: () => { sent++; } } }; showNotifications = () => {}; publishAfterWrite(currentView());");
-  assert.equal(h.run('sent'), 0);
-  assert.equal(h.run('previousSnapshot.kind'), 'tray');
+  const { main } = mainHarness();
+  let sent = 0;
+  main.store = { getTraySnapshot: () => ({ kind: 'tray' }), getDashboardSnapshot: () => { throw Error('Full snapshot must not be built'); } };
+  main.dashboard.window = { isDestroyed: () => false, isVisible: () => false, webContents: { send: () => { sent++; } } };
+  main.alerts.showNotifications = () => {};
+  main.refresh.publishAfterWrite(main.snapshots.currentView());
+  assert.equal(sent, 0);
+  assert.equal(main.snapshots.previousSnapshot.kind, 'tray');
 });
 
 test('settings responses stay full snapshots after a hidden refresh invalidates the dashboard cache', () => {
-  const h = mainHarness();
-  h.run("store = { getSettings: () => ({ theme: 'dark' }), getTraySnapshot: () => ({ kind: 'tray' }), getDashboardSnapshot: () => ({ costs: { periodDays: 30 } }) }; window = { isDestroyed: () => false, isVisible: () => false }; cachedSnapshot = null;");
-  assert.equal(h.run('patchSnapshotSettings().costs.periodDays'), 30);
-  h.run('invalidateSnapshot();');
-  assert.equal(h.run('lastFullSnapshot.costs.periodDays'), 30);
+  const { main } = mainHarness();
+  main.store = { getSettings: () => ({ theme: 'dark' }), getTraySnapshot: () => ({ kind: 'tray' }), getDashboardSnapshot: () => ({ costs: { periodDays: 30 } }) };
+  main.dashboard.window = { isDestroyed: () => false, isVisible: () => false };
+  main.snapshots.cachedSnapshot = null;
+  assert.equal(main.snapshots.patchSnapshotSettings().costs.periodDays, 30);
+  main.snapshots.invalidateSnapshot();
+  assert.equal(main.snapshots.lastFullSnapshot.costs.periodDays, 30);
 });
 
 test('settings edits do not reintroduce an expired cached forecast after collection is disabled', () => {
-  const h = mainHarness();
-  h.run("store = { getSettings: () => ({ theme: 'dark' }), getDashboardSnapshot: () => ({ expired: true }) }; cachedSnapshot = { days: 30, at: Date.now() - 3_600_000, value: { expired: false } };");
-  assert.equal(h.run('patchSnapshotSettings().expired'), true);
+  const { main } = mainHarness();
+  main.store = { getSettings: () => ({ theme: 'dark' }), getDashboardSnapshot: () => ({ expired: true }) };
+  main.snapshots.cachedSnapshot = { days: 30, at: Date.now() - 3_600_000, value: { expired: false } };
+  assert.equal(main.snapshots.patchSnapshotSettings().expired, true);
 });
 
 test('window release drops full snapshots but preserves reset and fallback notification evidence', () => {
-  const h = mainHarness();
-  h.run(`globalThis.released = 0; store = { releaseDashboardCaches: () => released++ };
-    cachedSnapshot = { value: { costs: {} } }; lastFullSnapshot = cachedSnapshot.value;
-    previousSnapshot = { costs: { heavy: true }, quotas: { codex: { windows: [{ bucketId: 'weekly', resetsAt: 'later', usedPercent: 90, forecast: { series: [1, 2, 3] } }] } }, sources: [{ id: 'codex', status: 'connected', metadata: { heavy: true } }] };
-    releaseDashboardMemory();`);
-  assert.equal(h.run('cachedSnapshot'), null);
-  assert.equal(h.run('lastFullSnapshot'), null);
-  assert.equal(h.run('released'), 1);
-  assert.deepEqual(JSON.parse(h.run('JSON.stringify(previousSnapshot)')), {
+  const { main } = mainHarness();
+  let released = 0;
+  main.store = { releaseDashboardCaches: () => released++ };
+  main.snapshots.cachedSnapshot = { value: { costs: {} } };
+  main.snapshots.lastFullSnapshot = main.snapshots.cachedSnapshot.value;
+  main.snapshots.previousSnapshot = { costs: { heavy: true }, quotas: { codex: { windows: [{ bucketId: 'weekly', resetsAt: 'later', usedPercent: 90, forecast: { series: [1, 2, 3] } }] } }, sources: [{ id: 'codex', status: 'connected', metadata: { heavy: true } }] };
+  main.snapshots.releaseDashboardMemory();
+  assert.equal(main.snapshots.cachedSnapshot, null);
+  assert.equal(main.snapshots.lastFullSnapshot, null);
+  assert.equal(released, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(main.snapshots.previousSnapshot)), {
     quotas: { codex: { windows: [{ bucketId: 'weekly', resetsAt: 'later', usedPercent: 90 }] } },
     sources: [{ id: 'codex', status: 'connected' }],
   });
 });
 
 test('in-flight dashboard IPC keeps the hidden window alive until success or failure settles', async () => {
-  const h = mainHarness();
-  h.run("window = { isDestroyed: () => false, webContents: { mainFrame: {} } }; handleIpc('test', () => new Promise((resolve, reject) => { globalThis.resolveJob = resolve; globalThis.rejectJob = reject; }));");
-  const sender = h.run('window.webContents');
+  const { main, handlers } = mainHarness();
+  let resolveJob;
+  let rejectJob;
+  main.dashboard.window = { isDestroyed: () => false, webContents: { mainFrame: {} } };
+  main.ipc.handleIpc('test', () => new Promise((resolve, reject) => { resolveJob = resolve; rejectJob = reject; }));
+  const sender = main.dashboard.window.webContents;
   const event = { sender, senderFrame: sender.mainFrame };
-  const success = h.handlers.get('test')(event);
-  assert.equal(h.run('activeDashboardRequests'), 1);
-  h.run('resolveJob(42);');
+  const success = handlers.get('test')(event);
+  assert.equal(main.ipc.activeDashboardRequests, 1);
+  resolveJob(42);
   assert.equal(await success, 42);
-  assert.equal(h.run('activeDashboardRequests'), 0);
-  const failure = h.handlers.get('test')(event);
-  h.run("rejectJob(Error('failed')); ");
+  assert.equal(main.ipc.activeDashboardRequests, 0);
+  const failure = handlers.get('test')(event);
+  rejectJob(Error('failed'));
   await assert.rejects(failure, /failed/);
-  assert.equal(h.run('activeDashboardRequests'), 0);
+  assert.equal(main.ipc.activeDashboardRequests, 0);
 });
 
 test('tray copy retains the full cost summary without caching a dashboard', () => {
-  const h = mainHarness();
-  h.run(`globalThis.released = 0;
-    store = { getDashboardSnapshot: () => ({ quotas: {}, costs: { actual: 12.34, currency: 'GBP', periodDays: 90 } }), releaseDashboardCaches: () => released++ };
-    window = null; periodDays = 90;`);
-  assert.match(h.run('traySummary()'), /12.34/);
-  assert.match(h.run('traySummary()'), /90/);
-  assert.equal(h.run('released'), 2);
-  assert.equal(h.run('cachedSnapshot'), null);
-  assert.equal(h.run('lastFullSnapshot'), null);
+  const { main } = mainHarness();
+  let released = 0;
+  main.store = { getDashboardSnapshot: () => ({ quotas: {}, costs: { actual: 12.34, currency: 'GBP', periodDays: 90 } }), releaseDashboardCaches: () => released++ };
+  main.dashboard.window = null;
+  main.snapshots.periodDays = 90;
+  assert.match(main.tray.traySummary(), /12.34/);
+  assert.match(main.tray.traySummary(), /90/);
+  assert.equal(released, 2);
+  assert.equal(main.snapshots.cachedSnapshot, null);
+  assert.equal(main.snapshots.lastFullSnapshot, null);
 });
 
 test('closing IPC serves the last full snapshot rather than a tray-only notification view', () => {
@@ -130,37 +137,40 @@ test('closing IPC serves the last full snapshot rather than a tray-only notifica
 });
 
 test('a failed period read leaves the main process on the period the renderer still shows', () => {
-  const h = mainHarness();
+  const { main } = mainHarness();
   const handlers = new Map();
   let fail = true;
   registerIpc({ handleIpc: (name, fn) => handlers.set(name, fn), storageClosing: () => false,
-    setPeriodDays: h.run('setPeriodDays'),
+    setPeriodDays: main.snapshots.setPeriodDays,
     snapshot: () => {
       if (fail) throw new Error('database is locked');
-      return { costs: { periodDays: h.run('periodDays') } };
+      return { costs: { periodDays: main.snapshots.periodDays } };
     },
   });
-  h.run('periodDays = 30;');
+  main.snapshots.periodDays = 30;
   assert.throws(() => handlers.get('dashboard:get-snapshot')({}, 90), /locked/);
   // Later pushes are built for this period; 90 days would be discarded by the
   // renderer, which kept 30, and its cost figures would stop updating.
-  assert.equal(h.run('periodDays'), 30);
+  assert.equal(main.snapshots.periodDays, 30);
   fail = false;
   assert.equal(handlers.get('dashboard:get-snapshot')({}, 90).costs.periodDays, 90);
 });
 
 test('Quit during storage close cancels the prepared update instead of authorizing the installer', async () => {
-  const h = mainHarness();
+  const { main } = mainHarness();
   let releaseClose;
-  h.context.closeWait = new Promise((resolve) => { releaseClose = resolve; });
-  h.run("updateLog = () => {}; stopForShutdown = () => {}; maintenance = { request: async () => ({}) }; closeStorage = () => closeWait;");
-  const preparation = h.run('prepareUpdateInstall()');
+  const closeWait = new Promise((resolve) => { releaseClose = resolve; });
+  main.logs.updateLog = () => {};
+  main.lifecycle.stopForShutdown = () => {};
+  main.maintenance = { request: async () => ({}) };
+  main.lifecycle.closeStorage = () => closeWait;
+  const preparation = main.lifecycle.prepareUpdateInstall();
   await new Promise((resolve) => setImmediate(resolve));
-  h.run('quitRequestedDuringUpdate = true;');
+  main.lifecycle.quitRequestedDuringUpdate = true;
   releaseClose();
   await assert.rejects(preparation, /cancelled while quitting/);
-  assert.equal(h.run('shutdownComplete'), true);
-  assert.equal(h.run('preparingUpdate'), false);
+  assert.equal(main.lifecycle.shutdownComplete, true);
+  assert.equal(main.lifecycle.preparingUpdate, false);
 });
 
 test('preload removes IPC transport prefixes and does not expose events to listeners', async () => {
