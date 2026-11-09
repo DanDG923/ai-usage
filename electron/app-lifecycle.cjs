@@ -7,6 +7,10 @@ const WINDOW_BOUNDS = Object.freeze({
   minHeight: 720,
 });
 
+/**
+ * @param {Pick<import('electron').App, 'requestSingleInstanceLock' | 'quit' | 'on'>} app
+ * @param {() => void} onSecondInstance
+ */
 function registerSingleInstance(app, onSecondInstance) {
   if (!app.requestSingleInstanceLock()) {
     app.quit();
@@ -16,6 +20,12 @@ function registerSingleInstance(app, onSecondInstance) {
   return true;
 }
 
+/**
+ * @template {Pick<import('electron').BrowserWindow, 'isDestroyed' | 'isMinimized' | 'restore' | 'show' | 'focus'>} W
+ * @param {W | null | undefined} currentWindow
+ * @param {() => W} createWindow
+ * @returns {W} The window now on screen: the current one, or its replacement.
+ */
 function revealWindow(currentWindow, createWindow) {
   const mustCreate = !currentWindow
     || (typeof currentWindow.isDestroyed === 'function' && currentWindow.isDestroyed());
@@ -26,6 +36,7 @@ function revealWindow(currentWindow, createWindow) {
   return target;
 }
 
+/** @param {() => void} reveal */
 function createDeferredWindowReveal(reveal) {
   let ready = false;
   let pending = false;
@@ -47,6 +58,11 @@ function createDeferredWindowReveal(reveal) {
   };
 }
 
+/**
+ * @param {object} options
+ * @param {() => unknown} options.initialize
+ * @param {(error: unknown) => 'retry' | void | Promise<'retry' | void>} options.onFailure Shows the failure; 'retry' runs initialize again.
+ */
 async function initializeWithVisibleFailure({ initialize, onFailure }) {
   for (;;) {
     try {
@@ -64,6 +80,11 @@ async function initializeWithVisibleFailure({ initialize, onFailure }) {
 // since been disconnected keep only their size and let the window be placed
 // afresh. A sliver at an edge is not enough to find and drag it back.
 const MIN_VISIBLE_PX = 64;
+/**
+ * @param {import('electron').Rectangle | null | undefined} bounds
+ * @param {readonly Pick<import('electron').Display, 'workArea'>[] | null | undefined} displays
+ * @returns {Partial<import('electron').Rectangle>}
+ */
 function restorableBounds(bounds, displays) {
   if (!bounds) return {};
   const overlaps = (displays || []).some(({ workArea: area }) =>
@@ -72,6 +93,12 @@ function restorableBounds(bounds, displays) {
   return overlaps ? bounds : { width: bounds.width, height: bounds.height };
 }
 
+/**
+ * @param {object} options
+ * @param {boolean} options.isPackaged
+ * @param {string} [options.devUrl]
+ * @param {string} options.filePath
+ */
 function resolveWindowTarget({ isPackaged, devUrl, filePath }) {
   if (!isPackaged && devUrl) return { kind: 'url', value: devUrl };
   return { kind: 'file', value: filePath };
@@ -81,6 +108,10 @@ function resolveWindowTarget({ isPackaged, devUrl, filePath }) {
 // span several awaited steps; `expired` tells a catch block whether it was the
 // deadline that fired. The timer is unref'd so it cannot itself keep an
 // otherwise finished process alive.
+/**
+ * @param {number} timeoutMs
+ * @param {string} message What the expiry rejects with.
+ */
 function createDeadline(timeoutMs, message) {
   const deadline = { expired: false, expiry: /** @type {Promise<never>} */ (/** @type {unknown} */ (null)), cancel: () => {} };
   deadline.expiry = new Promise((_, reject) => {
@@ -96,6 +127,12 @@ function createDeadline(timeoutMs, message) {
   return deadline;
 }
 
+/**
+ * @template T
+ * @param {Promise<T>} promise
+ * @param {number} timeoutMs
+ * @param {string} message
+ */
 function settleWithin(promise, timeoutMs, message) {
   const deadline = createDeadline(timeoutMs, message);
   return Promise.race([promise, deadline.expiry]).finally(deadline.cancel);

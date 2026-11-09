@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 
 class IncrementalReadError extends Error {
+  /** @param {NodeJS.ErrnoException} error What the file system reported. */
   constructor(error) {
     super(error.message, { cause: error });
     this.name = 'IncrementalReadError';
@@ -16,6 +17,10 @@ class IncrementalReadError extends Error {
 // byte cursor, and only whole lines: a line still being written is left for
 // the next refresh. A file that shrank, or was rewritten in place at the same
 // size, starts again from byte zero.
+/**
+ * @param {Pick<import('./types').ImportedFileRow, 'modified_ms' | 'size_bytes'> | null | undefined} previous How far the file had been read, if it has been seen before.
+ * @param {Pick<import('node:fs').Stats, 'mtimeMs' | 'size'>} stat The file as it is now.
+ */
 function planIncrementalRead(previous, stat) {
   if (!previous) return { startOffset: 0, resumed: false };
   const unchanged = previous.modified_ms === stat.mtimeMs && previous.size_bytes === stat.size;
@@ -26,6 +31,12 @@ function planIncrementalRead(previous, stat) {
   return { startOffset: previous.size_bytes, resumed: true };
 }
 
+/**
+ * @param {string} filePath
+ * @param {number} startOffset The byte to start reading from.
+ * @param {number} size The file's size in bytes when the read was planned.
+ * @param {{ chunkBytes?: number, streaming?: boolean }} [options]
+ */
 function readCompleteLines(filePath, startOffset, size, { chunkBytes = 1024 * 1024, streaming = false } = {}) {
   const length = Math.max(0, size - startOffset);
   if (length === 0) return { lines: [], consumedBytes: 0 };

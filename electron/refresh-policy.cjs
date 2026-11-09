@@ -34,32 +34,39 @@ const REFRESH_TRIGGERS = Object.freeze({
   CLAUDE_CODE_SYNC: 'claude-code-sync',
 });
 
+// Typed loosely so that a trigger this table does not know, or none at all,
+// can be looked up and simply is not found.
+/** @type {Set<string | undefined>} */
 const USER_REQUESTED_TRIGGERS = new Set([
   REFRESH_TRIGGERS.DASHBOARD_REFRESH,
   REFRESH_TRIGGERS.FLYOUT_REFRESH,
   REFRESH_TRIGGERS.TRAY_MENU_REFRESH,
 ]);
 
+/** @param {string | undefined} trigger One of REFRESH_TRIGGERS; anything else reads no plan usage. */
 function readsPlanUsage(trigger) {
   return USER_REQUESTED_TRIGGERS.has(trigger);
 }
 
+/** @param {string | undefined} trigger */
 function refreshOptionsFor(trigger) {
   return { trigger, readPlanUsage: readsPlanUsage(trigger) };
 }
 
-const settle = (promise) => promise.then(() => undefined, () => undefined);
+const settle = (/** @type {Promise<unknown>} */ promise) => promise.then(() => undefined, () => undefined);
 
 // One collection at a time, and coalescing that never swallows a user's
 // request: a request joins the run in flight unless it asks for plan usage
 // and that run does not read it. Then it waits for the run and performs one
 // plan-usage refresh, which every such request arriving meanwhile shares.
+/** @param {(options: { readPlanUsage: boolean }) => unknown} run Collects once; its result is what every joined request receives. */
 function createRefreshCoalescer(run) {
   /** @type {{ readPlanUsage: boolean, promise: Promise<any> } | null} */
   let current = null;
   /** @type {Promise<any> | null} */
   let followUp = null;
 
+  /** @param {boolean} readPlanUsage */
   function start(readPlanUsage) {
     const entry = { readPlanUsage, promise: /** @type {Promise<any>} */ (/** @type {unknown} */ (null)) };
     current = entry;

@@ -10,6 +10,10 @@ const path = require('node:path').win32;
 
 // Environment names are case-insensitive on Windows: the value under
 // whichever spelling the process actually carries.
+/**
+ * @param {NodeJS.ProcessEnv} environment
+ * @param {string} name
+ */
 function environmentValue(environment, name) {
   const key = Object.keys(environment).find((candidate) => candidate.toLowerCase() === name.toLowerCase());
   return key ? environment[key] : undefined;
@@ -18,6 +22,7 @@ function environmentValue(environment, name) {
 // An absolute local path, normalised, or null. Requires a drive letter and
 // rejects rooted, drive-relative, UNC, device and alternate-stream forms, so
 // no value is ever resolved against the directory the app was opened from.
+/** @param {string | null | undefined} value */
 function absolutePath(value) {
   if (typeof value !== 'string') return null;
   const unquoted = value.trim().replace(/^"(.*)"$/, '$1');

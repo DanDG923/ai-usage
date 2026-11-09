@@ -7,6 +7,12 @@ const MAX_RESTORE_BYTES = 64 * 1024 * 1024;
 // bounded avoids both V8's maximum string length and retaining the ledger.
 // Past `maxBytes` of JSON the export stops with EXPORT_TOO_LARGE: a file
 // readExport would refuse costs backup time and disk and restores nothing.
+/**
+ * @param {string} filePath
+ * @param {import('node:sqlite').DatabaseSync} database
+ * @param {import('./types').Settings} settings
+ * @param {{ maxBytes?: number }} [options]
+ */
 function writeExport(filePath, database, settings, { maxBytes = Infinity } = {}) {
   const fd = fs.openSync(filePath, 'wx');
   let pending = '';
@@ -21,7 +27,7 @@ function writeExport(filePath, database, settings, { maxBytes = Infinity } = {})
     while (offset < bytes.length) offset += fs.writeSync(fd, bytes, offset, bytes.length - offset);
     pending = '';
   };
-  const write = (text) => { pending += text; if (pending.length >= 256 * 1024) flush(); };
+  const write = (/** @type {string} */ text) => { pending += text; if (pending.length >= 256 * 1024) flush(); };
   try {
     write(`{"schemaVersion":1,"exportedAt":${JSON.stringify(new Date().toISOString())},"settings":${JSON.stringify(settings)}`);
     for (const [key, table] of Object.entries({ sources: 'sources', observations: 'quota_observations',
@@ -38,6 +44,7 @@ function writeExport(filePath, database, settings, { maxBytes = Infinity } = {})
   } finally { fs.closeSync(fd); }
 }
 
+/** @param {string | null | undefined} filePath */
 function readExport(filePath) {
   if (!filePath || !fs.existsSync(filePath)) throw new Error('That backup file could not be found.');
   if (fs.statSync(filePath).size > MAX_RESTORE_BYTES) throw new Error('This export exceeds the 64 MB restore limit. Restore its paired .sqlite backup instead.');

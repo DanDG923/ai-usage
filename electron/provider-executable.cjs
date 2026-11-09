@@ -9,14 +9,16 @@ const { absolutePath, environmentValue, launchDirectory } = require('./windows-p
 // remembered briefly: long enough to serve one refresh, short enough that a
 // directory the setup flow has just created is seen on the next lookup.
 const PATH_CACHE_MS = 30_000;
-/** @type {any} */
+/** @type {{ key: string, at: number, directories: string[] } | null} */
 let pathCache = null;
 
+/** @param {NodeJS.ProcessEnv} [environment] */
 function pathDirectories(environment = process.env) {
   const launch = launchDirectory();
   if (!launch) return [];
   const key = `${launch}\n${String(environmentValue(environment, 'PATH') || '')}`;
   if (pathCache && pathCache.key === key && Date.now() - pathCache.at < PATH_CACHE_MS) return [...pathCache.directories];
+  /** @type {Set<string>} */
   const directories = new Set();
   for (const entry of key.slice(launch.length + 1).split(';')) {
     const directory = absolutePath(entry);
@@ -32,12 +34,14 @@ function pathDirectories(environment = process.env) {
   return [...directories];
 }
 
+/** @param {string | null | undefined} value */
 function executable(value) {
   const file = absolutePath(value);
   if (!file || path.extname(file).toLowerCase() !== '.exe') return null;
   try { return fs.statSync(file).isFile() ? file : null; } catch { return null; }
 }
 
+/** @param {string} name The file name to look for, such as `claude.exe`. */
 function findOnPath(name) {
   for (const directory of pathDirectories()) {
     const file = executable(path.join(directory, name));
@@ -52,11 +56,20 @@ function findOnPath(name) {
   return null;
 }
 
+/**
+ * @param {string} name The environment variable that holds the root.
+ * @param {...string} parts Folders beneath it.
+ */
 function installationRoot(name, ...parts) {
   const root = absolutePath(environmentValue(process.env, name));
   return root ? path.join(root, ...parts) : null;
 }
 
+/**
+ * @param {string | null} root A folder holding one folder per installed version.
+ * @param {string} name
+ * @param {boolean} [newestModified] Prefer the most recently written binary over the highest version name.
+ */
 function versionedBinary(root, name, newestModified = false) {
   if (!root) return null;
   try {
@@ -97,6 +110,10 @@ function findCodexBinary() {
     ?? versionedBinary(installationRoot('LOCALAPPDATA', 'OpenAI', 'Codex', 'bin'), 'codex.exe', true);
 }
 
+/**
+ * @param {string} file
+ * @param {NodeJS.ProcessEnv} [environment]
+ */
 function providerProcessOptions(file, environment = process.env) {
   const binary = absolutePath(file);
   if (!binary || path.extname(binary).toLowerCase() !== '.exe') throw new Error('Provider executable must be an absolute local .exe path.');
@@ -109,6 +126,11 @@ function providerProcessOptions(file, environment = process.env) {
 // user set one, otherwise the conventional folder under the profile. A
 // relative override or a missing profile yields null rather than a path
 // resolved against the launch directory.
+/**
+ * @param {string} overrideName The environment variable that can relocate the directory.
+ * @param {string} conventionalFolder
+ * @param {NodeJS.ProcessEnv} [environment]
+ */
 function providerHome(overrideName, conventionalFolder, environment = process.env) {
   const override = absolutePath(environmentValue(environment, overrideName));
   if (override) return override;

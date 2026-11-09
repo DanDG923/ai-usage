@@ -15,31 +15,56 @@ const MAX_SCRIPT_BYTES = 1024 * 1024;
 const FETCH_TIMEOUT_MS = 60_000;
 const REDIRECT_CODES = new Set([301, 302, 303, 307, 308]);
 
+/**
+ * What the release pins: where the installer is served and the digest it had.
+ * @typedef {{ url: string, sha256: string }} InstallerPin
+ */
+
+/**
+ * @param {string} message
+ * @param {string} code
+ */
 function coded(message, code) {
   return Object.assign(new Error(message), { code });
 }
 
+/** @param {Buffer} bytes */
 function digestOf(bytes) {
   return crypto.createHash('sha256').update(bytes).digest('hex');
 }
 
+// The pin is read from a JSON file, so its fields are checked, not assumed.
+/**
+ * @param {{ url?: unknown, sha256?: unknown }} pin
+ * @returns {pin is InstallerPin}
+ */
 function validPin(pin) {
   return Boolean(pin) && typeof pin === 'object'
     && typeof pin.url === 'string' && pin.url.startsWith('https://')
     && typeof pin.sha256 === 'string' && /^[0-9a-f]{64}$/.test(pin.sha256);
 }
 
+/**
+ * @param {string} url
+ * @param {typeof https.get} get
+ * @param {number} timeoutMs
+ * @param {AbortSignal | undefined} signal
+ * @returns {Promise<{ bytes?: Buffer, redirect?: string | null }>} The body, or where the server redirected to.
+ */
 function requestOnce(url, get, timeoutMs, signal) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
       reject(coded('Installer download was cancelled.', 'CLAUDE_INSTALLER_DOWNLOAD_CANCELLED'));
       return;
     }
+    /** @type {import('node:http').ClientRequest} */
     let request;
     try {
       request = get(url, { headers: { 'user-agent': 'ai-usage-claude-setup' }, ...(signal ? { signal } : {}) }, (response) => {
         const status = response.statusCode;
-        if (REDIRECT_CODES.has(status)) {
+        // A response received by a client always carries a status code; only a
+        // message a server receives leaves it unset.
+        if (REDIRECT_CODES.has(/** @type {number} */ (status))) {
           response.resume();
           resolve({ redirect: response.headers.location ?? null });
           return;
@@ -49,9 +74,10 @@ function requestOnce(url, get, timeoutMs, signal) {
           reject(coded(`Installer download returned HTTP ${status}.`, 'CLAUDE_INSTALLER_DOWNLOAD_FAILED'));
           return;
         }
+        /** @type {Buffer[]} */
         const chunks = [];
         let size = 0;
-        response.on('data', (chunk) => {
+        response.on('data', (/** @type {Buffer} */ chunk) => {
           size += chunk.length;
           if (size > MAX_SCRIPT_BYTES) {
             response.destroy();
@@ -60,14 +86,14 @@ function requestOnce(url, get, timeoutMs, signal) {
           }
           chunks.push(chunk);
         });
-        response.on('error', (error) => reject(coded(`Installer download failed: ${error.code || 'read error'}.`, 'CLAUDE_INSTALLER_DOWNLOAD_FAILED')));
+        response.on('error', (/** @type {NodeJS.ErrnoException} */ error) => reject(coded(`Installer download failed: ${error.code || 'read error'}.`, 'CLAUDE_INSTALLER_DOWNLOAD_FAILED')));
         response.on('end', () => resolve({ bytes: Buffer.concat(chunks) }));
       });
     } catch (error) {
       reject(coded(`Installer download could not start: ${error?.code || 'request error'}.`, 'CLAUDE_INSTALLER_DOWNLOAD_FAILED'));
       return;
     }
-    request.on('error', (error) => {
+    request.on('error', (/** @type {NodeJS.ErrnoException} */ error) => {
       if (signal?.aborted || error?.name === 'AbortError' || error?.code === 'ABORT_ERR') {
         reject(coded('Installer download was cancelled.', 'CLAUDE_INSTALLER_DOWNLOAD_CANCELLED'));
       } else reject(coded(`Installer download failed: ${error?.code || 'network error'}.`, 'CLAUDE_INSTALLER_DOWNLOAD_FAILED'));
@@ -100,6 +126,10 @@ async function fetchInstaller(url, { get = https.get, timeoutMs = FETCH_TIMEOUT_
 }
 
 // Returns the digest when the script matches the pin; throws when it does not.
+/**
+ * @param {Buffer} bytes
+ * @param {{ url?: unknown, sha256?: unknown }} pin
+ */
 function verifyInstallerScript(bytes, pin) {
   if (!validPin(pin)) throw coded('The pinned Claude installer digest is missing or malformed.', 'CLAUDE_INSTALLER_PIN_INVALID');
   if (!Buffer.isBuffer(bytes) || bytes.length === 0) throw coded('The downloaded installer is empty.', 'CLAUDE_INSTALLER_DOWNLOAD_FAILED');

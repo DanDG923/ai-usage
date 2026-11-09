@@ -3,10 +3,18 @@
 // The renderer must consent after checking its current forms and dialogs.
 // Missing, stale or negative replies keep the window intact. Only a hidden
 // window is released; minimising it is deliberately different from closing it.
+/**
+ * @param {object} options
+ * @param {import('electron').BrowserWindow} options.window
+ * @param {() => boolean} options.isBusy
+ * @param {() => void} options.onRelease Called just before the window is destroyed.
+ * @param {number} [options.idleMs]
+ */
 function createWindowIdleRelease({ window, isBusy, onRelease, idleMs = 30_000 }) {
+  /** @type {NodeJS.Timeout | undefined} */
   let timer;
   let generation = 0;
-  /** @type {any} */
+  /** @type {number | null} */
   let requested = null;
   const hidden = () => !window.isDestroyed() && !window.isVisible();
   function cancel() {
@@ -29,6 +37,11 @@ function createWindowIdleRelease({ window, isBusy, onRelease, idleMs = 30_000 })
     }, idleMs);
     timer.unref?.();
   }
+  // Both values arrive from the renderer and are compared, never trusted.
+  /**
+   * @param {unknown} token
+   * @param {unknown} allowed
+   */
   function reply(token, allowed) {
     if (allowed !== true || token !== requested || requested === null || !hidden() || isBusy()) return false;
     clearTimeout(timer);

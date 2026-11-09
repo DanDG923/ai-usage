@@ -6,6 +6,7 @@ const PROVIDER_WINDOW_DESCRIPTORS = [
   { key: 'seven_day_opus', bucketName: 'Opus weekly', windowMinutes: 10_080, scope: 'model' },
   { key: 'seven_day_sonnet', bucketName: 'Sonnet weekly', windowMinutes: 10_080, scope: 'model' },
 ];
+/** @param {string} key The window's name in Claude's usage response. */
 function claudeWindowDescriptor(key) {
   return PROVIDER_WINDOW_DESCRIPTORS.find((descriptor) => descriptor.key === key)
     || { key, bucketName: key.replaceAll('_', ' '),

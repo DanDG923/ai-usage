@@ -14,6 +14,12 @@ const shippedPin = require('./claude-installer-pin.json');
 const INSTALLER_FILE = 'claude-install.ps1';
 const INSTALL_TARGET = 'stable';
 
+/**
+ * @param {string} file
+ * @param {readonly string[]} args
+ * @param {{ timeoutMs?: number, acceptExitOne?: boolean, environment?: NodeJS.ProcessEnv }} [options]
+ * @returns {Promise<string>} What the command wrote to its standard output.
+ */
 function runCommand(file, args, { timeoutMs = 15000, acceptExitOne = false, environment = process.env } = {}) {
   return new Promise((resolve, reject) => {
     execFile(file, args, { ...providerProcessOptions(file, environment), windowsHide: true, timeout: timeoutMs, maxBuffer: 1024 * 1024 }, (error, stdout) => {
@@ -51,7 +57,7 @@ function createClaudeSetup({
   let cancelPending = null;
   const systemRoot = process.env.SystemRoot || 'C:\\Windows';
   const powershell = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-  const save = (dismissed) => {
+  const save = (/** @type {boolean} */ dismissed) => {
     fs.mkdirSync(path.dirname(statePath), { recursive: true });
     fs.writeFileSync(statePath, JSON.stringify({ dismissed }), 'utf8');
   };
@@ -69,6 +75,7 @@ function createClaudeSetup({
     }
     return { installed: Boolean(binary), auth, helperInstalled: helperInstalled(), dismissed: dismissed(), busy };
   }
+  /** @param {() => Promise<Awaited<ReturnType<typeof status>> | void>} action Resolves with a status it has already checked, or with nothing. */
   async function exclusive(action) {
     if (busy) throw new Error('Claude setup is already running.');
     busy = true;
@@ -79,6 +86,11 @@ function createClaudeSetup({
       return { ...checked, helperInstalled: helperInstalled(), dismissed: dismissed(), busy: false };
     } finally { busy = false; }
   }
+  /**
+   * @param {string} file
+   * @param {readonly string[]} args
+   * @param {number} timeoutMs
+   */
   function interactiveCommand(file, args, timeoutMs) {
     return new Promise((/** @type {(value?: void) => void} */ resolve, reject) => {
       // Claude opens the user's browser itself. Discard its output so OAuth
@@ -87,7 +99,7 @@ function createClaudeSetup({
       const active = child;
       const timer = setTimeout(() => cancel(), timeoutMs);
       let settled = false;
-      const finish = (error) => {
+      const finish = (/** @type {Error | null} */ error) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
@@ -113,6 +125,7 @@ function createClaudeSetup({
   const CANCELLED = 'Claude setup was cancelled or timed out. You can try again.';
   // Runs the download under a cancellation handle so Cancel (or shutdown)
   // aborts the request, and a response that still arrives is discarded.
+  /** @param {string} url */
   async function cancellableDownload(url) {
     const controller = new AbortController();
     let cancelled = false;

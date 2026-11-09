@@ -3,6 +3,36 @@
 const FIRST_CHECK_DELAY_MS = 45_000;
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
+/**
+ * @typedef {import('electron-updater').AppUpdater} AppUpdater
+ * @typedef {import('electron-updater').UpdateInfo} UpdateInfo
+ * @typedef {import('../src/types').UpdateStatus} UpdateStatus
+ */
+
+/**
+ * One release feed, as package.json lists it.
+ * @typedef {{ provider?: string, [setting: string]: unknown }} FeedEntry
+ */
+
+/**
+ * The parts of package.json the update check reads.
+ * @typedef {object} PackageManifest
+ * @property {FeedEntry | FeedEntry[] | null} [updateFeed]
+ * @property {{ publish?: FeedEntry | FeedEntry[] | null }} [build]
+ */
+
+/**
+ * Whatever was thrown or emitted as an error. Only its code and message are
+ * read, and neither is assumed to be a string.
+ * @typedef {{ code?: unknown, message?: unknown } | null | undefined} Failure
+ */
+
+/**
+ * What the app's own installer launcher is asked to run.
+ * @typedef {{ filePath: string, sha512: string | null, onLog: (message: string) => void }} InstallerRequest
+ */
+
+/** @param {PackageManifest | null | undefined} pkg */
 function releaseFeed(pkg) {
   // electron-builder strips build from the packaged package.json.
   const publish = pkg?.updateFeed || pkg?.build?.publish;
@@ -10,12 +40,17 @@ function releaseFeed(pkg) {
   return entries.find((entry) => entry?.provider && Object.values(entry).every((value) => !String(value).startsWith('REPLACE')));
 }
 
+/** @param {PackageManifest | null | undefined} pkg */
 function feedConfigured(pkg) {
   return Boolean(releaseFeed(pkg));
 }
 
 // HTTP errors may include request headers and signed asset URLs. Only stable,
 // user-facing messages may reach the renderer or application log.
+/**
+ * @param {Failure} error
+ * @returns {{ status: 'error', error: string }}
+ */
 function updateError(error) {
   const code = String(error?.code || '');
   const message = String(error?.message || '');
@@ -34,6 +69,7 @@ function updateError(error) {
   return { status: 'error', error: 'The update could not finish. Check your connection and free disk space, then try again.' };
 }
 
+/** @param {UpdateInfo['releaseNotes']} notes */
 function notesText(notes) {
   const value = Array.isArray(notes) ? notes.map((entry) => entry?.note || '').join('\n\n') : notes;
   return typeof value === 'string' ? value.slice(0, 20_000) : null;
@@ -41,10 +77,16 @@ function notesText(notes) {
 
 // The manifest may list several files. Verify against the entry that names
 // the file actually downloaded; the single-file top-level digest is the fallback.
+/** @param {string | null | undefined} value A path or URL. */
 function fileName(value) {
   return /** @type {string} */ (String(value || '').split(/[/\\]/).pop()).toLowerCase();
 }
 
+/**
+ * @param {UpdateInfo} info
+ * @param {string | null} downloadedFile
+ * @returns {string | null}
+ */
 function manifestDigest(info, downloadedFile) {
   const name = fileName(downloadedFile);
   const files = Array.isArray(info?.files) ? info.files : [];
@@ -56,11 +98,28 @@ function manifestDigest(info, downloadedFile) {
 
 // Error codes are stable identifiers, never request details; anything else is
 // omitted from the log rather than risk carrying a header or signed URL.
+/** @param {Failure} error */
 function safeCode(error) {
   const code = String(error?.code || '');
   return /^[A-Z0-9_]{1,40}$/i.test(code) ? code : null;
 }
 
+/**
+ * @param {object} options
+ * @param {AppUpdater | (() => AppUpdater | null) | null} options.autoUpdater
+ * @param {() => boolean} options.enabled Whether the user has automatic checks switched on.
+ * @param {boolean} options.isPackaged
+ * @param {PackageManifest} options.pkg
+ * @param {boolean} [options.isPortable]
+ * @param {NodeJS.Platform} [options.platform]
+ * @param {() => unknown} [options.beforeInstall] Awaited before the installer starts.
+ * @param {(message?: string) => void} [options.onInstallError]
+ * @param {((request: InstallerRequest) => Promise<unknown>) | null} [options.launchInstaller]
+ * @param {(() => void) | null} [options.quitForInstall]
+ * @param {() => boolean} [options.installDirectoryWritable]
+ * @param {(status: UpdateStatus) => void} [options.onStatus]
+ * @param {(message: string) => void} [options.onLog]
+ */
 function createUpdateChecker({
   // Either the electron-updater instance or a function that loads it. The
   // module tree is sizeable, so a build that can never update (development,
@@ -71,21 +130,22 @@ function createUpdateChecker({
   platform = process.platform, beforeInstall = async () => {}, onInstallError = /** @type {(message?: string) => void} */ (() => {}),
   // When both are supplied the app verifies and launches the installer itself,
   // retrying a refused launch before it quits; otherwise electron-updater does.
-  launchInstaller = /** @type {((options: any) => Promise<any>) | null} */ (null),
+  launchInstaller = /** @type {((request: InstallerRequest) => Promise<unknown>) | null} */ (null),
   quitForInstall = /** @type {(() => void) | null} */ (null),
   installDirectoryWritable = /** @type {() => boolean} */ (() => false),
-  onStatus = /** @type {(status: object) => void} */ (() => {}), onLog = /** @type {(message: string) => void} */ (() => {}),
+  onStatus = /** @type {(status: UpdateStatus) => void} */ (() => {}), onLog = /** @type {(message: string) => void} */ (() => {}),
 }) {
   // The feed is a public GitHub repository: checks and downloads are anonymous
   // and carry no credential. electron-updater reads it from app-update.yml.
   const feed = releaseFeed(pkg);
   const lazy = typeof updaterOption === 'function';
   const available = Boolean((lazy || updaterOption) && isPackaged && feed && !isPortable && platform === 'win32');
+  /** @type {AppUpdater | null} */
   let loadedUpdater = lazy ? null : updaterOption;
   let loaded = !lazy;
   /** @type {NodeJS.Timeout | null} */
   let timer = null;
-  /** @type {any} */
+  /** @type {Promise<UpdateStatus> | null} */
   let operation = null;
   let downloaded = false;
   /** @type {string | null} */
@@ -93,18 +153,21 @@ function createUpdateChecker({
   /** @type {string | null} */
   let downloadedSha512 = null;
   let candidate = false;
-  /** @type {any} */
+  /** @type {Failure} */
   let lastFailure = null;
+  /** @type {UpdateStatus} */
   let result = {
     status: available ? 'idle' : 'unavailable', available,
     checkedAt: null, version: null, error: null, progress: null, releaseNotes: null,
     reason: isPortable ? 'Use the installed Windows version for in-app updates.' : !available ? 'Updates are available in the installed Windows app with a configured release feed.' : null,
   };
   const status = () => ({ ...result });
+  /** @param {Partial<UpdateStatus>} patch */
   function change(patch) {
     result = { ...result, ...patch };
     onStatus(status());
   }
+  /** @param {Failure} error */
   function fail(error) {
     // electron-updater both emits 'error' and rejects the operation with the
     // same object; report each failure once.
@@ -120,13 +183,15 @@ function createUpdateChecker({
   function updater() {
     if (!loaded) {
       loaded = true;
-      try { loadedUpdater = updaterOption() || null; } catch { loadedUpdater = null; }
+      // `loaded` starts false only when the option is a function that loads the updater.
+      try { loadedUpdater = /** @type {() => AppUpdater | null} */ (updaterOption)() || null; } catch { loadedUpdater = null; }
       if (loadedUpdater) configure(loadedUpdater);
     }
     if (!loadedUpdater) throw Object.assign(new Error('The update module could not be loaded.'), { code: 'UPDATE_MODULE_UNAVAILABLE' });
     return loadedUpdater;
   }
 
+  /** @param {AppUpdater} autoUpdater */
   function configure(autoUpdater) {
     autoUpdater.logger = null;
     autoUpdater.autoDownload = false;
@@ -167,6 +232,10 @@ function createUpdateChecker({
   }
   if (loadedUpdater) configure(loadedUpdater);
 
+  /**
+   * @param {() => Promise<void>} task
+   * @returns {Promise<UpdateStatus>}
+   */
   function run(task) {
     if (operation) return operation;
     lastFailure = null;

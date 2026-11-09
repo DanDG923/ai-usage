@@ -16,13 +16,31 @@ const LAUNCH_RETRY_DELAY_MS = 1500;
 const INSTALLER_ARGS = Object.freeze(['--updated', '/S', '--force-run']);
 const RETRYABLE_CODES = new Set(['EACCES', 'EPERM', 'EBUSY', 'ETXTBSY', 'EAGAIN', 'UNKNOWN']);
 
+/**
+ * The two members of electron-updater's installer-running updaters that
+ * preserveInstallerEnvironment wraps. The library's own types mark both as
+ * protected, so they are described here.
+ * @typedef {object} InstallerSpawner
+ * @property {string | null} [installerPath]
+ * @property {(command: string, args?: string[], env?: NodeJS.ProcessEnv, stdio?: import('node:child_process').StdioOptions) => Promise<boolean>} [spawnLog]
+ */
+
+/**
+ * @param {string} message
+ * @param {string} code
+ */
 function coded(message, code) {
   return Object.assign(new Error(message), { code });
 }
 
+/**
+ * @param {string} filePath
+ * @returns {Promise<string>} The file's SHA-512, base64-encoded.
+ */
 function fileDigest(filePath) {
   return new Promise((resolve, reject) => {
     const hash = crypto.createHash('sha512');
+    /** @type {string | undefined} */
     let digest;
     fs.createReadStream(filePath)
       .on('error', reject)
@@ -36,6 +54,10 @@ function fileDigest(filePath) {
 
 // The download was verified as it arrived; the file then sat on disk until the
 // user chose to install. Check it again immediately before it runs.
+/**
+ * @param {string | null | undefined} filePath
+ * @param {string | null | undefined} expectedSha512 Base64, as the update manifest carries it.
+ */
 async function verifyInstaller(filePath, expectedSha512) {
   if (typeof filePath !== 'string' || !path.isAbsolute(filePath) || path.extname(filePath).toLowerCase() !== '.exe') {
     throw coded('The downloaded installer path is not usable.', 'ERR_UPDATER_INVALID_INSTALLER');
@@ -52,8 +74,16 @@ async function verifyInstaller(filePath, expectedSha512) {
   if (digest !== expectedSha512) throw coded('The downloaded installer failed verification.', 'ERR_UPDATER_CHECKSUM_MISMATCH');
 }
 
+/**
+ * @param {string} filePath
+ * @param {string[]} args
+ * @param {typeof spawn} spawnProcess
+ * @param {NodeJS.ProcessEnv | undefined} environment
+ * @returns {Promise<number | null>} The installer's process id, when the system reports one.
+ */
 function spawnOnce(filePath, args, spawnProcess, environment) {
   return new Promise((resolve, reject) => {
+    /** @type {import('node:child_process').ChildProcess} */
     let child;
     try {
       child = spawnProcess(filePath, args, { detached: true, stdio: 'ignore', ...(environment ? { env: { ...environment } } : {}) });
@@ -69,6 +99,17 @@ function spawnOnce(filePath, args, spawnProcess, environment) {
   });
 }
 
+/**
+ * @param {object} options
+ * @param {string} options.filePath
+ * @param {string | null} options.sha512 Base64, as the update manifest carries it.
+ * @param {readonly string[]} [options.args]
+ * @param {typeof spawn} [options.spawnProcess]
+ * @param {NodeJS.ProcessEnv} [options.environment] Passed to the installer in place of process.env.
+ * @param {number} [options.attempts]
+ * @param {number} [options.retryDelayMs]
+ * @param {(message: string) => void} [options.onLog]
+ */
 async function launchInstaller({
   filePath, sha512, args = INSTALLER_ARGS, spawnProcess = spawn,
   environment, attempts = LAUNCH_ATTEMPTS, retryDelayMs = LAUNCH_RETRY_DELAY_MS, onLog = /** @type {(message: string) => void} */ (() => {}),
@@ -92,6 +133,7 @@ async function launchInstaller({
 
 // A per-machine install needs elevation that only electron-updater's helper
 // provides; this launcher handles the per-user layout the app ships with.
+/** @param {string} [executablePath] */
 function installDirectoryWritable(executablePath = process.execPath) {
   try {
     const probe = path.join(path.dirname(executablePath), `.ai-usage-write-probe-${crypto.randomUUID()}`);
@@ -108,6 +150,13 @@ function installDirectoryWritable(executablePath = process.execPath) {
 // Without arguments the new instance would repeat this one's command line, so
 // an app started hidden at sign-in would reopen to the tray after a restart
 // the user asked for from its window.
+/**
+ * @param {object} options
+ * @param {Pick<import('electron').App, 'relaunch'>} options.app
+ * @param {NodeJS.ProcessEnv} options.environment The environment the app was launched with.
+ * @param {NodeJS.ProcessEnv} [options.currentEnvironment]
+ * @param {readonly string[]} [options.argv]
+ */
 function relaunchApplication({ app, environment, currentEnvironment = process.env, argv = process.argv }) {
   const names = Object.keys(environment || {}).filter((name) => /^(?:GH_TOKEN|GITHUB_TOKEN)$/i.test(name));
   const previous = names.map((name) => /** @type {[string, string | undefined]} */ ([name, currentEnvironment[name]]));
@@ -125,13 +174,20 @@ function relaunchApplication({ app, environment, currentEnvironment = process.en
 // NSIS can retry elevation asynchronously, after quitAndInstall has returned.
 // Pass the captured environment on each trusted spawn instead of restoring
 // global token variables while the updater might still make HTTP requests.
+/**
+ * @template {object} T
+ * @param {T & InstallerSpawner} updater
+ * @param {NodeJS.ProcessEnv} environment The environment the app was launched with.
+ * @param {string} [resourcesPath]
+ * @returns {T & InstallerSpawner} The same updater, wrapped in place.
+ */
 function preserveInstallerEnvironment(updater, environment, resourcesPath = process.resourcesPath) {
   if (typeof updater?.spawnLog !== 'function') return updater;
   const spawnLog = updater.spawnLog;
   updater.spawnLog = function (command, args = [], env, stdio) {
     const installer = this.installerPath;
     const validInstaller = typeof installer === 'string' && path.isAbsolute(installer) && path.extname(installer).toLowerCase() === '.exe';
-    const same = (left, right) => typeof left === 'string' && typeof right === 'string' && path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase();
+    const same = (/** @type {unknown} */ left, /** @type {unknown} */ right) => typeof left === 'string' && typeof right === 'string' && path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase();
     const trusted = validInstaller && (same(command, installer)
       || (resourcesPath && same(command, path.join(resourcesPath, 'elevate.exe')) && same(args[0], installer)));
     return spawnLog.call(this, command, args, trusted ? { ...environment, ...env } : env, stdio);
