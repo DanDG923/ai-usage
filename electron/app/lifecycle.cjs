@@ -42,6 +42,7 @@ function createLifecycleModule(main) {
   // process.execPath would register an autostart entry that is gone by the next
   // boot; the launcher the user actually ran is what belongs there. The registry
   // write is skipped when nothing changed: this runs on every settings save.
+  /** @param {boolean} enabled */
   function applyLoginItem(enabled) {
     const executable = main.launchEnvironment.PORTABLE_EXECUTABLE_FILE || main.process.execPath;
     const key = `${enabled}|${executable}`;
@@ -288,7 +289,7 @@ function createLifecycleModule(main) {
           lifecycle.applySettingsEffects();
           powerMonitor.on('resume', main.refresh.onResume);
         },
-        onFailure: (error) => {
+        onFailure: (/** @type {unknown} */ error) => {
           main.dashboard.showFatalError('AI Usage could not start', 'Startup did not complete.', error);
         },
       });

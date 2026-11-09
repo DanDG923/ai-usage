@@ -46,6 +46,7 @@ class UsageStore {
     fs.mkdirSync(backupDirectory, { recursive: true });
     this.databasePath = databasePath;
     this.backupDirectory = backupDirectory;
+    /** @type {Map<string, import('./types').Statement>} */
     this.statements = new Map();
     this.costAnalyticsCache = new Map();
     this.cycleHistoryCache = new Map();
@@ -73,11 +74,14 @@ class UsageStore {
 
   // node:sqlite does not cache prepared statements, so every call re-parsed
   // its SQL; a first import calls recordUsageEvent thousands of times.
-  /** @param {string} sql */
+  /**
+   * @param {string} sql
+   * @returns {import('./types').Statement}
+   */
   prepare(sql) {
     let statement = this.statements.get(sql);
     if (!statement) {
-      statement = this.db.prepare(sql);
+      statement = /** @type {import('./types').Statement} */ (this.db.prepare(sql));
       this.statements.set(sql, statement);
     }
     return statement;
@@ -178,7 +182,11 @@ class UsageStore {
   }
 
   // Price catalogue: store/pricing.cjs
-  /** @type {Method<typeof impl.pricing.withPriceCache>} */
+  /**
+   * @template T
+   * @param {() => T} run
+   * @returns {T}
+   */
   withPriceCache(run) { return impl.pricing.withPriceCache(this, run); }
   /** @type {Method<typeof impl.pricing.resolvePrice>} */
   resolvePrice(model) { return impl.pricing.resolvePrice(this, model); }

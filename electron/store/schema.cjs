@@ -13,6 +13,7 @@ const { PRICE_ROWS } = require('./pricing.cjs');
 // SQLITE_CORRUPT and SQLITE_NOTADB: the file exists but SQLite cannot read it.
 const UNREADABLE_DATABASE_CODES = new Set([11, 26]);
 
+/** @param {string} databasePath */
 function openDatabase(databasePath) {
   const open = () => {
     const db = new DatabaseSync(databasePath);
@@ -152,21 +153,21 @@ function migrate(store) {
       );
     `);
   store.transaction(() => {
-  const sourceColumns = new Set(store.prepare('PRAGMA table_info(sources)').all().map((row) => row.name));
+  const sourceColumns = new Set(/** @type {{ name: string }[]} */ (store.prepare('PRAGMA table_info(sources)').all()).map((row) => row.name));
   if (!sourceColumns.has('last_attempt_at')) store.db.exec('ALTER TABLE sources ADD COLUMN last_attempt_at TEXT;');
   if (!sourceColumns.has('last_success_at')) store.db.exec('ALTER TABLE sources ADD COLUMN last_success_at TEXT;');
-  const usageColumns = new Set(store.prepare('PRAGMA table_info(usage_events)').all().map((row) => row.name));
+  const usageColumns = new Set(/** @type {{ name: string }[]} */ (store.prepare('PRAGMA table_info(usage_events)').all()).map((row) => row.name));
   const addedCacheBreakdown = !usageColumns.has('cache_write_5m_input_tokens') || !usageColumns.has('cache_write_1h_input_tokens');
   if (!usageColumns.has('cache_write_5m_input_tokens')) store.db.exec('ALTER TABLE usage_events ADD COLUMN cache_write_5m_input_tokens INTEGER NOT NULL DEFAULT 0;');
   if (!usageColumns.has('cache_write_1h_input_tokens')) store.db.exec('ALTER TABLE usage_events ADD COLUMN cache_write_1h_input_tokens INTEGER NOT NULL DEFAULT 0;');
   if (!usageColumns.has('project')) store.db.exec('ALTER TABLE usage_events ADD COLUMN project TEXT;');
-  const importColumns = new Set(store.prepare('PRAGMA table_info(imported_files)').all().map((row) => row.name));
+  const importColumns = new Set(/** @type {{ name: string }[]} */ (store.prepare('PRAGMA table_info(imported_files)').all()).map((row) => row.name));
   if (!importColumns.has('state_json')) store.db.exec('ALTER TABLE imported_files ADD COLUMN state_json TEXT;');
   // Earlier status-line readings stay undated; nothing recorded their fetch.
-  const quotaColumns = new Set(store.prepare('PRAGMA table_info(quota_observations)').all().map((row) => row.name));
+  const quotaColumns = new Set(/** @type {{ name: string }[]} */ (store.prepare('PRAGMA table_info(quota_observations)').all()).map((row) => row.name));
   if (!quotaColumns.has('fetched_after')) store.db.exec('ALTER TABLE quota_observations ADD COLUMN fetched_after TEXT;');
   if (!quotaColumns.has('seen_since')) store.db.exec('ALTER TABLE quota_observations ADD COLUMN seen_since TEXT;');
-  const sessionColumns = new Set(store.prepare('PRAGMA table_info(statusline_sessions)').all().map((row) => row.name));
+  const sessionColumns = new Set(/** @type {{ name: string }[]} */ (store.prepare('PRAGMA table_info(statusline_sessions)').all()).map((row) => row.name));
   if (!sessionColumns.has('seen_since')) store.db.exec('ALTER TABLE statusline_sessions ADD COLUMN seen_since TEXT;');
   if (!usageColumns.has('project')) {
     // Project attribution is read from the same local transcripts as the
@@ -174,13 +175,13 @@ function migrate(store) {
     store.prepare("DELETE FROM imported_files WHERE lower(file_path) LIKE '%.claude%projects%.jsonl' OR lower(file_path) LIKE '%.codex%sessions%.jsonl'").run();
   }
   for (const [oldKey, newKey] of Object.entries(SETTING_ALIASES)) {
-    const legacy = store.prepare('SELECT value_json FROM settings WHERE key = ?').get(oldKey);
+    const legacy = /** @type {{ value_json: string } | undefined} */ (store.prepare('SELECT value_json FROM settings WHERE key = ?').get(oldKey));
     if (!legacy) continue;
     store.prepare('INSERT INTO settings(key, value_json, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING')
       .run(newKey, legacy.value_json, iso());
     store.prepare('DELETE FROM settings WHERE key = ?').run(oldKey);
   }
-  const priceColumns = new Set(store.prepare('PRAGMA table_info(price_catalog)').all().map((row) => row.name));
+  const priceColumns = new Set(/** @type {{ name: string }[]} */ (store.prepare('PRAGMA table_info(price_catalog)').all()).map((row) => row.name));
   // Existing prices are user-owned; only newly seeded defaults yield to restores.
   if (!priceColumns.has('is_seed')) store.db.exec('ALTER TABLE price_catalog ADD COLUMN is_seed INTEGER NOT NULL DEFAULT 0;');
   store.addedOneHourPriceColumn = !priceColumns.has('cache_write_1h_usd_per_million');
@@ -302,6 +303,10 @@ function migrateAnalyticsRevisions(store) {
     ['quota_observations', 'quota', ['source_id', 'bucket_id']],
     ['price_catalog', 'price', []],
   ])) {
+    /**
+     * @param {string} reference
+     * @param {string | null} [condition]
+     */
     const bump = (reference, condition = /** @type {string | null} */ (null)) => {
       const source = scope.includes('source_id') ? `${reference}.source_id` : "''";
       const bucket = scope.includes('bucket_id') ? `${reference}.bucket_id` : "''";
@@ -323,13 +328,13 @@ function migrateAnalyticsRevisions(store) {
 
 /** @param {import('../store.cjs').Store} store */
 function canonicaliseCodexManualRows(store) {
-  const official = store.prepare(`
+  const official = /** @type {{ bucket_id: string } | undefined} */ (store.prepare(`
       SELECT bucket_id FROM quota_observations
       WHERE source_id = 'codex' AND bucket_id NOT IN ('manual-weekly', 'codex:weekly')
         AND COALESCE(window_minutes, 0) >= 10000
         AND json_valid(metadata_json) AND json_extract(metadata_json, '$.limitId') = 'codex'
       ORDER BY observed_at DESC, bucket_id ASC LIMIT 1
-    `).get();
+    `).get());
   const target = official?.bucket_id || 'codex:weekly';
   store.prepare(`UPDATE OR IGNORE quota_observations SET bucket_id = ?
       WHERE source_id = 'codex' AND bucket_id = 'manual-weekly'`).run(target);

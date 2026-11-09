@@ -5,6 +5,8 @@
 // Electron so every taskbar edge can be tested without a screen.
 
 const FLYOUT_MARGIN = 8;
+/** @typedef {'bottom' | 'top' | 'left' | 'right'} Edge */
+/** @type {Edge[]} */
 const EDGES = ['bottom', 'top', 'left', 'right'];
 
 /** @typedef {{ x: number, y: number, width: number, height: number }} Rect */
@@ -26,6 +28,7 @@ function isUsableIcon(rect) {
   return isRect(rect) && rect.width > 0 && rect.height > 0;
 }
 
+/** @param {Record<Edge, number>} distances */
 function nearestEdge(distances) {
   return EDGES.reduce((best, edge) => (distances[edge] < distances[best] ? edge : best), EDGES[0]);
 }
@@ -60,6 +63,11 @@ function taskbarEdge({ trayBounds, workArea, displayBounds } = {}) {
   });
 }
 
+/**
+ * @param {number} value
+ * @param {number} low
+ * @param {number} high
+ */
 function clamp(value, low, high) {
   return Math.min(Math.max(value, low), Math.max(low, high));
 }

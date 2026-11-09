@@ -51,6 +51,15 @@ const systemTimers = { setTimeout, clearTimeout, setInterval, clearInterval };
  * @property {ReturnType<typeof createLifecycleModule>} lifecycle
  */
 
+/**
+ * @param {object} options
+ * @param {typeof import('electron')} options.electron
+ * @param {NodeJS.Process} options.process
+ * @param {Record<string, any>} options.pkg package.json
+ * @param {NodeJS.ProcessEnv} options.launchEnvironment
+ * @param {typeof systemTimers} [options.timers]
+ * @returns {Application}
+ */
 function createApplication({ electron, process, pkg, launchEnvironment, timers = systemTimers }) {
   /** @type {Application} */
   const main = /** @type {any} */ ({

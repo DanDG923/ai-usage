@@ -20,6 +20,15 @@ const { exhaustionTime, forecastState } = require('./forecast.cjs');
 const { isMainWindow, selectDisplayedWindows } = require('./quota-selection.cjs');
 const { STALENESS_MS } = require('./token-capacity.cjs');
 
+/** @typedef {import('./types').Quota} Quota */
+/** @typedef {import('./types').QuotaWindow} QuotaWindow */
+/** @typedef {import('./types').Forecast} Forecast */
+/** @typedef {import('./types').ForecastState} ForecastState */
+/** @typedef {import('./types').Point} Point */
+/** @typedef {import('./types').SharedPoolApplied} SharedPoolApplied */
+/** @typedef {import('./types').TokenCapacityEstimate} TokenCapacityEstimate */
+/** @typedef {Extract<import('./types').SharedPool, { status: 'unavailable' }>['reason']} UnavailableReason */
+
 const WEEK_MINUTES = 10_080;
 // The weekly Fable allowance, as quota-selection.mjs and allowance-changes.cjs
 // know it. Any other Fable bucket is left as it is.
@@ -38,17 +47,35 @@ const SAME_MOMENT_MS = 15 * 60_000;
 // Whole-percent readings on both sides, one of them doubled.
 const SHARE_SLACK = 2;
 
+/** @type {Record<ForecastState, number>} */
 const SEVERITY = { unknown: 0, safe: 1, watch: 2, risk: 3, critical: 4 };
+/**
+ * @param {ForecastState} a
+ * @param {ForecastState} b
+ */
 const worse = (a, b) => ((SEVERITY[b] ?? 0) > (SEVERITY[a] ?? 0) ? b : a);
+/**
+ * @param {number} value
+ * @param {number} low
+ * @param {number} high
+ */
 const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
+/**
+ * True only for a finite number, which the checker reads as "a number".
+ * @param {unknown} value
+ * @returns {value is number}
+ */
 const finite = (value) => typeof value === 'number' && Number.isFinite(value);
 
+/** @param {Pick<QuotaWindow, 'windowMinutes' | 'bucketId'> | null | undefined} window */
 function isFableWeekly(window) {
   return Number(window?.windowMinutes) === WEEK_MINUTES && FABLE_WEEKLY_BUCKETS.has(String(window?.bucketId || ''));
 }
 
 // The dashboard's own "left now" rule (src/lib.ts displayedRemaining).
+/** @param {QuotaWindow | null | undefined} window */
 function displayed(window) {
+  /** @type {Partial<Forecast>} */
   const forecast = window?.forecast || {};
   const value = forecast.currentIsEstimated && finite(forecast.estimatedCurrentRemaining)
     ? forecast.estimatedCurrentRemaining
@@ -56,18 +83,25 @@ function displayed(window) {
   return finite(value) ? clamp(value, 0, 100) : null;
 }
 
+/** @param {QuotaWindow} window */
 function estimated(window) {
   return Boolean(window?.forecast?.currentIsEstimated && finite(window?.forecast?.estimatedCurrentRemaining));
 }
 
 // The moment a window's figure held: a status-line redraw can carry limits
 // its session fetched long before the redraw.
+/** @param {QuotaWindow} window */
 function readingMoment(window) {
   return window.evidenceAt ?? window.observedAt;
 }
 
 // The Claude weekly window every model draws on: the subscription's own
 // seven-day allowance, not the five-hour session or a model-scoped limit.
+/**
+ * @param {Quota | null | undefined} claudeQuota
+ * @param {number} nowMs
+ * @returns {{ window: QuotaWindow, reason?: undefined } | { window?: undefined, reason: UnavailableReason }}
+ */
 function weeklyPool(claudeQuota, nowMs) {
   if (!claudeQuota) return { reason: 'no-weekly-pool' };
   const windows = Array.isArray(claudeQuota.windows) && claudeQuota.windows.length ? claudeQuota.windows : [claudeQuota];
@@ -85,6 +119,11 @@ function weeklyPool(claudeQuota, nowMs) {
 // Weekly use only grows within a window, so a Fable reading is checked only
 // against a Claude reading from the same moment or later. A projected Fable
 // figure is built on the half share itself and is not evidence against it.
+/**
+ * @param {QuotaWindow} fable
+ * @param {QuotaWindow} pool
+ * @param {number} share
+ */
 function shareConsistent(fable, pool, share) {
   if (fable.provenance === 'derived-tokens') return true;
   const fableAt = Date.parse(readingMoment(fable));
@@ -95,10 +134,15 @@ function shareConsistent(fable, pool, share) {
 
 // A series value at any instant, interpolated between points. `projected`
 // keeps how far past zero a point ran, which exhaustionTime needs.
+/**
+ * @param {Point[] | null | undefined} series
+ * @returns {(at: number, key?: 'remaining' | 'projected') => number | null}
+ */
 function sampler(series) {
   const points = Array.isArray(series) ? series.filter((point) => finite(point?.at) && finite(point?.remaining)) : [];
   return (at, key = 'remaining') => {
     if (!points.length) return null;
+    /** @param {Point} point */
     const read = (point) => (key === 'projected' && finite(point.projected) ? point.projected : point.remaining);
     if (at <= points[0].at) return read(points[0]);
     for (let index = 1; index < points.length; index += 1) {
@@ -109,7 +153,8 @@ function sampler(series) {
       const fraction = span > 0 ? (at - previous.at) / span : 1;
       return read(previous) + (read(next) - read(previous)) * fraction;
     }
-    return read(points.at(-1));
+    // Past the last point; `points` is not empty here.
+    return read(/** @type {Point} */ (points.at(-1)));
   };
 }
 
@@ -123,6 +168,14 @@ function sampler(series) {
 // figure now (the card shows usable Fable as twice the whole Claude
 // percentage), as a scale rather than a shift, so an empty week stays empty
 // and Fable runs out at the same instant as Claude.
+/**
+ * @param {QuotaWindow} pool
+ * @param {'expected' | 'heavy'} kind
+ * @param {number} share
+ * @param {number} nowRemaining
+ * @param {number} [scale]
+ * @returns {(at: number) => number}
+ */
 function poolCeiling(pool, kind, share, nowRemaining, scale = 1) {
   const resetMs = Date.parse(pool.resetsAt);
   const series = pool.forecast?.series?.[kind];
@@ -143,20 +196,30 @@ function poolCeiling(pool, kind, share, nowRemaining, scale = 1) {
 // the lowest changes only where two of them cross. Those crossings are
 // instants of the combined path too: without them a run-out would be
 // interpolated between points belonging to different limits.
+/**
+ * @param {Point[]} fableSeries Fable's own path; at least one point.
+ * @param {(at: number) => number} ceiling
+ * @param {number[]} extraTimes
+ */
 function combineSeries(fableSeries, ceiling, extraTimes) {
   const fable = sampler(fableSeries);
   const first = fableSeries[0].at;
-  const last = fableSeries.at(-1).at;
+  // The series is not empty, so it has a last point, and a value at any instant.
+  const last = /** @type {Point} */ (fableSeries.at(-1)).at;
   const base = [...new Set([...fableSeries.map((point) => point.at), ...extraTimes.filter((at) => at > first && at < last)])]
     .sort((a, b) => a - b);
-  const ownAt = (at) => fable(at, 'projected');
+  /** @param {number} at */
+  const ownAt = (at) => /** @type {number} */ (fable(at, 'projected'));
   const start = { own: ownAt(first), ceiling: ceiling(first) };
+  /** @param {number} at */
   const coupledAt = (at) => (Number.isFinite(start.ceiling) ? start.ceiling - (start.own - ownAt(at)) : Number.POSITIVE_INFINITY);
+  /** @param {number} at */
   const limitAt = (at) => {
     const value = ceiling(at);
     return Number.isFinite(value) ? Math.min(value, coupledAt(at)) : value;
   };
   const lines = [ownAt, ceiling, coupledAt];
+  /** @type {number[]} */
   const times = [];
   base.forEach((at, index) => {
     times.push(at);
@@ -192,12 +255,22 @@ function combineSeries(fableSeries, ceiling, extraTimes) {
 // The observed history as usable Fable: at each reading of either side, the
 // lower of Fable's latest reading and the pool's latest, in Fable points.
 // Before the pool's first reading in view only Fable's own is known.
+/**
+ * @param {Point[] | undefined} fableObserved
+ * @param {Point[] | undefined} poolObserved
+ * @param {number} share
+ * @returns {Point[]}
+ */
 function combineObserved(fableObserved, poolObserved, share) {
   const own = (Array.isArray(fableObserved) ? fableObserved : []).filter((point) => finite(point?.at) && finite(point?.remaining));
   const pool = (Array.isArray(poolObserved) ? poolObserved : []).filter((point) => finite(point?.at) && finite(point?.remaining));
   if (!own.length || !pool.length) return own;
+  /**
+   * @param {Point[]} points
+   * @param {number} at
+   */
   const latest = (points, at) => {
-    /** @type {any} */
+    /** @type {Point | null} */
     let found = null;
     for (const point of points) {
       if (point.at > at) break;
@@ -221,6 +294,13 @@ const TOKEN_WARNING = 'The Claude weekly reading leaves less than the Fable limi
 // Token capacity is estimated as of the last Fable reading. When the Claude
 // weekly reading leaves less, the remaining tokens become that reading's share
 // of the estimated week, dated to it. A copy: the store caches the original.
+/**
+ * @param {TokenCapacityEstimate | null | undefined} capacity
+ * @param {number} poolAtReading
+ * @param {string} poolObservedAt
+ * @param {number} nowMs
+ * @returns {TokenCapacityEstimate | null | undefined}
+ */
 function cappedCapacity(capacity, poolAtReading, poolObservedAt, nowMs) {
   // An unavailable remainder is intentional: a fresh overall reading cannot
   // establish how much remains of Fable's own stale or uncalibrated limit.
@@ -245,6 +325,12 @@ function cappedCapacity(capacity, poolAtReading, poolObservedAt, nowMs) {
   };
 }
 
+/**
+ * @param {QuotaWindow} window
+ * @param {QuotaWindow} pool
+ * @param {{ nowMs: number, share: number, paceRiskThreshold: number, hardLimitThreshold: number }} options
+ * @returns {QuotaWindow}
+ */
 function constrain(window, pool, options) {
   const { nowMs, share, paceRiskThreshold, hardLimitThreshold } = options;
   // applySharedPool has checked that both readings carry a figure.
@@ -257,8 +343,11 @@ function constrain(window, pool, options) {
   const usableRemaining = clamp(Math.min(capRemaining, poolAsFable), 0, 100);
   const binding = poolAsFable < capRemaining - EPSILON ? 'pool' : 'cap';
   const own = window.forecast;
-  const poolForecast = pool.forecast || {};
+  // Every window the store builds carries a forecast; the empty object only
+  // keeps a malformed one from throwing, and reads as not known below.
+  const poolForecast = /** @type {Forecast} */ (pool.forecast || {});
   const poolKnown = poolForecast.state !== 'unknown' && finite(poolForecast.expectedRemaining);
+  /** @param {Point[] | undefined} series */
   const toFable = (series) => (Array.isArray(series) ? series : [])
     .filter((point) => finite(point?.at) && finite(point?.remaining))
     .map((point) => ({ at: point.at, remaining: clamp(point.remaining / share, 0, MAX_POOL_AS_FABLE) }));
@@ -272,6 +361,7 @@ function constrain(window, pool, options) {
       remaining: clamp(((finite(point.projected) ? point.projected : point.remaining) / share) * scale, 0, MAX_POOL_AS_FABLE),
     }));
   const apart = Math.abs(Date.parse(readingMoment(window)) - Date.parse(readingMoment(pool)));
+  /** @type {SharedPoolApplied} */
   const summary = {
     status: 'applied',
     share,
@@ -328,7 +418,8 @@ function constrain(window, pool, options) {
   const tokenCapacity = binding === 'pool'
     ? cappedCapacity(window.tokenCapacity, Math.round(Number(pool.remainingPercent)) / share, readingMoment(pool), nowMs)
     : window.tokenCapacity;
-  if (tokenCapacity !== window.tokenCapacity) summary.cap.tokenCapacity = window.tokenCapacity;
+  // cappedCapacity hands back a copy only of a capacity that exists.
+  if (tokenCapacity !== window.tokenCapacity) summary.cap.tokenCapacity = /** @type {TokenCapacityEstimate} */ (window.tokenCapacity);
   const observed = combineObserved(own.series?.observed, poolForecast.series?.observed, share);
 
   // A Fable forecast still learning has no projection to combine; the
@@ -345,6 +436,7 @@ function constrain(window, pool, options) {
   const expectedCeiling = poolCeiling(pool, 'expected', share, poolRemaining, scale);
   const heavyCeiling = poolCeiling(pool, poolForecast.series?.heavy?.length ? 'heavy' : 'expected', share,
     poolRemaining, scale);
+  /** @param {'expected' | 'heavy'} kind */
   const poolTimes = (kind) => (poolForecast.series?.[kind] || []).map((point) => point.at).filter(finite);
   const expectedPath = combineSeries(own.series.expected, expectedCeiling, poolTimes('expected'));
   const heavyPath = own.series.heavy?.length
@@ -355,7 +447,8 @@ function constrain(window, pool, options) {
   // A combined series always holds at least its starting point.
   const lastExpected = /** @type {typeof expected[number]} */ (expected.at(-1));
   const expectedRemaining = lastExpected.remaining;
-  const heavyRemaining = heavyPath ? heavy.at(-1).remaining : own.heavyRemaining;
+  // Likewise the heavier combined series.
+  const heavyRemaining = heavyPath ? /** @type {Point} */ (heavy.at(-1)).remaining : own.heavyRemaining;
   const exhaustsAt = exhaustionTime(expected);
   const heavyExhaustsAt = heavyPath ? exhaustionTime(heavy) : own.heavyExhaustsAt;
 
@@ -367,7 +460,8 @@ function constrain(window, pool, options) {
   // then still names the Claude weekly limit as the cause.
   summary.heavyBindsAtReset = Boolean(heavyPath?.poolBinds);
   // Which limit sets the figure at Fable's own reset: the lower of the two.
-  const ownEndRemaining = sampler(own.series.expected)(lastExpected.at);
+  // Fable's own expected series has points (checked above), so it has a value here.
+  const ownEndRemaining = /** @type {number} */ (sampler(own.series.expected)(lastExpected.at));
   summary.cappedAtReset = expectedRemaining < ownEndRemaining - EPSILON ? 'pool' : 'cap';
 
   // While the pool is what runs out, the Fable balance shrinks at the pool's
@@ -378,6 +472,7 @@ function constrain(window, pool, options) {
   const poolPaces = bindingAtReset === 'pool' && poolKnown;
   const poolPaceWins = poolPaces && (poolForecast.paceRatio || 0) > (own.paceRatio || 0);
   summary.paceSource = poolPaceWins ? 'pool' : 'cap';
+  /** @param {number} value */
   const inFable = (value) => (finite(value) ? value / share : value);
   const ownReserve = finite(own.reservePercent) ? own.reservePercent : 0;
   const reserve = poolPaces && finite(poolForecast.reservePercent)
@@ -417,6 +512,11 @@ function constrain(window, pool, options) {
   };
 }
 
+/**
+ * @param {QuotaWindow} window
+ * @param {UnavailableReason} reason
+ * @returns {QuotaWindow}
+ */
 function unavailable(window, reason) {
   return { ...window, sharedPool: { status: 'unavailable', reason } };
 }
@@ -425,10 +525,16 @@ function unavailable(window, reason) {
  * Caps each live weekly Fable window by the Claude weekly pool it sits in.
  * Returns a new Fable quota; the inputs are not modified. Expired windows
  * and other buckets are returned unchanged.
+ * @param {Quota | null} fableQuota
+ * @param {Quota | null | undefined} claudeQuota
+ * @param {{ nowMs?: number, settings?: Partial<import('./types').Settings> }} [options]
+ * @returns {Quota | null}
  */
 function applySharedPool(fableQuota, claudeQuota, options = {}) {
   if (!fableQuota) return fableQuota;
-  const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
+  // Number.isFinite is true only for a number.
+  const nowMs = Number.isFinite(options.nowMs) ? /** @type {number} */ (options.nowMs) : Date.now();
+  /** @type {Partial<import('./types').Settings>} */
   const settings = options.settings || {};
   const context = {
     nowMs,
@@ -437,6 +543,7 @@ function applySharedPool(fableQuota, claudeQuota, options = {}) {
     hardLimitThreshold: Number(settings.hardLimitThreshold ?? 90),
   };
   const pool = weeklyPool(claudeQuota, nowMs);
+  /** @param {QuotaWindow} window */
   const apply = (window) => {
     if (!isFableWeekly(window) || window.forecast?.expired || !(Date.parse(window.resetsAt) > nowMs)) return window;
     if (displayed(window) == null) return window;
@@ -445,6 +552,7 @@ function applySharedPool(fableQuota, claudeQuota, options = {}) {
     return constrain(window, pool.window, context);
   };
   const windows = Array.isArray(fableQuota.windows) ? fableQuota.windows.map(apply) : [];
+  /** @type {QuotaWindow & { windows?: QuotaWindow[] }} */
   const top = { ...fableQuota };
   delete top.windows;
   const primary = windows.find((window) => window.bucketId === top.bucketId) || apply(top);

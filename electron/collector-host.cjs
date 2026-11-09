@@ -7,14 +7,58 @@
 const DEFAULT_REQUEST_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_IDLE_TIMEOUT_MS = 30_000;
 
+/** @typedef {import('electron').UtilityProcess} UtilityProcess */
+/** @typedef {import('electron').ForkOptions} ForkOptions */
+/** @typedef {import('./collector-service.cjs').CollectorMessage} CollectorMessage */
+/** @typedef {import('./collector-service.cjs').CollectorReply} CollectorReply */
+/** @typedef {import('./collector-service.cjs').SettledOutcome} SettledOutcome */
+
+/**
+ * A request waiting for its reply, and the child it was sent to.
+ *
+ * @typedef {object} PendingRequest
+ * @property {(result: unknown) => void} resolve
+ * @property {(error: unknown) => void} reject
+ * @property {NodeJS.Timeout} timer
+ * @property {UtilityProcess} child
+ */
+
+/**
+ * What the main process holds: the collectors, wherever they run.
+ *
+ * @typedef {object} CollectorHost
+ * @property {(options?: { readPlanUsage?: boolean }) => Promise<{ codex: SettledOutcome, claude: SettledOutcome }>} refreshAll
+ * @property {() => Promise<{ claude: SettledOutcome }>} refreshClaude
+ * @property {(type: string, payload?: Record<string, unknown>) => Promise<any>} request resolves with the reply's result, whose shape depends on the type
+ * @property {() => void} stop
+ * @property {boolean} running
+ */
+
+/**
+ * @param {object} options
+ * @param {(modulePath: string, args: string[], options: ForkOptions) => UtilityProcess} options.fork
+ * @param {string} options.modulePath
+ * @param {import('./collector-service.cjs').CollectorConfig} options.config
+ * @param {number} [options.requestTimeoutMs]
+ * @param {number} [options.idleTimeoutMs]
+ * @param {ForkOptions} [options.forkOptions]
+ * @param {(message: string) => void} [options.onLog]
+ * @returns {CollectorHost}
+ */
 function createCollectorHost({ fork, modulePath, config, requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS, idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS, forkOptions = {}, onLog = /** @type {(message: string) => void} */ (() => {}) }) {
-  /** @type {any} */
+  /** @type {UtilityProcess | null} */
   let child = null;
+  /** @type {NodeJS.Timeout | undefined} */
   let idleTimer;
   let nextId = 1;
+  /** @type {Map<number, PendingRequest>} */
   const pending = new Map();
+  // Children asked to close: the id of that request, and the timer that
+  // ends a child which does not answer it.
+  /** @type {Map<UtilityProcess, { id: number, timer: NodeJS.Timeout }>} */
   const retiring = new Map();
 
+  /** @param {UtilityProcess} target */
   function finishRetirement(target) {
     clearTimeout(retiring.get(target)?.timer);
     retiring.delete(target);
@@ -45,7 +89,11 @@ function createCollectorHost({ fork, modulePath, config, requestTimeoutMs = DEFA
   // Fail the in-flight requests of one child (or of every child when no
   // owner is given). A recycled child's late exit event must not reject a
   // request that was already registered against its replacement.
-  function failAll(error, owner = /** @type {any} */ (null)) {
+  /**
+   * @param {Error} error
+   * @param {UtilityProcess | null} [owner]
+   */
+  function failAll(error, owner = /** @type {UtilityProcess | null} */ (null)) {
     for (const [id, entry] of pending) {
       if (owner && entry.child !== owner) continue;
       clearTimeout(entry.timer);
@@ -56,7 +104,7 @@ function createCollectorHost({ fork, modulePath, config, requestTimeoutMs = DEFA
 
   function spawn() {
     const spawned = fork(modulePath, [JSON.stringify(config)], { serviceName: 'AI Usage collectors', ...forkOptions });
-    spawned.on('message', (message) => {
+    spawned.on('message', (/** @type {CollectorReply} */ message) => {
       if (retiring.get(spawned)?.id === message?.id) {
         finishRetirement(spawned);
         return;
@@ -85,10 +133,16 @@ function createCollectorHost({ fork, modulePath, config, requestTimeoutMs = DEFA
     child = spawned;
   }
 
+  /**
+   * @param {string} type
+   * @param {Record<string, unknown>} [payload]
+   * @returns {Promise<any>} the reply's result, whose shape depends on the type
+   */
   function request(type, payload = {}) {
     clearTimeout(idleTimer);
     if (!child) spawn();
-    const target = child;
+    // spawn() has just set it if it was empty.
+    const target = /** @type {UtilityProcess} */ (child);
     const id = nextId++;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -134,10 +188,16 @@ function createCollectorHost({ fork, modulePath, config, requestTimeoutMs = DEFA
 
 // The same surface over an in-process service, for environments without
 // utility processes (tests, or AI_USAGE_INLINE_COLLECTORS=1 for debugging).
+/**
+ * @param {ReturnType<typeof import('./collector-service.cjs').createCollectorService>} service
+ * @returns {CollectorHost}
+ */
 function createInlineCollectorHost(service) {
   return {
-    refreshAll: ({ readPlanUsage = false } = {}) => service.handle({ type: 'refresh-all', readPlanUsage: readPlanUsage === true }),
-    refreshClaude: () => service.handle({ type: 'refresh-claude', readPlanUsage: false }),
+    // handle() is typed with the result of every request. It answers
+    // refresh-all with both outcomes and refresh-claude with Claude's.
+    refreshAll: ({ readPlanUsage = false } = {}) => /** @type {ReturnType<CollectorHost['refreshAll']>} */ (service.handle({ type: 'refresh-all', readPlanUsage: readPlanUsage === true })),
+    refreshClaude: () => /** @type {ReturnType<CollectorHost['refreshClaude']>} */ (service.handle({ type: 'refresh-claude', readPlanUsage: false })),
     request: (type, payload = {}) => service.handle({ type, ...payload }),
     stop: () => service.close(),
     get running() { return true; },

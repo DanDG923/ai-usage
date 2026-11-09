@@ -5,6 +5,123 @@ const { freshnessLimitHours } = require('./dashboard-decision.cjs');
 const { OFFICIAL_PROVENANCES, isOfficialProvenance } = require('./quota-provenance.mjs');
 const { MAX_QUOTA_RESET_AHEAD_MS, QUOTA_CLOCK_SKEW_MS, FORECAST_LOOKBACK_MS, validQuotaTime } = require('./quota-time.cjs');
 
+/** @typedef {import('./types').Reading} Reading */
+/** @typedef {import('./types').ReadingLike} ReadingLike */
+/** @typedef {import('./types').Schedule} Schedule */
+/** @typedef {import('./types').Point} Point */
+/** @typedef {import('./types').AllowanceChange} AllowanceChange */
+/** @typedef {import('./allowance-changes.cjs').AllowanceScaler} AllowanceScaler */
+
+/**
+ * A time as a reading may carry it before it is normalised.
+ * @typedef {string | number | Date} TimeInput
+ */
+
+/**
+ * A reading as it arrives: a row of quota_observations, or the same fields in
+ * camelCase with each time as ISO text, a Date or milliseconds. Either
+ * spelling of a field may be the one present. The two symbol keys are the
+ * marks normaliseObservation and prepareObservation leave.
+ * @typedef {Partial<import('./types').ProjectedObservationRow> & {
+ *   observedAt?: TimeInput, fetchedAfter?: TimeInput | null, seenSince?: TimeInput | null, resetsAt?: TimeInput,
+ *   usedPercent?: number, remainingPercent?: number, windowMinutes?: number | null,
+ *   sourceId?: string, bucketId?: string, allowanceScaled?: boolean,
+ *   [NORMALISED]?: true, [PREPARED]?: Reading,
+ * }} RawReading
+ */
+
+/**
+ * Whether a span of time touches an ignored day.
+ * @typedef {(startMs: number, endMs: number) => boolean} Excluded
+ */
+
+/**
+ * The readings of one allowance window, in time order.
+ * @template {Reading} [T=Reading]
+ * @typedef {object} WindowCluster
+ * @property {number} resetsAt The reset its latest reading names.
+ * @property {T[]} rows Never empty.
+ * @property {number | null} observedResetAt When the window was seen to begin, where an early replenishment showed it.
+ */
+
+/**
+ * One window's elapsed hours and usage, divided between scheduled and
+ * off-schedule time.
+ * @typedef {{ elapsedHours: number, activeHours: number, offHours: number, activeUsed: number, offUsed: number }} WindowSplit
+ */
+
+/** @typedef {'active' | 'off-schedule'} Phase */
+
+/**
+ * What one interval between two readings teaches, for one phase of the day.
+ * @typedef {object} LearningSample
+ * @property {number} rate Allowance points per hour across the span the rise is smoothed over.
+ * @property {number} observedAt When the interval ended.
+ * @property {number} weekday The local weekday of the middle of the time covered.
+ * @property {number} hour The local hour of the middle of the time covered.
+ * @property {number} weight Less for older and for estimated readings.
+ * @property {boolean} changed Whether usage rose across the interval.
+ * @property {boolean} rateEligible False when the span is too short to give a rate.
+ * @property {Phase} phase
+ * @property {number} delta The points used in this phase.
+ * @property {number} coveredHours
+ * @property {{ day: string, delta: number }[]} dailyDeltas The points used, by local day.
+ * @property {{ day: string, hours: number }[]} dailyHours The hours covered, by local day.
+ * @property {number} [influence] The share of its weight a sample keeps once an early reset has discounted its days.
+ */
+
+/**
+ * The rates one phase of the day is projected with.
+ * @typedef {object} PhaseRates
+ * @property {number} fallback The mean learned rate, for hours no closer sample describes.
+ * @property {{ rate: number, weight: number }} blend The recent rate and its pull on the learned one.
+ * @property {{ rate: number, weight: number } | null} anchor The window's own average pace and its pull.
+ * @property {number} [sustainable] A duty-cycled rate that replaces the others. Off-schedule only.
+ * @property {number} heavy The rate of a busy day.
+ * @property {number} heavyWeight How far the busy-day rate is trusted, from 0 to 1.
+ */
+
+/** @typedef {{ active: PhaseRates, offSchedule: PhaseRates }} ForecastRates */
+
+/** @typedef {ReturnType<typeof learnForecast>} LearnedModel */
+
+/**
+ * How current the latest reading is, measured by forecastQuota before it
+ * compacts the readings: `at` is when its figure is evidence of, `known` how
+ * current it is known to be.
+ * @typedef {{ observedAt: number, at: number | null, known: number | null }} ReadingEvidence
+ */
+
+/**
+ * What a forecast can be told besides the readings.
+ * @typedef {object} ForecastSettings
+ * @property {TimeInput | null} [now] The moment to forecast from; the clock when absent.
+ * @property {Partial<Schedule> | null} [schedule]
+ * @property {number} [fallbackRate]
+ * @property {number} [paceRiskThreshold]
+ * @property {number} [hardLimitThreshold]
+ * @property {number} [reservePercent]
+ * @property {string[]} [excludedDates]
+ * @property {AllowanceChange[] | null} [allowanceChanges]
+ * @property {string} [sourceId] For readings that do not name their own.
+ * @property {string} [bucketId] For readings that do not name their own.
+ * @property {boolean} [compactReadings] Collapse unchanged runs before learning.
+ * @property {number} [freshReadGraceMs]
+ * @property {Map<string, { at: number, value: LearnedModel }>} [learningCache]
+ */
+
+/**
+ * The evidence is read-only so that a test of it, once stored in a constant,
+ * still tells the checker it is present.
+ * @typedef {ForecastSettings & { readonly evidence?: ReadingEvidence }} ForecastOptions
+ */
+
+// On the casts to number in this file: a reading's fetch time, first-seen time
+// and window length may be null. Number.isFinite, or a comparison with zero,
+// rules null out at run time but does not tell the checker so; where a value
+// is cast beside such a test, the test is the reason. Any other cast carries
+// its own comment.
+
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 const RESET_TOLERANCE_MS = 60_000;
@@ -12,12 +129,20 @@ const HEAVY_HISTORY_DAYS = 7;
 // Readings further apart than this leave the time between them unobserved.
 const COVERAGE_GAP_MS = 6 * HOUR_MS;
 const EARLY_RESET_DAY_WEIGHT = 0.25;
+// Also asked about a reading with no provenance, which is in no set.
+/** @type {Set<string | undefined>} */
 const RESET_EVIDENCE_PROVENANCES = new Set(OFFICIAL_PROVENANCES);
 const MAX_PROJECTION_MS = MAX_QUOTA_RESET_AHEAD_MS + QUOTA_CLOCK_SKEW_MS;
 const MAX_SERIES_POINTS = Math.ceil(MAX_PROJECTION_MS / HOUR_MS) + 1;
 
+/**
+ * @param {number} value
+ * @param {number} min
+ * @param {number} max
+ */
 function clamp(value, min, max) { return Math.min(max, Math.max(min, value)); }
 
+/** @param {number} cursor */
 function nextLocalHour(cursor) {
   const date = new Date(cursor);
   // Advance elapsed time to the next local hour boundary. Arithmetic on local
@@ -26,7 +151,14 @@ function nextLocalHour(cursor) {
   return cursor + HOUR_MS - date.getMinutes() * 60_000 - date.getSeconds() * 1000 - date.getMilliseconds();
 }
 
-/** @returns {import('../src/types').ForecastState} */
+/**
+ * @param {number} expectedRemaining
+ * @param {number} heavyRemaining
+ * @param {number} paceRatio
+ * @param {number} paceRiskThreshold
+ * @param {number} watchRemainingThreshold
+ * @returns {import('../src/types').ForecastState}
+ */
 function forecastState(expectedRemaining, heavyRemaining, paceRatio, paceRiskThreshold, watchRemainingThreshold) {
   return expectedRemaining <= 0 ? 'critical'
     : heavyRemaining <= 0 || paceRatio > paceRiskThreshold ? 'risk'
@@ -34,6 +166,10 @@ function forecastState(expectedRemaining, heavyRemaining, paceRatio, paceRiskThr
         || paceRatio > paceRiskThreshold * 0.75 ? 'watch' : 'safe';
 }
 
+/**
+ * @param {number[]} values
+ * @param {number} fraction
+ */
 function percentile(values, fraction) {
   if (!values.length) return 0;
   const sorted = [...values].sort((a, b) => a - b);
@@ -44,6 +180,7 @@ function percentile(values, fraction) {
   return sorted[lower] + (sorted[upper] - sorted[lower]) * (index - lower);
 }
 
+/** @param {{ value: number, weight: number }[]} entries */
 function weightedMean(entries) {
   let numerator = 0;
   let denominator = 0;
@@ -54,12 +191,17 @@ function weightedMean(entries) {
   return denominator > 0 ? numerator / denominator : 0;
 }
 
+/**
+ * @param {Date} date
+ * @param {Schedule} schedule
+ */
 function isActiveHour(date, schedule) {
   if (!schedule.activeDays.includes(date.getDay())) return false;
   const hour = date.getHours() + date.getMinutes() / 60;
   return hour >= schedule.startHour && hour < schedule.endHour;
 }
 
+/** @param {Date} date */
 function localDayKey(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
@@ -68,6 +210,10 @@ function localDayKey(date) {
 // boundaries. Quota deltas cover [before, after), so a midnight reading can
 // still close the preceding clean day. Never infer where a delta crossing an
 // excluded day was spent: discard that interval and resume at its next reading.
+/**
+ * @param {string[]} [dates]
+ * @returns {Excluded}
+ */
 function exclusionLookup(dates = []) {
   const ranges = (Array.isArray(dates) ? dates : []).flatMap((day) => {
     if (typeof day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(day)) return [];
@@ -79,6 +225,11 @@ function exclusionLookup(dates = []) {
   return (start, end) => end > start && ranges.some((range) => range.start < end && range.end > start);
 }
 
+/**
+ * @param {number} startMs
+ * @param {number} endMs
+ * @param {Schedule} schedule
+ */
 function activeHoursBetween(startMs, endMs, schedule) {
   if (endMs <= startMs) return 0;
   let total = 0;
@@ -91,6 +242,10 @@ function activeHoursBetween(startMs, endMs, schedule) {
   return total;
 }
 
+/**
+ * @param {string} day
+ * @param {Schedule} schedule
+ */
 function offScheduleHoursForLocalDay(day, schedule) {
   const parts = String(day).split('-').map(Number);
   if (parts.length !== 3 || parts.some((part) => !Number.isInteger(part))) return 0;
@@ -102,6 +257,7 @@ function offScheduleHoursForLocalDay(day, schedule) {
   return Math.max(0, elapsedHours - activeHoursBetween(startMs, endMs, schedule));
 }
 
+/** @param {Reading} row */
 function providerBacked(row) {
   const provenance = String(row?.provenance || 'official');
   return isOfficialProvenance(provenance);
@@ -111,6 +267,10 @@ function providerBacked(row) {
 // reset timestamp is updated. Only treat a large drop all the way back to the
 // near-zero floor as a new allowance cycle; smaller backwards moves remain
 // rounding jitter and locally derived corrections remain in their old cycle.
+/**
+ * @param {Reading} previousRow
+ * @param {Reading} row
+ */
 function clearAllowanceRebase(previousRow, row) {
   if (!providerBacked(row)) return false;
   const before = usedPercentOf(previousRow);
@@ -126,6 +286,10 @@ function clearAllowanceRebase(previousRow, row) {
 // is a different window. A blanket gap-sized tolerance is NOT safe: it lets a
 // dormant cluster's tolerance grow until it steals rows from the live window,
 // and merges genuinely distinct short windows across an offline gap.
+/**
+ * @param {Reading} previousRow
+ * @param {Reading} row
+ */
 function sameWindowDrift(previousRow, row) {
   if (clearAllowanceRebase(previousRow, row)) return false;
   const gapMs = Math.max(0, row.observedAt - previousRow.observedAt);
@@ -136,14 +300,20 @@ function sameWindowDrift(previousRow, row) {
     && Math.abs(usedPercentOf(row) - usedPercentOf(previousRow)) <= 0.5;
 }
 
+/**
+ * @template {Reading} T
+ * @param {T[]} rows
+ */
 function clusterByWindow(rows) {
+  /** @type {WindowCluster<T>[]} */
   const clusters = [];
   for (const row of rows) {
     // Windows are sequential in time, so a time-sorted row either continues
     // the latest cluster or starts a new one — never rejoins a dormant one.
     const cluster = clusters.at(-1);
     const previous = cluster?.rows.at(-1);
-    if (cluster && sameWindowDrift(previous, row)) {
+    // A cluster is never empty, so it has a last row.
+    if (cluster && sameWindowDrift(/** @type {T} */ (previous), row)) {
       cluster.rows.push(row);
       cluster.resetsAt = row.resetsAt;
     } else {
@@ -169,21 +339,25 @@ function clusterByWindow(rows) {
 // Average allowance consumption per scheduled active hour across one window.
 // The provider's used-percentage covers the whole window, so when the window
 // length is known the denominator starts at the true window start.
+/** @param {Reading} row */
 function usedPercentOf(row) {
   return clamp(Number.isFinite(row.usedPercent) ? row.usedPercent : 100 - row.remainingPercent, 0, 100);
 }
 
 /**
+ * @param {Reading[]} rows At least one reading.
+ * @param {Schedule} schedule
  * @param {number | null} [observedResetAt]
  * @param {((startMs: number, endMs: number) => boolean) | null} [excluded]
  * @param {Map<string, number> | null} [dayWeights]
  */
 function windowPaceOf(rows, schedule, observedResetAt = null, nowMs = Date.now(), excluded = null, dayWeights = null) {
-  const last = rows.at(-1);
+  // Callers pass a window that has readings.
+  const last = /** @type {Reading} */ (rows.at(-1));
   const usedEnd = usedPercentOf(last);
-  const windowMinutes = rows.findLast((row) => Number.isFinite(row.windowMinutes) && row.windowMinutes > 0)?.windowMinutes;
+  const windowMinutes = rows.findLast((row) => Number.isFinite(row.windowMinutes) && /** @type {number} */ (row.windowMinutes) > 0)?.windowMinutes;
   const startMs = Number.isFinite(observedResetAt)
-    ? observedResetAt
+    ? /** @type {number} */ (observedResetAt)
     : windowMinutes ? last.resetsAt - windowMinutes * 60_000 : rows[0].observedAt;
   // Backward jitter within a window must not discard the pace entirely.
   const used = windowMinutes ? usedEnd : Math.max(0, usedEnd - usedPercentOf(rows[0]));
@@ -192,7 +366,8 @@ function windowPaceOf(rows, schedule, observedResetAt = null, nowMs = Date.now()
   // active-hour pace: the projection adds off-schedule use separately, so a
   // whole-window average would count every late-night point twice. Exposure
   // ends when the last figure was fetched: a later idle redraw observed nothing.
-  const endMs = latestEvidenceAt(rows);
+  // Null only for no readings at all.
+  const endMs = /** @type {number} */ (latestEvidenceAt(rows));
   const split = splitWindowUsage(rows, schedule, nowMs, startMs, endMs, used, excluded, dayWeights);
   const evidenceActiveHours = dayWeights?.size
     ? splitWindowUsage(rows, schedule, nowMs, startMs, endMs, used, excluded).activeHours : split.activeHours;
@@ -207,31 +382,40 @@ function windowPaceOf(rows, schedule, observedResetAt = null, nowMs = Date.now()
 // remainder by elapsed exposure instead, otherwise one +1 just after the
 // active-hours boundary can assign an entire 13% window burn to off-schedule use.
 /**
+ * @param {Reading[]} rows
+ * @param {Schedule} schedule
+ * @param {number} nowMs
+ * @param {number} startMs
+ * @param {number} endMs
+ * @param {number} used
  * @param {((startMs: number, endMs: number) => boolean) | null} [excluded]
  * @param {Map<string, number> | null} [dayWeights]
+ * @returns {WindowSplit}
  */
 function splitWindowUsage(rows, schedule, nowMs, startMs, endMs, used, excluded = null, dayWeights = null) {
   if (excluded?.(startMs, endMs)) {
     // A cumulative provider total includes the ignored day's burn. Only clean
     // spans bounded by actual readings can supply usage and elapsed exposure;
     // distributing the missing remainder would silently relearn that day.
+    /** @type {Reading[][]} Each holds at least one reading. */
     const segments = [];
     let peakUsed = 0;
     for (const row of rows) {
       const segment = segments.at(-1);
       peakUsed = Math.max(peakUsed, usedPercentOf(row));
       const monotonic = { ...row, usedPercent: peakUsed };
-      if (!segment || excluded(segment.at(-1).observedAt, row.observedAt)) segments.push([monotonic]);
+      if (!segment || excluded(/** @type {Reading} */ (segment.at(-1)).observedAt, row.observedAt)) segments.push([monotonic]);
       else segment.push(monotonic);
     }
     const result = { elapsedHours: 0, activeHours: 0, offHours: 0, activeUsed: 0, offUsed: 0 };
     for (const segment of segments) {
       if (segment.length < 2) continue;
       const first = segment[0];
-      const last = segment.at(-1);
+      const last = /** @type {Reading} */ (segment.at(-1));
       const cleanUsed = segment.reduce((peak, row) => Math.max(peak, usedPercentOf(row)), usedPercentOf(first)) - usedPercentOf(first);
       const split = splitWindowUsage(segment, schedule, nowMs, first.observedAt, last.observedAt, cleanUsed, null, dayWeights);
-      for (const key of Object.keys(result)) result[key] += split[key];
+      // The keys of `result` are the fields of a split and no others.
+      for (const key of /** @type {(keyof WindowSplit)[]} */ (Object.keys(result))) result[key] += split[key];
     }
     return result;
   }
@@ -285,27 +469,38 @@ function splitWindowUsage(rows, schedule, nowMs, startMs, endMs, used, excluded 
 // passes and the sample derivation inside them return it unchanged.
 const NORMALISED = Symbol('normalised');
 const PREPARED = Symbol('prepared');
+/**
+ * @template {RawReading} T
+ * @param {T} row
+ */
 function prepareObservation(row) {
   Object.defineProperty(row, PREPARED, { value: normaliseObservation(row) });
   return row;
 }
 
+/**
+ * @param {RawReading} row
+ * @returns {Reading & { [NORMALISED]?: true }}
+ */
 function normaliseObservation(row) {
-  if (row[NORMALISED]) return row;
+  // Only what this function returns carries the mark.
+  if (row[NORMALISED]) return /** @type {Reading} */ (row);
   if (row[PREPARED]) return row[PREPARED];
   const windowMinutes = row.windowMinutes ?? row.window_minutes;
   const fetchedAfter = row.fetchedAfter ?? row.fetched_after;
   const seenSince = row.seenSince ?? row.seen_since;
   return {
     [NORMALISED]: true,
-    observedAt: new Date(row.observedAt ?? row.observed_at).getTime(),
+    // A reading with neither spelling of a time gets an invalid one, which
+    // every caller's validity check then rejects.
+    observedAt: new Date(/** @type {TimeInput} */ (row.observedAt ?? row.observed_at)).getTime(),
     // The earliest moment a status-line reading's limits can have been
     // fetched; null for a provider read or a reading the collector could not date.
     fetchedAfter: fetchedAfter == null ? null : new Date(fetchedAfter).getTime(),
     // The first redraw in which its session showed the same limits: the fetch
     // was no later. Kept for readings that cannot be dated from below.
     seenSince: seenSince == null ? null : new Date(seenSince).getTime(),
-    resetsAt: new Date(row.resetsAt ?? row.resets_at).getTime(),
+    resetsAt: new Date(/** @type {TimeInput} */ (row.resetsAt ?? row.resets_at)).getTime(),
     usedPercent: Number(row.usedPercent ?? row.used_percent),
     remainingPercent: Number(row.remainingPercent ?? row.remaining_percent),
     windowMinutes: windowMinutes == null ? null : Number(windowMinutes),
@@ -325,11 +520,17 @@ function normaliseObservation(row) {
 // allowance. Express them in the current one so the step at the change is
 // not learned as a burst and the earlier pace is not understated. The scaled
 // copy keeps its normalised mark, so every later pass takes it as it is.
+/**
+ * @param {Reading[]} rows
+ * @param {Pick<ForecastOptions, 'allowanceChanges' | 'now' | 'sourceId' | 'bucketId'>} options
+ */
 function rescaleObservations(rows, options) {
   const changes = options.allowanceChanges;
   if (!Array.isArray(changes) || !changes.length) return rows;
+  /** @type {Map<string, AllowanceScaler | null>} */
   const scalers = new Map();
-  let previousSource, previousBucket, previousMinutes, previousScaler;
+  let /** @type {string | undefined} */ previousSource, /** @type {string | undefined} */ previousBucket,
+    /** @type {number | null | undefined} */ previousMinutes, /** @type {AllowanceScaler | null | undefined} */ previousScaler;
   const nowMs = options.now != null ? new Date(options.now).getTime() : Date.now();
   return rows.map((row) => {
     const sourceId = row.sourceId ?? options.sourceId;
@@ -348,7 +549,14 @@ function rescaleObservations(rows, options) {
   });
 }
 
-/** @param {number | null} [rateElapsedHours] */
+/**
+ * @param {LearningSample[]} samples Added to.
+ * @param {Reading} before
+ * @param {Reading} after
+ * @param {Schedule} schedule
+ * @param {number} nowMs
+ * @param {number | null} [rateElapsedHours]
+ */
 function addIntervalSamples(samples, before, after, schedule, nowMs, rateElapsedHours = null) {
   const elapsedHours = (after.observedAt - before.observedAt) / HOUR_MS;
   if (!(elapsedHours > 0)) return;
@@ -360,6 +568,7 @@ function addIntervalSamples(samples, before, after, schedule, nowMs, rateElapsed
   const rate = delta / smoothingHours;
   const allocationRate = delta / elapsedHours;
   const coverageScale = rateElapsedHours != null && rateElapsedHours > 0 ? rateElapsedHours / elapsedHours : 1;
+  /** @type {Map<Phase, { coveredHours: number, delta: number, midpointHours: number, dailyDeltas: Map<string, number>, dailyHours: Map<string, number> }>} */
   const phases = new Map();
   let cursor = before.observedAt;
   while (cursor < after.observedAt) {
@@ -405,6 +614,7 @@ function addIntervalSamples(samples, before, after, schedule, nowMs, rateElapsed
 // become the lower bound that localises the next increase, or a rise first
 // seen by a fresh read just after the active hours end is filed entirely as
 // late-night use and projected across every remaining night.
+/** @param {{ provenance?: string | null }} row */
 function restatesSessionLimits(row) {
   return row.provenance === 'official-statusline';
 }
@@ -413,11 +623,12 @@ function restatesSessionLimits(row) {
 // say: a provider read's own time, or a status-line reading's recorded fetch.
 // A percentage is a share of the allowance in force then, not at a redraw
 // that came after a recorded allowance change.
+/** @param {ReadingLike} row */
 function fetchMomentOf(row) {
   const parsed = normaliseObservation(row);
   if (!restatesSessionLimits(parsed)) return parsed.observedAt;
   const bound = Number.isFinite(parsed.fetchedAfter) ? parsed.fetchedAfter : parsed.seenSince;
-  return Number.isFinite(bound) ? Math.min(bound, parsed.observedAt) : parsed.observedAt;
+  return Number.isFinite(bound) ? Math.min(/** @type {number} */ (bound), parsed.observedAt) : parsed.observedAt;
 }
 
 // The moment each reading's value is evidence of, for readings in time order.
@@ -442,20 +653,21 @@ function fetchMomentOf(row) {
 // now: after a fourfold upgrade a read of 40% shows the same use as a later
 // 10%, and a read of 10% does not.
 /**
- * @param {any[]} rows
- * @param {{ known?: boolean, nowMs?: number, allowanceChanges?: any[], sourceId?: string }} [options]
+ * @param {ReadingLike[]} rows
+ * @param {{ known?: boolean, nowMs?: number, allowanceChanges?: AllowanceChange[] | null, sourceId?: string }} [options]
  */
 function evidenceTimes(rows, { known = false, nowMs, allowanceChanges, sourceId } = {}) {
   const parsed = rescaleObservations(rows.map(normaliseObservation), { allowanceChanges, now: nowMs, sourceId });
+  /** @type {{ resetsAt: number, used: number, from: number }[]} */
   let firstShown = [];
   return parsed.map((row, index) => {
     if (index > 0 && replenishedWithin(parsed[index - 1], row)) {
       firstShown = firstShown.filter((entry) => Math.abs(entry.resetsAt - row.resetsAt) > RESET_TOLERANCE_MS);
     }
     if (!restatesSessionLimits(row)) return row.observedAt;
-    if (Number.isFinite(row.fetchedAfter)) return Math.min(row.fetchedAfter, row.observedAt);
+    if (Number.isFinite(row.fetchedAfter)) return Math.min(/** @type {number} */ (row.fetchedAfter), row.observedAt);
     let placed;
-    if (Number.isFinite(row.seenSince)) placed = Math.min(row.seenSince, row.observedAt);
+    if (Number.isFinite(row.seenSince)) placed = Math.min(/** @type {number} */ (row.seenSince), row.observedAt);
     else {
       const used = usedPercentOf(row);
       let first = firstShown.find((entry) => Math.abs(entry.resetsAt - row.resetsAt) <= RESET_TOLERANCE_MS
@@ -468,7 +680,7 @@ function evidenceTimes(rows, { known = false, nowMs, allowanceChanges, sourceId 
     }
     if (!known) return placed;
     // A window of unknown length is no longer than a reset may lie ahead.
-    const windowMs = row.windowMinutes > 0 ? row.windowMinutes * 60_000 : MAX_QUOTA_RESET_AHEAD_MS;
+    const windowMs = /** @type {number} */ (row.windowMinutes) > 0 ? /** @type {number} */ (row.windowMinutes) * 60_000 : MAX_QUOTA_RESET_AHEAD_MS;
     return Math.min((Number.isFinite(row.resetsAt) ? row.resetsAt : placed) - windowMs, placed);
   });
 }
@@ -477,6 +689,10 @@ function evidenceTimes(rows, { known = false, nowMs, allowanceChanges, sourceId 
 // timestamp did not move: a new allowance, as `clusterByWindow` reads it.
 // Only a read or a dated fetch shows one; an undated drop may be an idle
 // session restating an older figure.
+/**
+ * @param {Reading} previous
+ * @param {Reading} row
+ */
 function replenishedWithin(previous, row) {
   return (!restatesSessionLimits(row) || Number.isFinite(row.fetchedAfter))
     && Math.abs(row.resetsAt - previous.resetsAt) <= RESET_TOLERANCE_MS && clearAllowanceRebase(previous, row);
@@ -489,8 +705,8 @@ function replenishedWithin(previous, row) {
 // replenishment is no evidence for the allowance that replaced it. Readings
 // must be in time order. Options as for `evidenceTimes`.
 /**
- * @param {any[]} rows
- * @param {{ known?: boolean, nowMs?: number, allowanceChanges?: any[], sourceId?: string }} [options]
+ * @param {ReadingLike[]} rows
+ * @param {{ known?: boolean, nowMs?: number, allowanceChanges?: AllowanceChange[] | null, sourceId?: string }} [options]
  */
 function latestEvidenceAt(rows, { known = false, nowMs, allowanceChanges, sourceId } = {}) {
   const parsed = rescaleObservations(rows.map(normaliseObservation), { allowanceChanges, now: nowMs, sourceId });
@@ -499,7 +715,8 @@ function latestEvidenceAt(rows, { known = false, nowMs, allowanceChanges, source
   const times = evidenceTimes(parsed, { known });
   let start = parsed.length - 1;
   while (start > 0 && !replenishedWithin(parsed[start - 1], parsed[start])) start -= 1;
-  let at = times.at(-1);
+  // One time for each reading, and there is at least one reading.
+  let at = /** @type {number} */ (times.at(-1));
   for (let index = start; index < parsed.length; index += 1) {
     const row = parsed[index];
     if (Math.abs(row.resetsAt - current.resetsAt) <= RESET_TOLERANCE_MS
@@ -541,27 +758,32 @@ const STALE_RESTATEMENT_MARGIN = 0.5;
 const FRESH_READ_GRACE_MS = 2 * HOUR_MS;
 // The least an undated lower reading waits for the provider's next read: two
 // refreshes, and never less than two hours.
+/** @param {{ refreshIntervalMinutes?: number }} settings */
 function freshReadGraceFor(settings) {
   const minutes = Number(settings.refreshIntervalMinutes);
   return Math.max(FRESH_READ_GRACE_MS, minutes > 0 ? 2 * minutes * 60_000 : 0);
 }
 /**
- * @param {any[]} rows
- * @param {{ nowMs?: number, freshReadGraceMs?: number, allowanceChanges?: any[], sourceId?: string }} [options]
+ * @template {ReadingLike} [T=any] Rows of no declared type come back the same way.
+ * @param {T[]} rows
+ * @param {{ nowMs?: number, freshReadGraceMs?: number, allowanceChanges?: AllowanceChange[] | null, sourceId?: string }} [options]
+ * @returns {T[]} The readings kept, as they were given.
  */
 function withoutStaleRestatements(rows, { nowMs = Date.now(), freshReadGraceMs = FRESH_READ_GRACE_MS, allowanceChanges, sourceId } = {}) {
   const parsed = rescaleObservations(rows.map(normaliseObservation), { allowanceChanges, now: nowMs, sourceId });
+  /** @type {(Reading | null)[]} The next provider read after each reading, if any. */
   const nextFresh = Array.from({ length: parsed.length }, () => null);
   for (let index = parsed.length - 1, next = null; index >= 0; index -= 1) {
     nextFresh[index] = next;
     if (!restatesSessionLimits(parsed[index])) next = parsed[index];
   }
   // The newest evidence so far, and the span its fetch is known to lie in.
-  /** @type {{ reading: any, from: number, to: number } | null} */
+  /** @type {{ reading: Reading, from: number, to: number } | null} */
   let newest = null;
   // Every redraw of one fetch carries its session's first redraw of it
   // (`seenSince`), which bounds the fetch from above. A dated reading without
   // one falls back to the first reading here that carries the same date.
+  /** @type {Map<number | null, number>} */
   const firstCarrier = new Map();
   return rows.filter((row, index) => {
     const reading = parsed[index];
@@ -570,12 +792,15 @@ function withoutStaleRestatements(rows, { nowMs = Date.now(), freshReadGraceMs =
       newest = { reading, from: reading.observedAt, to: reading.observedAt };
       return true;
     }
+    /** @param {Reading | null} other */
     const sameReset = (other) => other && Math.abs(other.resetsAt - reading.resetsAt) <= RESET_TOLERANCE_MS;
     // This reading's window had already ended when it was drawn, and newer
     // evidence shows the window after it.
+    /** @param {Reading} other */
     const endedBefore = (other) => reading.resetsAt < other.resetsAt && reading.resetsAt <= reading.observedAt;
     // Held back until the provider's next read confirms or contradicts it, or
     // until the newest evidence is past the window's freshness limit.
+    /** @param {(after: Reading) => unknown} confirms */
     const confirmedLater = (confirms) => {
       const after = nextFresh[index];
       if (after) return confirms(after);
@@ -585,8 +810,9 @@ function withoutStaleRestatements(rows, { nowMs = Date.now(), freshReadGraceMs =
     };
     if (Number.isFinite(reading.fetchedAfter)) {
       if (!firstCarrier.has(reading.fetchedAfter)) firstCarrier.set(reading.fetchedAfter, reading.observedAt);
-      const own = { reading, from: reading.fetchedAfter,
-        to: Number.isFinite(reading.seenSince) ? Math.min(reading.seenSince, reading.observedAt) : firstCarrier.get(reading.fetchedAfter) };
+      // The first carrier of this fetch was recorded on the line above at the latest.
+      const own = { reading, from: /** @type {number} */ (reading.fetchedAfter),
+        to: Number.isFinite(reading.seenSince) ? Math.min(/** @type {number} */ (reading.seenSince), reading.observedAt) : /** @type {number} */ (firstCarrier.get(reading.fetchedAfter)) };
       if (!newest || own.from > newest.to) {
         newest = own;
         return true;
@@ -622,7 +848,7 @@ function withoutStaleRestatements(rows, { nowMs = Date.now(), freshReadGraceMs =
     // Read below only where `newest` is set.
     const newestUsed = /** @type {number} */ (newest && usedPercentOf(newest.reading));
     const undated = () => ({ reading, from: -Infinity,
-      to: Number.isFinite(reading.seenSince) ? Math.min(reading.seenSince, reading.observedAt) : reading.observedAt });
+      to: Number.isFinite(reading.seenSince) ? Math.min(/** @type {number} */ (reading.seenSince), reading.observedAt) : reading.observedAt });
     if (newest && !sameReset(newest.reading)) {
       if (endedBefore(newest.reading)) return false;
       // Two undated readings cannot be ordered either, so the later redraw stands.
@@ -642,20 +868,33 @@ function withoutStaleRestatements(rows, { nowMs = Date.now(), freshReadGraceMs =
 // When a rise in a status-line figure was fetched, as late as needed to fall
 // after the interval it closes began: its fetch's lower bound, else its
 // session's first redraw of it, else the redraw itself. A read is its own time.
+/**
+ * @param {Reading} row
+ * @param {number} startMs
+ */
 function riseMomentOf(row, startMs) {
   if (!restatesSessionLimits(row)) return row.observedAt;
-  for (const at of [row.fetchedAfter, row.seenSince]) {
+  // A missing time is null, which the finite test below passes over.
+  for (const at of /** @type {number[]} */ ([row.fetchedAfter, row.seenSince])) {
     if (Number.isFinite(at) && at > startMs && at < row.observedAt) return at;
   }
   return row.observedAt;
 }
 
+/**
+ * @param {ReadingLike[]} observations
+ * @param {Schedule} schedule
+ * @param {number} nowMs
+ * @param {string[] | Excluded} [excludedDates] The ignored days, or a lookup already built from them.
+ * @returns {LearningSample[]}
+ */
 function deriveLearningSamples(observations, schedule, nowMs, excludedDates = []) {
   const excluded = typeof excludedDates === 'function' ? excludedDates : exclusionLookup(excludedDates);
   const rows = observations.map(normaliseObservation)
     .filter((row) => validQuotaTime(row.observedAt, row.resetsAt, row.windowMinutes, nowMs)
       && row.observedAt >= nowMs - FORECAST_LOOKBACK_MS && Number.isFinite(row.usedPercent))
     .sort((a, b) => a.observedAt - b.observedAt);
+  /** @type {LearningSample[]} */
   const samples = [];
   if (rows.length < 2) return samples;
 
@@ -663,6 +902,7 @@ function deriveLearningSamples(observations, schedule, nowMs, excludedDates = []
   // rise does: placed at a later redraw, it would squeeze the use that follows
   // into too few hours. Never before the interval already learned, nor back
   // across an ignored day.
+  /** @param {Reading} row */
   const fetchedAnchor = (row, notBefore = -Infinity) => {
     const at = fetchMomentOf(row);
     return at < row.observedAt && at > notBefore && !excluded(at, row.observedAt) ? { ...row, observedAt: at } : row;
@@ -725,10 +965,10 @@ function deriveLearningSamples(observations, schedule, nowMs, excludedDates = []
       latest = rise;
     } else if (!restatesSessionLimits(after)) {
       latest = after;
-    } else if (Number.isFinite(after.fetchedAfter) && after.fetchedAfter > latest.observedAt) {
+    } else if (Number.isFinite(after.fetchedAfter) && /** @type {number} */ (after.fetchedAfter) > latest.observedAt) {
       // A status-line fetch newer than the latest confirmation proves the
       // figure still held then, as a read would; an idle redraw proves nothing.
-      latest = { ...after, observedAt: Math.min(after.fetchedAfter, after.observedAt) };
+      latest = { ...after, observedAt: Math.min(/** @type {number} */ (after.fetchedAfter), after.observedAt) };
     }
   }
   // anchor and latest only ever diverge within one chained window, so the
@@ -743,9 +983,16 @@ function deriveLearningSamples(observations, schedule, nowMs, excludedDates = []
 // week, and each ask used to filter the whole sample set three times. The
 // per-phase partition is built once and every answer is remembered, with the
 // candidate order unchanged so the weighted means are bit-for-bit the same.
+/**
+ * @param {LearningSample[]} samples
+ * @returns {(date: Date, fallbackRate: number, phase: Phase) => number}
+ */
 function createRateLookup(samples) {
+  /** @type {Map<Phase, LearningSample[]>} */
   const partitions = new Map();
+  /** @type {Map<string, number>} */
   const answers = new Map();
+  /** @param {Phase} phase */
   const partition = (phase) => {
     let rows = partitions.get(phase);
     if (!rows) {
@@ -758,7 +1005,8 @@ function createRateLookup(samples) {
     const weekday = date.getDay();
     const hour = date.getHours();
     const key = `${phase}|${weekday}|${hour}|${fallbackRate}`;
-    if (answers.has(key)) return answers.get(key);
+    // Present: `has` has just said so.
+    if (answers.has(key)) return /** @type {number} */ (answers.get(key));
     const phaseSamples = partition(phase);
     const exact = phaseSamples.filter((sample) => sample.weekday === weekday && Math.abs(sample.hour - hour) <= 1);
     const sameHour = phaseSamples.filter((sample) => Math.abs(sample.hour - hour) <= 1);
@@ -769,7 +1017,11 @@ function createRateLookup(samples) {
   };
 }
 
-function contextualRate(samples, fallbackRate, recency = /** @type {(sample: any) => number} */ (() => 1)) {
+/**
+ * @param {LearningSample[]} samples
+ * @param {number} fallbackRate
+ */
+function contextualRate(samples, fallbackRate, recency = /** @type {(sample: LearningSample) => number} */ (() => 1)) {
   if (!samples.length) return fallbackRate;
   const entries = samples.map((sample) => ({ value: sample.rate,
     weight: sample.weight * sample.coveredHours * recency(sample), influence: sample.influence ?? 1 }));
@@ -782,6 +1034,12 @@ function contextualRate(samples, fallbackRate, recency = /** @type {(sample: any
   return weightedMean(entries) * influence + fallbackRate * (1 - influence);
 }
 
+/**
+ * @param {LearningSample[]} samples
+ * @param {number} nowMs
+ * @param {Phase} phase
+ * @param {number} fallbackRate
+ */
 function recentRate(samples, nowMs, phase, fallbackRate) {
   const recent = samples.filter((sample) => sample.phase === phase && sample.rateEligible !== false && nowMs - sample.observedAt <= 36 * HOUR_MS);
   if (!recent.length) return 0;
@@ -797,7 +1055,13 @@ function recentRate(samples, nowMs, phase, fallbackRate) {
 // origin. The origin is the latest reading, shared by the catch-up and future
 // segments, so a stale reading projects the same reset balance whenever it is
 // viewed instead of restarting the full-strength first day at every refresh.
+/**
+ * @param {number} fromMs
+ * @param {number} toMs
+ * @param {number} originMs
+ */
 function heavyOverageShare(fromMs, toMs, originMs) {
+  /** @param {number} ms */
   const pace = (ms) => {
     const days = (ms - originMs) / DAY_MS;
     return days <= 1 ? days : Math.sqrt(days);
@@ -806,6 +1070,15 @@ function heavyOverageShare(fromMs, toMs, originMs) {
   return span > 0 ? clamp((pace(toMs) - pace(fromMs)) / span, 0, 1) : 1;
 }
 
+/**
+ * @param {number} expectedStart
+ * @param {number} heavyStart
+ * @param {number} startMs
+ * @param {number} endMs
+ * @param {Schedule} schedule
+ * @param {LearningSample[]} samples
+ * @param {ForecastRates} rates
+ */
 function buildSeries(expectedStart, heavyStart, startMs, endMs, schedule, samples, rates, originMs = startMs) {
   // Reject unsupported work before allocation. Never turn a distant reset into
   // a shorter, apparently valid forecast (including an already empty allowance).
@@ -826,7 +1099,7 @@ function buildSeries(expectedStart, heavyStart, startMs, endMs, schedule, sample
     const phaseRates = phase === 'active' ? rates.active : rates.offSchedule;
     const hasPhaseEvidence = phase === 'active'
       || hasOffScheduleSamples
-      || (Number.isFinite(phaseRates.sustainable) && phaseRates.sustainable > 0);
+      || (Number.isFinite(phaseRates.sustainable) && /** @type {number} */ (phaseRates.sustainable) > 0);
     if (hasPhaseEvidence) {
       const duration = (next - cursor) / HOUR_MS;
       const learned = learnedRate(midpoint, phaseRates.fallback, phase);
@@ -835,7 +1108,7 @@ function buildSeries(expectedStart, heavyStart, startMs, endMs, schedule, sample
       // the projection tied to how much of the allowance is really being spent
       // per scheduled hour, so bursts are not extrapolated across every hour.
       const expectedRate = Number.isFinite(phaseRates.sustainable)
-        ? phaseRates.sustainable
+        ? /** @type {number} */ (phaseRates.sustainable)
         : phaseRates.anchor
           ? phaseRates.anchor.rate * phaseRates.anchor.weight + conditional * (1 - phaseRates.anchor.weight)
           : conditional;
@@ -877,19 +1150,35 @@ function unknownForecast({ expired = false, observed = [], staleHours = 0 } = {}
 // hour it happens. The displayed series is clamped at zero, which hides how far
 // past zero that hour ran; the unclamped `projected` value on the first zero
 // sample restores the slope. A series without it snaps to the end of the hour.
+/** @param {Point[]} series */
 function exhaustionTime(series) {
   for (let index = 1; index < series.length; index += 1) {
     const point = series[index];
     if (point.remaining > 0) continue;
     const previous = series[index - 1];
     if (previous.remaining <= 0) return new Date(previous.at).toISOString();
-    const overshoot = Number.isFinite(point.projected) ? Math.min(point.projected, point.remaining) : point.remaining;
+    const overshoot = Number.isFinite(point.projected) ? Math.min(/** @type {number} */ (point.projected), point.remaining) : point.remaining;
     const fraction = previous.remaining / Math.max(previous.remaining - overshoot, Number.EPSILON);
     return new Date(previous.at + (point.at - previous.at) * clamp(fraction, 0, 1)).toISOString();
   }
   return null;
 }
 
+/**
+ * @param {object} input
+ * @param {Reading[]} input.normalised
+ * @param {Reading} input.current
+ * @param {WindowCluster} input.currentCluster
+ * @param {WindowCluster[]} input.clusters
+ * @param {Schedule} input.schedule
+ * @param {number} input.nowMs
+ * @param {Excluded} input.excluded
+ * @param {Map<string, number> | null} input.dayWeights
+ * @param {number} input.usedNow
+ * @param {number} input.resetMs
+ * @param {number} input.fallbackRate
+ * @param {number} input.evidenceMs
+ */
 function learnForecast({ normalised, current, currentCluster, clusters, schedule, nowMs, excluded, dayWeights, usedNow, resetMs, fallbackRate, evidenceMs }) {
   const samples = deriveLearningSamples(normalised, schedule, nowMs, excluded).map((sample) => {
     if (!dayWeights?.size) return sample;
@@ -906,9 +1195,9 @@ function learnForecast({ normalised, current, currentCluster, clusters, schedule
   // of sustainable pace. Evidence ends when the current figure was fetched,
   // never at "now" or at an idle redraw that came after it.
   const inWindow = currentCluster.rows;
-  const windowMinutes = inWindow.findLast((row) => Number.isFinite(row.windowMinutes) && row.windowMinutes > 0)?.windowMinutes;
+  const windowMinutes = inWindow.findLast((row) => Number.isFinite(row.windowMinutes) && /** @type {number} */ (row.windowMinutes) > 0)?.windowMinutes;
   const anchorStartMs = Number.isFinite(currentCluster.observedResetAt)
-    ? currentCluster.observedResetAt
+    ? /** @type {number} */ (currentCluster.observedResetAt)
     : windowMinutes ? resetMs - windowMinutes * 60_000 : inWindow[0].observedAt;
   // Backward jitter on the latest reading (e.g. 5.0% → 4.9%) must degrade the
   // anchor to "pace ≈ 0", not discard the whole window's evidence as invalid.
@@ -928,7 +1217,8 @@ function learnForecast({ normalised, current, currentCluster, clusters, schedule
   for (let index = clusters.length - 1; index >= 0 && !priorEvidence; index -= 1) {
     const entry = clusters[index];
     if (entry === currentCluster || entry.rows.length < 2) continue;
-    if (entry.rows.at(-1).windowMinutes > 0 && entry.rows.at(-1).windowMinutes < 360) continue;
+    // A cluster is never empty. A window of unknown length fails the first test.
+    if (/** @type {{ windowMinutes: number }} */ (entry.rows.at(-1)).windowMinutes > 0 && /** @type {{ windowMinutes: number }} */ (entry.rows.at(-1)).windowMinutes < 360) continue;
     const pace = windowPaceOf(entry.rows, schedule, entry.observedResetAt, nowMs, excluded, dayWeights);
     if (pace && pace.evidenceActiveHours >= 6) priorEvidence = pace;
   }
@@ -944,6 +1234,10 @@ function learnForecast({ normalised, current, currentCluster, clusters, schedule
   const offAnchor = offWindowPace == null ? null : { rate: offWindowPace, weight: clamp(anchorOffHours / 30, 0, 0.9) };
   const activeSamples = modelSamples.filter((sample) => sample.phase === 'active');
   const offScheduleSamples = modelSamples.filter((sample) => sample.phase === 'off-schedule');
+  /**
+   * @param {LearningSample[]} rows
+   * @param {number} fallback
+   */
   const mean = (rows, fallback) => rows.length
     ? weightedMean(rows.map((sample) => ({ value: sample.rate, weight: sample.weight * sample.coveredHours })))
     : fallback;
@@ -955,7 +1249,9 @@ function learnForecast({ normalised, current, currentCluster, clusters, schedule
   const offScheduleRecentWeight = offScheduleSamples.length < 3 ? 0 : clamp(offScheduleSamples.filter((sample) => nowMs - sample.observedAt <= 36 * HOUR_MS).length / 10, 0.1, 0.38);
   // Heavy scenario: the busy end of learned *daily* usage, never of momentary
   // burst rates — a keyboard burst is not a pace anyone sustains for a week.
+  /** @type {Map<string, number>} */
   const activeDayUsage = new Map();
+  /** @type {Map<string, number>} */
   const offDayUsage = new Map();
   for (const sample of samples) {
     const target = sample.phase === 'active' ? activeDayUsage : offDayUsage;
@@ -974,6 +1270,7 @@ function learnForecast({ normalised, current, currentCluster, clusters, schedule
   // restates what a session fetched earlier while other sessions, the desktop
   // app or the web may have been spending.
   const partialDay = localDayKey(new Date(current.observedAt));
+  /** @type {Map<string, number>} */
   const quietOffHours = new Map();
   const covered = normalised.filter((row) => row.observedAt >= nowMs - FORECAST_LOOKBACK_MS && !excluded(row.observedAt, row.observedAt + 1));
   for (let index = 1; index < covered.length; index += 1) {
@@ -1023,11 +1320,13 @@ function learnForecast({ normalised, current, currentCluster, clusters, schedule
     ? percentile(activeDailyTotals, 0.82) / scheduleHoursPerDay
     : anchor ? anchor.rate * 1.6 : fallbackRate * 1.55;
   const heavyOffSchedule = offDailyRates.length >= 2
-    ? percentile(offDailyRates, 0.82)
+    // The filter above left only the finite rates.
+    ? percentile(/** @type {number[]} */ (offDailyRates), 0.82)
     : sustainableOffSchedulePace * 1.6;
   // The latest observed day is still partial. Poll count and reset count
   // cannot turn it into multiple independent days of heavy-use evidence.
   const latestObservedDay = localDayKey(new Date(current.observedAt));
+  /** @param {Map<string, number>} dailyUsage */
   const heavyWeight = (dailyUsage) => clamp(
     [...dailyUsage.keys()].filter((day) => day < latestObservedDay).length / HEAVY_HISTORY_DAYS,
     0, 1,
@@ -1054,8 +1353,8 @@ function learnForecast({ normalised, current, currentCluster, clusters, schedule
 /** @typedef {import('../src/types').ForecastState} ForecastState */
 
 /**
- * @param {any[]} observations
- * @param {Record<string, any>} [options]
+ * @param {ReadingLike[]} observations
+ * @param {ForecastOptions} [options]
  * @param {Map<string, number> | null} [dayWeights]
  * @returns {Forecast}
  */
@@ -1088,7 +1387,8 @@ function forecastQuotaWithLearning(observations, options = {}, dayWeights = null
   const clusters = clusterByWindow(normalised);
   // A hard reset may briefly retain the previous reset timestamp, so select
   // the latest matching cluster rather than the first historical match.
-  const currentCluster = clusters.at(-1);
+  // There is a current reading, and the last cluster holds it.
+  const currentCluster = /** @type {WindowCluster} */ (clusters.at(-1));
   const displayStart = nowMs - 48 * HOUR_MS;
   const firstVisible = currentCluster.rows.findIndex((row) => row.observedAt >= displayStart);
   const visibleRows = firstVisible < 0 ? currentCluster.rows.slice(-1) : currentCluster.rows.slice(Math.max(0, firstVisible - 1));
@@ -1100,10 +1400,11 @@ function forecastQuotaWithLearning(observations, options = {}, dayWeights = null
   // as fresh as it is known to be: an undated redraw may carry a fetch from
   // anywhere in its window.
   const measured = options.evidence?.observedAt === current.observedAt;
+  // Where it is measured afresh, there is a current reading, so it has a time.
   const evidenceMs = measured && Number.isFinite(options.evidence.at)
-    ? Math.min(options.evidence.at, current.observedAt) : latestEvidenceAt(normalised);
+    ? Math.min(/** @type {number} */ (options.evidence.at), current.observedAt) : /** @type {number} */ (latestEvidenceAt(normalised));
   const knownMs = measured && Number.isFinite(options.evidence.known)
-    ? Math.min(options.evidence.known, current.observedAt) : latestEvidenceAt(normalised, { known: true });
+    ? Math.min(/** @type {number} */ (options.evidence.known), current.observedAt) : latestEvidenceAt(normalised, { known: true });
   // There is a current reading here, so its evidence has a time.
   const staleHours = Math.max(0, (nowMs - /** @type {number} */ (knownMs)) / HOUR_MS);
   if (!Number.isFinite(resetMs) || resetMs <= nowMs) return unknownForecast({ expired: true, observed, staleHours });
@@ -1151,7 +1452,8 @@ function forecastQuotaWithLearning(observations, options = {}, dayWeights = null
   // sample. A clean interval may close at midnight on an ignored day; only
   // that endpoint needs the preceding allocation day instead of its label.
   const learnedDays = new Set(modelSamples.map((sample) => excluded(sample.observedAt, sample.observedAt + 1)
-    ? sample.dailyDeltas.at(-1).day
+    // Every sample covers part of at least one day.
+    ? /** @type {{ day: string }} */ (sample.dailyDeltas.at(-1)).day
     : localDayKey(new Date(sample.observedAt)))).size;
   const coveredHours = modelSamples.reduce((total, sample) => total + sample.coveredHours, 0);
   const changedSamples = new Set(modelSamples.filter((sample) => sample.changed).map((sample) => sample.observedAt)).size;
@@ -1176,6 +1478,11 @@ function forecastQuotaWithLearning(observations, options = {}, dayWeights = null
   };
 }
 
+/**
+ * @param {Reading[]} observations
+ * @param {ForecastOptions} options
+ * @param {number} nowMs
+ */
 function earlyResetAdjustment(observations, options, nowMs) {
   const rows = observations.map(normaliseObservation)
     .filter((row) => validQuotaTime(row.observedAt, row.resetsAt, row.windowMinutes, nowMs)
@@ -1185,14 +1492,16 @@ function earlyResetAdjustment(observations, options, nowMs) {
   // Callers normally supply one bucket. A mixed history cannot establish that
   // an apparent drop represents replenishment of the same allowance.
   const first = rows[0];
-  if (!first.sourceId || !first.bucketId || !(first.windowMinutes > 0)
+  if (!first.sourceId || !first.bucketId || !(/** @type {number} */ (first.windowMinutes) > 0)
     || rows.some((row) => row.sourceId !== first.sourceId || row.bucketId !== first.bucketId || row.windowMinutes !== first.windowMinutes)) return null;
+  /** @type {Map<string, number>} The day before each early reset, and when that reset was seen. */
   const candidates = new Map();
   const excluded = exclusionLookup(options.excludedDates);
   for (let index = 1; index < rows.length; index += 1) {
     const before = rows[index - 1], after = rows[index];
     if (!before.resetEvidence || !after.resetEvidence) continue;
-    const windowMs = before.windowMinutes * 60_000;
+    // Every row shares the first row's window length, shown above to be a positive number.
+    const windowMs = /** @type {number} */ (before.windowMinutes) * 60_000;
     const gap = after.observedAt - before.observedAt;
     const earlyMargin = Math.max(HOUR_MS / 2, Math.min(6 * HOUR_MS, windowMs / 10));
     if (!(gap > 0) || gap > Math.min(6 * HOUR_MS, windowMs / 4)
@@ -1212,7 +1521,8 @@ function earlyResetAdjustment(observations, options, nowMs) {
   if (!candidates.size) return null;
   const schedule = { activeDays: options.schedule?.activeDays ?? [1, 2, 3, 4, 5, 6, 0],
     startHour: options.schedule?.startHour ?? 8, endHour: options.schedule?.endHour ?? 22 };
-  const days = new Map(), uncertainDays = new Set();
+  const /** @type {Map<string, { used: number, hours: number }>} */ days = new Map(), /** @type {Set<string>} */ uncertainDays = new Set();
+  /** @type {LearningSample[]} */
   const boundedSamples = [];
   let peak = rows[0].usedPercent;
   for (let index = 1; index < rows.length; index += 1) {
@@ -1255,6 +1565,10 @@ function earlyResetAdjustment(observations, options, nowMs) {
       days.set(entry.day, day);
     }
   }
+  /**
+   * @param {string} day
+   * @param {{ used: number, hours: number }} value
+   */
   const covered = (day, value) => {
     const [year, month, date] = day.split('-').map(Number);
     const dayHours = (new Date(year, month - 1, date + 1).getTime() - new Date(year, month - 1, date).getTime()) / HOUR_MS;
@@ -1281,6 +1595,10 @@ function earlyResetAdjustment(observations, options, nowMs) {
 // waypoint at least every COVERAGE_GAP_MS between them. Without the waypoints a
 // quiet day polled throughout became one pair a day apart, which the quiet-day
 // coverage below discards as a gap, so its unused off-schedule hours were lost.
+/**
+ * @param {Reading[]} rows
+ * @param {number} nowMs
+ */
 function collapseReadings(rows, nowMs) {
   const result = [];
   /** @type {any} The row before this one, in time order. */
@@ -1290,8 +1608,9 @@ function collapseReadings(rows, nowMs) {
     // Redraws of one fetch collapse; a different fetch of the same figure is
     // kept, since a newer one confirms the figure later than the others.
     const same = previous && day === previousDay && (row.observedAt <= nowMs) === (previous.observedAt <= nowMs)
-      && ['sourceId', 'bucketId', 'usedPercent', 'remainingPercent', 'resetsAt', 'windowMinutes', 'provenance', 'resetEvidence',
-        'allowanceScaled', 'fetchedAfter', 'seenSince']
+      // Each names a field of a reading.
+      && /** @type {(keyof Reading)[]} */ (['sourceId', 'bucketId', 'usedPercent', 'remainingPercent', 'resetsAt', 'windowMinutes', 'provenance', 'resetEvidence',
+        'allowanceScaled', 'fetchedAfter', 'seenSince'])
         .every((field) => Object.is(row[field], previous[field]));
     run = same ? run + 1 : 1;
     if (run > 2 && row.observedAt - result[result.length - 2].observedAt <= COVERAGE_GAP_MS) {
@@ -1306,8 +1625,8 @@ function collapseReadings(rows, nowMs) {
 }
 
 /**
- * @param {any[]} observations
- * @param {Record<string, any>} [options]
+ * @param {ReadingLike[]} observations
+ * @param {ForecastOptions} [options]
  * @returns {Forecast}
  */
 function forecastQuota(observations, options = {}) {
@@ -1345,7 +1664,8 @@ function forecastQuota(observations, options = {}) {
   const heavyRemaining = heavy.at(-1)?.remaining ?? ordinary.heavyRemaining;
   const paceRiskThreshold = Number(options.paceRiskThreshold ?? 1.2);
   const watchRemainingThreshold = Math.max(100 - Number(options.hardLimitThreshold ?? 90), /** @type {number} */ (adjusted.reservePercent));
-  const state = forecastState(adjusted.expectedRemaining, heavyRemaining, adjusted.paceRatio, paceRiskThreshold, watchRemainingThreshold);
+  // The second pass differs from the first only in its day weights, so it has a projection wherever the first did.
+  const state = forecastState(/** @type {number} */ (adjusted.expectedRemaining), /** @type {number} */ (heavyRemaining), adjusted.paceRatio, paceRiskThreshold, watchRemainingThreshold);
   return { ...adjusted, state, heavyRemaining, heavyExhaustsAt: exhaustionTime(heavy),
     series: { ...adjusted.series, heavy }, resetAdjustment: adjustment };
 }

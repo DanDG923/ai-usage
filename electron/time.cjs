@@ -4,6 +4,7 @@
 // reports epoch seconds or milliseconds; the Claude status line reports either
 // of those or an ISO string. Anything outside 2020–2100 is a parse accident,
 // not a reset time, and must not become an observation.
+/** @param {unknown} value */
 function epochToIso(value) {
   if (value == null || value === '') return null;
   const numeric = Number(value);
@@ -20,6 +21,7 @@ function epochToIso(value) {
 // epochToIso, a numeric string is not a timestamp here: the Claude usage
 // payload reports ISO text, and honouring "1700000000" in it would paper
 // over a malformed field rather than reject it.
+/** @param {unknown} value */
 function asIso(value) {
   if (typeof value !== 'string' || !value.trim()) return null;
   const timestamp = Date.parse(value);
@@ -28,6 +30,7 @@ function asIso(value) {
   return year >= 2020 && year <= 2100 ? new Date(timestamp).toISOString() : null;
 }
 
+/** @param {Date | number | string} value */
 function localDayKey(value) {
   const date = value instanceof Date ? value : new Date(value);
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
@@ -35,6 +38,10 @@ function localDayKey(value) {
 
 // Inclusive local calendar days, today included. Zero gives tomorrow's
 // midnight for caches whose period changes at the next local day boundary.
+/**
+ * @param {number} days
+ * @param {number} nowMs
+ */
 function periodStart(days, nowMs) {
   const start = new Date(nowMs);
   start.setHours(0, 0, 0, 0);

@@ -4,6 +4,17 @@
 // writes of the settings table.
 
 /** @typedef {import('../../src/types').Settings} Settings */
+/**
+ * The check for one setting. Its argument arrives unchecked from the
+ * renderer, an export or a stored row, and the validator is what checks it.
+ * @typedef {(value: any) => boolean} SettingValidator
+ */
+/**
+ * Settings being filled in from stored rows: also indexed by the key column,
+ * which holds whatever name a row carries.
+ * @typedef {Settings & Record<string, unknown>} KeyedSettings
+ */
+/** @typedef {{ key: string, value_json: string }} SettingRow A row of the settings table. */
 
 const { isAllowanceChange, isAllowanceChangeList, normalizeAllowanceChanges } = require('../allowance-changes.cjs');
 const { iso, json } = require('./shared.cjs');
@@ -49,24 +60,33 @@ const DEFAULT_SETTINGS = {
 
 // Settings renamed between releases. Old exports and databases carry the old
 // key; both read paths map it forward instead of counting it as unusable.
+/** @type {Record<string, string>} */
 const SETTING_ALIASES = { notifyInApp: 'notifyDesktop' };
 
+/** @param {unknown} value */
 function isIsoOrNull(value) {
   return value === null || (typeof value === 'string' && Number.isFinite(Date.parse(value)));
 }
 
+/** @param {unknown} value */
 function isForecastDate(value) {
   return typeof value === 'string' && /^(?:20\d{2}|2100)-\d{2}-\d{2}$/.test(value)
     && value >= '2020-01-01' && Number.isFinite(Date.parse(value))
     && new Date(value).toISOString().slice(0, 10) === value;
 }
 
+// `value` has passed the validator for `key`, so it has that setting's shape.
+/**
+ * @param {string} key
+ * @param {any} value
+ */
 function normalizedSetting(key, value) {
   if (key === 'forecastExcludedDates') return [...new Set(value)].sort();
   if (key === 'allowanceChanges') return normalizeAllowanceChanges(value);
   return value;
 }
 
+/** @type {Record<keyof Settings, SettingValidator>} */
 const SETTING_VALIDATORS = {
   showCodexSubscription: (value) => typeof value === 'boolean',
   showClaudeSubscription: (value) => typeof value === 'boolean',
@@ -110,15 +130,25 @@ const SETTING_VALIDATORS = {
 
 // Inherited names such as `constructor` are not settings. Only an own entry
 // of the validator table may vouch for a key from IPC, an export, or a row.
+/**
+ * @param {unknown} key
+ * @returns {SettingValidator | null}
+ */
 function settingValidator(key) {
-  return typeof key === 'string' && Object.hasOwn(SETTING_VALIDATORS, key) ? SETTING_VALIDATORS[key] : null;
+  // The own-entry check on the same line is what makes the name a setting.
+  return typeof key === 'string' && Object.hasOwn(SETTING_VALIDATORS, key) ? SETTING_VALIDATORS[/** @type {keyof Settings} */ (key)] : null;
 }
 
 // The settings a backup carries, whether exported or restored from its
 // SQLite copy: the known keys only, as the export has always written them.
+/**
+ * @param {import('node:sqlite').DatabaseSync} database
+ * @returns {Settings}
+ */
 function backupSettings(database) {
+  /** @type {KeyedSettings} */
   const settings = { ...DEFAULT_SETTINGS };
-  for (const row of database.prepare('SELECT key, value_json FROM settings').iterate()) {
+  for (const row of /** @type {IterableIterator<SettingRow>} */ (database.prepare('SELECT key, value_json FROM settings').iterate())) {
     if (Object.hasOwn(DEFAULT_SETTINGS, row.key)) settings[row.key] = json(row.value_json, settings[row.key]);
   }
   return settings;
@@ -129,9 +159,11 @@ function backupSettings(database) {
 // settings the backed-up version never had. A renamed key maps forward, and
 // the current name wins when a database holds both.
 const UNREADABLE = Symbol('unreadable');
+/** @param {import('node:sqlite').DatabaseSync} database */
 function storedSettings(database) {
+  /** @type {Record<string, unknown>} */
   const settings = {};
-  for (const row of database.prepare('SELECT key, value_json FROM settings').iterate()) {
+  for (const row of /** @type {IterableIterator<SettingRow>} */ (database.prepare('SELECT key, value_json FROM settings').iterate())) {
     const renamed = Object.hasOwn(SETTING_ALIASES, row.key);
     const key = renamed ? SETTING_ALIASES[row.key] : row.key;
     if (!Object.hasOwn(DEFAULT_SETTINGS, key) || (renamed && Object.hasOwn(settings, key))) continue;
@@ -144,8 +176,9 @@ function storedSettings(database) {
 /** @param {import('../store.cjs').Store} store */
 function repairSettings(store) {
   const update = store.prepare('UPDATE settings SET value_json = ?, updated_at = ? WHERE key = ?');
+  /** @type {KeyedSettings} */
   const repaired = { ...DEFAULT_SETTINGS };
-  for (const row of store.prepare('SELECT key, value_json FROM settings').all()) {
+  for (const row of /** @type {SettingRow[]} */ (store.prepare('SELECT key, value_json FROM settings').all())) {
     const validate = settingValidator(row.key);
     if (!validate) continue;
     const stored = json(row.value_json, undefined);
@@ -157,7 +190,8 @@ function repairSettings(store) {
         update.run(JSON.stringify(repaired[row.key]), iso(), row.key);
       }
     }
-    else update.run(JSON.stringify(DEFAULT_SETTINGS[row.key]), iso(), row.key);
+    // A key with a validator is a key of the settings, so it has a default.
+    else update.run(JSON.stringify(DEFAULT_SETTINGS[/** @type {keyof Settings} */ (row.key)]), iso(), row.key);
   }
   if (repaired.activeStartHour >= repaired.activeEndHour) {
     update.run(JSON.stringify(DEFAULT_SETTINGS.activeStartHour), iso(), 'activeStartHour');
@@ -179,8 +213,9 @@ function repairSettings(store) {
  * @returns {Settings}
  */
 function getSettings(store) {
+  /** @type {KeyedSettings} */
   const result = { ...DEFAULT_SETTINGS };
-  for (const row of store.prepare('SELECT key, value_json FROM settings').all()) {
+  for (const row of /** @type {SettingRow[]} */ (store.prepare('SELECT key, value_json FROM settings').all())) {
     if (!Object.hasOwn(DEFAULT_SETTINGS, row.key)) continue;
     result[row.key] = json(row.value_json, result[row.key]);
   }
@@ -189,6 +224,7 @@ function getSettings(store) {
 
 /**
  * @param {import('../store.cjs').Store} store
+ * @param {Partial<Settings>} patch
  * @returns {Settings}
  */
 function updateSettings(store, patch) {

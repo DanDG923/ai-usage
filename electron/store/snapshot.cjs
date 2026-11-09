@@ -4,6 +4,8 @@
 
 /** @typedef {import('../../src/types').ClaudeExtraUsage} ClaudeExtraUsage */
 /** @typedef {import('../../src/types').Snapshot} Snapshot */
+/** @typedef {import('../types').IsoTime} IsoTime */
+/** @typedef {import('../types').Ms} Ms */
 /** @typedef {Pick<import('../../src/types').Snapshot, 'generatedAt' | 'timezone' | 'settings' | 'sources' | 'quotas' | 'fableApplies' | 'dashboardVerdict' | 'resetCredits'>} TraySnapshot */
 
 const fs = require('node:fs');
@@ -14,11 +16,15 @@ const { iso, json } = require('./shared.cjs');
 
 /**
  * @param {import('../store.cjs').Store} store
+ * @param {Ms} [nowMs]
+ * @param {{ tokenCapacity?: boolean }} [options]
  * @returns {TraySnapshot}
  */
 function getTraySnapshot(store, nowMs = Date.now(), { tokenCapacity = false } = {}) {
   const settings = store.getSettings();
-  const sources = store.prepare('SELECT * FROM sources ORDER BY CASE id WHEN \'codex\' THEN 1 WHEN \'claude\' THEN 2 ELSE 3 END').all()
+  // The table holds only the seeded sources, so every id is one the renderer knows.
+  const sources = /** @type {(import('../types').SourceRow & { id: import('../types').SourceId })[]} */ (
+    store.prepare('SELECT * FROM sources ORDER BY CASE id WHEN \'codex\' THEN 1 WHEN \'claude\' THEN 2 ELSE 3 END').all())
     .map((row) => ({ ...row, metadata: json(row.metadata_json, {}) }));
   const claude = store.getQuota('claude', settings, nowMs, { tokenCapacity });
   const quotas = {
@@ -54,23 +60,27 @@ function getTraySnapshot(store, nowMs = Date.now(), { tokenCapacity = false } = 
 // the headline window's metadata alone can miss the last Refresh.
 /**
  * @param {import('../store.cjs').Store} store
+ * @param {Ms} [nowMs]
  * @returns {ClaudeExtraUsage | null}
  */
 function getClaudeExtraUsage(store, nowMs = Date.now()) {
-  const row = store.prepare(`
+  const row = /** @type {{ metadata_json: string, observed_at: IsoTime } | undefined} */ (store.prepare(`
       SELECT metadata_json, observed_at FROM quota_observations
       WHERE source_id IN ('claude', 'claude-fable') AND provenance = 'official-claude-usage'
         AND observed_at >= ? AND observed_at <= ? AND metadata_json LIKE '%"extraUsage"%'
       ORDER BY observed_at DESC, id DESC LIMIT 1
-    `).get(iso(nowMs - FORECAST_LOOKBACK_MS), iso(nowMs + QUOTA_CLOCK_SKEW_MS));
+    `).get(iso(nowMs - FORECAST_LOOKBACK_MS), iso(nowMs + QUOTA_CLOCK_SKEW_MS)));
   const extra = json(row?.metadata_json, {})?.extraUsage;
   if (!extra || typeof extra !== 'object' || typeof extra.isEnabled !== 'boolean') return null;
   const utilization = Number.isFinite(extra.utilization) ? extra.utilization : null;
-  return { isEnabled: extra.isEnabled, utilization, observedAt: row.observed_at };
+  // Without a row there is no `extra`, and the function has returned above.
+  return { isEnabled: extra.isEnabled, utilization, observedAt: /** @type {NonNullable<typeof row>} */ (row).observed_at };
 }
 
 /**
  * @param {import('../store.cjs').Store} store
+ * @param {number} [days]
+ * @param {Ms} [nowMs]
  * @returns {Snapshot}
  */
 function getDashboardSnapshot(store, days = 30, nowMs = Date.now()) {

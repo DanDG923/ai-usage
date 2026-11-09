@@ -4,18 +4,31 @@
 // its tokens are worth today.
 
 /** @typedef {import('../../src/types').CycleRow} CycleRow */
+/** @typedef {import('../../src/types').Settings} Settings */
+/** @typedef {import('../types').IsoTime} IsoTime */
+/** @typedef {import('../types').Ms} Ms */
+/**
+ * The readings that share one reset time, summed up.
+ * @typedef {{ resets_at: IsoTime, window_minutes: number | null, peak_used: number, first_observed_at: IsoTime, last_observed_at: IsoTime, readings: number }} CycleReadings
+ */
+/** @typedef {Required<import('./pricing.cjs').PricedUsage>} TierUsage One model's tokens in a window, summed within a long-context tier. */
 
 const { MAX_QUOTA_RESET_AHEAD_MS, QUOTA_CLOCK_SKEW_MS } = require('../quota-time.cjs');
 const { CONTEXT_TIER_SQL } = require('./pricing.cjs');
 const { iso, round } = require('./shared.cjs');
 
-/** @param {import('../store.cjs').Store} store */
+/**
+ * @param {import('../store.cjs').Store} store
+ * @param {string} sourceId
+ * @param {string} bucketId
+ * @returns {number}
+ */
 function cycleRevision(store, sourceId, bucketId) {
   const eventSource = sourceId === 'codex' ? 'codex' : 'claude';
-  return store.prepare(`SELECT COALESCE(SUM(revision), 0) AS revision FROM analytics_revisions
+  return /** @type {{ revision: number }} */ (store.prepare(`SELECT COALESCE(SUM(revision), 0) AS revision FROM analytics_revisions
       WHERE domain = 'price' OR (domain = 'usage' AND source_id = ?)
         OR (domain = 'quota' AND source_id = ? AND bucket_id = ?)`)
-    .get(eventSource, sourceId, bucketId).revision;
+    .get(eventSource, sourceId, bucketId)).revision;
 }
 
 // One row per past allowance window of a source's primary bucket: when it
@@ -23,6 +36,11 @@ function cycleRevision(store, sourceId, bucketId) {
 // have cost at the current catalogue. Windows are keyed by their reset time.
 /**
  * @param {import('../store.cjs').Store} store
+ * @param {string} sourceId
+ * @param {Pick<import('../../src/types').Quota, 'bucketId'> | null | undefined} quota The source's headline window; only its bucket is read.
+ * @param {Settings} [settings]
+ * @param {number} [limit]
+ * @param {Ms} [nowMs]
  * @returns {CycleRow[]}
  */
 function getCycleHistory(store, sourceId, quota, settings = store.getSettings(), limit = 8, nowMs = Date.now()) {
@@ -42,14 +60,14 @@ function getCycleHistory(store, sourceId, quota, settings = store.getSettings(),
   // Current cycles end at now (exclusive). A future-dated imported event
   // enters its cycle one millisecond after its timestamp; a reset also
   // changes the current flag even when no database write occurs.
-  const nextEvent = store.prepare(`SELECT occurred_at FROM usage_events
+  const nextEvent = /** @type {{ occurred_at: IsoTime } | undefined} */ (store.prepare(`SELECT occurred_at FROM usage_events
       WHERE source_id = ? AND occurred_at >= ? ${modelFilter}
-      ORDER BY occurred_at ASC LIMIT 1`).get(eventSource, iso(nowMs));
+      ORDER BY occurred_at ASC LIMIT 1`).get(eventSource, iso(nowMs)));
   // A stored reading dated beyond the clock-skew allowance joins its cycle
   // once the clock comes within that allowance of it.
-  const nextReading = store.prepare(`SELECT observed_at FROM quota_observations
+  const nextReading = /** @type {{ observed_at: IsoTime } | undefined} */ (store.prepare(`SELECT observed_at FROM quota_observations
       WHERE source_id = ? AND bucket_id = ? AND observed_at > ?
-      ORDER BY observed_at ASC LIMIT 1`).get(sourceId, quota.bucketId, iso(nowMs + QUOTA_CLOCK_SKEW_MS));
+      ORDER BY observed_at ASC LIMIT 1`).get(sourceId, quota.bucketId, iso(nowMs + QUOTA_CLOCK_SKEW_MS)));
   const expiresAt = Math.min(nextEvent ? Date.parse(nextEvent.occurred_at) + 1 : Infinity,
     nextReading ? Date.parse(nextReading.observed_at) - QUOTA_CLOCK_SKEW_MS : Infinity,
     ...value.filter((row) => row.current).map((row) => Date.parse(row.resetsAt)));
@@ -61,12 +79,17 @@ function getCycleHistory(store, sourceId, quota, settings = store.getSettings(),
 
 /**
  * @param {import('../store.cjs').Store} store
+ * @param {string} sourceId
+ * @param {Pick<import('../../src/types').Quota, 'bucketId'> | null | undefined} quota
+ * @param {Settings} [settings]
+ * @param {number} [limit]
+ * @param {Ms} [nowMs]
  * @returns {CycleRow[]}
  */
 function buildCycleHistory(store, sourceId, quota, settings = store.getSettings(), limit = 8, nowMs = Date.now()) {
   if (!quota) return [];
   const bucketId = quota.bucketId;
-  const rows = store.prepare(`
+  const rows = /** @type {IterableIterator<CycleReadings>} */ (store.prepare(`
       SELECT resets_at, window_minutes, MAX(used_percent) AS peak_used,
         MIN(observed_at) AS first_observed_at, MAX(observed_at) AS last_observed_at,
         COUNT(*) AS readings
@@ -83,12 +106,13 @@ function buildCycleHistory(store, sourceId, quota, settings = store.getSettings(
       GROUP BY resets_at
       ORDER BY resets_at DESC
     `).iterate(sourceId, bucketId, iso(nowMs + QUOTA_CLOCK_SKEW_MS),
-    -QUOTA_CLOCK_SKEW_MS, MAX_QUOTA_RESET_AHEAD_MS, MAX_QUOTA_RESET_AHEAD_MS / 60_000);
+    -QUOTA_CLOCK_SKEW_MS, MAX_QUOTA_RESET_AHEAD_MS, MAX_QUOTA_RESET_AHEAD_MS / 60_000));
   // Before its first use, an idle allowance can roll its reset forward with
   // every poll. Fold those unused readings into the subsequently pinned
   // window as well as merging ordinary sub-minute timestamp jitter.
   // Apply the limit to merged windows, not timestamps: a busy current window
   // can have hundreds of jittered timestamps and must not hide older cycles.
+  /** @type {CycleReadings[]} */
   const merged = [];
   for (const row of rows) {
     const previous = merged.at(-1);
@@ -141,7 +165,7 @@ function buildCycleHistory(store, sourceId, quota, settings = store.getSettings(
   if (windows.length) {
     store.withPriceCache(() => {
       for (const window of windows) {
-        const events = store.prepare(`SELECT source_id, model,
+        const events = /** @type {IterableIterator<TierUsage>} */ (store.prepare(`SELECT source_id, model,
             ${CONTEXT_TIER_SQL} AS contextTier,
             SUM(input_tokens) AS input_tokens, SUM(cached_input_tokens) AS cached_input_tokens,
             SUM(cache_write_input_tokens) AS cache_write_input_tokens,
@@ -149,7 +173,7 @@ function buildCycleHistory(store, sourceId, quota, settings = store.getSettings(
             SUM(cache_write_1h_input_tokens) AS cache_write_1h_input_tokens,
             SUM(output_tokens) AS output_tokens
             FROM usage_events WHERE source_id = ? AND occurred_at >= ? AND occurred_at < ? ${modelFilter}
-            GROUP BY model, contextTier`).iterate(eventSource, window.startIso, window.endIso);
+            GROUP BY model, contextTier`).iterate(eventSource, window.startIso, window.endIso));
         for (const event of events) {
           window.usd += store.calculateCost(event).actualUsd;
           // Codex reports cached input as a subset of input; Claude reports it

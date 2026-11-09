@@ -36,6 +36,7 @@ function createTrayModule(main) {
     try { flyout.setBackgroundColor(FLYOUT_BACKGROUND[main.dashboard.resolvedTheme()]); } catch { /* Cosmetic only. */ }
   }
 
+  /** @param {import('../../src/types').ForecastState} state */
   function trayIconFor(state) {
     // The tray needs a raster image: Electron's nativeImage cannot rasterise
     // SVG data URLs on Windows, which leaves an invisible tray entry.
@@ -129,6 +130,7 @@ function createTrayModule(main) {
   // The same hardening as the dashboard: the session refuses every permission
   // and 'web-contents-created' denies navigation, pop-ups, redirects and web
   // views for this window too. Only its own preload and flyout:* channels exist.
+  /** @param {{ width: number, height: number }} size */
   function createFlyoutWindow({ width, height }) {
     const flyout = new BrowserWindow({
       width,
@@ -171,11 +173,13 @@ function createTrayModule(main) {
     return flyoutPayload(main.store.getTraySnapshot(Date.now()));
   }
 
+  /** @param {import('../../src/types').FlyoutSnapshot | null} current a tray snapshot, or one already reduced for the flyout */
   function pushFlyout(current) {
     if (!tray.flyout?.window() || !current) return;
     tray.flyout.send('flyout:updated', flyoutPayload(current));
   }
 
+  /** @param {import('../types').TraySnapshot} current a tray snapshot, or a full one, which has the same fields */
   function updateTray(current) {
     if (!tray.icon) return;
     tray.pushFlyout(current);
@@ -211,6 +215,10 @@ function createTrayModule(main) {
     tray.snoozeTimer.unref?.();
   }
 
+  /**
+   * @param {number} hours zero resumes alerts
+   * @param {{ push?: boolean }} [options] `push: false` leaves the dashboard to its caller
+   */
   function setSnooze(hours, { push = true } = {}) {
     return main.databaseJobs.run(() => {
       const until = hours > 0 ? new Date(Date.now() + hours * 60 * 60 * 1000).toISOString() : null;

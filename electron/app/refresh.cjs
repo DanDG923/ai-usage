@@ -14,6 +14,9 @@ const ELECTRON_DIR = path.join(__dirname, '..');
 
 const STALE_AFTER_MS = 5 * 60_000;
 
+/** @typedef {import('../types').TraySnapshot} TraySnapshot */
+/** @typedef {import('../collector-service.cjs').SettledOutcome} SettledOutcome */
+
 /** @param {import('./application.cjs').Application} main */
 function createRefreshModule(main) {
   const { utilityProcess } = main.electron;
@@ -94,6 +97,7 @@ function createRefreshModule(main) {
     });
   }
 
+  /** @param {SettledOutcome | undefined} entry */
   function collectorOutcome(entry) {
     if (!entry) return { error: 'The collector did not report.' };
     if (entry.status === 'fulfilled') return entry.value;
@@ -103,6 +107,10 @@ function createRefreshModule(main) {
   // Everything that has to happen after collectors write: publish the new
   // snapshot, then the things that can fail. A backup error used to skip the
   // publish, silently freezing an open window for the life of the process.
+  /**
+   * @param {TraySnapshot} current a tray snapshot, or a full one, which has the same fields
+   * @param {{ push?: boolean }} [options] `push: false` when the caller hands the snapshot to the dashboard itself
+   */
   function publishAfterWrite(current, { push = true } = {}) {
     if (push && main.dashboard.isVisible()) main.dashboard.window?.webContents.send('dashboard:updated', current);
     main.tray.updateTray(current);
@@ -114,6 +122,7 @@ function createRefreshModule(main) {
 
   // What the Claude Code mod asks for. "Sync now" is a local collection: the
   // session asking already holds the plan limits, so nothing reads plan usage.
+  /** @param {'sync' | 'open'} action */
   function answerClaudeCodeRequest(action) {
     if (main.lifecycle.isQuitting || !main.store || main.lifecycle.storageClosing()) return;
     if (action === 'sync') refresh.refreshAll(refreshOptionsFor(REFRESH_TRIGGERS.CLAUDE_CODE_SYNC)).catch(() => {});
@@ -131,8 +140,10 @@ function createRefreshModule(main) {
     return refresh.refreshRuns.request({ readPlanUsage: readPlanUsage === true });
   }
 
+  /** @param {{ readPlanUsage: boolean }} options */
   async function collectAll({ readPlanUsage }) {
     if (main.lifecycle.isQuitting) return { snapshot: undefined, backupError: null, collectors: {} };
+    /** @type {{ codex?: SettledOutcome, claude?: SettledOutcome }} */
     let outcomes;
     try {
       outcomes = await main.databaseJobs.collect(() => main.collectors.refreshAll({ readPlanUsage }));
@@ -208,7 +219,7 @@ function createRefreshModule(main) {
   // only when that says so (an explicit user refresh); the default never reads
   // it. The coalescer joins overlapping requests, except that a user refresh
   // arriving during an automatic run gets its own plan-usage run afterwards.
-  refresh.refreshRuns = createRefreshCoalescer((options) => refresh.collectAll(options));
+  refresh.refreshRuns = createRefreshCoalescer((/** @type {{ readPlanUsage: boolean }} */ options) => refresh.collectAll(options));
   return refresh;
 }
 

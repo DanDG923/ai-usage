@@ -1,5 +1,11 @@
 'use strict';
 
+/** @typedef {import('./types').DesktopEstimateRow} DesktopEstimateRow */
+/** @typedef {import('./types').Settings} Settings */
+/** @typedef {import('./types').Ms} Ms */
+/** @typedef {import('../src/types').DesktopEstimates} DesktopEstimates */
+/** @typedef {Record<string, any>} ExportMessage A message of a Claude export: parsed JSON, read field by field. */
+
 const fs = require('node:fs');
 const { createHash } = require('node:crypto');
 const { periodStart } = require('./time.cjs');
@@ -8,14 +14,17 @@ const MAX_BYTES = 64 * 1024 * 1024;
 const MAX_MESSAGES = 200_000;
 const MAX_MODELS = 128;
 const METHOD = 'visible-prompt-reply-chars-v1';
-const id = (value) => typeof value === 'string' && value.length > 0 && value.length <= 200 ? value : null;
-const modelName = (value) => typeof value === 'string' && /^claude-[a-z0-9.-]{1,100}$/i.test(value)
+const id = (/** @type {unknown} */ value) => typeof value === 'string' && value.length > 0 && value.length <= 200 ? value : null;
+const modelName = (/** @type {unknown} */ value) => typeof value === 'string' && /^claude-[a-z0-9.-]{1,100}$/i.test(value)
   ? value.toLowerCase() : null;
+/** @param {string} text */
 function characterCount(text) {
   let count = 0;
-  for (let index = 0; index < text.length; index += text.codePointAt(index) > 0xffff ? 2 : 1) count += 1;
+  // `index` is inside the text here, so there is a code point at it.
+  for (let index = 0; index < text.length; index += /** @type {number} */ (text.codePointAt(index)) > 0xffff ? 2 : 1) count += 1;
   return count;
 }
+/** @param {unknown} value */
 function timestamp(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T/.test(value)) return null;
   const ms = Date.parse(value);
@@ -24,6 +33,7 @@ function timestamp(value) {
 
 // Deliberately a transparent character heuristic, not a provider tokenizer.
 // Content blocks and the convenience `text` field often duplicate each other.
+/** @param {ExportMessage} message */
 function visibleText(message) {
   let characters = 0;
   let excluded = false;
@@ -43,28 +53,37 @@ function visibleText(message) {
   return { tokens: Math.ceil(characters / 4), excluded };
 }
 
+/** @param {unknown} payload The parsed conversations.json; anything else is refused. */
 function parseDesktopExport(payload) {
   if (!Array.isArray(payload) || !payload.length || payload.length > 50_000
     || !payload.some((conversation) => id(conversation?.uuid) && Array.isArray(conversation.chat_messages))) {
     throw new Error('Choose conversations.json from a Claude data export. Extract the ZIP first.');
   }
+  /** @type {Map<string, DesktopEstimateRow>} */
   const records = new Map();
   let skipped = 0;
   let scanned = 0;
+  /** @type {Set<string>} */
   const conversations = new Set();
+  /** @type {Set<string>} */
   const models = new Set();
   for (const conversation of payload) {
     if (!id(conversation?.uuid) || !Array.isArray(conversation.chat_messages)) { skipped += 1; continue; }
+    /** @type {ExportMessage[]} */
     const messages = conversation.chat_messages;
     scanned += messages.length;
     if (scanned > MAX_MESSAGES) throw new Error('This export has more than 200,000 messages. Import a smaller export.');
     const byId = new Map(messages.filter((message) => id(message?.uuid)).map((message) => [message.uuid, message]));
     const textCache = new Map();
+    /**
+     * @param {ExportMessage} message
+     * @returns {ReturnType<typeof visibleText>}
+     */
     const text = (message) => {
       if (!textCache.has(message)) textCache.set(message, visibleText(message));
       return textCache.get(message);
     };
-    /** @type {any} */
+    /** @type {ExportMessage | null} */
     let latestHuman = null;
     for (const message of messages) {
       if (message?.sender === 'human') { latestHuman = message; continue; }
@@ -72,6 +91,7 @@ function parseDesktopExport(payload) {
       const occurredAt = timestamp(message.created_at);
       if (!id(message.uuid) || !occurredAt) { skipped += 1; continue; }
       // A parent link takes precedence over array order in branched exports.
+      /** @type {ExportMessage | null | undefined} */
       let human = latestHuman;
       if (message.parent_message_uuid) {
         human = byId.get(message.parent_message_uuid);
@@ -103,6 +123,7 @@ function parseDesktopExport(payload) {
   } };
 }
 
+/** @param {string} filePath */
 function readDesktopExport(filePath) {
   const fd = fs.openSync(filePath, 'r');
   try {
@@ -124,6 +145,7 @@ function readDesktopExport(filePath) {
   } finally { fs.closeSync(fd); }
 }
 
+/** @param {import('node:sqlite').DatabaseSync} db */
 function migrateDesktopEstimates(db) {
   db.exec(`CREATE TABLE IF NOT EXISTS desktop_chat_estimates (
     event_key TEXT PRIMARY KEY, occurred_at TEXT NOT NULL, model TEXT,
@@ -134,11 +156,18 @@ function migrateDesktopEstimates(db) {
 
 /** @param {import('./store.cjs').Store} store */
 function storedDesktopModels(store) {
-  return new Set(store.prepare('SELECT DISTINCT model FROM desktop_chat_estimates WHERE model IS NOT NULL')
-    .all().map((row) => row.model.toLowerCase()));
+  return new Set(/** @type {{ model: string }[]} */ (store.prepare('SELECT DISTINCT model FROM desktop_chat_estimates WHERE model IS NOT NULL')
+    .all()).map((row) => row.model.toLowerCase()));
 }
 
-/** @param {import('./store.cjs').Store} store */
+// A row from a restored backup is unchecked, so every field is tested here
+// whatever its declared type.
+/**
+ * @param {import('./store.cjs').Store} store
+ * @param {DesktopEstimateRow} row
+ * @param {Set<string>} [models] The model labels already stored, lower-cased.
+ * @returns {number} 1 when the row was stored, 0 when it was already there.
+ */
 function insertDesktopEstimate(store, row, models = storedDesktopModels(store)) {
   if (!row || typeof row.event_key !== 'string' || !/^[a-f0-9]{64}$/.test(row.event_key) || !timestamp(row.occurred_at)
     || row.method !== METHOD || !['exported', 'assumed', 'unknown'].includes(row.model_origin)
@@ -161,7 +190,11 @@ function insertDesktopEstimate(store, row, models = storedDesktopModels(store)) 
   return changed;
 }
 
-/** @param {import('./store.cjs').Store} store */
+/**
+ * @param {import('./store.cjs').Store} store
+ * @param {DesktopEstimateRow[]} rows
+ * @param {string | null} [assumedModel]
+ */
 function saveDesktopEstimates(store, rows, assumedModel = /** @type {string | null} */ (null)) {
   if (assumedModel !== null && (!modelName(assumedModel) || !store.resolvePrice(assumedModel))) {
     throw new Error('Choose a priced Claude model or leave missing models unknown.');
@@ -175,28 +208,44 @@ function saveDesktopEstimates(store, rows, assumedModel = /** @type {string | nu
   return { imported, duplicates: rows.length - imported };
 }
 
-/** @param {import('./store.cjs').Store} store */
+/**
+ * @param {import('./store.cjs').Store} store
+ * @param {number} days
+ * @param {Settings} settings
+ * @param {Ms} nowMs
+ * @returns {DesktopEstimates}
+ */
 function desktopAnalytics(store, days, settings, nowMs) {
-  return store.withPriceCache(() => buildDesktopAnalytics(store, days, settings, nowMs));
+  // withPriceCache returns what its callback returns.
+  return /** @type {DesktopEstimates} */ (store.withPriceCache(() => buildDesktopAnalytics(store, days, settings, nowMs)));
 }
 
-/** @param {import('./store.cjs').Store} store */
+/**
+ * @param {import('./store.cjs').Store} store
+ * @param {number} days
+ * @param {Settings} settings
+ * @param {Ms} nowMs
+ * @returns {DesktopEstimates}
+ */
 function buildDesktopAnalytics(store, days, settings, nowMs) {
   const period = [new Date(periodStart(days, nowMs)).toISOString(), new Date(nowMs).toISOString()];
-  const rows = store.prepare(`SELECT model, model_origin AS modelOrigin, COUNT(*) AS replies,
+  // The query leaves out estimatedCost; the loop below gives every row one.
+  const rows = /** @type {DesktopEstimates['byModel']} */ (store.prepare(`SELECT model, model_origin AS modelOrigin, COUNT(*) AS replies,
     SUM(input_tokens) AS inputTokens, SUM(output_tokens) AS outputTokens,
     SUM(CASE WHEN excluded_content OR input_missing THEN 1 ELSE 0 END) AS incompleteReplies
     FROM desktop_chat_estimates WHERE occurred_at >= ? AND occurred_at <= ? GROUP BY model, model_origin
-    ORDER BY replies DESC, model, model_origin`).all(...period);
+    ORDER BY replies DESC, model, model_origin`).all(...period));
   // Each reply is priced by the rate card its own prompt selects, as recorded
   // requests are, so replies are summed within a long-context tier, never
   // across one. The visible prompt is all an estimate knows of a reply's
   // prompt; earlier turns could only raise its tier.
   const { contextTierSql } = require('./store.cjs');
+  // null once any tier of the model has no price.
+  /** @type {Map<string, number | null>} */
   const usdByModel = new Map();
-  for (const tier of store.prepare(`SELECT model, model_origin AS modelOrigin, ${contextTierSql('input_tokens')} AS contextTier,
+  for (const tier of /** @type {IterableIterator<{ model: string | null, modelOrigin: string, contextTier: number, input_tokens: number, output_tokens: number }>} */ (store.prepare(`SELECT model, model_origin AS modelOrigin, ${contextTierSql('input_tokens')} AS contextTier,
     SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens
-    FROM desktop_chat_estimates WHERE occurred_at >= ? AND occurred_at <= ? GROUP BY model, model_origin, contextTier`).iterate(...period)) {
+    FROM desktop_chat_estimates WHERE occurred_at >= ? AND occurred_at <= ? GROUP BY model, model_origin, contextTier`).iterate(...period))) {
     const cost = store.calculateCost({ ...tier, source_id: 'claude' });
     const key = `${tier.model}|${tier.modelOrigin}`;
     usdByModel.set(key, cost.covered ? (usdByModel.get(key) ?? 0) + cost.actualUsd : null);
@@ -212,7 +261,7 @@ function buildDesktopAnalytics(store, days, settings, nowMs) {
   }
   return { periodDays: days, currency: settings.currency, estimatedCost: estimatedUsd * conversion,
     unpricedReplies, replies: rows.reduce((sum, row) => sum + row.replies, 0), byModel: rows,
-    storedReplies: store.prepare('SELECT COUNT(*) AS count FROM desktop_chat_estimates').get().count };
+    storedReplies: /** @type {{ count: number }} */ (store.prepare('SELECT COUNT(*) AS count FROM desktop_chat_estimates').get()).count };
 }
 
 module.exports = { readDesktopExport, parseDesktopExport, migrateDesktopEstimates, insertDesktopEstimate,

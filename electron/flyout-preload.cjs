@@ -6,6 +6,11 @@
 // so the error clean-up below mirrors preload.cjs.
 const { contextBridge, ipcRenderer } = require('electron');
 
+/**
+ * @param {string} channel
+ * @param {...unknown} args
+ * @returns {Promise<any>} what the main process answered; each bridge method says what that is
+ */
 async function invoke(channel, ...args) {
   try { return await ipcRenderer.invoke(channel, ...args); } catch (error) {
     const message = String(error?.message || error).replace(/^Error invoking remote method ['"].+?['"]:\s*(?:Error:\s*)?/, '');
@@ -13,10 +18,12 @@ async function invoke(channel, ...args) {
   }
 }
 
-contextBridge.exposeInMainWorld('aiUsageFlyout', {
+// What the flyout sees as window.aiUsageFlyout. It has to provide the
+// FlyoutBridge the flyout is written against.
+contextBridge.exposeInMainWorld('aiUsageFlyout', /** @satisfies {import('../src/types').FlyoutBridge} */ ({
   getSnapshot: () => invoke('flyout:get-snapshot'),
   onUpdated: (callback) => {
-    const listener = (_event, snapshot) => callback(snapshot);
+    const listener = (/** @type {import('electron').IpcRendererEvent} */ _event, /** @type {import('../src/types').FlyoutSnapshot} */ snapshot) => callback(snapshot);
     ipcRenderer.on('flyout:updated', listener);
     return () => ipcRenderer.removeListener('flyout:updated', listener);
   },
@@ -24,4 +31,4 @@ contextBridge.exposeInMainWorld('aiUsageFlyout', {
   openDashboard: (target) => invoke('flyout:open-dashboard', target),
   snooze: (hours) => invoke('flyout:snooze', hours),
   close: () => invoke('flyout:close'),
-});
+}));

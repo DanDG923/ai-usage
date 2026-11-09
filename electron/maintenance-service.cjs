@@ -10,6 +10,11 @@ const { readDesktopExport, saveDesktopEstimates } = require('./desktop-estimates
 // indexer, OneDrive syncing Documents), so moving it into place is retried
 // for a few seconds before the error is reported.
 const BUSY_FILE_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
+/**
+ * @param {string} from
+ * @param {string} to
+ * @param {number} [attempts]
+ */
 async function replaceFile(from, to, attempts = 8) {
   for (let attempt = 1; ; attempt += 1) {
     try {
@@ -22,15 +27,47 @@ async function replaceFile(from, to, attempts = 8) {
   }
 }
 
+/** @typedef {import('./store.cjs').Store} Store */
+
+/**
+ * The protocol between the host and this worker. A request carries an id; its
+ * reply carries the same id and either a result or an error message.
+ *
+ * @typedef {{ id: number, type: string, payload?: Record<string, unknown> }} MaintenanceMessage
+ * @typedef {{ id: number, ok: boolean, result?: unknown, error?: { message?: string } }} MaintenanceReply
+ */
+
+/**
+ * A request as the service runs it: its type, with the payload's fields
+ * beside it. Each type names the fields it needs.
+ *
+ * @typedef {{ type: 'close' | 'ping' | 'clear-desktop-estimates' | 'scheduled-backup' }
+ *   | { type: 'preview-desktop-export', filePath: string }
+ *   | { type: 'cancel-desktop-export', previewId: string }
+ *   | { type: 'import-desktop-export', previewId: string, assumedModel?: string | null }
+ *   | { type: 'create-backup', exportJson?: boolean }
+ *   | { type: 'restore-backup', filePath: string }
+ *   | { type: 'export-csv', filePath: string, days: number }} MaintenanceJob
+ */
+
 // All large reads, JSON conversion, SQLite copying and file writes stay in
 // this worker. Only small results cross the port back to the window process.
+/**
+ * @param {object} options
+ * @param {string} options.databasePath
+ * @param {string} options.backupDirectory
+ * @param {(database: string, backups: string) => Store} [options.openStore]
+ */
 function createMaintenanceService({ databasePath, backupDirectory, openStore = (database, backups) => new UsageStore(database, backups) }) {
+  /** @type {Store | null | undefined} */
   let store;
   let closed = false;
+  /** @type {Promise<unknown>} */
   let queue = Promise.resolve();
-  /** @type {any} */
+  /** @type {{ id: string, rows: ReturnType<typeof readDesktopExport>['rows'], expiresAt: number } | null} */
   let desktopPreview = null;
 
+  /** @param {MaintenanceJob} request */
   async function run(request) {
     if (closed) throw new Error('Storage maintenance has closed.');
     if (request.type === 'close') {
@@ -102,10 +139,12 @@ function createMaintenanceService({ databasePath, backupDirectory, openStore = (
         return { filePath: request.filePath, rows: exported.rows, days: request.days };
       }
       default:
-        throw new Error(`Unknown storage request: ${String(request.type)}`);
+        // Reached only by a type the list above does not have.
+        throw new Error(`Unknown storage request: ${String(/** @type {{ type: unknown }} */ (request).type)}`);
     }
   }
 
+  /** @param {MaintenanceJob} request */
   function handle(request) {
     const next = queue.then(() => run(request));
     queue = next.catch(() => {});
@@ -118,9 +157,10 @@ function createMaintenanceService({ databasePath, backupDirectory, openStore = (
 if (parentPort) {
   const port = parentPort;
   const service = createMaintenanceService(workerData);
-  port.on('message', async ({ id, type, payload }) => {
+  port.on('message', async (/** @type {MaintenanceMessage} */ { id, type, payload }) => {
     try {
-      const result = await service.handle({ ...payload, type });
+      // The host in this app wrote the message; run() refuses a type it does not know.
+      const result = await service.handle(/** @type {MaintenanceJob} */ ({ ...payload, type }));
       // Worker ports do not have a browser target origin.
       // oxlint-disable-next-line unicorn/require-post-message-target-origin
       port.postMessage({ id, ok: true, result });

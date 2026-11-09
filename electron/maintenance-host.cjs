@@ -15,21 +15,50 @@ const PREVIEW_HOLD_MS = 30 * 60_000;
 // A released worker closes its store and exits; one that does not is ended.
 const RETIRE_TIMEOUT_MS = 10_000;
 
+/** @typedef {import('./maintenance-service.cjs').MaintenanceMessage} MaintenanceMessage */
+/** @typedef {import('./maintenance-service.cjs').MaintenanceReply} MaintenanceReply */
+
+/**
+ * A request waiting for its reply, and the worker it was sent to. Close
+ * carries no timer.
+ *
+ * @typedef {object} PendingRequest
+ * @property {(result: unknown) => void} resolve
+ * @property {(error: unknown) => void} reject
+ * @property {Worker} worker
+ * @property {NodeJS.Timeout | null} timer
+ * @property {string} type
+ */
+
+/**
+ * @param {object} options
+ * @param {string} options.databasePath
+ * @param {string} options.backupDirectory
+ * @param {number} [options.requestTimeoutMs]
+ * @param {number} [options.idleTimeoutMs]
+ * @param {() => number} [options.now]
+ * @param {(modulePath: string, options: import('node:worker_threads').WorkerOptions) => Worker} [options.createWorker]
+ */
 function createMaintenanceHost({
   databasePath, backupDirectory, requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
   idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS, now = Date.now,
   createWorker = (modulePath, options) => new Worker(modulePath, options),
 }) {
-  /** @type {any} */
+  /** @type {Worker | null} */
   let worker = null;
   let closing = false;
+  /** @type {Promise<{ closed: boolean }> | undefined} */
   let closePromise;
   let nextId = 1;
+  /** @type {NodeJS.Timeout | undefined} */
   let idleTimer;
   let previewHeldUntil = 0;
+  /** @type {Map<number, PendingRequest>} */
   const pending = new Map();
   // Released workers still closing their store, and when each has exited.
+  /** @type {Map<Worker, Promise<void>>} */
   const retiring = new Map();
+  /** @param {Worker} target */
   const busy = (target) => [...pending.values()].some((entry) => entry.worker === target);
 
   function scheduleIdle() {
@@ -67,11 +96,16 @@ function createMaintenanceHost({
     }
   }
 
+  /**
+   * @param {Worker} owner
+   * @param {unknown} error
+   */
   function failPending(owner, error) {
     for (const [id, entry] of pending) {
       if (entry.worker !== owner) continue;
       pending.delete(id);
-      clearTimeout(entry.timer);
+      // A close request carries null, which clearTimeout ignores.
+      clearTimeout(/** @type {NodeJS.Timeout} */ (entry.timer));
       entry.reject(error);
     }
   }
@@ -79,6 +113,10 @@ function createMaintenanceHost({
   // A request that never answers is a wedged worker: every later refresh
   // waits behind the exclusive queue for it. Drop the worker so the next
   // request starts a fresh one; SQLite rolls back whatever it was writing.
+  /**
+   * @param {Worker} target
+   * @param {Error} reason
+   */
   function abandon(target, reason) {
     if (worker === target) {
       worker = null;
@@ -93,11 +131,12 @@ function createMaintenanceHost({
     const spawned = createWorker(path.join(__dirname, 'maintenance-service.cjs'), {
       workerData: { databasePath, backupDirectory },
     });
-    spawned.on('message', (message) => {
+    spawned.on('message', (/** @type {MaintenanceReply} */ message) => {
       const entry = pending.get(message?.id);
       if (!entry || entry.worker !== spawned) return;
       pending.delete(message.id);
-      clearTimeout(entry.timer);
+      // A close request carries null, which clearTimeout ignores.
+      clearTimeout(/** @type {NodeJS.Timeout} */ (entry.timer));
       // A preview keeps its worker until it is imported, cancelled or expires.
       // A failed import leaves it in place for another try.
       if (entry.type === 'preview-desktop-export' && message.ok) previewHeldUntil = now() + PREVIEW_HOLD_MS;
@@ -124,6 +163,11 @@ function createMaintenanceHost({
     return spawned;
   }
 
+  /**
+   * @param {string} type
+   * @param {Record<string, unknown>} [payload]
+   * @returns {Promise<any>} the reply's result, whose shape depends on the type
+   */
   function request(type, payload = {}) {
     if (closing && type !== 'close') return Promise.reject(new Error('AI Usage is closing; storage maintenance is unavailable.'));
     clearTimeout(idleTimer);
@@ -177,6 +221,11 @@ function createDatabaseQueue() {
   const collections = new Set();
   let paused = false;
   const closingError = () => new Error('AI Usage is closing; changes cannot be saved.');
+  /**
+   * @template T
+   * @param {() => T | Promise<T>} operation
+   * @returns {Promise<T>}
+   */
   function enqueue(operation) {
     const next = queue.then(operation);
     queue = next.catch(() => {});

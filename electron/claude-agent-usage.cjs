@@ -7,6 +7,10 @@ const { setTimeout: delay } = require('node:timers/promises');
 const { createUsageDiagnostics } = require('./claude-usage-diagnostics.cjs');
 
 class ClaudeUsageAdapterError extends Error {
+  /**
+   * @param {string} code
+   * @param {string} message
+   */
   constructor(code, message) {
     super(message);
     this.name = 'ClaudeUsageAdapterError';
@@ -15,6 +19,45 @@ class ClaudeUsageAdapterError extends Error {
 }
 
 /** @typedef {ClaudeUsageAdapterError & { retryable?: boolean, collectionDiagnostics?: { attempts: object[] } }} UsageReadError */
+
+/**
+ * One plan window as the usage response reports it.
+ * @typedef {{ utilization: number | null, resets_at: string | null }} UsageWindow
+ */
+
+/**
+ * @typedef {object} ExtraUsage
+ * @property {boolean} is_enabled
+ * @property {number | null} monthly_limit
+ * @property {number | null} used_credits
+ * @property {number | null} utilization
+ * @property {string | null} [currency]
+ */
+
+/**
+ * The plan windows of a usage response, once checked.
+ * @typedef {object} RateLimits
+ * @property {UsageWindow | null} [five_hour]
+ * @property {UsageWindow | null} [seven_day]
+ * @property {UsageWindow | null} [seven_day_oauth_apps]
+ * @property {UsageWindow | null} [seven_day_opus]
+ * @property {UsageWindow | null} [seven_day_sonnet]
+ * @property {(UsageWindow & { display_name: string })[]} [model_scoped]
+ * @property {ExtraUsage | null} [extra_usage]
+ */
+
+/**
+ * What the usage port returns: the slice of the SDK's usage response this app
+ * reads, copied field by field.
+ * @typedef {object} UsageReading
+ * @property {string | null} subscription_type
+ * @property {boolean} rate_limits_available
+ * @property {RateLimits | null} rate_limits
+ */
+
+/** @typedef {{ signal?: AbortSignal, expectSubscription?: boolean }} UsageReadOptions */
+
+/** @typedef {import('@anthropic-ai/claude-agent-sdk').Query} Query */
 
 async function defaultLoadSdk() {
   return import('@anthropic-ai/claude-agent-sdk');
@@ -27,15 +70,22 @@ function defaultFindClaudeBinary() {
 function idleInput() {
   let release;
   const released = new Promise((resolve) => { release = resolve; });
-  return {
+  // A promise runs its callback before the constructor returns, so `release`
+  // is set by the time it is read here. The checker does not follow an
+  // assignment made inside a callback, hence the cast by way of `unknown`.
+  return /** @type {{ iterable: AsyncGenerator<never, void, unknown>, release: () => void }} */ (/** @type {unknown} */ ({
     // An async iterable that yields nothing and completes only when released:
     // the SDK gets a prompt stream, and the stream never carries a message.
     // oxlint-disable-next-line require-yield
     iterable: (async function* noMessages() { await released; }()),
     release,
-  };
+  }));
 }
 
+/**
+ * @param {unknown} value
+ * @returns {value is Record<string, any>}
+ */
 function isRecord(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
@@ -47,6 +97,10 @@ function schemaError() {
   );
 }
 
+/**
+ * @param {unknown} window
+ * @returns {UsageWindow | null | undefined}
+ */
 function copyWindow(window) {
   if (window == null) return window;
   if (!isRecord(window)) throw schemaError();
@@ -62,10 +116,14 @@ function copyWindow(window) {
   return { utilization, resets_at: resetsAt };
 }
 
+/**
+ * @param {unknown} extraUsage
+ * @returns {ExtraUsage | null | undefined}
+ */
 function copyExtraUsage(extraUsage) {
   if (extraUsage == null) return extraUsage;
   if (!isRecord(extraUsage) || typeof extraUsage.is_enabled !== 'boolean') throw schemaError();
-  const nonNegativeNumberOrNull = (value) => value === null
+  const nonNegativeNumberOrNull = (/** @type {unknown} */ value) => value === null
     || (typeof value === 'number' && Number.isFinite(value) && value >= 0);
   if (!nonNegativeNumberOrNull(extraUsage.monthly_limit)
     || !nonNegativeNumberOrNull(extraUsage.used_credits)) {
@@ -83,6 +141,7 @@ function copyExtraUsage(extraUsage) {
     && typeof extraUsage.currency !== 'string') {
     throw schemaError();
   }
+  /** @type {ExtraUsage} */
   const sanitized = {
     is_enabled: extraUsage.is_enabled,
     monthly_limit: extraUsage.monthly_limit,
@@ -93,32 +152,39 @@ function copyExtraUsage(extraUsage) {
   return sanitized;
 }
 
+/**
+ * @param {unknown} raw What the SDK returned; nothing in it is trusted until checked.
+ * @returns {UsageReading}
+ */
 function sanitizeUsage(raw) {
   if (!isRecord(raw)) throw schemaError();
   if (raw.subscription_type !== null && typeof raw.subscription_type !== 'string') throw schemaError();
   if (typeof raw.rate_limits_available !== 'boolean') throw schemaError();
   if (raw.rate_limits !== null && !isRecord(raw.rate_limits)) throw schemaError();
+  /** @type {RateLimits | null} */
   const rateLimits = raw.rate_limits == null ? null : {};
   if (rateLimits) {
-    for (const key of [
+    for (const key of /** @type {const} */ ([
       'five_hour',
       'seven_day',
       'seven_day_oauth_apps',
       'seven_day_opus',
       'seven_day_sonnet',
-    ]) {
+    ])) {
       if (raw.rate_limits[key] !== undefined) rateLimits[key] = copyWindow(raw.rate_limits[key]);
     }
     if (raw.rate_limits.model_scoped !== undefined) {
       if (!Array.isArray(raw.rate_limits.model_scoped)) throw schemaError();
-      rateLimits.model_scoped = raw.rate_limits.model_scoped.map((window) => ({
+      rateLimits.model_scoped = raw.rate_limits.model_scoped.map((/** @type {unknown} */ window) => ({
         ...(() => {
           if (!isRecord(window) || typeof window.display_name !== 'string' || !window.display_name.trim()) {
             throw schemaError();
           }
           return { display_name: window.display_name };
         })(),
-        ...copyWindow(window),
+        // The check above threw unless `window` is an object, and the copy of
+        // an object is never null.
+        .../** @type {UsageWindow} */ (copyWindow(window)),
       }));
     }
     if (raw.rate_limits.extra_usage !== undefined) {
@@ -132,12 +198,26 @@ function sanitizeUsage(raw) {
   };
 }
 
+/**
+ * @template T
+ * @param {Promise<T> | T} promise
+ * @param {number} timeoutMs
+ * @param {string} code
+ * @param {string} message
+ * @param {AbortController} abortController
+ * @returns {Promise<T>}
+ */
 function withinTimeout(promise, timeoutMs, code, message, abortController) {
   return new Promise((resolve, reject) => {
     let settled = false;
+    /** @type {NodeJS.Timeout | undefined} */
     let timer;
     const signal = abortController.signal;
     const removeAbortListener = () => signal.removeEventListener('abort', onAbort);
+    /**
+     * @param {(value: any) => void} action The promise's own resolve or reject.
+     * @param {unknown} value
+     */
     const finish = (action, value) => {
       if (settled) return;
       settled = true;
@@ -171,6 +251,13 @@ function withinTimeout(promise, timeoutMs, code, message, abortController) {
   });
 }
 
+/**
+ * @template T
+ * @param {Promise<T> | T} promise
+ * @param {number} timeoutMs
+ * @param {AbortController} abortController
+ * @returns {Promise<T>}
+ */
 async function usageWithinTimeout(promise, timeoutMs, abortController) {
   try {
     return await withinTimeout(
@@ -186,6 +273,13 @@ async function usageWithinTimeout(promise, timeoutMs, abortController) {
   }
 }
 
+/**
+ * @template T
+ * @param {Promise<T> | T} promise
+ * @param {number} timeoutMs
+ * @param {AbortController} abortController
+ * @returns {Promise<T>}
+ */
 async function initializationWithinTimeout(promise, timeoutMs, abortController) {
   try {
     return await withinTimeout(
@@ -201,10 +295,19 @@ async function initializationWithinTimeout(promise, timeoutMs, abortController) 
   }
 }
 
+/**
+ * @param {Query} query
+ * @param {number} timeoutMs
+ */
 function cleanupWithinTimeout(query, timeoutMs) {
   return new Promise((resolve, reject) => {
     let settled = false;
+    /** @type {NodeJS.Timeout | undefined} */
     let timer;
+    /**
+     * @param {(value: any) => void} action The promise's own resolve or reject.
+     * @param {unknown} value
+     */
     const finish = (action, value) => {
       if (settled) return;
       settled = true;
@@ -225,13 +328,21 @@ function cleanupWithinTimeout(query, timeoutMs) {
   });
 }
 
+/**
+ * @param {object} [options]
+ * @param {() => Promise<Pick<typeof import('@anthropic-ai/claude-agent-sdk'), 'query'>>} [options.loadSdk]
+ * @param {typeof defaultFindClaudeBinary} [options.findClaudeBinary]
+ * @param {number} [options.timeoutMs]
+ * @param {number} [options.retryDelayMs]
+ * @returns {{ read(options?: UsageReadOptions): Promise<UsageReading> }} The usage port: one read of the plan's rate limits.
+ */
 function createClaudeAgentSdkUsagePort({
   loadSdk = defaultLoadSdk,
   findClaudeBinary = defaultFindClaudeBinary,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   retryDelayMs = 1000,
 } = {}) {
-  /** @param {{ signal?: AbortSignal, expectSubscription?: boolean }} [options] */
+  /** @param {UsageReadOptions} [options] */
   async function readOnce({ signal, expectSubscription = false } = {}) {
     const diagnostics = createUsageDiagnostics();
     let result;
@@ -341,7 +452,8 @@ function createClaudeAgentSdkUsagePort({
     // control responses and stderr diagnostics travel over separate pipes.
     const fetch = diagnostics.finish();
     if (fetch.outcome === 'failed') {
-      const error = new ClaudeUsageAdapterError(fetch.code,
+      // A failed fetch always carries a code.
+      const error = new ClaudeUsageAdapterError(/** @type {string} */ (fetch.code),
         fetch.httpStatus === 429 ? 'Claude temporarily throttled the allowance check. The last fresh reading is retained.'
           : 'Claude could not fetch current allowance data. The last fresh reading is retained.');
       throw error;
@@ -366,7 +478,7 @@ function createClaudeAgentSdkUsagePort({
   return {
     // `expectSubscription`: the caller knows this account has a Claude
     // subscription, so a session reporting none is a failed read.
-    /** @param {{ signal?: AbortSignal, expectSubscription?: boolean }} [options] */
+    /** @param {UsageReadOptions} [options] */
     async read({ signal, expectSubscription = false } = {}) {
       const attempts = [];
       for (let attempt = 1; attempt <= 2; attempt += 1) {

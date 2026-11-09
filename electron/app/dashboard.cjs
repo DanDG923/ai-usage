@@ -58,6 +58,11 @@ function createDashboardModule(main) {
     return icon.isEmpty() ? null : icon;
   }
 
+  /**
+   * @param {string} title
+   * @param {string} message
+   * @param {unknown} error whatever was thrown
+   */
   function showFatalError(title, message, error) {
     const detail = error instanceof Error ? error.message : String(error || 'Unknown local error.');
     dialog.showErrorBox(title, `${message}\n\n${detail}`);
@@ -69,6 +74,7 @@ function createDashboardModule(main) {
     return nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
   }
 
+  /** @param {import('../../src/types').Theme} theme */
   function applyTheme(theme) {
     nativeTheme.themeSource = ['dark', 'light'].includes(theme) ? theme : 'system';
     dashboard.applyWindowChrome();
@@ -84,12 +90,16 @@ function createDashboardModule(main) {
     } catch { /* Only Windows exposes the overlay; other platforms ignore it. */ }
   }
 
+  /**
+   * @param {import('electron').BrowserWindow} targetWindow
+   * @param {ReturnType<typeof resolveWindowTarget>} target
+   */
   async function loadWindowContents(targetWindow, target) {
     return initializeWithVisibleFailure({
       initialize: () => (target.kind === 'url'
         ? targetWindow.loadURL(target.value)
         : targetWindow.loadFile(target.value)),
-      onFailure: async (error) => {
+      onFailure: async (/** @type {unknown} */ error) => {
         if (targetWindow.isDestroyed()) return undefined;
         const detail = error instanceof Error ? error.message : String(error || 'Unknown local error.');
         const choice = await dialog.showMessageBox(targetWindow, {
@@ -199,6 +209,7 @@ function createDashboardModule(main) {
   // Shows the dashboard on the requested page. The page waits in the main
   // process until the dashboard renderer collects it: a released dashboard is
   // recreated and loading, and only its preload can tell when it is listening.
+  /** @param {import('../../src/types').DashboardNavigation} target */
   function openDashboardAt(target) {
     dashboard.navigation.request(target);
     // Shown while the flyout still holds the foreground, so Windows lets the

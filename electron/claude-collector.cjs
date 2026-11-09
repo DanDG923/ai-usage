@@ -14,11 +14,91 @@ const { IncrementalReadError, planIncrementalRead, readCompleteLines } = require
 const { asIso, epochToIso } = require('./time.cjs');
 const { claudeWindowDescriptor } = require('./claude-window-descriptors.cjs');
 
+/** @typedef {import('./types').Store} Store */
+/** @typedef {import('./types').IsoTime} IsoTime */
+/** @typedef {import('./types').Ms} Ms */
+/** @typedef {import('./types').ObservationRow} ObservationRow */
+/** @typedef {import('./types').UsageEventRow} UsageEventRow */
+/** @typedef {import('./types').StatuslineSessionRow} StatuslineSessionRow */
+/** @typedef {import('./types').ImportedFileRow} ImportedFileRow */
+
+/**
+ * What an import of status-line readings did.
+ * @typedef {object} InboxResult
+ * @property {number} snapshots
+ * @property {number} usageEvents
+ * @property {number} observations
+ * @property {number} claudeObservations
+ * @property {number} fableObservations
+ * @property {number} invalidRecords
+ * @property {number} invalidResets
+ * @property {number} rejectedRecords
+ * @property {number} readErrors
+ * @property {number} bytesRead
+ * @property {IsoTime | null} latestObservationAt
+ * @property {IsoTime | null} latestClaudeObservedAt
+ * @property {IsoTime | null} latestFableObservedAt
+ */
+
+/**
+ * One window of a status-line payload as it is compared between redraws: its
+ * reading and reset, or the marker for a window the store would reject.
+ * @typedef {[used: number, resetsAt: IsoTime] | 'unreadable'} WindowReading
+ */
+
+/** @typedef {Record<string, WindowReading>} StatusLineLimits */
+
+/**
+ * The bounds on when a session fetched the limits a redraw shows.
+ * @typedef {{ fetchedAfter: IsoTime | null, seenSince: IsoTime | null }} FetchDating
+ */
+
+/**
+ * A usage event built from a transcript message.
+ * @typedef {import('./types').UsageEventInput & { metadata: Record<string, unknown> }} TranscriptUsageEvent
+ */
+
+/** @typedef {ReturnType<typeof usageRowFields>} TranscriptRow */
+
+/**
+ * What an import of Claude Code transcripts did.
+ * @typedef {object} TranscriptImportSummary
+ * @property {number} importedFiles
+ * @property {number} usageEvents
+ * @property {number} fableEvents
+ * @property {number} [repairedEvents]
+ * @property {ReturnType<Store['createBackup']> | null} [reconciliationBackup] The safety copy made before a repair, if one was needed.
+ * @property {number} filesFound
+ * @property {number} rejectedRows
+ * @property {string | null} lastRejection
+ * @property {number} readErrors
+ * @property {string | null} lastReadError
+ */
+
+/**
+ * A Claude window's reading, with the columns the freshness check reads.
+ * @typedef {Required<Pick<ObservationRow, 'id'>> & Pick<ObservationRow, 'bucket_id' | 'observed_at' | 'resets_at' | 'window_minutes'
+ *   | 'used_percent' | 'remaining_percent' | 'provenance' | 'fetched_after' | 'seen_since'>} PlanWindowRow
+ */
+
+/**
+ * The latest accepted reading of one window, dated by its evidence.
+ * @typedef {PlanWindowRow & { evidence_at: IsoTime, own_evidence_at: IsoTime, plan_read_ms: Ms | null }} PlanWindowReading
+ */
+
+/** @typedef {import('./fable-tracker.cjs').FableTracking} FableTracking */
+
+/**
+ * A plan-usage read the user asked for, as the source's metadata keeps it.
+ * @typedef {{ at: IsoTime, succeeded?: boolean, fableCurrent?: boolean, provider?: FableTracking['provider'] | null }} PlanUsageRequest
+ */
+
 const MAX_INBOX_BYTES = 2 * 1024 * 1024;
 
 /**
  * @template {object} T
  * @param {T} [overrides]
+ * @returns {InboxResult & T}
  */
 function emptyInboxResult(overrides = /** @type {T} */ ({})) {
   return {
@@ -39,6 +119,11 @@ function emptyInboxResult(overrides = /** @type {T} */ ({})) {
   };
 }
 
+/**
+ * @param {IsoTime | null | undefined} left
+ * @param {IsoTime | null | undefined} right
+ * @returns {IsoTime | null}
+ */
 function laterIso(left, right) {
   if (!left) return right || null;
   if (!right) return left;
@@ -49,6 +134,11 @@ function laterIso(left, right) {
 // one it would reject: not an object, no reading, a reading outside 0–100
 // (a spend limit can pass 100), or a reset out of range.
 const UNREADABLE = 'unreadable';
+/**
+ * @param {any} limit One window of a status-line payload.
+ * @param {IsoTime} capturedAt
+ * @returns {[used: number, resetsAt: IsoTime] | null}
+ */
 function recordableWindow(limit, capturedAt) {
   if (!limit || typeof limit !== 'object' || Array.isArray(limit) || limit.used_percentage == null) return null;
   const used = Number(limit.used_percentage);
@@ -62,7 +152,12 @@ function recordableWindow(limit, capturedAt) {
 // window the store would reject is kept as unreadable rather than dropped:
 // it tells nothing about a response, and must not make the next redraw that
 // shows it readable again look like a new one.
+/**
+ * @param {unknown} rateLimits The `rate_limits` of a status-line payload.
+ * @param {IsoTime} capturedAt
+ */
 function statusLineLimits(rateLimits, capturedAt) {
+  /** @type {StatusLineLimits} */
   const limits = {};
   if (!rateLimits || typeof rateLimits !== 'object' || Array.isArray(rateLimits)) return limits;
   for (const [key, limit] of Object.entries(rateLimits)) {
@@ -70,8 +165,8 @@ function statusLineLimits(rateLimits, capturedAt) {
   }
   return limits;
 }
-const readableWindow = (value) => Array.isArray(value);
-const sameWindow = (a, b) => (readableWindow(a) && readableWindow(b) ? a[0] === b[0] && a[1] === b[1] : a === b);
+const readableWindow = (/** @type {unknown} */ value) => Array.isArray(value);
+const sameWindow = (/** @type {WindowReading} */ a, /** @type {WindowReading} */ b) => (readableWindow(a) && readableWindow(b) ? a[0] === b[0] && a[1] === b[1] : a === b);
 
 // Claude Code redraws its status line after each response and, at the
 // interval the helper is installed with, every minute in between, always
@@ -87,28 +182,36 @@ const sameWindow = (a, b) => (readableWindow(a) && readableWindow(b) ? a[0] === 
 // helper recorded sessions), but its redraws still share that first redraw,
 // so an idle session cannot renew its own evidence. Every session's opening
 // redraw has no limits, because they arrive with its first response.
-/** @param {import('./store.cjs').Store} store */
+/**
+ * @param {Store} store
+ * @param {Record<string, any>} payload A status-line payload.
+ * @param {IsoTime} capturedAt
+ * @returns {FetchDating}
+ */
 function datedStatusLineFetch(store, payload, capturedAt) {
   const undated = { fetchedAfter: null, seenSince: null };
   const sessionId = typeof payload.session_id === 'string' ? payload.session_id.trim() : '';
   if (!sessionId) return undated;
   const apiMs = typeof payload.api_ms === 'number' && Number.isFinite(payload.api_ms) ? payload.api_ms : null;
   const limits = statusLineLimits(payload.rate_limits, capturedAt);
-  const previous = store.prepare('SELECT seen_at, api_ms, limits_json, fetched_after, seen_since FROM statusline_sessions WHERE session_id = ?').get(sessionId);
+  const previous = /** @type {Omit<StatuslineSessionRow, 'session_id'> | undefined} */ (
+    store.prepare('SELECT seen_at, api_ms, limits_json, fetched_after, seen_since FROM statusline_sessions WHERE session_id = ?').get(sessionId));
+  // What the session's previous redraw stored.
+  /** @type {StatusLineLimits} */
   let before = {};
   try { before = previous ? JSON.parse(previous.limits_json) : {}; } catch { /* Undated below. */ }
-  const sameLimits = (a, b) => Object.keys(a).length === Object.keys(b).length
+  const sameLimits = (/** @type {StatusLineLimits} */ a, /** @type {StatusLineLimits} */ b) => Object.keys(a).length === Object.keys(b).length
     && Object.entries(a).every(([key, value]) => key in b && sameWindow(value, b[key]));
   // A line imported again, or late: it shares the session's latest fetch only
   // if nothing has changed since, and cannot move the session backwards.
   if (previous && capturedAt <= previous.seen_at) {
     const same = sameLimits(limits, before) && apiMs === previous.api_ms;
-    const shared = (value) => (same && value && value <= capturedAt ? value : null);
+    const shared = (/** @type {IsoTime | null} */ value) => (same && value && value <= capturedAt ? value : null);
     return { fetchedAfter: shared(previous.fetched_after), seenSince: shared(previous.seen_since) };
   }
-  /** @type {any} */
+  /** @type {IsoTime | null} */
   let fetchedAfter = null;
-  /** @type {any} */
+  /** @type {IsoTime | null} */
   let seenSince = null;
   if (Object.keys(limits).length) {
     // A readable window that is new, or that changed from a readable one, came
@@ -136,7 +239,14 @@ function datedStatusLineFetch(store, payload, capturedAt) {
 // Records every window of one status-line payload (a helper redraw or a
 // Claude Code mod reading) as official status-line observations, dated by the
 // fetch that delivered them, and counts them into `result`.
-/** @param {import('./store.cjs').Store} store */
+/**
+ * @param {Store} store
+ * @param {Record<string, any>} payload A status-line payload whose `rate_limits` is an object.
+ * @param {IsoTime} capturedAt
+ * @param {FetchDating} dating
+ * @param {InboxResult} result Counted into.
+ * @param {Record<string, unknown>} [extraMetadata]
+ */
 function recordStatusLineLimits(store, payload, capturedAt, { fetchedAfter, seenSince }, result, extraMetadata = {}) {
   const model = payload.model?.id || payload.model?.display_name || 'claude-unknown';
   const limits = payload.rate_limits;
@@ -188,7 +298,11 @@ function recordStatusLineLimits(store, payload, capturedAt, { fetchedAfter, seen
   }
 }
 
-/** @param {import('./store.cjs').Store} store */
+/**
+ * @param {Store} store
+ * @param {string} inboxPath
+ * @param {{ rotations: string[] } | null} [state] Kept with the file's cursor.
+ */
 function importClaudeInboxFile(store, inboxPath, state = /** @type {any} */ (null)) {
   if (!fs.existsSync(inboxPath)) return emptyInboxResult();
   let stat;
@@ -249,10 +363,14 @@ function importClaudeInboxFile(store, inboxPath, state = /** @type {any} */ (nul
   });
 }
 
-/** @param {import('./store.cjs').Store} store */
+/**
+ * @param {Store} store
+ * @param {string} inboxPath
+ */
 function importClaudeInbox(store, inboxPath) {
   const directory = path.dirname(inboxPath);
   const base = path.basename(inboxPath);
+  /** @type {string[]} */
   let rotated = [];
   try {
     rotated = fs.readdirSync(directory)
@@ -265,8 +383,8 @@ function importClaudeInbox(store, inboxPath) {
     store.prepare('DELETE FROM statusline_sessions WHERE seen_at < ?').run(new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString());
   } catch { /* Pruned on a later import. */ }
   const total = emptyInboxResult();
-  const numericKeys = ['snapshots', 'usageEvents', 'observations', 'claudeObservations', 'fableObservations',
-    'invalidRecords', 'invalidResets', 'rejectedRecords', 'readErrors', 'bytesRead'];
+  const numericKeys = /** @type {const} */ (['snapshots', 'usageEvents', 'observations', 'claudeObservations', 'fableObservations',
+    'invalidRecords', 'invalidResets', 'rejectedRecords', 'readErrors', 'bytesRead']);
   // A rotated file with no cursor was rotated since the last import, so the
   // live inbox restarted from empty. Once it grows past the old cursor it
   // would look like an append and its first records would be skipped. Its
@@ -329,6 +447,11 @@ const MAX_CLAUDE_CODE_FETCH_MS = 30 * 60_000;
 // it is this old, then discarded.
 const TORN_READING_GRACE_MS = 60_000;
 
+/**
+ * @param {Record<string, any>} payload A Claude Code mod reading.
+ * @param {IsoTime} capturedAt
+ * @returns {FetchDating}
+ */
 function claudeCodeReadingDating(payload, capturedAt) {
   const fetchedAfter = asIso(payload.fetched_after);
   const span = fetchedAfter ? Date.parse(capturedAt) - Date.parse(fetchedAfter) : Number.NaN;
@@ -337,6 +460,10 @@ function claudeCodeReadingDating(payload, capturedAt) {
     : { fetchedAfter: null, seenSince: capturedAt };
 }
 
+/**
+ * @param {InboxResult & Record<string, any>} total Added to, under whatever counts `result` carries.
+ * @param {InboxResult} result
+ */
 function mergeInboxResult(total, result) {
   for (const [key, value] of Object.entries(result)) {
     if (typeof value === 'number') total[key] = (total[key] || 0) + value;
@@ -347,7 +474,12 @@ function mergeInboxResult(total, result) {
   return total;
 }
 
-/** @param {import('./store.cjs').Store} store */
+/**
+ * @param {Store} store
+ * @param {string | null | undefined} directory Where the mod leaves its readings, if it is known.
+ * @param {object} [options]
+ * @param {Ms} [options.nowMs]
+ */
 function importClaudeCodeReadings(store, directory, { nowMs = Date.now() } = {}) {
   const result = emptyInboxResult({ files: 0 });
   if (!directory) return result;
@@ -402,12 +534,18 @@ function importClaudeCodeReadings(store, directory, { nowMs = Date.now() } = {})
   return result;
 }
 
+/**
+ * @param {string} root
+ * @param {Ms} cutoffMs
+ * @param {Set<string>} [legacyFiles]
+ */
 function listTranscriptFiles(root, cutoffMs, legacyFiles = new Set()) {
   if (!fs.existsSync(root)) return [];
   const files = [];
   const stack = [root];
   while (stack.length) {
-    const current = stack.pop();
+    // The loop runs only while the stack holds a folder.
+    const current = /** @type {string} */ (stack.pop());
     let entries;
     try {
       entries = fs.readdirSync(current, { withFileTypes: true });
@@ -430,6 +568,12 @@ function listTranscriptFiles(root, cutoffMs, legacyFiles = new Set()) {
   return files;
 }
 
+/**
+ * @param {TranscriptRow} row
+ * @param {string} messageId
+ * @param {string} fullPath
+ * @returns {TranscriptUsageEvent}
+ */
 function transcriptEvent(row, messageId, fullPath) {
   const usage = row.message.usage;
   const model = row.message.model || 'claude-unknown';
@@ -465,16 +609,20 @@ function transcriptEvent(row, messageId, fullPath) {
 }
 
 // Repair only an untouched importer record whose source proves it was copied.
-/** @param {import('./store.cjs').Store} store */
+/**
+ * @param {Store} store
+ * @param {TranscriptUsageEvent} event
+ */
 function copiedEventRow(store, event) {
-  const row = store.prepare('SELECT * FROM usage_events WHERE event_key = ?').get(event.eventKey);
+  const row = /** @type {UsageEventRow | undefined} */ (store.prepare('SELECT * FROM usage_events WHERE event_key = ?').get(event.eventKey));
   if (!row || row.source_id !== 'claude' || row.reported_cost_usd != null) return null;
   const fields = { occurred_at: epochToIso(event.occurredAt), session_id: event.sessionId, model: event.model, project: event.project,
     input_tokens: Number(event.inputTokens || 0), cached_input_tokens: Number(event.cachedInputTokens || 0),
     cache_write_input_tokens: Number(event.cacheWriteInputTokens || 0), cache_write_5m_input_tokens: Number(event.cacheWrite5mInputTokens || 0),
     cache_write_1h_input_tokens: Number(event.cacheWrite1hInputTokens || 0), output_tokens: Number(event.outputTokens || 0),
     reasoning_output_tokens: Number(event.reasoningOutputTokens || 0) };
-  if (Object.entries(fields).some(([key, value]) => row[key] !== value)) return null;
+  // Every key of `fields` is a column of the row.
+  if (Object.entries(fields).some(([key, value]) => row[/** @type {keyof typeof fields} */ (key)] !== value)) return null;
   let metadata;
   try { metadata = JSON.parse(row.metadata_json); } catch { return null; }
   if (metadata.source !== 'claude-transcript' || Object.entries(metadata).some(([key, value]) => event.metadata[key] !== value)) return null;
@@ -484,6 +632,10 @@ function copiedEventRow(store, event) {
 // Only what transcriptEvent, agent attribution and the fork check read. A row
 // also carries message content and tool inputs (file contents, commands) that
 // can dwarf its usage; none of it is held while the rest of the file is read.
+/**
+ * @param {Record<string, any>} row An assistant record of a transcript.
+ * @param {Record<string, any>} usage Its `message.usage`.
+ */
 function usageRowFields(row, usage) {
   return {
     sessionId: row.sessionId, timestamp: row.timestamp, cwd: row.cwd, requestId: row.requestId,
@@ -493,13 +645,18 @@ function usageRowFields(row, usage) {
   };
 }
 
-/** @param {import('./store.cjs').Store} store */
+/**
+ * @param {Store} store
+ * @param {number} [days] How far back a transcript may have last changed and still be scanned.
+ * @returns {TranscriptImportSummary}
+ */
 function importClaudeTranscripts(store, days = 120) {
   // CLAUDE_CONFIG_DIR relocates Claude Code's directory, projects included.
   const home = providerHome('CLAUDE_CONFIG_DIR', '.claude');
   if (!home) return { importedFiles: 0, usageEvents: 0, fableEvents: 0, filesFound: 0, rejectedRows: 0, lastRejection: null, readErrors: 0, lastReadError: null };
   const root = path.join(home, 'projects');
-  const legacyFiles = new Set(store.prepare("SELECT file_path, state_json FROM imported_files").all()
+  const legacyFiles = new Set(/** @type {Pick<ImportedFileRow, 'file_path' | 'state_json'>[]} */ (
+    store.prepare("SELECT file_path, state_json FROM imported_files").all())
     .filter((row) => {
       const relative = path.relative(root, row.file_path);
       if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return false;
@@ -510,7 +667,7 @@ function importClaudeTranscripts(store, days = 120) {
   let usageEvents = 0;
   let fableEvents = 0;
   let repairedEvents = 0;
-  /** @type {any} */
+  /** @type {ReturnType<Store['createBackup']> | null} */
   let reconciliationBackup = null;
   let rejectedRows = 0;
   /** @type {string | null} */
@@ -535,7 +692,9 @@ function importClaudeTranscripts(store, days = 120) {
       lastReadError = error?.code || (error instanceof Error ? error.message : String(error));
       continue;
     }
+    /** @type {Map<string, TranscriptRow>} */
     const latestByMessage = new Map();
+    /** @type {Pick<TranscriptImportSummary, 'rejectedRows' | 'lastRejection'>} */
     const beforeFile = { rejectedRows, lastRejection };
     try {
       for (const line of chunk.lines) {
@@ -578,7 +737,10 @@ function importClaudeTranscripts(store, days = 120) {
         if (row.forkedFrom || model === '<synthetic>') {
           const held = copiedEventRow(store, event);
           if (held && reconciliationBackup) {
-            repairedEvents += store.prepare('DELETE FROM usage_events WHERE id = ? AND metadata_json = ?').run(held.id, held.metadata_json).changes;
+            // A stored row has its id, and the count of rows changed is a
+            // plain number: the store does not ask SQLite for big integers.
+            repairedEvents += /** @type {number} */ (store.prepare('DELETE FROM usage_events WHERE id = ? AND metadata_json = ?')
+              .run(/** @type {number} */ (held.id), held.metadata_json).changes);
           }
           continue;
         }
@@ -611,6 +773,7 @@ function importClaudeTranscripts(store, days = 120) {
 // duration; no path, prompt or cost).
 const HELPER_VERSION = 'AI_USAGE_HELPER_VERSION=1.0.5';
 
+/** @param {string} inboxPath */
 function makeHelperScript(inboxPath) {
   // PowerShell ends a single-quoted string at any of its four typographic
   // single quotes as well as at ', so a profile folder such as O’Brien needs
@@ -623,10 +786,18 @@ function makeHelperScript(inboxPath) {
 // script without a byte-order mark in the ANSI code page: a profile folder
 // with any non-ASCII character (José, or O’Brien with a typographic
 // apostrophe) became a different path. With the mark it reads UTF-8.
+/**
+ * @param {string} helperPath
+ * @param {string} inboxPath
+ */
 function writeHelperScript(helperPath, inboxPath) {
   fs.writeFileSync(helperPath, `\uFEFF${makeHelperScript(inboxPath)}`, 'utf8');
 }
 
+/**
+ * @param {string} helperPath
+ * @param {string} inboxPath
+ */
 function updateManagedHelper(helperPath, inboxPath) {
   if (!fs.existsSync(helperPath)) return false;
   try {
@@ -654,6 +825,10 @@ function helperPaths() {
   };
 }
 
+/**
+ * @param {any} statusLine The `statusLine` of Claude Code's settings, whatever it holds.
+ * @param {string | null | undefined} helperPath
+ */
 function isManagedStatusLine(statusLine, helperPath) {
   if (statusLine?.type !== 'command' || typeof helperPath !== 'string' || !helperPath) return false;
   const command = String(statusLine.command || '');
@@ -675,11 +850,13 @@ function isClaudeHelperInstalled() {
 // another timestamped backup in .claude for ever. The comparison and the copy
 // are both byte-exact — decoding as UTF-8 would mangle a settings file written
 // in another encoding and destroy the only pristine copy at the same time.
+/** @param {string} settingsPath */
 function backupClaudeSettings(settingsPath) {
   if (!fs.existsSync(settingsPath)) return null;
   const current = fs.readFileSync(settingsPath);
   const directory = path.dirname(settingsPath);
   const prefix = `${path.basename(settingsPath)}.ai-usage-backup-`;
+  /** @type {string[]} */
   let existing = [];
   try {
     existing = fs.readdirSync(directory).filter((name) => name.startsWith(prefix));
@@ -702,6 +879,10 @@ function backupClaudeSettings(settingsPath) {
 // Claude's settings.json is written by other tools too. A UTF-8 BOM is legal
 // there and common from PowerShell, but JSON.parse rejects it — and an
 // unreadable settings file must never be silently replaced with an empty one.
+/**
+ * @param {string} settingsPath
+ * @returns {Record<string, any>} Claude Code's settings, which belong to it and to the user.
+ */
 function readClaudeSettings(settingsPath) {
   if (!fs.existsSync(settingsPath)) return {};
   const raw = fs.readFileSync(settingsPath);
@@ -723,6 +904,11 @@ function readClaudeSettings(settingsPath) {
   return parsed;
 }
 
+/**
+ * @param {string} previousStatusLinePath
+ * @param {string} helperPath
+ * @returns {Record<string, any> | null}
+ */
 function readPreviousStatusLine(previousStatusLinePath, helperPath) {
   if (!fs.existsSync(previousStatusLinePath)) return null;
   try {
@@ -735,6 +921,7 @@ function readPreviousStatusLine(previousStatusLinePath, helperPath) {
   }
 }
 
+/** @param {string} inboxPath */
 function installClaudeHelper(inboxPath) {
   const { claudeDirectory, settingsPath, helperPath, previousStatusLinePath } = helperPaths();
   fs.mkdirSync(claudeDirectory, { recursive: true });
@@ -809,24 +996,35 @@ function uninstallClaudeHelper() {
 // from the start of the window it shows.
 // `emptyReadMs` is a later read that succeeded without returning any window,
 // which omitted every window stored before it.
-/** @param {import('./store.cjs').Store} store */
+/**
+ * @param {Store} store
+ * @param {Ms} nowMs
+ * @param {number} graceMs How long an undated lower reading waits for the provider's next read.
+ * @param {Ms | null} [emptyReadMs]
+ * @returns {{ lastReadAt: IsoTime | null, staleReadAt: IsoTime | null, fresh: boolean, windows: PlanWindowReading[] }}
+ */
 function latestPlanUsageReading(store, nowMs, graceMs, emptyReadMs = /** @type {number | null} */ (null)) {
-  const rows = store.prepare(`SELECT id, bucket_id, observed_at, resets_at, window_minutes, used_percent, remaining_percent, provenance, fetched_after, seen_since
+  const rows = /** @type {PlanWindowRow[]} */ (store.prepare(`SELECT id, bucket_id, observed_at, resets_at, window_minutes, used_percent, remaining_percent, provenance, fetched_after, seen_since
     FROM quota_observations WHERE source_id = 'claude' AND observed_at <= ? AND observed_at >= ? ORDER BY observed_at ASC, id ASC`)
-    .all(new Date(nowMs + QUOTA_CLOCK_SKEW_MS).toISOString(), new Date(nowMs - 8 * 24 * 60 * 60 * 1000).toISOString());
+    .all(new Date(nowMs + QUOTA_CLOCK_SKEW_MS).toISOString(), new Date(nowMs - 8 * 24 * 60 * 60 * 1000).toISOString()));
+  /** @type {Map<string, PlanWindowRow[]>} */
   const buckets = new Map();
   for (const row of rows) {
     if (!validQuotaTime(Date.parse(row.observed_at), Date.parse(row.resets_at), row.window_minutes, nowMs)) continue;
     if (!buckets.has(row.bucket_id)) buckets.set(row.bucket_id, []);
-    buckets.get(row.bucket_id).push(row);
+    // Set on the line above when it was missing.
+    /** @type {PlanWindowRow[]} */ (buckets.get(row.bucket_id)).push(row);
   }
+  /** @type {Map<string, PlanWindowReading>} */
   const latest = new Map();
   /** @type {number | null} */
   let lastPlanUsageReadMs = null;
   const restatementOptions = { nowMs, freshReadGraceMs: graceMs, allowanceChanges: store.getSettings().allowanceChanges, sourceId: 'claude' };
   for (const [bucketId, bucketRows] of buckets) {
+    // The rows kept come back as they were given.
+    /** @type {PlanWindowRow[]} */
     const accepted = withoutStaleRestatements(bucketRows, restatementOptions)
-      .filter((row) => isProviderProvenance(row.provenance));
+      .filter((/** @type {PlanWindowRow} */ row) => isProviderProvenance(row.provenance));
     // One plan-usage read records every window it returns at the same instant.
     const planUsageRead = accepted.findLast((row) => row.provenance === 'official-claude-usage');
     const planReadMs = planUsageRead ? Date.parse(planUsageRead.observed_at) : null;
@@ -834,7 +1032,7 @@ function latestPlanUsageReading(store, nowMs, graceMs, emptyReadMs = /** @type {
     if (accepted.length) {
       const evidenceOptions = { ...restatementOptions, known: true };
       // `accepted` is not empty here, so its last reading and its evidence both exist.
-      latest.set(bucketId, { ...accepted.at(-1), evidence_at: new Date(/** @type {number} */ (latestEvidenceAt(accepted, evidenceOptions))).toISOString(),
+      latest.set(bucketId, { .../** @type {PlanWindowRow} */ (accepted.at(-1)), evidence_at: new Date(/** @type {number} */ (latestEvidenceAt(accepted, evidenceOptions))).toISOString(),
         own_evidence_at: new Date(/** @type {number} */ (evidenceTimes(accepted, evidenceOptions).at(-1))).toISOString(), plan_read_ms: planReadMs });
     }
   }
@@ -848,13 +1046,14 @@ function latestPlanUsageReading(store, nowMs, graceMs, emptyReadMs = /** @type {
     && (lastPlanUsageReadMs == null || row.plan_read_ms === lastPlanUsageReadMs
       || Date.parse(row.own_evidence_at) >= lastPlanUsageReadMs));
   if (!active.length) return { lastReadAt: null, staleReadAt: null, fresh: false, windows: [] };
-  const lastReadAt = active.reduce((last, row) => laterIso(last, row.evidence_at), null);
+  const lastReadAt = active.reduce((last, row) => laterIso(last, row.evidence_at), /** @type {IsoTime | null} */ (null));
   // The oldest reading that is out of date, which the stale detail quotes.
   const staleReadAt = active.filter((row) => !providerReadingFresh(row, nowMs))
-    .reduce((oldest, row) => (!oldest || Date.parse(row.evidence_at) < Date.parse(oldest) ? row.evidence_at : oldest), null);
+    .reduce((oldest, row) => (!oldest || Date.parse(row.evidence_at) < Date.parse(oldest) ? row.evidence_at : oldest), /** @type {IsoTime | null} */ (null));
   return { lastReadAt, staleReadAt, fresh: !staleReadAt, windows: active };
 }
 
+/** @param {IsoTime} value */
 function readingTime(value) {
   return new Date(value).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
@@ -862,6 +1061,10 @@ function readingTime(value) {
 // Why a Refresh could not read plan usage, as a sentence for the status line.
 // A missing sign-in is said in words, since it is something to act on; any
 // other failure is named by its code, as Diagnostics names it.
+/**
+ * @param {{ errorCode?: string | null } | null | undefined} provider The provider outcome of the request that failed.
+ * @param {string} refresh How the sentence names that request.
+ */
 function planUsageFailure(provider, refresh) {
   const reason = provider?.errorCode === 'claude-usage-signed-out'
     ? ' because Claude Code did not report your Claude subscription sign-in'
@@ -870,19 +1073,27 @@ function planUsageFailure(provider, refresh) {
 }
 
 // When a plan-usage read succeeded without returning any overall window.
+/**
+ * @param {PlanUsageRequest | null} request
+ * @returns {Ms | null}
+ */
 function emptyPlanUsageReadMs(request) {
   const provider = request?.provider;
+  // A provider outcome was read from a request, so the request is there.
   return provider?.attemptSucceeded === true && ['observed', 'unavailable'].includes(provider.kind)
-    && Number(provider.overallWindowsRecorded) === 0 ? Date.parse(request.at) : null;
+    && Number(provider.overallWindowsRecorded) === 0 ? Date.parse(/** @type {PlanUsageRequest} */ (request).at) : null;
 }
 
 // The outcome of the last plan-usage read the user asked for, which an
 // automatic run carries forward so a failed Refresh stays visible until a
 // newer reading replaces it.
-/** @param {import('./store.cjs').Store} store */
+/**
+ * @param {Store} store
+ * @returns {PlanUsageRequest | null}
+ */
 function previousPlanUsageRequest(store) {
   try {
-    const row = store.prepare("SELECT metadata_json FROM sources WHERE id = 'claude'").get();
+    const row = /** @type {{ metadata_json: string } | undefined} */ (store.prepare("SELECT metadata_json FROM sources WHERE id = 'claude'").get());
     const request = JSON.parse(row?.metadata_json || '{}')?.planUsage?.lastRequest;
     return request && typeof request === 'object' && typeof request.at === 'string' ? request : null;
   } catch { return null; }
@@ -892,13 +1103,23 @@ function previousPlanUsageRequest(store) {
 // SDK) only when `options.readPlanUsage` is true, which only an explicit user
 // refresh sets. Otherwise no usage port is created, nothing contacts
 // Anthropic, and the status-line inbox and the transcript import still run.
-/** @param {import('./store.cjs').Store} store */
+/**
+ * @param {Store} store
+ * @param {string} inboxPath
+ * @param {object} [options]
+ * @param {boolean} [options.readPlanUsage]
+ * @param {string | null} [options.claudeCodeReadingsDirectory]
+ * @param {import('./fable-tracker.cjs').UsagePort} [options.usagePort]
+ * @param {import('./fable-tracker.cjs').ActivityReader} [options.activityReader]
+ * @param {() => Date | number | string} [options.clock]
+ * @param {AbortSignal} [options.signal]
+ */
 async function refreshClaude(store, inboxPath, options = {}) {
   const readPlanUsage = options.readPlanUsage === true;
   const binary = findClaudeBinary();
   // Rows this collection's status-line import adds are numbered after every
   // row stored before it; a line imported again only updates its existing row.
-  const importedAfterId = store.prepare('SELECT COALESCE(MAX(id), 0) AS id FROM quota_observations').get().id;
+  const importedAfterId = /** @type {{ id: number }} */ (store.prepare('SELECT COALESCE(MAX(id), 0) AS id FROM quota_observations').get()).id;
   let statusLine;
   try {
     statusLine = importClaudeInbox(store, inboxPath);
@@ -960,7 +1181,8 @@ async function refreshClaude(store, inboxPath, options = {}) {
   try { ({ helperPath } = helperPaths()); } catch { /* No Windows profile; nothing is installed. */ }
   let helperInstalled = false;
   try { helperInstalled = isClaudeHelperInstalled(); } catch { /* Unreadable settings cannot confirm an active helper. */ }
-  const helperUpdated = helperInstalled ? updateManagedHelper(helperPath, inboxPath) : false;
+  // The helper is found installed only where its path was.
+  const helperUpdated = helperInstalled ? updateManagedHelper(/** @type {string} */ (helperPath), inboxPath) : false;
   // Existence probes, not getQuota: the status text needs a yes or no, and
   // getQuota forecasts every window of the source to produce one.
   const hasQuota = store.hasUsableObservation('claude', nowMs, { activeWithinMs: 8 * 24 * 60 * 60 * 1000 });
@@ -995,17 +1217,20 @@ async function refreshClaude(store, inboxPath, options = {}) {
   const planReading = readPlanUsage ? null : acceptedReading;
   // Whether it brought the Fable allowance up to date is kept apart: a read
   // can return every overall window and still omit the model-scoped one.
+  // Null only on an automatic run with no earlier Refresh on record.
+  /** @type {PlanUsageRequest | null} */
   const lastRequest = readPlanUsage
     ? { at: requestAt, succeeded: hasFreshClaudeEvidence || providerScanSucceeded, provider: fableTracking.provider,
       fableCurrent: fableTracking.health.officialSource === 'connected' }
     : previousRequest;
   // A failed Refresh that no reading has since replaced.
-  const failedSince = (observedAt) => !readPlanUsage && lastRequest?.succeeded === false
-    && !(Date.parse(observedAt) >= Date.parse(lastRequest.at));
+  // A missing time parses as no time at all, which is never the later one.
+  const failedSince = (/** @type {IsoTime | null | undefined} */ observedAt) => !readPlanUsage && lastRequest?.succeeded === false
+    && !(Date.parse(/** @type {IsoTime} */ (observedAt)) >= Date.parse(lastRequest.at));
   // Likewise a Refresh that left the Fable allowance out of date. A request
   // recorded before this was kept says nothing either way.
-  const fableMissedSince = (observedAt) => !readPlanUsage && lastRequest?.fableCurrent === false
-    && !(Date.parse(observedAt) >= Date.parse(lastRequest.at));
+  const fableMissedSince = (/** @type {IsoTime | null | undefined} */ observedAt) => !readPlanUsage && lastRequest?.fableCurrent === false
+    && !(Date.parse(/** @type {IsoTime} */ (observedAt)) >= Date.parse(lastRequest.at));
   const lastRequestFailed = failedSince(planReading?.lastReadAt);
   // Automatic runs judge all active windows even when this run just imported
   // fresh evidence.
@@ -1038,8 +1263,9 @@ async function refreshClaude(store, inboxPath, options = {}) {
         : binary ? 'ready' : 'awaiting-installation';
   // This Refresh's failure, said on both cards. A failed activity import
   // already quotes it through the tracker's detail.
-  const refreshFailure = readPlanUsage && activityCurrent && lastRequest.succeeded === false
-    ? planUsageFailure(lastRequest.provider, 'This Refresh') : '';
+  // This run read plan usage, so the request is its own.
+  const refreshFailure = readPlanUsage && activityCurrent && /** @type {PlanUsageRequest} */ (lastRequest).succeeded === false
+    ? planUsageFailure(/** @type {PlanUsageRequest} */ (lastRequest).provider, 'This Refresh') : '';
   const lastRead = planReading?.lastReadAt ? readingTime(planReading.lastReadAt) : null;
   const staleRead = planReading?.staleReadAt ? readingTime(planReading.staleReadAt) : null;
   const claudeDetail = !readPlanUsage ? (!activityCurrent
@@ -1054,7 +1280,8 @@ async function refreshClaude(store, inboxPath, options = {}) {
           ? `Claude Code was found. Plan usage is read when you press Refresh; no local transcript activity was available. ${helperSentence}`
           : 'Claude Code is not currently installed or available locally. Plan usage is read through Claude Code when you press Refresh.')
       // Outside the group: inside it, `+` would bind only to the last branch.
-      + (lastRequestFailed ? planUsageFailure(lastRequest.provider, 'The last Refresh') : '')
+      // Only a request on record can have failed.
+      + (lastRequestFailed ? planUsageFailure(/** @type {PlanUsageRequest} */ (lastRequest).provider, 'The last Refresh') : '')
     : (!activityCurrent
     ? `${hasFreshClaudeEvidence ? 'Official Claude allowance evidence was refreshed, but' : 'The allowance check completed, but'} the local transcript activity import failed; previously tracked token activity remains available. ${fableTracking.health.detail || ''}`
     : hasFreshClaudeEvidence
@@ -1067,7 +1294,8 @@ async function refreshClaude(store, inboxPath, options = {}) {
           ? `Claude Code was found. Automatic plan usage was checked, but no current allowance or local transcript activity was available. ${helperSentence}`
           : 'Claude Code is not currently installed or available locally.')
       + refreshFailure
-      + (refreshFailure && lastRequest.provider?.errorCode === 'claude-usage-signed-out' ? ' If Claude Code is signed in, press Refresh again.' : '')
+      // A failure of this Refresh is a failure of its own request.
+      + (refreshFailure && /** @type {PlanUsageRequest} */ (lastRequest).provider?.errorCode === 'claude-usage-signed-out' ? ' If Claude Code is signed in, press Refresh again.' : '')
       + extraUsageDetail;
   store.setSourceStatus('claude', claudeStatus, claudeDetail, {
     binary,
@@ -1082,7 +1310,10 @@ async function refreshClaude(store, inboxPath, options = {}) {
     planUsage: { requested: readPlanUsage, lastReadAt: planReading?.lastReadAt ?? null, lastRequest },
   }, { scanSucceeded: claudeScanSucceeded });
   const fableAuto = fableDerived.derived;
-  const fableEvidenceAt = fableTracking.allowance.evidenceAt ?? fableTracking.allowance.observedAt;
+  // Only an official allowance has these times. Every use below is of one
+  // that is official and provider-scoped, or passes a missing time on.
+  const fableEvidenceAt = /** @type {Partial<import('./fable-tracker.cjs').OfficialAllowance>} */ (fableTracking.allowance).evidenceAt
+    ?? /** @type {Partial<import('./fable-tracker.cjs').OfficialAllowance>} */ (fableTracking.allowance).observedAt;
   const fableMissed = hasProviderScopedFable && fableMissedSince(fableEvidenceAt);
   const providerCurrent = hasProviderScopedFable && fableTracking.health.officialSource === 'connected'
     && !failedSince(fableEvidenceAt) && !fableMissed;
@@ -1094,11 +1325,13 @@ async function refreshClaude(store, inboxPath, options = {}) {
         : fableObserved ? 'observing'
           : fableTracking.activity.requests ? 'activity-only' : 'waiting';
   const fableEvents = `${fableTracking.activity.requests} local Fable usage event${fableTracking.activity.requests === 1 ? '' : 's'}`;
-  const fableReadAt = hasProviderScopedFable ? readingTime(fableEvidenceAt) : null;
+  // An official allowance always carries the time of its evidence.
+  const fableReadAt = hasProviderScopedFable ? readingTime(/** @type {IsoTime} */ (fableEvidenceAt)) : null;
   // As on the Claude card, a failed Refresh stays explained until a newer
   // Fable reading replaces it; without one, until a Refresh succeeds.
   const fableRefreshFailure = refreshFailure
-    || (failedSince(hasProviderScopedFable ? fableEvidenceAt : null) ? planUsageFailure(lastRequest.provider, 'The last Refresh') : '');
+    // Only a request on record can have failed.
+    || (failedSince(hasProviderScopedFable ? fableEvidenceAt : null) ? planUsageFailure(/** @type {PlanUsageRequest} */ (lastRequest).provider, 'The last Refresh') : '');
   const fableDetail = !activityCurrent
     ? `${providerCurrent ? 'The official model-scoped Fable allowance is current, but' : readPlanUsage ? 'The allowance check completed, but' : 'Plan usage is read only when you press Refresh, and'} the actual local activity import failed; previously tracked counts are retained. ${fableTracking.health.detail || ''}`
     : providerCurrent && !readPlanUsage

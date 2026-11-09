@@ -25,6 +25,7 @@ function createSnapshotsModule(main) {
   // The renderer owns the selected period, so every snapshot the main process
   // emits — refresh, settings change, price edit, backup — has to use it too.
   // Called without a valid period it changes nothing and reports the current one.
+  /** @param {unknown} [days] the period as the renderer sent it; checked here */
   function setPeriodDays(days) {
     const requested = Math.round(Number(days));
     if (Number.isFinite(requested) && requested >= 1 && requested <= 365) snapshots.periodDays = requested;
@@ -67,9 +68,9 @@ function createSnapshotsModule(main) {
     if (snapshots.previousSnapshot) {
       snapshots.previousSnapshot = {
         quotas: Object.fromEntries(Object.entries(snapshots.previousSnapshot.quotas || {}).map(([key, quota]) => [key, quota && {
-          windows: (quota.windows?.length ? quota.windows : [quota]).map(({ bucketId, resetsAt, usedPercent }) => ({ bucketId, resetsAt, usedPercent })),
+          windows: (quota.windows?.length ? quota.windows : [quota]).map((/** @type {{ bucketId: string, resetsAt: string, usedPercent: number }} */ { bucketId, resetsAt, usedPercent }) => ({ bucketId, resetsAt, usedPercent })),
         }])),
-        sources: (snapshots.previousSnapshot.sources || []).map(({ id, status }) => ({ id, status })),
+        sources: (snapshots.previousSnapshot.sources || []).map((/** @type {{ id: string, status: string }} */ { id, status }) => ({ id, status })),
       };
     }
     main.store?.releaseDashboardCaches();

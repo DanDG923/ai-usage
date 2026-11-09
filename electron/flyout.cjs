@@ -3,6 +3,19 @@
 const { flyoutBounds } = require('./flyout-position.cjs');
 
 /** @typedef {import('electron').BrowserWindow} BrowserWindow */
+/** @typedef {import('electron').IpcMainInvokeEvent} IpcMainInvokeEvent */
+/** @typedef {import('electron').Rectangle} Rectangle */
+/** @typedef {import('../src/types').DashboardNavigation} DashboardNavigation */
+/** @typedef {import('../src/types').FlyoutSnapshot} FlyoutSnapshot */
+/** @typedef {import('../src/types').Quota} Quota */
+/** @typedef {import('../src/types').QuotaWindow} QuotaWindow */
+/** @typedef {import('../src/types').SharedPool} SharedPool */
+
+/**
+ * Where the tray icon is, and the display it is on.
+ *
+ * @typedef {{ trayBounds: Rectangle, workArea: Rectangle, displayBounds: Rectangle }} FlyoutAnchor
+ */
 
 // The tray flyout: a small frameless window above the tray icon showing the
 // allowances at a glance. Electron is injected so the lifecycle, sender and
@@ -34,6 +47,8 @@ const FLYOUT_MEASURE_MS = 150;
  * fraction, the scrollbar that raises narrows and rewraps the page taller,
  * the window grows, the scrollbar goes and the page shrinks back: it resized
  * hundreds of times a second while open. The next whole pixel always holds it.
+ *
+ * @param {unknown} height as the page reported it; anything but a positive number gives null
  */
 function fitHeight(height) {
   const value = Number(height);
@@ -46,7 +61,12 @@ const DASHBOARD_PROVIDERS = Object.freeze(['codex', 'claude', 'fable']);
 // load, must not redirect a dashboard opened much later.
 const NAVIGATION_TTL_MS = 60_000;
 
-/** True only for an IPC event sent by the main frame of the given live window. */
+/**
+ * True only for an IPC event sent by the main frame of the given live window.
+ *
+ * @param {BrowserWindow | null | undefined} window
+ * @param {IpcMainInvokeEvent | null | undefined} event
+ */
 function isMainFrameOf(window, event) {
   if (!window || typeof window.isDestroyed !== 'function' || window.isDestroyed() || !event) return false;
   const contents = window.webContents;
@@ -56,6 +76,9 @@ function isMainFrameOf(window, event) {
 /**
  * A dashboard page request from outside the dashboard, reduced to the known
  * tabs and providers. Anything else, including extra keys, is refused (null).
+ *
+ * @param {any} value whatever a renderer sent; every field is checked here
+ * @returns {DashboardNavigation | null}
  */
 function normalizeNavigationTarget(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -68,9 +91,10 @@ function normalizeNavigationTarget(value) {
 
 /** Holds the latest requested page until the dashboard collects it, exactly once. */
 function createNavigationQueue({ now = Date.now, ttlMs = NAVIGATION_TTL_MS } = {}) {
-  /** @type {{ target: any, at: number } | null} */
+  /** @type {{ target: DashboardNavigation, at: number } | null} */
   let pending = null;
   return {
+    /** @param {DashboardNavigation} target */
     request(target) {
       pending = { target, at: now() };
     },
@@ -86,9 +110,14 @@ function createNavigationQueue({ now = Date.now, ttlMs = NAVIGATION_TTL_MS } = {
 }
 
 const EMPTY_SERIES = Object.freeze({ observed: Object.freeze([]), expected: Object.freeze([]), heavy: Object.freeze([]) });
+/** @type {(keyof FlyoutSnapshot)[]} */
 const FLYOUT_FIELDS = ['generatedAt', 'timezone', 'settings', 'sources', 'fableApplies', 'dashboardVerdict', 'resetCredits'];
 
 // Fable's shared-pool summary keeps its figures; the chart lines go.
+/**
+ * @param {SharedPool | undefined} sharedPool
+ * @returns {SharedPool | undefined}
+ */
 function lightSharedPool(sharedPool) {
   if (!sharedPool || typeof sharedPool !== 'object' || sharedPool.status !== 'applied') return sharedPool;
   return {
@@ -99,6 +128,7 @@ function lightSharedPool(sharedPool) {
   };
 }
 
+/** @param {(QuotaWindow & { windows?: QuotaWindow[] }) | null | undefined} window one window, or a quota with its windows */
 function lightWindow(window) {
   if (!window || typeof window !== 'object') return null;
   const { tokenCapacity: _tokenCapacity, windows: _windows, ...rest } = window;
@@ -106,28 +136,36 @@ function lightWindow(window) {
   return rest.forecast && typeof rest.forecast === 'object' ? { ...rest, forecast: { ...rest.forecast, series: EMPTY_SERIES } } : rest;
 }
 
+/** @param {Quota | null | undefined} quota */
 function lightQuota(quota) {
   const light = lightWindow(quota);
   if (!light) return null;
-  return Array.isArray(quota.windows) ? { ...light, windows: quota.windows.map(lightWindow).filter(Boolean) } : light;
+  // lightWindow returned an object, so it was given one.
+  return Array.isArray(/** @type {Quota} */ (quota).windows) ? { ...light, windows: /** @type {Quota} */ (quota).windows.map(lightWindow).filter(Boolean) } : light;
 }
 
 /**
  * What the flyout receives: the tray snapshot's fields, from either a tray or
  * a full dashboard snapshot, without cost analytics, token-capacity estimates
  * or forecast chart series, none of which the flyout draws.
+ *
+ * @param {FlyoutSnapshot | null | undefined} snapshot a tray or dashboard snapshot, or an earlier payload
+ * @returns {FlyoutSnapshot | null}
  */
 function flyoutPayload(snapshot) {
   if (!snapshot || typeof snapshot !== 'object') return null;
+  /** @type {Record<string, unknown>} */
   const payload = {};
   for (const key of FLYOUT_FIELDS) if (key in snapshot) payload[key] = snapshot[key];
+  /** @type {Partial<FlyoutSnapshot['quotas']>} */
   const quotas = snapshot.quotas && typeof snapshot.quotas === 'object' ? snapshot.quotas : {};
   payload.quotas = {
     codex: lightQuota(quotas.codex),
     claude: lightQuota(quotas.claude),
     fable: lightQuota(quotas.fable),
   };
-  return payload;
+  // It holds the snapshot's own fields, copied above, and the lighter quotas.
+  return /** @type {FlyoutSnapshot} */ (payload);
 }
 
 /**
@@ -135,6 +173,18 @@ function flyoutPayload(snapshot) {
  * hidden window; `getAnchor` returns { trayBounds, workArea, displayBounds }.
  * The window is created on the first show only, revealed at ready-to-show,
  * hidden on blur, and destroyed `releaseAfterMs` after it was last hidden.
+ *
+ * @param {object} options
+ * @param {(size: { width: number, height: number }) => BrowserWindow} options.createWindow
+ * @param {() => FlyoutAnchor | null} options.getAnchor
+ * @param {(shown: { reused: boolean }) => void} [options.onReveal]
+ * @param {number} [options.width]
+ * @param {number} [options.maxHeight]
+ * @param {number} [options.minHeight]
+ * @param {number} [options.releaseAfterMs]
+ * @param {number} [options.blurGraceMs]
+ * @param {number} [options.measureMs]
+ * @param {() => number} [options.now]
  */
 function createTrayFlyout({
   createWindow,
@@ -164,7 +214,7 @@ function createTrayFlyout({
 
   function place() {
     if (!alive()) return;
-    /** @type {any} */
+    /** @type {FlyoutAnchor | null} */
     let anchor = null;
     try { anchor = getAnchor(); } catch { /* Keep the previous position. */ }
     if (!anchor) return;
@@ -187,6 +237,7 @@ function createTrayFlyout({
     releaseTimer.unref?.();
   }
 
+  /** @param {boolean} reused */
   function reveal(reused) {
     place();
     /** @type {BrowserWindow} */ (win).show();
@@ -198,6 +249,10 @@ function createTrayFlyout({
   // a preferred size only once the window is visible, so without this a new
   // window opened at the maximum height and then shrank on screen. Null when
   // it cannot be read in time.
+  /**
+   * @param {BrowserWindow} target
+   * @returns {Promise<number | null> | null}
+   */
   function measure(target) {
     if (typeof target.webContents?.executeJavaScript !== 'function') return null;
     return new Promise((resolve) => {
@@ -302,6 +357,10 @@ function createTrayFlyout({
     if (target && !target.isDestroyed()) target.destroy();
   }
 
+  /**
+   * @param {string} channel
+   * @param {unknown} payload anything that can be sent to a renderer
+   */
   function send(channel, payload) {
     if (!alive()) return false;
     /** @type {BrowserWindow} */ (win).webContents.send(channel, payload);
@@ -316,7 +375,7 @@ function createTrayFlyout({
     send,
     reposition: place,
     isOpen: () => wanted,
-    isSender: (event) => isMainFrameOf(win, event),
+    isSender: (/** @type {IpcMainInvokeEvent} */ event) => isMainFrameOf(win, event),
     window: () => (alive() ? win : null),
   };
 }

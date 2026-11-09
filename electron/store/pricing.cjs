@@ -4,6 +4,33 @@
 // of one usage row at today's catalogue prices.
 
 /** @typedef {import('../../src/types').PriceRow} PriceRow */
+/** @typedef {import('../types').PriceCatalogRow} PriceCatalogRow */
+/**
+ * What is priced: the token counts of one request, or of a sum of requests
+ * of one model in one long-context tier. A usage_events row is one.
+ * @typedef {object} PricedUsage
+ * @property {string | null} [model]
+ * @property {string} [source_id]
+ * @property {number} [input_tokens]
+ * @property {number} [cached_input_tokens]
+ * @property {number} [cache_write_input_tokens]
+ * @property {number} [cache_write_5m_input_tokens]
+ * @property {number} [cache_write_1h_input_tokens]
+ * @property {number} [output_tokens]
+ * @property {number | null} [contextTier] On a sum: how many long-context thresholds each request's prompt is over.
+ */
+/**
+ * A price as the settings screen sends it.
+ * @typedef {object} PriceUpdate
+ * @property {string} model
+ * @property {number} inputUsdPerMillion
+ * @property {number} cacheWriteUsdPerMillion
+ * @property {number} cacheWrite1hUsdPerMillion
+ * @property {number} cacheReadUsdPerMillion
+ * @property {number} outputUsdPerMillion
+ * @property {string | null} [effectiveFrom]
+ * @property {string | null} [sourceUrl]
+ */
 
 const { iso } = require('./shared.cjs');
 
@@ -23,6 +50,7 @@ const LONG_CONTEXT_THRESHOLDS = [...new Set([...LONG_CONTEXT_PRICING.values()].m
 // How many thresholds a request's prompt is over, as calculateCost's
 // contextTier. Queries that sum requests group by it, so no sum mixes requests
 // either side of the threshold their model is priced by.
+/** @param {string} promptSql */
 function contextTierSql(promptSql) {
   return LONG_CONTEXT_THRESHOLDS.map((threshold) => `(${promptSql} > ${threshold})`).join(' + ');
 }
@@ -37,6 +65,7 @@ const CONTEXT_TIER_SQL = contextTierSql(`CASE WHEN source_id = 'codex'
 const MAX_PRICE_MODEL_LENGTH = 120;
 const MAX_PRICE_SOURCE_URL_LENGTH = 2048;
 
+/** @param {unknown} value */
 function priceModelName(value) {
   if (typeof value !== 'string') return null;
   const model = value.trim();
@@ -44,12 +73,14 @@ function priceModelName(value) {
   return model;
 }
 
+/** @param {unknown} value */
 function priceEffectiveFrom(value) {
   if (value == null || value === '') return iso().slice(0, 10);
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(Date.parse(value))) return null;
   return value;
 }
 
+/** @param {unknown} value */
 function priceSourceUrl(value) {
   if (value == null || value === '') return null;
   if (typeof value !== 'string' || value.length > MAX_PRICE_SOURCE_URL_LENGTH || /[\p{Cc}\p{Cf}]/u.test(value)) return undefined;
@@ -106,7 +137,12 @@ const VERSION_SUFFIX = /^(?:\d{8}|\d{4}(?:-\d{2}){0,2})$/;
 // Analytics runs resolve the same handful of model names thousands of times.
 // Inside `withPriceCache` every lookup after the first is a Map hit and the
 // catalogue is read once; outside it, each call reads the live table.
-/** @param {import('../store.cjs').Store} store */
+/**
+ * @template T
+ * @param {import('../store.cjs').Store} store
+ * @param {() => T} run
+ * @returns {T}
+ */
 function withPriceCache(store, run) {
   if (store.priceCache) return run();
   store.priceCache = { byModel: new Map(), rows: null };
@@ -117,7 +153,11 @@ function withPriceCache(store, run) {
   }
 }
 
-/** @param {import('../store.cjs').Store} store */
+/**
+ * @param {import('../store.cjs').Store} store
+ * @param {string | null | undefined} model
+ * @returns {PriceCatalogRow | null}
+ */
 function resolvePrice(store, model) {
   if (!model) return null;
   const cache = store.priceCache;
@@ -127,14 +167,19 @@ function resolvePrice(store, model) {
   return resolved;
 }
 
-/** @param {import('../store.cjs').Store} store */
+/**
+ * @param {import('../store.cjs').Store} store
+ * @param {string} model
+ * @param {import('../store.cjs').Store['priceCache']} [cache]
+ * @returns {PriceCatalogRow | null}
+ */
 function lookupPrice(store, model, cache) {
-  const direct = store.prepare('SELECT * FROM price_catalog WHERE model = ?').get(model);
+  const direct = /** @type {PriceCatalogRow | undefined} */ (store.prepare('SELECT * FROM price_catalog WHERE model = ?').get(model));
   if (direct) return direct;
   const normalized = model.toLowerCase().trim();
-  const rows = cache
+  const rows = /** @type {PriceCatalogRow[]} */ (cache
     ? (cache.rows ??= store.prepare('SELECT * FROM price_catalog').all())
-    : store.prepare('SELECT * FROM price_catalog').all();
+    : store.prepare('SELECT * FROM price_catalog').all());
   const exactInsensitive = rows.find((row) => row.model.toLowerCase() === normalized);
   if (exactInsensitive) return exactInsensitive;
   const candidates = rows
@@ -152,17 +197,21 @@ function lookupPrice(store, model, cache) {
  * @returns {PriceRow[]}
  */
 function getPriceCatalog(store) {
-  return store.prepare(`
+  return /** @type {PriceRow[]} */ (store.prepare(`
       SELECT model, input_usd_per_million, cache_write_usd_per_million,
         cache_write_1h_usd_per_million, cache_read_usd_per_million,
         output_usd_per_million, effective_from, source_url
       FROM price_catalog ORDER BY CASE WHEN model LIKE 'claude-%' THEN 2 ELSE 1 END, model
-    `).all();
+    `).all());
 }
 
-/** @param {import('../store.cjs').Store} store */
+/**
+ * @param {import('../store.cjs').Store} store
+ * @param {PriceUpdate} row
+ * @returns {PriceRow[]}
+ */
 function updatePrice(store, row) {
-  const values = ['inputUsdPerMillion', 'cacheWriteUsdPerMillion', 'cacheWrite1hUsdPerMillion', 'cacheReadUsdPerMillion', 'outputUsdPerMillion']
+  const values = /** @type {const} */ (['inputUsdPerMillion', 'cacheWriteUsdPerMillion', 'cacheWrite1hUsdPerMillion', 'cacheReadUsdPerMillion', 'outputUsdPerMillion'])
     .map((key) => Number(row[key]));
   const model = priceModelName(row.model);
   if (!model) throw new Error(`Model name must be plain text of at most ${MAX_PRICE_MODEL_LENGTH} characters.`);
@@ -189,7 +238,10 @@ function updatePrice(store, row) {
   return store.getPriceCatalog();
 }
 
-/** @param {import('../store.cjs').Store} store */
+/**
+ * @param {import('../store.cjs').Store} store
+ * @param {PricedUsage} row
+ */
 function calculateCost(store, row) {
   // This dashboard answers the counterfactual "what would these tokens cost
   // at today's API catalogue?" A legacy/imported reported charge is useful

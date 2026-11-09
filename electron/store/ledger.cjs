@@ -3,6 +3,11 @@
 // Everything the collectors write: source status, allowance readings, usage
 // events, daily totals and import cursors, plus the compaction of old readings.
 
+/** @typedef {import('../types').IsoTime} IsoTime */
+/** @typedef {import('../types').ObservationRow} ObservationRow */
+/** @typedef {import('../types').ImportedFileRow} ImportedFileRow */
+/** @typedef {import('../types').Reading & { id: number, original: ObservationRow }} CompactionRow A stored reading with its times as numbers. */
+
 const { normaliseObservation, clusterByWindow } = require('../forecast.cjs');
 const { MAX_QUOTA_RESET_AHEAD_MS, QUOTA_CLOCK_SKEW_MS } = require('../quota-time.cjs');
 const { KNOWN_SOURCE_IDS, DAY_MS, iso, validIso, optionalText, json, dateKey } = require('./shared.cjs');
@@ -20,7 +25,7 @@ const COMPACT_AFTER_MS = 60 * DAY_MS;
  * @param {string} id
  * @param {string} status
  * @param {string | null} [detail]
- * @param {Record<string, any>} [metadata]
+ * @param {Record<string, unknown>} [metadata]
  * @param {{ scanSucceeded?: boolean }} [options]
  */
 function setSourceStatus(store, id, status, detail, metadata, options = {}) {
@@ -48,7 +53,10 @@ function setSourceStatus(store, id, status, detail, metadata, options = {}) {
     `).run(status, detail || null, JSON.stringify(metadata), attemptedAt, successfulAt, id);
 }
 
-/** @param {import('../store.cjs').Store} store */
+/**
+ * @param {import('../store.cjs').Store} store
+ * @param {import('../types').ObservationInput} observation
+ */
 function recordObservation(store, observation) {
   if (!KNOWN_SOURCE_IDS.has(observation.sourceId)) throw new Error(`Unknown source: ${observation.sourceId || 'missing'}.`);
   if (typeof observation.bucketId !== 'string' || !observation.bucketId.trim()) {
@@ -101,6 +109,10 @@ function recordObservation(store, observation) {
   // Only a status-line reading is dated by the fetch its session made; see
   // the Claude inbox import. Every other reading is evidence of its own time.
   // `seenSince` is the session's first redraw showing the same limits.
+  /**
+   * @param {IsoTime | null | undefined} value
+   * @param {string} label
+   */
   const statusLineTime = (value, label) => {
     if (value == null || provenance !== 'official-statusline') return null;
     const at = validIso(value, label);
@@ -167,7 +179,11 @@ function recordObservation(store, observation) {
     .run(observedAt, observation.sourceId, observedAt);
 }
 
-/** @param {import('../store.cjs').Store} store */
+/**
+ * @param {import('../store.cjs').Store} store
+ * @param {import('../types').UsageEventInput} event
+ * @returns {number} How many rows the write changed.
+ */
 function recordUsageEvent(store, event) {
   if (!KNOWN_SOURCE_IDS.has(event.sourceId)) throw new Error(`Unknown source: ${event.sourceId || 'missing'}.`);
   if (typeof event.eventKey !== 'string' || !event.eventKey.trim()) throw new Error('Usage event key is required.');
@@ -176,6 +192,7 @@ function recordUsageEvent(store, event) {
   const sessionId = optionalText(event.sessionId, 'Usage event session ID');
   const model = optionalText(event.model, 'Usage event model');
   const occurredAt = validIso(event.occurredAt, 'Event time');
+  /** @param {unknown} value */
   const token = (value) => {
     if (value == null) return 0;
     if (!['number', 'string'].includes(typeof value) || (typeof value === 'string' && !value.trim())) {
@@ -252,20 +269,29 @@ function recordUsageEvent(store, event) {
   return result.changes;
 }
 
-/** @param {import('../store.cjs').Store} store */
+/**
+ * @param {import('../store.cjs').Store} store
+ * @param {string} sourceId
+ * @returns {string}
+ */
 function getManualBucketId(store, sourceId) {
   if (sourceId === 'claude') return 'seven_day';
   if (sourceId === 'claude-fable') return 'fable_seven_day';
   if (sourceId !== 'codex') return 'manual-weekly';
-  const row = store.prepare(`SELECT bucket_id FROM quota_observations
+  const row = /** @type {{ bucket_id: string } | undefined} */ (store.prepare(`SELECT bucket_id FROM quota_observations
       WHERE source_id = 'codex' AND COALESCE(window_minutes, 0) >= 10000
         AND bucket_id NOT IN ('manual-weekly', 'codex:weekly')
         AND json_valid(metadata_json) AND json_extract(metadata_json, '$.limitId') = 'codex'
-      ORDER BY observed_at DESC, bucket_id ASC LIMIT 1`).get();
+      ORDER BY observed_at DESC, bucket_id ASC LIMIT 1`).get());
   return row?.bucket_id || 'codex:weekly';
 }
 
-/** @param {import('../store.cjs').Store} store */
+/**
+ * @param {import('../store.cjs').Store} store
+ * @param {string} sourceId
+ * @param {string} usageDate A calendar date, YYYY-MM-DD.
+ * @param {number} tokens
+ */
 function upsertDailyUsage(store, sourceId, usageDate, tokens) {
   if (!KNOWN_SOURCE_IDS.has(sourceId) || !isForecastDate(usageDate) || !Number.isSafeInteger(tokens) || tokens < 0) {
     throw new Error('Invalid daily usage date or token count.');
@@ -280,14 +306,24 @@ function upsertDailyUsage(store, sourceId, usageDate, tokens) {
 // `state` carries whatever an incremental reader needs to resume mid-file
 // (the Codex reader's current model, for instance), so a growing transcript
 // is parsed once, not once per refresh.
-/** @param {import('../store.cjs').Store} store */
+/**
+ * @param {import('../store.cjs').Store} store
+ * @param {string} filePath
+ * @returns {(ImportedFileRow & { state: any }) | null} `state` is the reader's own JSON, in whatever shape it saved.
+ */
 function getImportedFile(store, filePath) {
-  const row = store.prepare('SELECT * FROM imported_files WHERE file_path = ?').get(filePath);
+  const row = /** @type {ImportedFileRow | undefined} */ (store.prepare('SELECT * FROM imported_files WHERE file_path = ?').get(filePath));
   if (!row) return null;
   return { ...row, state: json(row.state_json, null) };
 }
 
-/** @param {import('../store.cjs').Store} store */
+/**
+ * @param {import('../store.cjs').Store} store
+ * @param {string} filePath
+ * @param {number} modifiedMs
+ * @param {number} sizeBytes
+ * @param {unknown} [state]
+ */
 function markImportedFile(store, filePath, modifiedMs, sizeBytes, state = /** @type {any} */ (null)) {
   store.prepare(`
       INSERT INTO imported_files(file_path, modified_ms, size_bytes, imported_at, state_json)
@@ -300,29 +336,39 @@ function markImportedFile(store, filePath, modifiedMs, sizeBytes, state = /** @t
     `).run(filePath, modifiedMs, sizeBytes, iso(), state == null ? null : JSON.stringify(state));
 }
 
-/** @param {import('../store.cjs').Store} store */
+/**
+ * @param {import('../store.cjs').Store} store
+ * @param {string} filePath
+ */
 function forgetImportedFile(store, filePath) {
   store.prepare('DELETE FROM imported_files WHERE file_path = ?').run(filePath);
 }
 
 // Housekeeping after a refresh: compact old polling rows so the table stops
 // growing with the refresh interval. Manual readings are never touched.
-/** @param {import('../store.cjs').Store} store */
+/**
+ * @param {import('../store.cjs').Store} store
+ * @param {import('../types').Ms} [nowMs]
+ */
 function compactObservations(store, nowMs = Date.now()) {
   const edge = new Date(nowMs - COMPACT_AFTER_MS);
   edge.setHours(0, 0, 0, 0);
   const cutoff = iso(edge.getTime());
   return store.transaction(() => {
-    const state = store.prepare('SELECT * FROM quota_compaction_state WHERE id = 1').get();
+    const state = /** @type {{ through_at: IsoTime | null, dirty_at: IsoTime | null }} */ (
+      store.prepare('SELECT * FROM quota_compaction_state WHERE id = 1').get());
     const lower = [state.through_at, state.dirty_at].filter(Boolean).sort()[0];
     if (!lower || lower >= cutoff) return { removed: 0, cutoff };
     const from = new Date(lower); from.setHours(0, 0, 0, 0);
+    /** @type {Map<string, CompactionRow[]>} */
     const buckets = new Map();
-    for (const row of store.prepare('SELECT * FROM quota_observations WHERE observed_at >= ? AND observed_at < ? ORDER BY observed_at, id')
-      .iterate(iso(from.getTime()), cutoff)) {
+    for (const row of /** @type {IterableIterator<ObservationRow & { id: number }>} */ (
+      store.prepare('SELECT * FROM quota_observations WHERE observed_at >= ? AND observed_at < ? ORDER BY observed_at, id')
+      .iterate(iso(from.getTime()), cutoff))) {
       const key = JSON.stringify([row.source_id, row.bucket_id, row.window_minutes]);
       if (!buckets.has(key)) buckets.set(key, []);
-      buckets.get(key).push({ ...normaliseObservation(row), id: row.id, original: row });
+      // The line above put a list there if there was none.
+      /** @type {CompactionRow[]} */ (buckets.get(key)).push({ ...normaliseObservation(row), id: row.id, original: row });
     }
     let removed = 0;
     const remove = store.prepare('DELETE FROM quota_observations WHERE id = ?');
@@ -331,15 +377,18 @@ function compactObservations(store, nowMs = Date.now()) {
     const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     for (const rows of buckets.values()) {
       for (const cluster of clusterByWindow(rows)) {
+        /** @type {Map<string, CompactionRow[]>} */
         const days = new Map();
         for (const row of cluster.rows) {
           const day = dateKey(row.observedAt, timeZone);
           if (!days.has(day)) days.set(day, []);
-          days.get(day).push(row);
+          // The line above put a list there if there was none.
+          /** @type {CompactionRow[]} */ (days.get(day)).push(row);
         }
         for (const day of days.values()) {
           const peak = day.reduce((best, row) => row.usedPercent >= best.usedPercent ? row : best);
-          const keep = new Set([day[0].id, day.at(-1).id, peak.id]);
+          // A day is only in the map with at least one row, so it has a last one.
+          const keep = new Set([day[0].id, /** @type {CompactionRow} */ (day.at(-1)).id, peak.id]);
           for (const row of day) if (!keep.has(row.id) && row.provenance !== 'manual-official') removed += remove.run(row.id).changes;
         }
       }

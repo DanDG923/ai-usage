@@ -3,6 +3,17 @@
 // Backups: writing them, reading them back, merging one into the live
 // database, pruning old sets and the daily schedule.
 
+/** @typedef {import('../types').IsoTime} IsoTime */
+/** @typedef {import('../types').Ms} Ms */
+/** @typedef {Record<string, any>} RestoreRow One record of a backup. Nothing in it has been checked; the restore tests each field it reads. */
+/**
+ * What a restore merges: a JSON export as parsed from disk, or a SQLite
+ * backup read into the same shape (see readDatabaseBackup). Its record lists
+ * are arrays in an export and row iterators in a SQLite backup, and nothing
+ * in it has been checked: restoreFromExport validates it field by field.
+ * @typedef {Record<string, any>} RestorePayload
+ */
+
 const fs = require('node:fs');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
@@ -22,7 +33,10 @@ const BACKUP_ATTEMPT_KEY = 'maintenance.backup-attempt';
 // `exportJson: false` writes the SQLite copy alone. The JSON export is also
 // skipped once it outgrows what readExport accepts: the SQLite copy
 // restores a ledger of any size, and the export would only cost time.
-/** @param {import('../store.cjs').Store} store */
+/**
+ * @param {import('../store.cjs').Store} store
+ * @param {{ exportJson?: boolean, keep?: string | null }} [options]
+ */
 function createBackup(store, options = {}) {
   const stamp = `${new Date().toISOString().replaceAll(':', '-').replaceAll('.', '-')}-${require('node:crypto').randomUUID()}`;
   const databasePath = path.join(store.backupDirectory, `ai-usage-${stamp}.sqlite`);
@@ -62,7 +76,11 @@ function createBackup(store, options = {}) {
 // Reading is a separate step so a caller can load the export into memory
 // before taking its own backup: creating one prunes old sets, and the file
 // the user chose from the backup folder can be among them.
-/** @param {import('../store.cjs').Store} store */
+/**
+ * @param {import('../store.cjs').Store} store
+ * @param {string} filePath
+ * @returns {RestorePayload}
+ */
 function readExport(store, filePath) {
   if (/\.sqlite$/i.test(String(filePath || ''))) return store.readDatabaseBackup(filePath);
   return require('../backup-export.cjs').readExport(filePath);
@@ -71,15 +89,22 @@ function readExport(store, filePath) {
 // A SQLite backup restores a ledger of any size: its records are read as
 // the merge consumes them, in the export's shape, so restoreFromExport
 // applies the same validation and merge rules. The caller calls close().
-/** @param {import('../store.cjs').Store} store */
+/**
+ * @param {import('../store.cjs').Store} store
+ * @param {string} filePath
+ * @returns {RestorePayload}
+ */
 function readDatabaseBackup(store, filePath) {
   if (!filePath || !fs.existsSync(filePath)) throw new Error('That backup file could not be found.');
+  /** @type {DatabaseSync | undefined} */
   let database;
   try {
     database = new DatabaseSync(filePath, { readOnly: true });
-    const tables = new Set(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name));
+    const tables = new Set(/** @type {{ name: string }[]} */ (database.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()).map((row) => row.name));
     if (!['settings', 'quota_observations', 'usage_events'].every((table) => tables.has(table))) throw new Error('Not an AI Usage database.');
-    const rows = (table) => (tables.has(table) ? database.prepare(`SELECT * FROM ${table}`).iterate() : []);
+    // On the two casts below: `database` was opened above and is never reassigned.
+    /** @param {string} table */
+    const rows = (table) => (tables.has(table) ? /** @type {DatabaseSync} */ (database).prepare(`SELECT * FROM ${table}`).iterate() : []);
     return {
       schemaVersion: 1,
       settings: storedSettings(database),
@@ -88,7 +113,7 @@ function readDatabaseBackup(store, filePath) {
       dailyUsage: rows('account_daily_usage'),
       prices: [...rows('price_catalog')],
       desktopEstimates: [...rows('desktop_chat_estimates')],
-      close: () => database.close(),
+      close: () => /** @type {DatabaseSync} */ (database).close(),
     };
   } catch {
     try { database?.close(); } catch { /* Report the unreadable file instead. */ }
@@ -96,7 +121,10 @@ function readDatabaseBackup(store, filePath) {
   }
 }
 
-/** @param {import('../store.cjs').Store} store */
+/**
+ * @param {import('../store.cjs').Store} store
+ * @param {Ms} [nowMs]
+ */
 function sweepPartialBackups(store, nowMs = Date.now()) {
   // Missing registrations can mean database recovery, not failed backups.
   // Completed files may be the only remaining history; only partials are disposable.
@@ -110,7 +138,10 @@ function sweepPartialBackups(store, nowMs = Date.now()) {
   }
 }
 
-/** @param {import('../store.cjs').Store} store */
+/**
+ * @param {import('../store.cjs').Store} store
+ * @param {string} filePath
+ */
 function restoreFromBackup(store, filePath) {
   const payload = store.readExport(filePath);
   try {
@@ -125,7 +156,11 @@ function restoreFromBackup(store, filePath) {
 // the exception — they are replaced, and reported separately so the caller
 // can say so. Records the export cannot supply validly are skipped and
 // counted, never guessed, and one bad row never costs the others.
-/** @param {import('../store.cjs').Store} store */
+/**
+ * @param {import('../store.cjs').Store} store
+ * @param {RestorePayload} payload
+ * @returns {import('../../src/types').RestoreCounts}
+ */
 function restoreFromExport(store, payload) {
   const nowMs = Date.now();
   const unreadable = () => new Error('That file is not a readable AI Usage export.');
@@ -134,9 +169,14 @@ function restoreFromExport(store, payload) {
   if (!Number.isFinite(schemaVersion) || schemaVersion < 1) throw unreadable();
   if (schemaVersion > 1) throw new Error(`This backup was written by a newer version of AI Usage (schema ${schemaVersion}).`);
   // Arrays from a JSON export, or row iterators from a SQLite backup.
+  /**
+   * @param {any} value
+   * @returns {Iterable<RestoreRow> & { length?: number }}
+   */
   const list = (value) => (Array.isArray(value)
     || (value && typeof value === 'object' && typeof value[Symbol.iterator] === 'function') ? value : []);
   const knownSources = new Set(SOURCE_DEFINITIONS.map(([id]) => id));
+  /** @type {import('../../src/types').RestoreCounts} */
   const counts = { settings: 0, observations: 0, usageEvents: 0, dailyUsage: 0, prices: 0, skipped: 0 };
   let restoredCodexEvents = 0;
   let restoredClaudeEvents = 0;
@@ -187,6 +227,7 @@ function restoreFromExport(store, payload) {
       INSERT INTO settings(key, value_json, updated_at) VALUES (?, ?, ?)
       ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
     `);
+  /** @param {unknown} value */
   const finiteNumber = (value) => {
     // Number(null), Number(''), Number(false) and Number([]) are all 0, so
     // coercing first would accept those as a legitimate zero.
@@ -207,6 +248,7 @@ function restoreFromExport(store, payload) {
     // against what would actually be written. Testing it against the raw
     // export let a rejected end hour vouch for a start hour that then
     // outlived it, leaving a start-after-end schedule updateSettings refuses.
+    /** @type {Record<string, unknown>} */
     const accepted = {};
     for (const [exportedKey, value] of Object.entries(exported)) {
       const key = Object.hasOwn(SETTING_ALIASES, exportedKey) ? SETTING_ALIASES[exportedKey] : exportedKey;
@@ -265,6 +307,7 @@ function restoreFromExport(store, payload) {
         if (!metadata) throw unreadable();
         // A backup from before readings were dated, or an unusable date,
         // restores the reading undated rather than not at all.
+        /** @param {unknown} value */
         const statusLineTime = (value) => {
           const ms = provenance === 'official-statusline' && typeof value === 'string' ? Date.parse(value) : Number.NaN;
           return Number.isFinite(ms) && ms <= Date.parse(observedAt) ? iso(ms) : null;
@@ -286,6 +329,7 @@ function restoreFromExport(store, payload) {
     for (const row of list(payload.usageEvents)) {
       try {
         if (!knownSources.has(row.source_id) || typeof row.event_key !== 'string' || !row.event_key) throw unreadable();
+        /** @param {unknown} value */
         const tokens = (value) => {
           const parsed = value == null ? 0 : finiteNumber(value);
           if (parsed === null || !Number.isSafeInteger(parsed) || parsed < 0) throw unreadable();
@@ -420,12 +464,18 @@ function restoreFromExport(store, payload) {
   return counts;
 }
 
-/** @param {import('../store.cjs').Store} store */
+/**
+ * @param {import('../store.cjs').Store} store
+ * @param {number} [retentionCount]
+ * @param {string | null} [keepPath]
+ * @returns {number} How many backup sets were removed.
+ */
 function pruneBackups(store, retentionCount = DEFAULT_SETTINGS.backupRetentionCount, keepPath = /** @type {string | null} */ (null)) {
   const keep = Math.max(1, Math.min(365, Number(retentionCount) || DEFAULT_SETTINGS.backupRetentionCount));
   const protectedPath = keepPath ? path.resolve(keepPath) : null;
-  const rows = store.prepare('SELECT * FROM backups ORDER BY created_at DESC, id DESC').all();
+  const rows = /** @type {import('../types').BackupRow[]} */ (store.prepare('SELECT * FROM backups ORDER BY created_at DESC, id DESC').all());
   const root = path.resolve(store.backupDirectory);
+  /** @param {string} filePath */
   const removeFile = (filePath) => {
     if (!filePath) return true;
     const target = path.resolve(filePath);
@@ -454,15 +504,19 @@ function pruneBackups(store, retentionCount = DEFAULT_SETTINGS.backupRetentionCo
 // Whether a scheduled backup is due, without writing anything. The window
 // process asks this after every collection, so the storage worker is only
 // started when there is a backup to make.
-/** @param {import('../store.cjs').Store} store */
+/**
+ * @param {import('../store.cjs').Store} store
+ * @param {Ms} [nowMs]
+ */
 function scheduledBackupDue(store, nowMs = Date.now()) {
   const frequency = store.getSettings().backupFrequency;
   if (!frequency || frequency === 'off') return false;
+  /** @type {Record<string, number>} */
   const intervals = { daily: 24 * 60 * 60 * 1000, weekly: 7 * 24 * 60 * 60 * 1000 };
   const interval = intervals[frequency] || intervals.daily;
-  const attempt = store.prepare('SELECT value_json FROM settings WHERE key = ?').get(BACKUP_ATTEMPT_KEY);
+  const attempt = /** @type {{ value_json: string } | undefined} */ (store.prepare('SELECT value_json FROM settings WHERE key = ?').get(BACKUP_ATTEMPT_KEY));
   if (attempt && nowMs - Number(json(attempt.value_json, 0)) < 60 * 60_000) return false;
-  const latest = store.prepare('SELECT created_at FROM backups ORDER BY created_at DESC LIMIT 1').get();
+  const latest = /** @type {{ created_at: IsoTime } | undefined} */ (store.prepare('SELECT created_at FROM backups ORDER BY created_at DESC LIMIT 1').get());
   return !(latest && nowMs - new Date(latest.created_at).getTime() < interval);
 }
 

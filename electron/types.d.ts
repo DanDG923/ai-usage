@@ -6,13 +6,27 @@
 export type {
   AllowanceChange, ClaudeExtraUsage, CostAnalytics, CycleRow, DailyUsage, DashboardVerdict, FableActivity, Forecast,
   ForecastState, Point, PriceRow, Quota, QuotaWindow, SessionCost, SessionPage, Settings, SharedPool, SharedPoolApplied,
-  Snapshot, Source, TaskCost, TaskPage, TokenCapacityEstimate,
+  Snapshot, Source, TaskCost, TaskPage, TokenCapacityEstimate, DesktopEstimates, ModelCost, RestoreCounts,
+  SessionPageOptions, UpdateStatus,
 } from '../src/types';
 
 import type { Snapshot } from '../src/types';
 
 /** The handle on the database: electron/store.cjs. */
 export type Store = import('./store.cjs').Store;
+
+type StatementSync = import('node:sqlite').StatementSync;
+type SqlValue = import('node:sqlite').SQLInputValue;
+type StatementResult = { changes: number; lastInsertRowid: number };
+
+/**
+ * A prepared statement as the store hands it out. The store never asks SQLite
+ * for big integers, so a write reports its row count as a number.
+ */
+export type Statement = Omit<StatementSync, 'run'> & {
+  run(...anonymousParameters: SqlValue[]): StatementResult;
+  run(namedParameters: Record<string, SqlValue>, ...anonymousParameters: SqlValue[]): StatementResult;
+};
 
 /** A subscription as the database and the collectors name it. */
 export type SourceId = 'codex' | 'claude' | 'claude-fable';
@@ -44,9 +58,13 @@ export type ObservationRow = {
   fetched_after?: IsoTime | null;
   /** The first redraw in which its session showed the same limits. */
   seen_since?: IsoTime | null;
-  /** Set on a projected Fable point: already expressed in the current allowance. */
-  allowance_scaled?: boolean;
 };
+
+/**
+ * A point of the projected Fable estimate, shaped like a row so the forecast
+ * can learn from it. It is already expressed in the current allowance.
+ */
+export type ProjectedObservationRow = ObservationRow & { allowance_scaled?: boolean };
 
 /** usage_events: the tokens of one request. */
 export type UsageEventRow = {

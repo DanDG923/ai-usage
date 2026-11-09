@@ -1,15 +1,26 @@
 'use strict';
 
+/**
+ * @param {number | null | undefined} minutes
+ * @param {string} [fallback]
+ */
 function durationLabel(minutes, fallback = 'Allowance') {
   if (minutes === 300) return 'Five hour';
   if (minutes === 10_080) return 'Weekly';
   if (minutes === 1440) return 'Daily';
-  if (!Number.isFinite(minutes) || minutes <= 0) return fallback;
-  if (minutes % 1440 === 0) return String(minutes / 1440) + '-day';
-  if (minutes % 60 === 0) return String(minutes / 60) + '-hour';
+  // Number.isFinite is false for anything but a number, so `minutes` is one
+  // wherever it is compared or divided below.
+  if (!Number.isFinite(minutes) || /** @type {number} */ (minutes) <= 0) return fallback;
+  if (/** @type {number} */ (minutes) % 1440 === 0) return String(/** @type {number} */ (minutes) / 1440) + '-day';
+  if (/** @type {number} */ (minutes) % 60 === 0) return String(/** @type {number} */ (minutes) / 60) + '-hour';
   return String(minutes) + '-minute';
 }
 
+/**
+ * @param {string} bucketName
+ * @param {number | null | undefined} windowMinutes
+ * @param {Record<string, unknown> | null} [metadata]
+ */
 function codexQuotaLabel(bucketName, windowMinutes, metadata = {}) {
   // Persisted/provider metadata can contain JSON values with unsafe coercions.
   const limitId = typeof metadata?.limitId === 'string' ? metadata.limitId : null;

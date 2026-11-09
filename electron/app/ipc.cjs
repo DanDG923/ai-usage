@@ -10,6 +10,15 @@ const { flyoutPayload, normalizeNavigationTarget } = require('../flyout.cjs');
 const { relaunchApplication } = require('../installer-launch.cjs');
 const { closed } = require('./closed.cjs');
 
+/** @typedef {import('electron').IpcMainInvokeEvent} IpcMainInvokeEvent */
+
+/**
+ * A channel's handler. What a renderer sends is not trusted, so each argument
+ * arrives as `unknown` and the handler checks it before use.
+ *
+ * @typedef {(event: IpcMainInvokeEvent, ...args: unknown[]) => unknown} IpcHandler
+ */
+
 const EMPTY_SESSION_PAGE = Object.freeze({ rows: [], total: 0, page: 1, pageSize: 20, totalPages: 0 });
 
 /** @param {import('./application.cjs').Application} main */
@@ -24,6 +33,7 @@ function createIpcModule(main) {
   // Only the dashboard's own main frame may invoke the bridge. Every handler is
   // wrapped, not just setup: a restore or helper install changes files outside
   // the app, and a future embedded frame must never be able to request either.
+  /** @param {IpcMainInvokeEvent} event */
   function assertDashboardSender(event) {
     const { window } = main.dashboard;
     if (!window || window.isDestroyed() || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) {
@@ -31,13 +41,17 @@ function createIpcModule(main) {
     }
   }
 
+  /**
+   * @param {string} channel
+   * @param {IpcHandler} handler
+   */
   function handleIpc(channel, handler) {
     electronIpcMain.handle(channel, (event, ...args) => {
       ipc.assertDashboardSender(event);
       ipc.activeDashboardRequests++;
       try {
         const result = handler(event, ...args);
-        if (result && typeof result.then === 'function') {
+        if (result && typeof /** @type {{ then?: unknown }} */ (result).then === 'function') {
           return Promise.resolve(result).finally(() => { ipc.activeDashboardRequests--; });
         }
         ipc.activeDashboardRequests--;
@@ -51,12 +65,17 @@ function createIpcModule(main) {
 
   // The flyout's channels mirror the dashboard's rule: only the flyout's own main
   // frame may call them, and assertDashboardSender refuses the flyout in turn.
+  /** @param {IpcMainInvokeEvent} event */
   function assertFlyoutSender(event) {
     if (!main.tray.flyout?.isSender(event)) {
       throw new Error('This action is only available from the AI Usage tray flyout.');
     }
   }
 
+  /**
+   * @param {string} channel
+   * @param {IpcHandler} handler
+   */
   function handleFlyoutIpc(channel, handler) {
     electronIpcMain.handle(channel, (event, ...args) => {
       ipc.assertFlyoutSender(event);
@@ -86,6 +105,7 @@ function createIpcModule(main) {
     ipc.handleFlyoutIpc('flyout:close', () => { main.tray.flyout?.hide(); });
   }
 
+  /** @param {import('electron').WebContents} contents */
   function hardenWebContents(contents) {
     contents.setWindowOpenHandler(() => ({ action: 'deny' }));
     // A page reloading itself is the only navigation allowed: Electron raises
@@ -115,7 +135,8 @@ function createIpcModule(main) {
       maintenance: main.maintenance,
       databaseJobs: main.databaseJobs,
       claudeSetup: main.claudeSetup,
-      claudeCodeMod: main.claudeCodeMod,
+      // Startup creates the mod before it registers these channels.
+      claudeCodeMod: /** @type {NonNullable<typeof main.claudeCodeMod>} */ (main.claudeCodeMod),
       updateChecker: main.updateChecker,
       installClaudeHelper, uninstallClaudeHelper, buildSummaryText, EMPTY_SESSION_PAGE,
       getWindow: () => main.dashboard.window,

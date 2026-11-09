@@ -9,6 +9,66 @@
 /** @typedef {import('../../src/types').FableActivity} FableActivity */
 /** @typedef {import('../../src/types').SessionPage} SessionPage */
 /** @typedef {import('../../src/types').TaskPage} TaskPage */
+/** @typedef {import('../../src/types').Settings} Settings */
+/** @typedef {import('../../src/types').SessionPageOptions} SessionPageOptions */
+/** @typedef {CostAnalytics['byModel'][number]} ModelCost */
+/** @typedef {import('../types').UsageEventRow} UsageEventRow */
+/** @typedef {import('../types').IsoTime} IsoTime */
+/** @typedef {import('../types').Ms} Ms */
+/**
+ * What analytics reads from the ledger: one session's requests of one model
+ * within a quarter hour and a long-context tier, summed, with the metadata
+ * that attributes them to a task or agent.
+ * @typedef {object} UsageGroup
+ * @property {string} event_key The first of the group's event keys.
+ * @property {string} source_id
+ * @property {string | null} session_id
+ * @property {string | null} model
+ * @property {string | null} project
+ * @property {string} metadata_json
+ * @property {IsoTime} first_occurred_at
+ * @property {IsoTime} occurred_at The latest request of the group.
+ * @property {number} event_count
+ * @property {number} contextTier
+ * @property {number} input_tokens
+ * @property {number} cached_input_tokens
+ * @property {number} cache_write_input_tokens
+ * @property {number} cache_write_5m_input_tokens
+ * @property {number} cache_write_1h_input_tokens
+ * @property {number} output_tokens
+ * @property {number} reasoning_output_tokens
+ */
+/**
+ * One model's totals while a period is added up, in US dollars.
+ * @typedef {object} ModelTotals
+ * @property {string} sourceId
+ * @property {string} model
+ * @property {number} inputTokens
+ * @property {number} cachedInputTokens
+ * @property {number} cacheWriteInputTokens
+ * @property {number} cacheWrite5mInputTokens
+ * @property {number} cacheWrite1hInputTokens
+ * @property {number} outputTokens
+ * @property {number} reasoningOutputTokens
+ * @property {number} costUsd
+ * @property {{ input: number, cacheRead: number, cacheWrite5m: number, cacheWrite1h: number, output: number }} breakdownUsd
+ * @property {number} coveredTokens
+ * @property {number} totalTokens
+ */
+/**
+ * One Fable version's requests and tokens in the current Fable window.
+ * @typedef {{
+ *   model: string | null, requests: number, input_tokens: number, cached_input_tokens: number,
+ *   cache_write_input_tokens: number, cache_write_5m_input_tokens: number, cache_write_1h_input_tokens: number,
+ *   output_tokens: number,
+ * }} FableModelUsage
+ */
+/**
+ * @typedef {{ project: string | null, costUsd: number, totalTokens: number, coveredTokens: number, sessions: Set<string>, sources: Set<string>, lastActivity: IsoTime }} ProjectTotals
+ */
+/**
+ * @typedef {{ sourceId: string, sessionId: string, model: string, project: string | null, occurredAt: IsoTime, totalTokens: number, costUsd: number, coveredTokens: number }} SessionTotals
+ */
 
 const { periodStart } = require('../time.cjs');
 const { TaskUsage } = require('../task-usage.cjs');
@@ -27,27 +87,37 @@ const ATTRIBUTION_METADATA = `CASE WHEN json_valid(metadata_json)
 
 /**
  * @param {import('../store.cjs').Store} store
+ * @param {number} [days]
+ * @param {Settings} [settings]
+ * @param {Ms} [nowMs]
  * @returns {CostAnalytics}
  */
 function getCostAnalytics(store, days = 30, settings = store.getSettings(), nowMs = Date.now()) {
   return store.getAnalytics(days, settings, nowMs).costs;
 }
 
-/** @param {import('../store.cjs').Store} store */
+/**
+ * @param {import('../store.cjs').Store} store
+ * @returns {number}
+ */
 function analyticsRevision(store) {
-  return store.prepare("SELECT COALESCE(SUM(revision), 0) AS revision FROM analytics_revisions WHERE domain IN ('usage', 'price')")
-    .get().revision;
+  return /** @type {{ revision: number }} */ (store.prepare("SELECT COALESCE(SUM(revision), 0) AS revision FROM analytics_revisions WHERE domain IN ('usage', 'price')")
+    .get()).revision;
 }
 
 /**
  * @param {import('../store.cjs').Store} store
+ * @param {number} days
+ * @param {Settings} settings
+ * @param {Ms} nowMs
  * @returns {Analytics}
  */
 function getAnalytics(store, days, settings, nowMs) {
   // Cache the ledger separately from the time-sensitive forecast snapshot.
   // SQLite tracks both writes on this connection and collector-process commits.
   // Never cache transactional reads: a rollback must not preserve their totals.
-  if (store.db.isTransaction) return store.withPriceCache(() => store.buildAnalytics(days, settings, nowMs));
+  // On the two casts below: withPriceCache returns what its callback returns.
+  if (store.db.isTransaction) return /** @type {Analytics} */ (store.withPriceCache(() => store.buildAnalytics(days, settings, nowMs)));
   const revision = store.analyticsRevision();
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const key = JSON.stringify([days, settings.currency, settings.usdToCurrency, timeZone]);
@@ -57,9 +127,10 @@ function getAnalytics(store, days, settings, nowMs) {
     store.costAnalyticsCache.set(key, cached);
     return cached.value;
   }
-  const nextEvent = store.prepare('SELECT occurred_at FROM usage_events WHERE occurred_at > ? ORDER BY occurred_at ASC LIMIT 1')
-    .get(iso(nowMs));
-  const value = store.withPriceCache(() => store.buildAnalytics(days, settings, nowMs));
+  const nextEvent = /** @type {{ occurred_at: IsoTime } | undefined} */ (
+    store.prepare('SELECT occurred_at FROM usage_events WHERE occurred_at > ? ORDER BY occurred_at ASC LIMIT 1')
+    .get(iso(nowMs)));
+  const value = /** @type {Analytics} */ (store.withPriceCache(() => store.buildAnalytics(days, settings, nowMs)));
   // The period starts at a local midnight, so it moves only when the day
   // changes; a future-dated record enters at its timestamp. Clock rollback
   // also forces a read.
@@ -72,6 +143,9 @@ function getAnalytics(store, days, settings, nowMs) {
 
 /**
  * @param {import('../store.cjs').Store} store
+ * @param {number} days
+ * @param {Settings} settings
+ * @param {Ms} nowMs
  * @returns {CostAnalytics}
  */
 function buildCostAnalytics(store, days, settings, nowMs) {
@@ -83,9 +157,17 @@ function buildCostAnalytics(store, days, settings, nowMs) {
 // requests search the complete ledger without re-costing it for each page.
 /**
  * @param {import('../store.cjs').Store} store
+ * @param {Partial<SessionPageOptions>} [options]
+ * @param {Ms} [nowMs]
  * @returns {SessionPage}
  */
 function getSessionPage(store, { days = 30, query = '', page = 1, pageSize = 20 } = {}, nowMs = Date.now()) {
+  /**
+   * @param {unknown} value
+   * @param {number} fallback
+   * @param {number} min
+   * @param {number} max
+   */
   const boundedInteger = (value, fallback, min, max) => {
     const number = Number(value);
     return Number.isFinite(number) ? Math.min(max, Math.max(min, Math.round(number))) : fallback;
@@ -106,9 +188,17 @@ function getSessionPage(store, { days = 30, query = '', page = 1, pageSize = 20 
 
 /**
  * @param {import('../store.cjs').Store} store
+ * @param {Partial<SessionPageOptions>} [options]
+ * @param {Ms} [nowMs]
  * @returns {TaskPage}
  */
 function getTaskPage(store, { days = 30, query = '', page = 1, pageSize = 20 } = {}, nowMs = Date.now()) {
+  /**
+   * @param {unknown} value
+   * @param {number} fallback
+   * @param {number} min
+   * @param {number} max
+   */
   const boundedInteger = (value, fallback, min, max) => {
     const number = Number(value);
     return Number.isFinite(number) ? Math.min(max, Math.max(min, Math.round(number))) : fallback;
@@ -128,10 +218,17 @@ function getTaskPage(store, { days = 30, query = '', page = 1, pageSize = 20 } =
     page: selectedPage, pageSize: size, totalPages };
 }
 
-/** @param {import('../store.cjs').Store} store */
+/**
+ * @param {import('../store.cjs').Store} store
+ * @param {IsoTime} since
+ * @param {IsoTime} until
+ * @returns {UsageGroup[]}
+ */
 function analyticsEvents(store, since, until) {
-  const revisions = new Map(store.prepare('SELECT day, revision FROM analytics_day_revisions WHERE day >= ? AND day <= ?')
-    .all(since.slice(0, 10), until.slice(0, 10)).map((row) => [row.day, row.revision]));
+  const revisions = new Map(/** @type {{ day: string, revision: number }[]} */ (
+    store.prepare('SELECT day, revision FROM analytics_day_revisions WHERE day >= ? AND day <= ?')
+    .all(since.slice(0, 10), until.slice(0, 10))).map((row) => [row.day, row.revision]));
+  /** @type {UsageGroup[]} */
   const result = [];
   const start = Date.parse(`${since.slice(0, 10)}T00:00:00.000Z`);
   for (let cursor = start; cursor <= Date.parse(until); cursor += DAY_MS) {
@@ -140,12 +237,13 @@ function analyticsEvents(store, since, until) {
     const upper = iso(Math.min(cursor + DAY_MS - 1, Date.parse(until)));
     const revision = revisions.get(day) ?? 0;
     const cached = !store.db.isTransaction ? store.analyticsDayCache.get(day) : null;
+    /** @type {UsageGroup[] | null} */
     let rows = cached?.revision === revision && cached.lower === lower && cached.upper === upper ? cached.rows : null;
     if (!rows) {
       // Preserve per-request context tiers and legacy cache durations before
       // aggregation. Task metadata stays distinct so parent/agent attribution
       // cannot merge. Counts remain request counts, not aggregate row counts.
-      rows = store.prepare(`SELECT MIN(event_key) AS event_key, source_id, session_id, model, project,
+      rows = /** @type {UsageGroup[]} */ (store.prepare(`SELECT MIN(event_key) AS event_key, source_id, session_id, model, project,
           ${ATTRIBUTION_METADATA} AS metadata_json,
           MIN(occurred_at) AS first_occurred_at, MAX(occurred_at) AS occurred_at, COUNT(*) AS event_count,
           ${CONTEXT_TIER_SQL} AS contextTier,
@@ -157,7 +255,7 @@ function analyticsEvents(store, since, until) {
           FROM usage_events WHERE occurred_at >= ? AND occurred_at <= ?
           GROUP BY source_id, session_id, CASE WHEN session_id IS NULL OR session_id = '' THEN event_key END,
             model, project, ${ATTRIBUTION_METADATA}, substr(occurred_at, 1, 13), CAST(substr(occurred_at, 15, 2) AS INTEGER) / 15, contextTier
-          ORDER BY first_occurred_at, occurred_at`).all(lower, upper);
+          ORDER BY first_occurred_at, occurred_at`).all(lower, upper));
       if (!store.db.isTransaction) {
         store.analyticsDayCache.set(day, { revision, lower, upper, rows });
         if (store.analyticsDayCache.size > 367) store.analyticsDayCache.delete(store.analyticsDayCache.keys().next().value);
@@ -172,6 +270,9 @@ function analyticsEvents(store, since, until) {
 
 /**
  * @param {import('../store.cjs').Store} store
+ * @param {number} days
+ * @param {Settings} settings
+ * @param {Ms} nowMs
  * @returns {Analytics}
  */
 function buildAnalytics(store, days, settings, nowMs) {
@@ -180,10 +281,15 @@ function buildAnalytics(store, days, settings, nowMs) {
   // Aggregate one row at a time instead of retaining the entire raw ledger
   // alongside the model, project, and session summaries.
   const events = store.analyticsEvents(since, iso(nowMs));
+  /** @type {Map<string, ModelTotals>} */
   const byModelMap = new Map();
+  /** @type {Map<string, CostAnalytics['unpricedModels'][number]>} */
   const unpricedModelsMap = new Map();
+  /** @type {Map<string, { date: string, codexUsd: number, claudeUsd: number }>} */
   const byDayMap = new Map();
+  /** @type {Map<string, ProjectTotals>} */
   const byProjectMap = new Map();
+  /** @type {Map<string, SessionTotals>} */
   const sessionMap = new Map();
   const taskUsage = new TaskUsage();
   const activityUsd = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0));
@@ -304,6 +410,7 @@ function buildAnalytics(store, days, settings, nowMs) {
   }
 
   const rate = Number(settings.usdToCurrency || 1);
+  /** @param {number} value */
   const toCurrency = (value) => round(value * rate, 2);
   const byModel = [...byModelMap.values()].map((row) => ({
     ...row,
@@ -311,7 +418,9 @@ function buildAnalytics(store, days, settings, nowMs) {
     cost: toCurrency(row.costUsd),
     // Keep category precision until display; rounding each event would erase
     // small charges. Price per event before grouping to preserve context tiers.
-    costBreakdown: Object.fromEntries(Object.entries(row.breakdownUsd).map(([key, value]) => [key, value * rate])),
+    // The same five categories as breakdownUsd, each converted.
+    costBreakdown: /** @type {NonNullable<ModelCost['costBreakdown']>} */ (
+      Object.fromEntries(Object.entries(row.breakdownUsd).map(([key, value]) => [key, value * rate]))),
     costShare: actualUsd > 0 && row.coveredTokens > 0 ? row.costUsd / actualUsd : null,
     coverage: row.totalTokens ? row.coveredTokens / row.totalTokens : 0,
   })).sort((a, b) => b.cost - a.cost);
@@ -369,9 +478,15 @@ function buildAnalytics(store, days, settings, nowMs) {
 // period is the dashboard's: the last N local calendar days. Given `write`,
 // text is handed over in batches as the ledger is read, so a long, busy
 // period is never held in memory as one string; otherwise it is returned.
-/** @param {import('../store.cjs').Store} store */
+/**
+ * @param {import('../store.cjs').Store} store
+ * @param {number} [days]
+ * @param {Ms} [nowMs]
+ * @param {((chunk: string) => void) | null} [write]
+ */
 function exportLedgerCsv(store, days = 90, nowMs = Date.now(), write = /** @type {((chunk: string) => void) | null} */ (null)) {
   const since = iso(periodStart(days, nowMs));
+  /** @param {string | number | null} value */
   const escape = (value) => {
     const text = value == null ? '' : String(value);
     // CSV quoting alone does not stop spreadsheet formulas. Guard text at
@@ -387,13 +502,15 @@ function exportLedgerCsv(store, days = 90, nowMs = Date.now(), write = /** @type
   const header = ['occurred_at', 'source', 'model', 'project', 'session_id', 'input_tokens', 'cached_input_tokens',
     'cache_write_5m_input_tokens', 'cache_write_1h_input_tokens', 'output_tokens', 'reasoning_output_tokens',
     'api_equivalent_usd', 'priced'];
+  /** @type {string[]} */
   const chunks = [];
   const emit = write || ((text) => chunks.push(text));
   let batch = `${header.join(',')}\r\n`;
   let rows = 0;
   store.withPriceCache(() => {
-    const events = store.prepare('SELECT * FROM usage_events WHERE occurred_at >= ? AND occurred_at <= ? ORDER BY occurred_at ASC')
-      .iterate(since, iso(nowMs));
+    const events = /** @type {IterableIterator<UsageEventRow>} */ (
+      store.prepare('SELECT * FROM usage_events WHERE occurred_at >= ? AND occurred_at <= ? ORDER BY occurred_at ASC')
+      .iterate(since, iso(nowMs)));
     for (const event of events) {
       const cost = store.calculateCost(event);
       let cacheWrite5m = Number(event.cache_write_5m_input_tokens || 0);
@@ -418,16 +535,18 @@ function exportLedgerCsv(store, days = 90, nowMs = Date.now(), write = /** @type
 
 /**
  * @param {import('../store.cjs').Store} store
+ * @param {number} [days]
+ * @param {Ms} [nowMs]
  * @returns {DailyUsage[]}
  */
 function getDailyUsage(store, days = 90, nowMs = Date.now()) {
   const since = dateKey(nowMs - days * 24 * 60 * 60 * 1000);
-  return store.prepare(`
+  return /** @type {DailyUsage[]} */ (store.prepare(`
       SELECT source_id AS sourceId, usage_date AS date, tokens
       FROM account_daily_usage
       WHERE usage_date >= ?
       ORDER BY usage_date ASC, source_id ASC
-    `).all(since);
+    `).all(since));
 }
 
 // Fable 5 and Fable 5.1 draw on one allowance; this splits this device's
@@ -436,6 +555,9 @@ function getDailyUsage(store, days = 90, nowMs = Date.now()) {
 // the provider reports one percentage for both.
 /**
  * @param {import('../store.cjs').Store} store
+ * @param {Pick<import('../../src/types').Quota, 'resetsAt'> | null | undefined} fableQuota The Fable headline window; only its reset is read.
+ * @param {Settings} [settings]
+ * @param {Ms} [nowMs]
  * @returns {FableActivity}
  */
 function getFableActivity(store, fableQuota, settings = store.getSettings(), nowMs = Date.now()) {
@@ -443,7 +565,7 @@ function getFableActivity(store, fableQuota, settings = store.getSettings(), now
   const throughMs = nowMs;
   const sinceMs = Number.isFinite(resetMs) && resetMs > nowMs ? resetMs - 7 * DAY_MS : nowMs - 7 * DAY_MS;
   const rate = Number(settings.usdToCurrency || 1);
-  const rows = store.prepare(`
+  const rows = /** @type {FableModelUsage[]} */ (store.prepare(`
       SELECT model, COUNT(*) AS requests,
         COALESCE(SUM(input_tokens), 0) AS input_tokens,
         COALESCE(SUM(cached_input_tokens), 0) AS cached_input_tokens,
@@ -458,7 +580,7 @@ function getFableActivity(store, fableQuota, settings = store.getSettings(), now
       WHERE source_id = 'claude' AND occurred_at >= ? AND occurred_at <= ?
         AND LOWER(COALESCE(model, '')) LIKE '%fable%'
       GROUP BY model
-    `).all(iso(sinceMs), iso(throughMs));
+    `).all(iso(sinceMs), iso(throughMs)));
   const models = rows.map((row) => {
     const cost = store.calculateCost({ ...row, source_id: 'claude' });
     return {

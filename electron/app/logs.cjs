@@ -19,10 +19,12 @@ function createLogsModule(main) {
     log, logRendererError, updateLogPath, updateLog,
   });
 
+  /** @param {string} message */
   function log(message) {
     if (main.process.env.AI_USAGE_DEBUG === '1') main.process.stderr.write(`[ai-usage] ${message}\n`);
   }
 
+  /** @param {string} message */
   function logRendererError(message) {
     logs.log(message);
     try {
@@ -36,6 +38,7 @@ function createLogsModule(main) {
     return path.join(app.getPath('userData'), 'update.log');
   }
 
+  /** @param {string} message */
   function updateLog(message) {
     const line = String(message).replace(/[\r\n\t]+/g, ' ').trim();
     logs.log(`Update: ${line}`);
