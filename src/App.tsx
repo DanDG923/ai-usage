@@ -95,13 +95,13 @@ export default function App() {
         return;
       }
       if (event.key === 'r' || event.key === 'R') {
-        // The shortcut is the desktop's; in the browser preview only the button answers.
-        if (dashboard.desktop && !shortcutState.current.busy) void actions.refresh();
+        // R does what the Refresh button does, in the browser preview as well.
+        if (!shortcutState.current.busy) void actions.refresh();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [dashboard, actions, notices, setTab]);
+  }, [actions, notices, setTab]);
 
   const openProvider = useCallback((provider: ProviderId) => {
     setTabState('overview');
