@@ -691,7 +691,10 @@ async function refreshCodex(store, {
     localScanFailed = true;
   }
   if (!binary) {
-    const status = localWarning ? 'error' : local.observations ? 'observing' : 'unavailable';
+    // As below for a failing app server: session logs can keep supplying
+    // readings without an executable to start, and the status follows whether
+    // one is still in force, not whether this run imported new rows.
+    const status = localWarning ? 'error' : hasActiveReading(store) ? 'observing' : 'unavailable';
     const detail = localWarning
       ? `Codex executable was not found. ${localWarning}`
       : 'Codex executable was not found.';

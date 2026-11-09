@@ -599,3 +599,62 @@ test('an app-server failure beside a failed local scan is an error, with or with
   assert.equal(source.status, 'error');
   assert.match(source.status_detail, /^App server unavailable; Local session records were also unavailable\. server unavailable$/);
 });
+
+test('a missing Codex executable keeps one status whether or not a run imports new local rows', async (t) => {
+  const store = temporaryStore(t);
+  const withoutExecutable = (importSessions) => refreshCodex(store, {
+    findBinary: () => null,
+    importSessions,
+    collectAppServer: async () => { throw new Error('the app server must not be started without an executable'); },
+  });
+
+  await withoutExecutable(noLocalRows);
+  assert.equal(codexSource(store).status, 'unavailable', 'nothing has been read yet');
+
+  let run = 0;
+  const withNewRows = (target) => {
+    run += 1;
+    const observations = recordRateLimit(target, { limitId: 'codex', primary: liveWindow(300, 20 + run), secondary: liveWindow(10_080, 5) },
+      new Date(Date.now() - (10 - run) * 1000).toISOString(), 'local-official');
+    return { importedFiles: 1, events: 3, observations };
+  };
+  const statuses = [];
+  for (const importSessions of [withNewRows, noLocalRows, withNewRows, noLocalRows, noLocalRows]) {
+    const result = await withoutExecutable(importSessions);
+    assert.equal(result.binary, null);
+    const source = codexSource(store);
+    statuses.push(source.status);
+    assert.equal(source.status_detail, 'Codex executable was not found.');
+  }
+  assert.deepEqual(statuses, Array(5).fill('observing'));
+});
+
+test('a missing Codex executable with no allowance still in force is unavailable, even on a run that imports old rows', async (t) => {
+  const store = temporaryStore(t);
+  const day = 86_400_000;
+  const importsEndedWindow = (target) => ({
+    importedFiles: 1,
+    events: 1,
+    observations: recordRateLimit(target, {
+      limitId: 'codex',
+      primary: { usedPercent: 40, windowDurationMins: 300, resetsAt: Math.floor((Date.now() - day) / 1000) },
+    }, new Date(Date.now() - day - 3_600_000).toISOString(), 'local-official'),
+  });
+  const withoutExecutable = (importSessions) => refreshCodex(store, { findBinary: () => null, importSessions });
+
+  const first = await withoutExecutable(importsEndedWindow);
+  assert.equal(first.local.observations, 1);
+  assert.equal(codexSource(store).status, 'unavailable');
+  await withoutExecutable(noLocalRows);
+  assert.equal(codexSource(store).status, 'unavailable');
+});
+
+test('a missing Codex executable beside a failed local scan is still an error', async (t) => {
+  const store = temporaryStore(t);
+  recordRateLimit(store, { limitId: 'codex', primary: liveWindow(300, 20) }, new Date().toISOString(), 'official');
+
+  await refreshCodex(store, { findBinary: () => null, importSessions: () => { throw new Error('session file was rotated'); } });
+  const source = codexSource(store);
+  assert.equal(source.status, 'error');
+  assert.match(source.status_detail, /^Codex executable was not found\. Codex local session scan failed: session file was rotated$/);
+});
