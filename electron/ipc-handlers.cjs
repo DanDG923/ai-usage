@@ -1,6 +1,7 @@
 'use strict';
 
 const path = require('node:path');
+const { CLAUDE, providerById } = require('./providers.mjs');
 const { REFRESH_TRIGGERS, refreshOptionsFor } = require('./refresh-policy.cjs');
 
 /** @typedef {import('./app/application.cjs').Application} Application */
@@ -126,10 +127,11 @@ function registerIpc(context) {
   // The observation is taken apart field by field, each checked before use.
   handleIpc('dashboard:add-manual-observation', async (_event, /** @type {any} */ observation) => {
     if (!observation || typeof observation !== 'object') throw new Error('An observation is required.');
-    const sourceId = observation.sourceId;
+    const provider = providerById(observation.sourceId);
     const usedPercent = Number(observation.usedPercent);
     const resetsAt = new Date(observation.resetsAt);
-    if (!['codex', 'claude', 'claude-fable'].includes(sourceId)) throw new Error('Unknown source.');
+    if (!provider) throw new Error('Unknown source.');
+    const sourceId = provider.id;
     if (!Number.isFinite(usedPercent) || usedPercent < 0 || usedPercent > 100) throw new Error('Usage percentage must be between 0 and 100.');
     if (!Number.isFinite(resetsAt.getTime()) || resetsAt.getTime() <= Date.now()) throw new Error('Reset time must be a valid time in the future.');
     // Only the fields the renderer's form sends are accepted; bucket, window,
@@ -139,7 +141,7 @@ function registerIpc(context) {
       store.recordObservation({
         sourceId,
         bucketId: store.getManualBucketId(sourceId),
-        bucketName: sourceId === 'claude-fable' ? 'Fable weekly' : 'Weekly',
+        bucketName: provider.weeklyBucketName,
         observedAt: new Date().toISOString(),
         usedPercent,
         remainingPercent: 100 - usedPercent,
@@ -157,8 +159,9 @@ function registerIpc(context) {
     });
     // The observation is committed. Provider availability must not turn that
     // successful save into an error or hold the form open for a network call.
-    // Claude's derived view refreshes through the normal snapshot push.
-    if (sourceId !== 'codex') void refreshClaudeOnly().catch((error) => log(`Refresh after manual observation: ${error.message}`));
+    // Claude's derived view refreshes through the normal snapshot push. A
+    // Fable entry counts: the Claude collector derives Fable's view too.
+    if (provider.collector === CLAUDE.collector) void refreshClaudeOnly().catch((error) => log(`Refresh after manual observation: ${error.message}`));
     return current;
   });
   handleIpc('dashboard:install-claude-helper', async () => {

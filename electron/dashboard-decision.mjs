@@ -1,16 +1,14 @@
+import { FABLE, PROVIDERS, allowanceHost, visibilitySettingFor } from './providers.mjs';
 import { selectDisplayedWindows } from './quota-selection.mjs';
 
 export function subscriptionVisible(settings, providerId) {
-  return settings?.[providerId === 'codex' ? 'showCodexSubscription' : 'showClaudeSubscription'] !== false;
+  return settings?.[visibilitySettingFor(providerId)] !== false;
 }
 
 // The subscriptions the dashboard, tray and notifications all reason about,
-// in display order: snapshot quota key, source-health id, and label.
-export const SOURCES = [
-  { id: 'codex', healthId: 'codex', label: 'Codex' },
-  { id: 'claude', healthId: 'claude', label: 'Claude' },
-  { id: 'fable', healthId: 'claude-fable', label: 'Fable' },
-];
+// in display order: snapshot quota key, source-health id, and label. A view
+// of the provider registry in the shape this module has always exported.
+export const SOURCES = PROVIDERS.map((provider) => ({ id: provider.snapshotKey, healthId: provider.id, label: provider.label }));
 
 const ACTIONABLE_STATES = ['critical', 'risk', 'watch'];
 const KNOWN_STATES = new Set([...ACTIONABLE_STATES, 'safe', 'unknown']);
@@ -140,30 +138,34 @@ export function buildDashboardVerdict(snapshot = {}) {
   const missing = [];
   const staleSources = [];
 
-  for (const source of SOURCES) {
-    if (!subscriptionVisible(snapshot.settings, source.id)) continue;
-    const windows = quotaWindows(quotas[source.id]);
+  for (const provider of PROVIDERS) {
+    const sourceId = provider.snapshotKey;
+    if (!subscriptionVisible(snapshot.settings, sourceId)) continue;
+    const windows = quotaWindows(quotas[sourceId]);
     if (!windows.length) {
       // A plan without a Fable allowance has no Fable window to wait for.
-      if (source.id === 'fable' && snapshot.fableApplies === false) continue;
-      missing.push(source.label);
+      if (provider === FABLE && snapshot.fableApplies === false) continue;
+      missing.push(provider.label);
       continue;
     }
+    // The provider whose weekly pool this one sits inside: Claude, for Fable.
+    const poolHost = allowanceHost(provider)?.snapshotKey ?? null;
     for (const window of windows) {
       assessed.push({
-        sourceId: source.id,
-        sourceLabel: source.label,
+        sourceId,
+        sourceLabel: provider.label,
         bucketId: window.bucketId || '',
         bucketName: window.bucketName || window.bucketId || '',
         state: windowState(window),
-        label: windowLabel(source.label, window),
+        label: windowLabel(provider.label, window),
         forecast: window.forecast,
-        poolBucket: source.id === 'fable' ? poolDrivenBucket(window) : null,
+        poolHost,
+        poolBucket: poolHost ? poolDrivenBucket(window) : null,
       });
-      const health = sourceHealth.get(source.healthId);
+      const health = sourceHealth.get(provider.id);
       if (['error', 'stale', 'degraded'].includes(health?.status) || evidenceNeedsRefresh(window)
-        || (source.id === 'fable' && stalePoolWindow(window, quotas.claude))) {
-        staleSources.push(source.label);
+        || (poolHost && stalePoolWindow(window, quotas[poolHost]))) {
+        staleSources.push(provider.label);
       }
     }
   }
@@ -178,7 +180,7 @@ export function buildDashboardVerdict(snapshot = {}) {
   const includes = new Map();
   const considered = assessed.filter((entry) => {
     if (!entry.poolBucket) return true;
-    const host = assessed.find((other) => other.sourceId === 'claude' && other.bucketId === entry.poolBucket);
+    const host = assessed.find((other) => other.sourceId === entry.poolHost && other.bucketId === entry.poolBucket);
     if (!host || SEVERITY[host.state] < SEVERITY[entry.state]) return true;
     includes.set(host, [...(includes.get(host) || []), entry.sourceLabel]);
     return false;

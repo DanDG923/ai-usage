@@ -1,5 +1,7 @@
 'use strict';
 
+const { cachedInputInsideInput } = require('./providers.mjs');
+
 /** @typedef {import('./types').IsoTime} IsoTime */
 /** @typedef {'main' | 'subagent' | 'unknown'} AgentKind */
 /**
@@ -182,7 +184,7 @@ class TaskUsage {
       model: event.model || 'Unknown', project: event.project || null,
     };
     mergeUsage(row, {
-      inputTokens: event.source_id === 'codex' ? Math.max(0, event.input_tokens - event.cached_input_tokens) : event.input_tokens,
+      inputTokens: cachedInputInsideInput(event.source_id) ? Math.max(0, event.input_tokens - event.cached_input_tokens) : event.input_tokens,
       cachedInputTokens: event.cached_input_tokens, cacheWriteInputTokens: event.cache_write_input_tokens,
       outputTokens: event.output_tokens, reasoningOutputTokens: event.reasoning_output_tokens,
       totalTokens, usageCount: event.event_count ?? 1, costUsd: cost.actualUsd, coveredTokens: cost.covered ? totalTokens : 0,

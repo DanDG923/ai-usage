@@ -32,6 +32,7 @@
  * @property {string | null} [sourceUrl]
  */
 
+const { cachedInputInsideInput } = require('../providers.mjs');
 const { iso } = require('./shared.cjs');
 
 // Long-context pricing by catalogue model: a request whose prompt is over
@@ -254,7 +255,8 @@ function calculateCost(store, row) {
   const output = Number(row.output_tokens || 0);
   // OpenAI input totals include the cache-read subset. Claude's status-line
   // fields are mutually exclusive categories, so only Codex needs removal.
-  const regularInput = row.source_id === 'codex'
+  const cachedInsideInput = cachedInputInsideInput(row.source_id);
+  const regularInput = cachedInsideInput
     ? Math.max(0, Number(row.input_tokens || 0) - Number(row.cached_input_tokens || 0))
     : Number(row.input_tokens || 0);
   const cacheWriteTotal = Number(row.cache_write_input_tokens || 0);
@@ -270,7 +272,7 @@ function calculateCost(store, row) {
   // instead of applying this rule to totals.
   // Resolve through the catalogue row so dated supported model suffixes inherit
   // the rule, while similarly priced models such as codex-auto-review do not.
-  const promptTokens = row.source_id === 'codex'
+  const promptTokens = cachedInsideInput
     ? Number(row.input_tokens || 0) + cacheWriteTotal
     : Number(row.input_tokens || 0) + cacheWriteTotal + Number(row.cached_input_tokens || 0);
   const rule = LONG_CONTEXT_PRICING.get(price.model);

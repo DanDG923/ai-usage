@@ -6,7 +6,8 @@
 const fs = require('node:fs');
 const { DatabaseSync } = require('node:sqlite');
 const { FABLE_BUCKET_NAME } = require('../fable-projection.cjs');
-const { SOURCE_DEFINITIONS, LEGACY_FABLE_BUCKET_NAME, iso } = require('./shared.cjs');
+const { PROVIDERS } = require('../providers.mjs');
+const { LEGACY_FABLE_BUCKET_NAME, iso } = require('./shared.cjs');
 const { DEFAULT_SETTINGS, SETTING_ALIASES } = require('./settings.cjs');
 const { PRICE_ROWS } = require('./pricing.cjs');
 
@@ -349,7 +350,7 @@ function seed(store) {
       VALUES (?, ?, ?, 'pending', '{}')
       ON CONFLICT(id) DO NOTHING
     `);
-  for (const row of SOURCE_DEFINITIONS) insertSource.run(...row);
+  for (const provider of PROVIDERS) insertSource.run(provider.id, provider.label, provider.kind);
 
   const insertSetting = store.prepare(`
       INSERT INTO settings(key, value_json, updated_at) VALUES (?, ?, ?)

@@ -8,6 +8,7 @@
 
 const fs = require('node:fs');
 const { createHash } = require('node:crypto');
+const { CLAUDE } = require('./providers.mjs');
 const { periodStart } = require('./time.cjs');
 
 const MAX_BYTES = 64 * 1024 * 1024;
@@ -246,7 +247,7 @@ function buildDesktopAnalytics(store, days, settings, nowMs) {
   for (const tier of /** @type {IterableIterator<{ model: string | null, modelOrigin: string, contextTier: number, input_tokens: number, output_tokens: number }>} */ (store.prepare(`SELECT model, model_origin AS modelOrigin, ${contextTierSql('input_tokens')} AS contextTier,
     SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens
     FROM desktop_chat_estimates WHERE occurred_at >= ? AND occurred_at <= ? GROUP BY model, model_origin, contextTier`).iterate(...period))) {
-    const cost = store.calculateCost({ ...tier, source_id: 'claude' });
+    const cost = store.calculateCost({ ...tier, source_id: CLAUDE.ledgerSource });
     const key = `${tier.model}|${tier.modelOrigin}`;
     usdByModel.set(key, cost.covered ? (usdByModel.get(key) ?? 0) + cost.actualUsd : null);
   }

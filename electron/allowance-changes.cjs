@@ -14,6 +14,8 @@
 // before two changes is scaled by both ratios and an entry stays correct
 // when the allowance changes again later.
 
+const { PROVIDERS, allowanceFamily, isWeeklyBucket } = require('./providers.mjs');
+
 /** @typedef {import('./types').AllowanceChange} AllowanceChange */
 
 /**
@@ -23,17 +25,15 @@
  * @typedef {NonNullable<ReturnType<typeof createAllowanceScaler>>} AllowanceScaler
  */
 
-const ALLOWANCE_CHANGE_SOURCES = ['claude', 'codex'];
+// A change is recorded against the provider that owns a weekly allowance.
+// Fable shares Claude's weekly pool (its cap is half of it), so a Claude
+// allowance change moves both readings by the same ratio: allowanceFamily, in
+// the provider registry, maps a source to the owner its changes are filed under.
+/** @type {string[]} */
+const ALLOWANCE_CHANGE_SOURCES = PROVIDERS.filter((provider) => provider.sharesAllowanceWith == null).map((provider) => provider.id);
 const MAX_ALLOWANCE_CHANGES = 24;
 const EARLIEST_CHANGE_MS = Date.parse('2020-01-01T00:00:00Z');
 const FUTURE_TOLERANCE_MS = 5 * 60_000;
-
-// Fable shares Claude's weekly pool (its cap is half of it), so a Claude
-// allowance change moves both readings by the same ratio.
-/** @param {string | undefined} sourceId */
-function allowanceFamily(sourceId) {
-  return sourceId === 'claude-fable' ? 'claude' : sourceId;
-}
 
 // These entries describe the main weekly pool, not independent short-term,
 // model or OAuth limits. Require both identity and duration: Codex can use
@@ -45,11 +45,7 @@ function allowanceFamily(sourceId) {
  * @param {number | null | undefined} windowMinutes
  */
 function isWeeklyAllowance(sourceId, bucketId, windowMinutes) {
-  if (windowMinutes !== 10_080) return false;
-  if (sourceId === 'claude') return bucketId === 'seven_day';
-  // The lists are also asked about a reading that names no bucket, which is in neither.
-  if (sourceId === 'claude-fable') return /** @type {(string | undefined)[]} */ (['fable_seven_day', 'fable:seven_day_fable']).includes(bucketId);
-  return sourceId === 'codex' && /** @type {(string | undefined)[]} */ (['codex:weekly', 'codex:primary', 'codex:secondary']).includes(bucketId);
+  return windowMinutes === 10_080 && isWeeklyBucket(sourceId, bucketId);
 }
 
 /**

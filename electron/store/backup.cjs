@@ -18,7 +18,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 const { MAX_QUOTA_RESET_AHEAD_MS, validQuotaTime } = require('../quota-time.cjs');
-const { SOURCE_DEFINITIONS, DAY_MS, iso, validIso, json, quotaMetadata } = require('./shared.cjs');
+const { CLAUDE, CODEX, cachedInputInsideInput, isProviderId } = require('../providers.mjs');
+const { DAY_MS, iso, validIso, json, quotaMetadata } = require('./shared.cjs');
 const {
   DEFAULT_SETTINGS, SETTING_ALIASES, isForecastDate, normalizedSetting, settingValidator, backupSettings,
   storedSettings,
@@ -175,7 +176,6 @@ function restoreFromExport(store, payload) {
    */
   const list = (value) => (Array.isArray(value)
     || (value && typeof value === 'object' && typeof value[Symbol.iterator] === 'function') ? value : []);
-  const knownSources = new Set(SOURCE_DEFINITIONS.map(([id]) => id));
   /** @type {import('../../src/types').RestoreCounts} */
   const counts = { settings: 0, observations: 0, usageEvents: 0, dailyUsage: 0, prices: 0, skipped: 0 };
   let restoredCodexEvents = 0;
@@ -275,7 +275,7 @@ function restoreFromExport(store, payload) {
 
     for (const row of list(payload.observations)) {
       try {
-        if (!knownSources.has(row.source_id) || typeof row.bucket_id !== 'string' || !row.bucket_id) throw unreadable();
+        if (!isProviderId(row.source_id) || typeof row.bucket_id !== 'string' || !row.bucket_id) throw unreadable();
         // Derived estimates are reproducible local cache, not source
         // evidence. In particular, old versions could derive them from an
         // unverified Max-plan assumption, so backups must not resurrect them.
@@ -328,7 +328,7 @@ function restoreFromExport(store, payload) {
 
     for (const row of list(payload.usageEvents)) {
       try {
-        if (!knownSources.has(row.source_id) || typeof row.event_key !== 'string' || !row.event_key) throw unreadable();
+        if (!isProviderId(row.source_id) || typeof row.event_key !== 'string' || !row.event_key) throw unreadable();
         /** @param {unknown} value */
         const tokens = (value) => {
           const parsed = value == null ? 0 : finiteNumber(value);
@@ -349,7 +349,7 @@ function restoreFromExport(store, payload) {
         const reasoningTokens = tokens(row.reasoning_output_tokens);
         const inputTokens = tokens(row.input_tokens);
         const cachedInputTokens = tokens(row.cached_input_tokens);
-        if ((row.source_id === 'codex' && cachedInputTokens > inputTokens)
+        if ((cachedInputInsideInput(row.source_id) && cachedInputTokens > inputTokens)
           || cacheWrite5m + cacheWrite1h !== cacheWriteTotal) throw unreadable();
         if (reasoningTokens > outputTokens
           || (row.reported_cost_usd != null && (reportedCost == null || reportedCost < 0))) throw unreadable();
@@ -365,8 +365,8 @@ function restoreFromExport(store, payload) {
           typeof row.metadata_json === 'string' ? row.metadata_json : JSON.stringify(row.metadata_json ?? {}),
         ).changes;
         counts.usageEvents += inserted;
-        if (row.source_id === 'codex') restoredCodexEvents += inserted;
-        if (row.source_id === 'claude') restoredClaudeEvents += inserted;
+        if (row.source_id === CODEX.ledgerSource) restoredCodexEvents += inserted;
+        if (row.source_id === CLAUDE.ledgerSource) restoredClaudeEvents += inserted;
       } catch (error) {
         // Database errors may roll back the transaction. Continuing after
         // one would autocommit later records outside the failed restore.
@@ -397,7 +397,7 @@ function restoreFromExport(store, payload) {
     for (const row of list(payload.dailyUsage)) {
       try {
         const tokens = finiteNumber(row.tokens);
-        if (!knownSources.has(row.source_id) || !isForecastDate(row.usage_date)
+        if (!isProviderId(row.source_id) || !isForecastDate(row.usage_date)
           || tokens === null || !Number.isSafeInteger(tokens) || tokens < 0) throw unreadable();
         counts.dailyUsage += insertDailyUsage.run(row.source_id, row.usage_date, tokens).changes;
       } catch (error) {

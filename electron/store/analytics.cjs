@@ -72,7 +72,8 @@
 
 const { periodStart } = require('../time.cjs');
 const { TaskUsage } = require('../task-usage.cjs');
-const { SOURCE_DEFINITIONS, DAY_MS, iso, round, dateKey, createLocalPartsLookup, WEEKDAY_INDEX } = require('./shared.cjs');
+const { CLAUDE, CODEX, cachedInputInsideInput, providerById } = require('../providers.mjs');
+const { DAY_MS, iso, round, dateKey, createLocalPartsLookup, WEEKDAY_INDEX } = require('./shared.cjs');
 const { CONTEXT_TIER_SQL } = require('./pricing.cjs');
 
 // About a megabyte of ledger CSV is written at a time.
@@ -177,7 +178,7 @@ function getSessionPage(store, { days = 30, query = '', page = 1, pageSize = 20 
   const needle = typeof query === 'string' ? query.trim().slice(0, 500).toLowerCase() : '';
   const sessions = store.getAnalytics(period, store.getSettings(), nowMs).sessions;
   const matches = needle ? sessions.filter((row) => [row.sourceId,
-    SOURCE_DEFINITIONS.find(([id]) => id === row.sourceId)?.[1], row.project, row.sessionId, row.model]
+    providerById(row.sourceId)?.label, row.project, row.sessionId, row.model]
     .some((value) => typeof value === 'string' && value.toLowerCase().includes(needle))) : sessions;
   const total = matches.length;
   const totalPages = Math.ceil(total / size);
@@ -208,7 +209,7 @@ function getTaskPage(store, { days = 30, query = '', page = 1, pageSize = 20 } =
   const needle = typeof query === 'string' ? query.trim().slice(0, 500).toLowerCase() : '';
   const sessions = store.getAnalytics(period, store.getSettings(), nowMs).tasks;
   const matches = needle ? sessions.filter((row) => [row.sourceId,
-    SOURCE_DEFINITIONS.find(([id]) => id === row.sourceId)?.[1], row.project, row.sessionId, row.taskId,
+    providerById(row.sourceId)?.label, row.project, row.sessionId, row.taskId,
     ...row.agents.flatMap((agent) => [agent.agentId, agent.agentName, agent.agentRole, agent.model])]
     .some((value) => typeof value === 'string' && value.toLowerCase().includes(needle))) : sessions;
   const total = matches.length;
@@ -303,7 +304,7 @@ function buildAnalytics(store, days, settings, nowMs) {
   for (const event of events) {
     requestCount += event.event_count;
     const cost = store.calculateCost(event);
-    const eventTokens = event.source_id === 'codex'
+    const eventTokens = cachedInputInsideInput(event.source_id)
       ? Number(event.input_tokens) + Number(event.cache_write_input_tokens) + Number(event.output_tokens)
       : Number(event.input_tokens) + Number(event.cached_input_tokens)
         + Number(event.cache_write_input_tokens) + Number(event.output_tokens);
@@ -367,7 +368,7 @@ function buildAnalytics(store, days, settings, nowMs) {
     const parts = localPartsOf(event.occurred_at);
     const day = `${parts.year}-${parts.month}-${parts.day}`;
     const dayRow = byDayMap.get(day) || { date: day, codexUsd: 0, claudeUsd: 0 };
-    if (event.source_id === 'codex') dayRow.codexUsd += cost.actualUsd;
+    if (event.source_id === CODEX.ledgerSource) dayRow.codexUsd += cost.actualUsd;
     else dayRow.claudeUsd += cost.actualUsd;
     byDayMap.set(day, dayRow);
     activityUsd[WEEKDAY_INDEX[parts.weekday] ?? 0][Number(parts.hour) % 24] += cost.actualUsd;
@@ -582,7 +583,7 @@ function getFableActivity(store, fableQuota, settings = store.getSettings(), now
       GROUP BY model
     `).all(iso(sinceMs), iso(throughMs)));
   const models = rows.map((row) => {
-    const cost = store.calculateCost({ ...row, source_id: 'claude' });
+    const cost = store.calculateCost({ ...row, source_id: CLAUDE.ledgerSource });
     return {
       model: String(row.model),
       requests: Number(row.requests || 0),

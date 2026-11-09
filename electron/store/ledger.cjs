@@ -10,7 +10,8 @@
 
 const { normaliseObservation, clusterByWindow } = require('../forecast.cjs');
 const { MAX_QUOTA_RESET_AHEAD_MS, QUOTA_CLOCK_SKEW_MS } = require('../quota-time.cjs');
-const { KNOWN_SOURCE_IDS, DAY_MS, iso, validIso, optionalText, json, dateKey } = require('./shared.cjs');
+const { CODEX, cachedInputInsideInput, isProviderId, providerById } = require('../providers.mjs');
+const { DAY_MS, iso, validIso, optionalText, json, dateKey } = require('./shared.cjs');
 const { isForecastDate } = require('./settings.cjs');
 
 // Beyond this age, keep each local day's endpoints and peak per bucket/window.
@@ -29,7 +30,7 @@ const COMPACT_AFTER_MS = 60 * DAY_MS;
  * @param {{ scanSucceeded?: boolean }} [options]
  */
 function setSourceStatus(store, id, status, detail, metadata, options = {}) {
-  if (!KNOWN_SOURCE_IDS.has(id)) throw new Error(`Unknown source: ${id || 'missing'}.`);
+  if (!isProviderId(id)) throw new Error(`Unknown source: ${id || 'missing'}.`);
   if (typeof status !== 'string' || !status.trim()) throw new Error('Source status is required.');
   const attemptedAt = iso();
   // The display status is not a reliable proxy for scan success: a provider
@@ -58,7 +59,7 @@ function setSourceStatus(store, id, status, detail, metadata, options = {}) {
  * @param {import('../types').ObservationInput} observation
  */
 function recordObservation(store, observation) {
-  if (!KNOWN_SOURCE_IDS.has(observation.sourceId)) throw new Error(`Unknown source: ${observation.sourceId || 'missing'}.`);
+  if (!isProviderId(observation.sourceId)) throw new Error(`Unknown source: ${observation.sourceId || 'missing'}.`);
   if (typeof observation.bucketId !== 'string' || !observation.bucketId.trim()) {
     throw new Error('Observation bucket is required.');
   }
@@ -121,9 +122,11 @@ function recordObservation(store, observation) {
   };
   const fetchedAfter = statusLineTime(observation.fetchedAfter, 'Fetch time');
   const seenSince = statusLineTime(observation.seenSince, 'First redraw time');
-  if (observation.sourceId === 'codex' && observation.bucketId !== 'codex:weekly'
+  // Codex only: a manual weekly entry made before any live reading sits in a
+  // stand-in bucket, and joins the live weekly bucket once Codex names it.
+  if (observation.sourceId === CODEX.id && observation.bucketId !== CODEX.weeklyBucket
     && Number(observation.windowMinutes || 0) >= 10_000
-    && observation.metadata?.limitId === 'codex'
+    && observation.metadata?.limitId === CODEX.mainLimitId
     && observation.provenance !== 'manual-official') {
     store.prepare(`UPDATE OR IGNORE quota_observations SET bucket_id = ?
         WHERE source_id = 'codex' AND bucket_id IN ('manual-weekly', 'codex:weekly')`).run(observation.bucketId);
@@ -185,7 +188,7 @@ function recordObservation(store, observation) {
  * @returns {number} How many rows the write changed.
  */
 function recordUsageEvent(store, event) {
-  if (!KNOWN_SOURCE_IDS.has(event.sourceId)) throw new Error(`Unknown source: ${event.sourceId || 'missing'}.`);
+  if (!isProviderId(event.sourceId)) throw new Error(`Unknown source: ${event.sourceId || 'missing'}.`);
   if (typeof event.eventKey !== 'string' || !event.eventKey.trim()) throw new Error('Usage event key is required.');
   // Malformed JSON fields are rejected before SQLite binding. Coded SQLite
   // errors remain operational failures that must roll back the file cursor.
@@ -214,8 +217,8 @@ function recordUsageEvent(store, event) {
   if (cacheWrite5mInputTokens + cacheWrite1hInputTokens === 0) cacheWrite5mInputTokens = cacheWriteInputTokens;
   const outputTokens = token(event.outputTokens);
   const reasoningOutputTokens = token(event.reasoningOutputTokens);
-  if (event.sourceId === 'codex' && cachedInputTokens > inputTokens) {
-    throw new Error('Codex cached input tokens must be a subset of input tokens.');
+  if (cachedInputInsideInput(event.sourceId) && cachedInputTokens > inputTokens) {
+    throw new Error(`${providerById(event.sourceId).label} cached input tokens must be a subset of input tokens.`);
   }
   if (cacheWrite5mInputTokens + cacheWrite1hInputTokens !== cacheWriteInputTokens) {
     throw new Error('Cache write durations must sum to the total cache write tokens.');
@@ -275,15 +278,17 @@ function recordUsageEvent(store, event) {
  * @returns {string}
  */
 function getManualBucketId(store, sourceId) {
-  if (sourceId === 'claude') return 'seven_day';
-  if (sourceId === 'claude-fable') return 'fable_seven_day';
-  if (sourceId !== 'codex') return 'manual-weekly';
+  const provider = providerById(sourceId);
+  if (!provider) return 'manual-weekly';
+  // Codex names its weekly bucket itself, and not always the same way: a
+  // manual entry goes to the bucket its latest live weekly reading used.
+  if (provider !== CODEX) return provider.weeklyBucket;
   const row = /** @type {{ bucket_id: string } | undefined} */ (store.prepare(`SELECT bucket_id FROM quota_observations
       WHERE source_id = 'codex' AND COALESCE(window_minutes, 0) >= 10000
         AND bucket_id NOT IN ('manual-weekly', 'codex:weekly')
         AND json_valid(metadata_json) AND json_extract(metadata_json, '$.limitId') = 'codex'
       ORDER BY observed_at DESC, bucket_id ASC LIMIT 1`).get());
-  return row?.bucket_id || 'codex:weekly';
+  return row?.bucket_id || CODEX.weeklyBucket;
 }
 
 /**
@@ -293,7 +298,7 @@ function getManualBucketId(store, sourceId) {
  * @param {number} tokens
  */
 function upsertDailyUsage(store, sourceId, usageDate, tokens) {
-  if (!KNOWN_SOURCE_IDS.has(sourceId) || !isForecastDate(usageDate) || !Number.isSafeInteger(tokens) || tokens < 0) {
+  if (!isProviderId(sourceId) || !isForecastDate(usageDate) || !Number.isSafeInteger(tokens) || tokens < 0) {
     throw new Error('Invalid daily usage date or token count.');
   }
   store.prepare(`

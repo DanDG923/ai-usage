@@ -7,6 +7,7 @@ const { findClaudeBinary, providerHome } = require('./provider-executable.cjs');
 const { createClaudeAgentSdkUsagePort } = require('./claude-agent-usage.cjs');
 const { createFableUsageTracker, providerReadingFresh } = require('./fable-tracker.cjs');
 const { MAX_QUOTA_RESET_AHEAD_MS, QUOTA_CLOCK_SKEW_MS, validQuotaTime } = require('./quota-time.cjs');
+const { CLAUDE, FABLE } = require('./providers.mjs');
 const { isProviderProvenance } = require('./quota-provenance.mjs');
 const { deriveFableEstimate } = require('./fable-projection.cjs');
 const { evidenceTimes, freshReadGraceFor, latestEvidenceAt, withoutStaleRestatements } = require('./forecast.cjs');
@@ -253,10 +254,10 @@ function recordStatusLineLimits(store, payload, capturedAt, { fetchedAfter, seen
   for (const [key, limit] of Object.entries(limits)) {
     if (!limit || limit.used_percentage == null || limit.resets_at == null) continue;
     const isFable = key.toLowerCase().includes('fable');
-    const sourceId = isFable ? 'claude-fable' : 'claude';
+    const sourceId = isFable ? FABLE.id : CLAUDE.id;
     const descriptor = claudeWindowDescriptor(key);
     const minutes = isFable ? 10_080 : descriptor.windowMinutes;
-    const bucketName = isFable ? 'Fable weekly' : descriptor.bucketName;
+    const bucketName = isFable ? FABLE.weeklyBucketName : descriptor.bucketName;
     const resetsAt = epochToIso(limit.resets_at);
     if (!resetsAt) {
       result.invalidResets += 1;
@@ -265,7 +266,7 @@ function recordStatusLineLimits(store, payload, capturedAt, { fetchedAfter, seen
     try {
       store.recordObservation({
         sourceId,
-        bucketId: isFable && ['fable_seven_day', 'fable_weekly'].includes(key.toLowerCase()) ? 'fable_seven_day' : isFable ? `fable:${key}` : key,
+        bucketId: isFable && [FABLE.weeklyBucket, 'fable_weekly'].includes(key.toLowerCase()) ? FABLE.weeklyBucket : isFable ? `fable:${key}` : key,
         bucketName,
         observedAt: capturedAt,
         usedPercent: Number(limit.used_percentage),
@@ -585,7 +586,7 @@ function transcriptEvent(row, messageId, fullPath) {
 
   return {
     eventKey: `claude-transcript:${row.sessionId || 'unknown-session'}:${messageId}`,
-    sourceId: 'claude',
+    sourceId: CLAUDE.id,
     occurredAt: row.timestamp,
     sessionId: row.sessionId || null,
     model,
@@ -615,7 +616,7 @@ function transcriptEvent(row, messageId, fullPath) {
  */
 function copiedEventRow(store, event) {
   const row = /** @type {UsageEventRow | undefined} */ (store.prepare('SELECT * FROM usage_events WHERE event_key = ?').get(event.eventKey));
-  if (!row || row.source_id !== 'claude' || row.reported_cost_usd != null) return null;
+  if (!row || row.source_id !== CLAUDE.id || row.reported_cost_usd != null) return null;
   const fields = { occurred_at: epochToIso(event.occurredAt), session_id: event.sessionId, model: event.model, project: event.project,
     input_tokens: Number(event.inputTokens || 0), cached_input_tokens: Number(event.cachedInputTokens || 0),
     cache_write_input_tokens: Number(event.cacheWriteInputTokens || 0), cache_write_5m_input_tokens: Number(event.cacheWrite5mInputTokens || 0),
@@ -1019,7 +1020,7 @@ function latestPlanUsageReading(store, nowMs, graceMs, emptyReadMs = /** @type {
   const latest = new Map();
   /** @type {number | null} */
   let lastPlanUsageReadMs = null;
-  const restatementOptions = { nowMs, freshReadGraceMs: graceMs, allowanceChanges: store.getSettings().allowanceChanges, sourceId: 'claude' };
+  const restatementOptions = { nowMs, freshReadGraceMs: graceMs, allowanceChanges: store.getSettings().allowanceChanges, sourceId: CLAUDE.id };
   for (const [bucketId, bucketRows] of buckets) {
     // The rows kept come back as they were given.
     /** @type {PlanWindowRow[]} */
@@ -1185,7 +1186,7 @@ async function refreshClaude(store, inboxPath, options = {}) {
   const helperUpdated = helperInstalled ? updateManagedHelper(/** @type {string} */ (helperPath), inboxPath) : false;
   // Existence probes, not getQuota: the status text needs a yes or no, and
   // getQuota forecasts every window of the source to produce one.
-  const hasQuota = store.hasUsableObservation('claude', nowMs, { activeWithinMs: 8 * 24 * 60 * 60 * 1000 });
+  const hasQuota = store.hasUsableObservation(CLAUDE.id, nowMs, { activeWithinMs: 8 * 24 * 60 * 60 * 1000 });
   const providerScanSucceeded = Boolean(fableTracking.provider?.attemptSucceeded
     && ['observed', 'unavailable'].includes(fableTracking.provider.kind));
   const activityCurrent = fableTracking.health.activitySource === 'current';
@@ -1238,7 +1239,7 @@ async function refreshClaude(store, inboxPath, options = {}) {
   const claudeScanSucceeded = readPlanUsage
     ? (hasFreshClaudeEvidence || providerScanSucceeded) && activityCurrent
     : activityCurrent;
-  const fableObserved = store.hasUsableObservation('claude-fable', nowMs);
+  const fableObserved = store.hasUsableObservation(FABLE.id, nowMs);
   const extraUsage = fableTracking.provider?.extraUsage;
   let extraUsageDetail = '';
   if (extraUsage) {
@@ -1297,7 +1298,7 @@ async function refreshClaude(store, inboxPath, options = {}) {
       // A failure of this Refresh is a failure of its own request.
       + (refreshFailure && /** @type {PlanUsageRequest} */ (lastRequest).provider?.errorCode === 'claude-usage-signed-out' ? ' If Claude Code is signed in, press Refresh again.' : '')
       + extraUsageDetail;
-  store.setSourceStatus('claude', claudeStatus, claudeDetail, {
+  store.setSourceStatus(CLAUDE.id, claudeStatus, claudeDetail, {
     binary,
     inboxPath,
     statusLine,
@@ -1355,7 +1356,7 @@ async function refreshClaude(store, inboxPath, options = {}) {
   // A stale provider-scoped reading still requires a provider refresh, unless
   // this run was never asked to read the provider.
   const fableScanSucceeded = activityCurrent && (!providerStale || !readPlanUsage);
-  store.setSourceStatus('claude-fable', fableStatus, fableDetail, {
+  store.setSourceStatus(FABLE.id, fableStatus, fableDetail, {
     sharedWithOverall: true,
     models: (fableTracking.activity.models || []).map((entry) => entry.model),
     transcriptEvents: fableTracking.activity.requests,

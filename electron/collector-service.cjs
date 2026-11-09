@@ -10,8 +10,10 @@ const { UsageStore } = require('./store.cjs');
 const { refreshCodex } = require('./codex-collector.cjs');
 const { refreshClaude } = require('./claude-collector.cjs');
 const { runCollectors } = require('./collector-runner.cjs');
+const { CLAUDE, CODEX } = require('./providers.mjs');
 
 /** @typedef {import('./store.cjs').Store} Store */
+/** @typedef {import('./providers.mjs').CollectorId} CollectorId */
 
 /**
  * Where the collectors read and write. The host passes this to the process
@@ -89,11 +91,16 @@ function createCollectorService({
   // against itself: two SDK control queries and two transcript scans over the
   // same files at once waste work and race on the cursor. Sources share a
   // lane; waiting requests for the same source share their result.
+  //
+  // One entry per collector the provider registry names. The two collectors
+  // are started by hand below because they are not alike: only Claude's takes
+  // the status-line inbox, and only Claude's reads plan usage, and then only
+  // when a person asked for it.
   let queue = Promise.resolve();
-  /** @type {Record<'codex' | 'claude', QueuedRun | null>} */
+  /** @type {Record<CollectorId, QueuedRun | null>} */
   const pending = { codex: null, claude: null };
   /**
-   * @param {'codex' | 'claude'} source
+   * @param {CollectorId} source
    * @param {(options: { readPlanUsage: boolean }) => Promise<Record<string, unknown>>} run
    * @param {{ readPlanUsage?: boolean }} [options]
    */
@@ -117,10 +124,10 @@ function createCollectorService({
     queue = entry.promise.then(() => undefined, () => undefined);
     return entry.promise;
   }
-  const runCodex = () => queued('codex', () => collectors.codex(getStore()));
+  const runCodex = () => queued(CODEX.collector, () => collectors.codex(getStore()));
   /** @param {boolean} readPlanUsage */
   const runClaude = (readPlanUsage) => queued(
-    'claude',
+    CLAUDE.collector,
     (options) => collectors.claude(getStore(), inboxPath, { readPlanUsage: options.readPlanUsage, claudeCodeReadingsDirectory }),
     { readPlanUsage },
   );

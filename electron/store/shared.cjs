@@ -7,15 +7,6 @@
 /** @typedef {import('../types').Ms} Ms */
 /** @typedef {Record<string, string>} LocalParts The fields of a local date and time: year, month, day, hour, weekday. */
 
-// id, display name, kind
-/** @type {[import('../types').SourceId, string, string][]} */
-const SOURCE_DEFINITIONS = [
-  ['codex', 'Codex', 'codex'],
-  ['claude', 'Claude', 'claude'],
-  ['claude-fable', 'Fable', 'fable'],
-];
-/** @type {Set<string>} */
-const KNOWN_SOURCE_IDS = new Set(SOURCE_DEFINITIONS.map(([id]) => id));
 // Stored by versions before 1.0.52 and still present in their backups.
 const LEGACY_FABLE_BUCKET_NAME = 'Fable 5 weekly';
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -148,6 +139,6 @@ function createLocalPartsLookup(timeZone) {
 const WEEKDAY_INDEX = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
 
 module.exports = {
-  SOURCE_DEFINITIONS, KNOWN_SOURCE_IDS, LEGACY_FABLE_BUCKET_NAME, DAY_MS, iso, validIso, optionalText, json,
+  LEGACY_FABLE_BUCKET_NAME, DAY_MS, iso, validIso, optionalText, json,
   quotaMetadata, round, dateKey, QUARTER_HOUR_MS, createLocalPartsLookup, WEEKDAY_INDEX,
 };

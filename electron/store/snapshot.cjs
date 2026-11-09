@@ -11,6 +11,7 @@
 const fs = require('node:fs');
 const { buildDashboardVerdict } = require('../dashboard-decision.cjs');
 const { applySharedPool } = require('../fable-shared-pool.cjs');
+const { PROVIDERS, allowanceHost } = require('../providers.mjs');
 const { QUOTA_CLOCK_SKEW_MS, FORECAST_LOOKBACK_MS } = require('../quota-time.cjs');
 const { iso, json } = require('./shared.cjs');
 
@@ -26,14 +27,19 @@ function getTraySnapshot(store, nowMs = Date.now(), { tokenCapacity = false } = 
   const sources = /** @type {(import('../types').SourceRow & { id: import('../types').SourceId })[]} */ (
     store.prepare('SELECT * FROM sources ORDER BY CASE id WHEN \'codex\' THEN 1 WHEN \'claude\' THEN 2 ELSE 3 END').all())
     .map((row) => ({ ...row, metadata: json(row.metadata_json, {}) }));
-  const claude = store.getQuota('claude', settings, nowMs, { tokenCapacity });
-  const quotas = {
-    codex: store.getQuota('codex', settings, nowMs, { tokenCapacity }),
-    claude,
+  // One quota per registered provider, under its snapshot key; the record is
+  // complete once the loop has run. A provider in the registry that
+  // Snapshot['quotas'] does not list is a type error at the assignment.
+  const quotas = /** @type {Snapshot['quotas']} */ ({});
+  for (const provider of PROVIDERS) {
+    const own = store.getQuota(provider.id, settings, nowMs, { tokenCapacity });
     // Fable's limit sits inside the Claude weekly pool: whatever any model
-    // has used of the week also caps what Fable can still use.
-    fable: applySharedPool(store.getQuota('claude-fable', settings, nowMs, { tokenCapacity }), claude, { nowMs, settings }),
-  };
+    // has used of the week also caps what Fable can still use. The registry
+    // lists a provider after the one whose pool it shares, so the host's
+    // quota is already there.
+    const host = allowanceHost(provider);
+    quotas[provider.snapshotKey] = host ? applySharedPool(own, quotas[host.snapshotKey], { nowMs, settings }) : own;
+  }
   // A plan the provider names other than Max has no Fable allowance, so
   // with no Fable reading there is nothing for the verdict to wait for.
   const fableProjection = quotas.fable ? null : store.getFableProjection(settings, nowMs);
@@ -77,6 +83,23 @@ function getClaudeExtraUsage(store, nowMs = Date.now()) {
   return { isEnabled: extra.isEnabled, utilization, observedAt: /** @type {NonNullable<typeof row>} */ (row).observed_at };
 }
 
+// Each provider's reset-cycle history, under its snapshot key. Filled the
+// same way as the quotas, and checked by the compiler the same way.
+/**
+ * @param {import('../store.cjs').Store} store
+ * @param {Snapshot['quotas']} quotas
+ * @param {Snapshot['settings']} settings
+ * @param {Ms} nowMs
+ * @returns {Snapshot['cycles']}
+ */
+function cycleHistories(store, quotas, settings, nowMs) {
+  const cycles = /** @type {Snapshot['cycles']} */ ({});
+  for (const provider of PROVIDERS) {
+    cycles[provider.snapshotKey] = store.getCycleHistory(provider.id, quotas[provider.snapshotKey], settings, 8, nowMs);
+  }
+  return cycles;
+}
+
 /**
  * @param {import('../store.cjs').Store} store
  * @param {number} [days]
@@ -93,11 +116,7 @@ function getDashboardSnapshot(store, days = 30, nowMs = Date.now()) {
     priceCatalog: store.getPriceCatalog(),
     costs: store.getCostAnalytics(days, settings, nowMs),
     desktopEstimates: require('../desktop-estimates.cjs').desktopAnalytics(store, days, settings, nowMs),
-    cycles: {
-      codex: store.getCycleHistory('codex', quotas.codex, settings, 8, nowMs),
-      claude: store.getCycleHistory('claude', quotas.claude, settings, 8, nowMs),
-      fable: store.getCycleHistory('claude-fable', quotas.fable, settings, 8, nowMs),
-    },
+    cycles: cycleHistories(store, quotas, settings, nowMs),
     dailyUsage: store.getDailyUsage(Math.max(days, 90), nowMs),
     storage: {
       databasePath: store.databasePath,

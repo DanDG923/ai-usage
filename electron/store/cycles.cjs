@@ -14,8 +14,22 @@
 /** @typedef {Required<import('./pricing.cjs').PricedUsage>} TierUsage One model's tokens in a window, summed within a long-context tier. */
 
 const { MAX_QUOTA_RESET_AHEAD_MS, QUOTA_CLOCK_SKEW_MS } = require('../quota-time.cjs');
+const { cachedInputInsideInput, ledgerSourceOf, providerById } = require('../providers.mjs');
 const { CONTEXT_TIER_SQL } = require('./pricing.cjs');
 const { iso, round } = require('./shared.cjs');
+
+// Which usage events belong to a source's cycles: the ledger source they are
+// recorded under and, for a source that is one model family of it (Fable), a
+// filter on the model name with the pattern it binds.
+/** @param {string} sourceId */
+function cycleEvents(sourceId) {
+  const modelLike = providerById(sourceId)?.ledgerModelLike ?? null;
+  return {
+    eventSource: ledgerSourceOf(sourceId),
+    modelFilter: modelLike == null ? '' : "AND LOWER(COALESCE(model, '')) LIKE ?",
+    modelPattern: modelLike == null ? [] : [`%${modelLike}%`],
+  };
+}
 
 /**
  * @param {import('../store.cjs').Store} store
@@ -24,7 +38,7 @@ const { iso, round } = require('./shared.cjs');
  * @returns {number}
  */
 function cycleRevision(store, sourceId, bucketId) {
-  const eventSource = sourceId === 'codex' ? 'codex' : 'claude';
+  const eventSource = ledgerSourceOf(sourceId);
   return /** @type {{ revision: number }} */ (store.prepare(`SELECT COALESCE(SUM(revision), 0) AS revision FROM analytics_revisions
       WHERE domain = 'price' OR (domain = 'usage' AND source_id = ?)
         OR (domain = 'quota' AND source_id = ? AND bucket_id = ?)`)
@@ -55,14 +69,13 @@ function getCycleHistory(store, sourceId, quota, settings = store.getSettings(),
     return cached.value;
   }
   const value = store.buildCycleHistory(sourceId, quota, settings, limit, nowMs);
-  const eventSource = sourceId === 'codex' ? 'codex' : 'claude';
-  const modelFilter = sourceId === 'claude-fable' ? "AND LOWER(COALESCE(model, '')) LIKE '%fable%'" : '';
+  const { eventSource, modelFilter, modelPattern } = cycleEvents(sourceId);
   // Current cycles end at now (exclusive). A future-dated imported event
   // enters its cycle one millisecond after its timestamp; a reset also
   // changes the current flag even when no database write occurs.
   const nextEvent = /** @type {{ occurred_at: IsoTime } | undefined} */ (store.prepare(`SELECT occurred_at FROM usage_events
       WHERE source_id = ? AND occurred_at >= ? ${modelFilter}
-      ORDER BY occurred_at ASC LIMIT 1`).get(eventSource, iso(nowMs)));
+      ORDER BY occurred_at ASC LIMIT 1`).get(eventSource, iso(nowMs), ...modelPattern));
   // A stored reading dated beyond the clock-skew allowance joins its cycle
   // once the clock comes within that allowance of it.
   const nextReading = /** @type {{ observed_at: IsoTime } | undefined} */ (store.prepare(`SELECT observed_at FROM quota_observations
@@ -135,8 +148,7 @@ function buildCycleHistory(store, sourceId, quota, settings = store.getSettings(
     merged.push({ ...row });
   }
   const rate = Number(settings.usdToCurrency || 1);
-  const eventSource = sourceId === 'codex' ? 'codex' : 'claude';
-  const modelFilter = sourceId === 'claude-fable' ? "AND LOWER(COALESCE(model, '')) LIKE '%fable%'" : '';
+  const { eventSource, modelFilter, modelPattern } = cycleEvents(sourceId);
   const windows = merged.slice(0, limit).map((row, index) => {
     const resetMs = new Date(row.resets_at).getTime();
     const windowMinutes = Number(row.window_minutes) > 0 ? Number(row.window_minutes) : 10_080;
@@ -173,12 +185,12 @@ function buildCycleHistory(store, sourceId, quota, settings = store.getSettings(
             SUM(cache_write_1h_input_tokens) AS cache_write_1h_input_tokens,
             SUM(output_tokens) AS output_tokens
             FROM usage_events WHERE source_id = ? AND occurred_at >= ? AND occurred_at < ? ${modelFilter}
-            GROUP BY model, contextTier`).iterate(eventSource, window.startIso, window.endIso));
+            GROUP BY model, contextTier`).iterate(eventSource, window.startIso, window.endIso, ...modelPattern));
         for (const event of events) {
           window.usd += store.calculateCost(event).actualUsd;
           // Codex reports cached input as a subset of input; Claude reports it
           // separately. Same rule as buildCostAnalytics so the two tables agree.
-          window.tokens += event.source_id === 'codex'
+          window.tokens += cachedInputInsideInput(event.source_id)
             ? Number(event.input_tokens) + Number(event.cache_write_input_tokens) + Number(event.output_tokens)
             : Number(event.input_tokens) + Number(event.cached_input_tokens)
               + Number(event.cache_write_input_tokens) + Number(event.output_tokens);

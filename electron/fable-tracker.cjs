@@ -4,8 +4,12 @@ const { asIso } = require('./time.cjs');
 const { selectDisplayedWindows } = require('./quota-selection.cjs');
 const { QUOTA_CLOCK_SKEW_MS, validQuotaTime } = require('./quota-time.cjs');
 
-const FABLE_SOURCE_ID = 'claude-fable';
-const FABLE_BUCKET_ID = 'fable_seven_day';
+const { CLAUDE, FABLE } = require('./providers.mjs');
+
+// Fable has no collector of its own: this part of the Claude refresh writes
+// its readings and its status, from Claude's plan usage and Claude's tokens.
+const FABLE_SOURCE_ID = FABLE.id;
+const FABLE_BUCKET_ID = FABLE.weeklyBucket;
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const { OFFICIAL_PROVENANCES, isProviderProvenance } = require('./quota-provenance.mjs');
 const { freshnessLimitHours } = require('./dashboard-decision.cjs');
@@ -334,7 +338,7 @@ function recordProviderWindows(store, normalized, observedAt) {
       if (window.displayName) metadata.displayName = window.displayName;
       if (normalized.extraUsage) metadata.extraUsage = normalized.extraUsage;
       store.recordObservation({
-        sourceId: 'claude',
+        sourceId: CLAUDE.id,
         bucketId: window.bucketId,
         bucketName: window.bucketName,
         observedAt,
@@ -353,7 +357,7 @@ function recordProviderWindows(store, normalized, observedAt) {
       store.recordObservation({
         sourceId: FABLE_SOURCE_ID,
         bucketId: FABLE_BUCKET_ID,
-        bucketName: 'Fable weekly',
+        bucketName: FABLE.weeklyBucketName,
         observedAt,
         usedPercent: normalized.fable.utilization,
         remainingPercent: 100 - normalized.fable.utilization,
@@ -590,7 +594,7 @@ function createFableUsageTracker({ store, usagePort, activityReader, clock = () 
     // A Claude plan window that is still running means the account has a
     // subscription, so a read reporting none has failed.
     const expectSubscription = planUsageRequested
-      && store.hasUsableObservation('claude', nowMs, { activeWithinMs: 8 * 24 * 60 * 60 * 1000 });
+      && store.hasUsableObservation(CLAUDE.id, nowMs, { activeWithinMs: 8 * 24 * 60 * 60 * 1000 });
     const usageRead = planUsageRequested
       ? timed(() => usagePort.read({ signal: options.signal, expectSubscription })) : null;
     const [usageResult] = usageRead ? await Promise.allSettled([usageRead.promise]) : [null];

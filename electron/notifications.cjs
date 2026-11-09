@@ -28,7 +28,7 @@ const { localDayKey } = require('./time.cjs');
  * serves as well as a whole snapshot.
  * @typedef {Pick<QuotaWindow, 'bucketId' | 'resetsAt' | 'usedPercent'>} PreviousWindow
  * @typedef {{
- *   quotas?: Partial<Record<'codex' | 'claude' | 'fable', { windows?: PreviousWindow[] } | null>>,
+ *   quotas?: Partial<Record<import('./providers.mjs').SnapshotKey, { windows?: PreviousWindow[] } | null>>,
  *   sources?: Pick<Source, 'id' | 'status'>[],
  * }} PreviousSnapshot
  */

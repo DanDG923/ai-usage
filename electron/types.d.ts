@@ -28,8 +28,8 @@ export type Statement = Omit<StatementSync, 'run'> & {
   run(namedParameters: Record<string, SqlValue>, ...anonymousParameters: SqlValue[]): StatementResult;
 };
 
-/** A subscription as the database and the collectors name it. */
-export type SourceId = 'codex' | 'claude' | 'claude-fable';
+/** A subscription as the database and the collectors name it: an id in electron/providers.mjs. */
+export type SourceId = import('./providers.mjs').ProviderId;
 
 /** A time as SQLite stores it: an ISO 8601 string in UTC. */
 export type IsoTime = string;

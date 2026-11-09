@@ -1,6 +1,7 @@
 'use strict';
 
 const { flyoutBounds } = require('./flyout-position.cjs');
+const { PROVIDERS } = require('./providers.mjs');
 
 /** @typedef {import('electron').BrowserWindow} BrowserWindow */
 /** @typedef {import('electron').IpcMainInvokeEvent} IpcMainInvokeEvent */
@@ -56,7 +57,8 @@ function fitHeight(height) {
 }
 
 const DASHBOARD_TABS = Object.freeze(['overview', 'activity', 'costs', 'settings']);
-const DASHBOARD_PROVIDERS = Object.freeze(['codex', 'claude', 'fable']);
+// A page may name a provider by the key the snapshot lists it under.
+const DASHBOARD_PROVIDERS = Object.freeze(PROVIDERS.map((provider) => provider.snapshotKey));
 // A navigation the dashboard never collects, for example because it failed to
 // load, must not redirect a dashboard opened much later.
 const NAVIGATION_TTL_MS = 60_000;
@@ -159,11 +161,7 @@ function flyoutPayload(snapshot) {
   for (const key of FLYOUT_FIELDS) if (key in snapshot) payload[key] = snapshot[key];
   /** @type {Partial<FlyoutSnapshot['quotas']>} */
   const quotas = snapshot.quotas && typeof snapshot.quotas === 'object' ? snapshot.quotas : {};
-  payload.quotas = {
-    codex: lightQuota(quotas.codex),
-    claude: lightQuota(quotas.claude),
-    fable: lightQuota(quotas.fable),
-  };
+  payload.quotas = Object.fromEntries(DASHBOARD_PROVIDERS.map((key) => [key, lightQuota(quotas[key])]));
   // It holds the snapshot's own fields, copied above, and the lighter quotas.
   return /** @type {FlyoutSnapshot} */ (payload);
 }

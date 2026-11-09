@@ -6,6 +6,7 @@
 const path = require('node:path');
 const { createCollectorHost, createInlineCollectorHost } = require('../collector-host.cjs');
 const { createCollectorService } = require('../collector-service.cjs');
+const { CLAUDE, CODEX, PROVIDERS } = require('../providers.mjs');
 const { REFRESH_TRIGGERS, createRefreshCoalescer, refreshOptionsFor } = require('../refresh-policy.cjs');
 const { closed } = require('./closed.cjs');
 
@@ -159,12 +160,17 @@ function createRefreshModule(main) {
     if (main.lifecycle.isQuitting) return { snapshot: undefined, backupError: null, collectors: {} };
     const { codex, claude } = outcomes;
     await main.databaseJobs.run(() => {
-      if (codex?.status === 'rejected') main.store.setSourceStatus('codex', 'error', `Codex refresh failed: ${codex.reason?.message || 'Unknown local error.'}`);
-      if (claude?.status === 'rejected') {
-        const detail = `Claude refresh failed: ${claude.reason?.message || 'Unknown local error.'}`;
-        main.store.setSourceStatus('claude', 'error', detail);
-        main.store.setSourceStatus('claude-fable', 'error', detail);
-      }
+      // A failed collector is an error on every source it reports for: the
+      // Claude collector writes Fable's status as well as Claude's.
+      /**
+       * @param {import('../providers.mjs').CollectorId} collector
+       * @param {string} detail
+       */
+      const failSources = (collector, detail) => {
+        for (const provider of PROVIDERS) if (provider.collector === collector) main.store.setSourceStatus(provider.id, 'error', detail);
+      };
+      if (codex?.status === 'rejected') failSources(CODEX.collector, `Codex refresh failed: ${codex.reason?.message || 'Unknown local error.'}`);
+      if (claude?.status === 'rejected') failSources(CLAUDE.collector, `Claude refresh failed: ${claude.reason?.message || 'Unknown local error.'}`);
       try {
         main.store.compactObservations();
       } catch { /* Housekeeping is best effort. */ }

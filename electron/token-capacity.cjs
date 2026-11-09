@@ -5,6 +5,7 @@ const { FORECAST_LOOKBACK_MS } = require('./quota-time.cjs');
 const { evidenceTimes, normaliseObservation } = require('./forecast.cjs');
 const { OFFICIAL_PROVENANCES: CALIBRATION_PROVENANCES } = require('./quota-provenance.mjs');
 const { present } = require('./present.cjs');
+const { CLAUDE, CLAUDE_MODEL_IDS, CODEX, cachedInputInsideInput, claudeModelFamily, isWeeklyBucket, providerById } = require('./providers.mjs');
 
 /** @typedef {import('./types').ObservationRow} ObservationRow */
 /**
@@ -19,12 +20,12 @@ const { present } = require('./present.cjs');
  * @typedef {{ input: number, cacheRead: number, cacheWrite: number, output: number }} TokenMix
  */
 
-/** @typedef {(model: string | null | undefined) => boolean} ModelMatcher */
+/** @typedef {import('./providers.mjs').ModelMatcher} ModelMatcher */
 
 /**
  * Which token records can explain movement in one weekly limit.
  * @typedef {object} Scope
- * @property {'codex' | 'claude'} eventSource The subscription whose records count.
+ * @property {string} eventSource The ledger source whose records count.
  * @property {ModelMatcher} modelMatches Whether a record's model draws on this limit.
  * @property {'overall' | 'model'} kind Whether the limit covers every model or one family.
  */
@@ -73,7 +74,8 @@ const RESET_TOLERANCE_MS = 60_000;
 const MIN_INTERVAL_PERCENT = 5;
 const MIN_INTERVALS = 3;
 const OFFICIAL_PROVENANCES = new Set(CALIBRATION_PROVENANCES);
-const MODEL_IDS = new Set(['claude-fable-5-1', 'claude-fable-5', 'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-sonnet-5-5', 'claude-sonnet-5', 'claude-haiku-5-5', 'claude-haiku-4-5']);
+/** @type {Set<string>} */
+const MODEL_IDS = new Set(CLAUDE_MODEL_IDS);
 const EMPTY_MIX = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
 const BASE_WARNINGS = [
   'This estimates capacity for the observed model and token mix, not a fixed provider token limit.',
@@ -103,36 +105,27 @@ function metadataOf(row) {
  * @returns {Scope | null}
  */
 function scopeFor(sourceId, bucketId) {
-  /**
-   * @param {string} name
-   * @returns {ModelMatcher}
-   */
-  const family = (name) => {
-    const pattern = new RegExp(`^claude-${name}(?:-|$)`, 'i');
-    return (model) => pattern.test(model || '');
-  };
-  if (sourceId === 'codex' && ['codex:weekly', 'codex:primary', 'codex:secondary'].includes(bucketId)) {
-    // Spark is metered separately. Its tokens remain in the ledger but cannot
-    // explain movement in the main Codex allowance or increase its capacity.
-    return { eventSource: 'codex', modelMatches: (model) =>
-      !/^gpt-5\.3-codex-spark(?:$|-(?:\d{8}|\d{4}-\d{2}-\d{2})$)/i.test(typeof model === 'string' ? model.trim() : ''), kind: 'overall' };
+  // A provider's own weekly allowance: the registry says which ledger source
+  // and which models count toward it.
+  const provider = providerById(sourceId);
+  if (provider && isWeeklyBucket(sourceId, bucketId)) {
+    return { eventSource: provider.ledgerSource, modelMatches: provider.countsModel, kind: provider.weeklyScope };
   }
-  if (sourceId === 'claude-fable' && ['fable_seven_day', 'fable:seven_day_fable'].includes(bucketId)) {
-    return { eventSource: 'claude', modelMatches: family('fable'), kind: 'model' };
-  }
-  if (sourceId !== 'claude') return null;
-  if (bucketId === 'seven_day') return { eventSource: 'claude', modelMatches: () => true, kind: 'overall' };
+  // The rest is Claude's alone: the weekly limits it reports per model family
+  // or per model, beside the overall one.
+  if (provider !== CLAUDE) return null;
+  const eventSource = CLAUDE.ledgerSource;
   /** @type {Record<string, string>} */
   const known = { seven_day_opus: 'opus', seven_day_sonnet: 'sonnet' };
-  if (Object.hasOwn(known, bucketId)) return { eventSource: 'claude', modelMatches: family(known[bucketId]), kind: 'model' };
+  if (Object.hasOwn(known, bucketId)) return { eventSource, modelMatches: claudeModelFamily(known[bucketId]), kind: 'model' };
   if (!String(bucketId).startsWith('model_scoped:')) return null;
   let label;
   try { label = decodeURIComponent(bucketId.slice('model_scoped:'.length)).trim().toLowerCase(); }
   catch { return null; }
   const familyLabel = /^(?:claude )?(opus|sonnet|fable)$/.exec(label);
-  if (familyLabel) return { eventSource: 'claude', modelMatches: family(familyLabel[1]), kind: 'model' };
+  if (familyLabel) return { eventSource, modelMatches: claudeModelFamily(familyLabel[1]), kind: 'model' };
   if (!MODEL_IDS.has(label)) return null;
-  return { eventSource: 'claude', kind: 'model', modelMatches: (model) => {
+  return { eventSource, kind: 'model', modelMatches: (model) => {
     const value = String(model || '').toLowerCase();
     return value === label || (value.startsWith(`${label}-`) && /^(?:\d{8}|\d{4}-\d{2}-\d{2})$/.test(value.slice(label.length + 1)));
   } };
@@ -175,8 +168,11 @@ function normalizeObservation(row, sourceId, bucketId, scope, nowMs, evidence, k
   if (row.remaining_percent != null && (typeof row.remaining_percent !== 'number'
     || !Number.isFinite(row.remaining_percent) || Math.abs(used + row.remaining_percent - 100) > 0.1)) return null;
   const metadata = metadataOf(row);
+  // A provider that names its limits (Codex) may record another limit in
+  // the same bucket; only its main one is this allowance.
+  const mainLimitId = providerById(sourceId)?.mainLimitId ?? null;
   if ((metadata.scope && metadata.scope !== scope.kind)
-    || (sourceId === 'codex' && metadata.limitId != null && metadata.limitId !== 'codex')) return null;
+    || (mainLimitId != null && metadata.limitId != null && metadata.limitId !== mainLimitId)) return null;
   return { at, reset, used, plan: typeof row.plan_type === 'string' ? row.plan_type.trim().toLowerCase() || null : null,
     official: OFFICIAL_PROVENANCES.has(row.provenance), manual: row.provenance === 'manual-official',
     provenance: row.provenance, evidence: Math.min(at, evidence.get(row) ?? at), known: Math.min(at, known.get(row) ?? at),
@@ -216,8 +212,8 @@ function normalizeEvent(row, scope, nowMs) {
   const fields = /** @type {const} */ (['input_tokens', 'cached_input_tokens', 'cache_write_input_tokens', 'output_tokens', 'reasoning_output_tokens']);
   const [input, read, write, output, reasoning] = fields.map((field) => row[field] ?? 0);
   if (![input, read, write, output, reasoning].every((value) => Number.isSafeInteger(value) && value >= 0)
-    || reasoning > output || (scope.eventSource === 'codex' && read > input)) return { at, invalid: /** @type {const} */ (true) };
-  const mix = { input: scope.eventSource === 'codex' ? input - read : input,
+    || reasoning > output || (cachedInputInsideInput(scope.eventSource) && read > input)) return { at, invalid: /** @type {const} */ (true) };
+  const mix = { input: cachedInputInsideInput(scope.eventSource) ? input - read : input,
     cacheRead: read, cacheWrite: write, output };
   const tokens = Object.values(mix).reduce((sum, value) => sum + value, 0);
   if (!Number.isSafeInteger(tokens)) return { at, invalid: /** @type {const} */ (true) };
@@ -338,7 +334,7 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
   // them creates apparent corrections at every percentage step and continually
   // throws away the accumulating calibration interval. Prefer live readings
   // over the period they cover; retain transcript-only history outside it.
-  const liveReadings = sourceId === 'codex' ? readings.filter((row) => row.provenance === 'official') : [];
+  const liveReadings = sourceId === CODEX.id ? readings.filter((row) => row.provenance === 'official') : [];
   const calibrationReadings = liveReadings.length >= 2 ? readings.filter((row) =>
     row.provenance !== 'local-official' || row.at < liveReadings[0].at || row.at > /** @type {typeof liveReadings[number]} */ (liveReadings.at(-1)).at) : readings;
   if (calibrationReadings.length < readings.length) {
@@ -367,7 +363,7 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
       anchor = after; highWater = after.used; cycleReset = after.reset; cycle += 1; recovering = false;
       continue;
     }
-    if (sourceId === 'codex' && (anchor.provenance === 'local-official') !== (after.provenance === 'local-official')) {
+    if (sourceId === CODEX.id && (anchor.provenance === 'local-official') !== (after.provenance === 'local-official')) {
       // A source handoff has no known delay, so never match tokens across it.
       anchor = after; highWater = after.used; recovering = false;
       continue;

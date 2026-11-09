@@ -9,11 +9,12 @@
 const { SOURCES, evidenceNeedsRefresh, stalePoolWindow, subscriptionVisible } = require('./dashboard-decision.cjs');
 const { isMainWindow, selectDisplayedWindows } = require('./quota-selection.cjs');
 const { displayedRemaining, isEstimated, poolLimited, primaryWindow, quotaWindows } = require('./notifications.cjs');
+const { CODEX, FABLE, allowanceHost, isMainLimitId, providerBySnapshotKey } = require('./providers.mjs');
 
 /** @typedef {import('./types').QuotaWindow} QuotaWindow */
 /** @typedef {import('./types').ForecastState} ForecastState */
 /** @typedef {import('./notifications.cjs').SnapshotLike} SnapshotLike */
-/** @typedef {'codex' | 'claude' | 'fable'} ProviderId */
+/** @typedef {import('./providers.mjs').SnapshotKey} ProviderId The key a snapshot lists a provider under. */
 /** @typedef {ReturnType<typeof providerRow>} GlanceProvider */
 /** @typedef {ReturnType<typeof buildGlance>} Glance The file the Claude Code mod reads. */
 
@@ -47,7 +48,7 @@ function windowLabel(minutes) {
 function planName(planType, provider) {
   const value = typeof planType === 'string' ? planType.trim() : '';
   if (!value) return 'Allowance';
-  if (value.toLowerCase() === 'pro') return provider === 'codex' ? 'ChatGPT Pro' : 'Claude Pro';
+  if (value.toLowerCase() === 'pro') return provider === CODEX.snapshotKey ? 'ChatGPT Pro' : 'Claude Pro';
   if (value.toLowerCase() === 'max') return 'Claude Max';
   return value;
 }
@@ -57,7 +58,7 @@ function modelAllowanceName(window) {
   /** @type {Record<string, unknown>} */
   const { limitId, limitName } = window.metadata || {};
   if (typeof limitId === 'string') {
-    if (limitId === 'codex') return null;
+    if (isMainLimitId(limitId)) return null;
     return typeof limitName === 'string' && limitName.trim() ? limitName : limitId;
   }
   if (isMainWindow(window) || /^fable/i.test(window.bucketId) || !window.bucketName?.trim()) return null;
@@ -79,7 +80,8 @@ function allowanceWindowLabel(window) {
 function subtitleOf(id, current, source) {
   if (!current) return 'Awaiting data';
   let measurement = planName(current.planType, id);
-  if (id === 'fable') {
+  // Fable has no plan of its own to name; its card says where the figure came from.
+  if (id === FABLE.snapshotKey) {
     measurement = current.provenance === 'derived-tokens' ? 'Local estimate'
       : current.provenance === 'manual-official' ? 'Manual observation' : 'Provider reading';
     if (source && FALLEN_BACK.has(source.status)) measurement = `Stale ${measurement.toLowerCase()}`;
@@ -163,7 +165,9 @@ function providerRow({ id, healthId, label }, snapshot) {
   const current = primaryWindow(quota);
   const expired = Boolean(current?.forecast?.expired);
   const source = (snapshot.sources || []).find((entry) => entry.id === healthId) ?? null;
-  const poolWindow = id === 'fable' ? stalePoolWindow(current, snapshot.quotas?.claude) : null;
+  // The weekly window of the provider whose pool this one sits inside (Claude, for Fable).
+  const poolHost = allowanceHost(providerBySnapshotKey(id));
+  const poolWindow = poolHost ? stalePoolWindow(current, snapshot.quotas?.[poolHost.snapshotKey]) : null;
   /** @type {Partial<import('../src/types').Forecast>} */
   const forecast = current?.forecast || {};
   const live = Boolean(current && !expired);

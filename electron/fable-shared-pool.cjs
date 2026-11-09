@@ -17,6 +17,7 @@
 
 const { FABLE_ALLOWANCE_SHARE } = require('./fable-projection.cjs');
 const { exhaustionTime, forecastState } = require('./forecast.cjs');
+const { FABLE } = require('./providers.mjs');
 const { isMainWindow, selectDisplayedWindows } = require('./quota-selection.cjs');
 const { STALENESS_MS } = require('./token-capacity.cjs');
 
@@ -30,9 +31,10 @@ const { STALENESS_MS } = require('./token-capacity.cjs');
 /** @typedef {Extract<import('./types').SharedPool, { status: 'unavailable' }>['reason']} UnavailableReason */
 
 const WEEK_MINUTES = 10_080;
-// The weekly Fable allowance, as quota-selection.mjs and allowance-changes.cjs
-// know it. Any other Fable bucket is left as it is.
-const FABLE_WEEKLY_BUCKETS = new Set(['fable_seven_day', 'fable:seven_day_fable']);
+// The weekly Fable allowance, as the provider registry lists it. Any other
+// Fable bucket is left as it is.
+/** @type {Set<string>} */
+const FABLE_WEEKLY_BUCKETS = new Set(FABLE.weeklyBuckets);
 // The pool expressed in Fable points. Above 100 it cannot bind; the cap keeps
 // chart coordinates finite once the pool has room to spare.
 const MAX_POOL_AS_FABLE = 200;

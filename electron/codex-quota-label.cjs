@@ -1,5 +1,7 @@
 'use strict';
 
+const { CODEX } = require('./providers.mjs');
+
 /**
  * @param {number | null | undefined} minutes
  * @param {string} [fallback]
@@ -25,7 +27,7 @@ function codexQuotaLabel(bucketName, windowMinutes, metadata = {}) {
   // Persisted/provider metadata can contain JSON values with unsafe coercions.
   const limitId = typeof metadata?.limitId === 'string' ? metadata.limitId : null;
   const limitName = typeof metadata?.limitName === 'string' ? metadata.limitName : null;
-  if (!limitId || limitId === 'codex') return bucketName;
+  if (!limitId || limitId === CODEX.mainLimitId) return bucketName;
   const name = limitName || limitId;
   // Retain descriptive/manual names; older collectors only lost model identity
   // when replacing it with one of these generic window names.

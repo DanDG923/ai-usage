@@ -35,6 +35,7 @@
 const { isOfficialWindow, selectDisplayedWindows } = require('../quota-selection.cjs');
 const { FABLE_BUCKET, FABLE_BUCKET_NAME, projectFableAllowance } = require('../fable-projection.cjs');
 const { codexQuotaLabel } = require('../codex-quota-label.cjs');
+const { CLAUDE, CODEX, FABLE, ledgerSourceOf } = require('../providers.mjs');
 const { forecastQuota, freshReadGraceFor, latestEvidenceAt, normaliseObservation, prepareObservation, withoutStaleRestatements } = require('../forecast.cjs');
 const { estimateTokenCapacity, LOOKBACK_MS: TOKEN_CAPACITY_LOOKBACK_MS, STALENESS_MS: TOKEN_CAPACITY_STALENESS_MS } = require('../token-capacity.cjs');
 const { QUOTA_CLOCK_SKEW_MS, FORECAST_LOOKBACK_MS, validQuotaTime } = require('../quota-time.cjs');
@@ -143,7 +144,7 @@ function getQuota(store, sourceId, settings = store.getSettings(), nowMs = Date.
     }
   }
   // Fable may have no stored rows and still have a projected estimate.
-  if (!rows.length && sourceId !== 'claude-fable') return null;
+  if (!rows.length && sourceId !== FABLE.id) return null;
 
   /** @type {Map<string, ObservationRow[]>} */
   const grouped = new Map();
@@ -161,7 +162,7 @@ function getQuota(store, sourceId, settings = store.getSettings(), nowMs = Date.
   for (const [bucketId, bucketRows] of grouped) {
     grouped.set(bucketId, withoutStaleRestatements(bucketRows, restatementOptions));
   }
-  if (sourceId === 'claude' && sessionWindowOmitted(grouped.get(CLAUDE_SESSION_BUCKET), rows, nowMs)) {
+  if (sourceId === CLAUDE.id && sessionWindowOmitted(grouped.get(CLAUDE_SESSION_BUCKET), rows, nowMs)) {
     grouped.delete(CLAUDE_SESSION_BUCKET);
   }
   const schedule = {
@@ -190,9 +191,9 @@ function getQuota(store, sourceId, settings = store.getSettings(), nowMs = Date.
     const metadata = quotaMetadata(latest.metadata_json) || {};
     return {
       bucketId,
-      bucketName: sourceId === 'codex'
+      bucketName: sourceId === CODEX.id
         ? codexQuotaLabel(latest.bucket_name || bucketId, latest.window_minutes, metadata)
-        : sourceId === 'claude-fable' && latest.bucket_name === LEGACY_FABLE_BUCKET_NAME
+        : sourceId === FABLE.id && latest.bucket_name === LEGACY_FABLE_BUCKET_NAME
           ? FABLE_BUCKET_NAME
           : latest.bucket_name || bucketId,
       observedAt: latest.observed_at,
@@ -211,7 +212,7 @@ function getQuota(store, sourceId, settings = store.getSettings(), nowMs = Date.
   });
   // Decide replacement from every window before omitting any forecast: a
   // live provider window in an alternate Fable bucket can prevent projection.
-  const projected = sourceId === 'claude-fable'
+  const projected = sourceId === FABLE.id
     ? store.projectedFableWindow(readings, grouped.get(FABLE_BUCKET) || [], settings, forecastOptions, nowMs, tokenCapacity)
     : null;
   // Each reading was built from a bucket of `grouped`, so its rows are there.
@@ -282,7 +283,7 @@ function projectedFableWindow(store, windows, bucketRows, settings, forecastOpti
    * @returns {import('../types').ProjectedObservationRow}
    */
   const point = (entry) => ({
-    source_id: 'claude-fable', bucket_id: FABLE_BUCKET, bucket_name: FABLE_BUCKET_NAME,
+    source_id: FABLE.id, bucket_id: FABLE_BUCKET, bucket_name: FABLE_BUCKET_NAME,
     observed_at: entry.observedAt, used_percent: entry.usedPercent, remaining_percent: 100 - entry.usedPercent,
     resets_at: projection.resetsAt, window_minutes: projection.windowMinutes, plan_type: projection.planType,
     provenance: 'derived-tokens', confidence: projection.confidence, metadata_json: '{}',
@@ -302,7 +303,7 @@ function projectedFableWindow(store, windows, bucketRows, settings, forecastOpti
     provenance: 'derived-tokens',
     metadata: { sharedWithOverall: true, projected: true, calibration: projection.calibration },
     forecast,
-    tokenCapacity: includeTokenCapacity ? store.getTokenCapacity('claude-fable', FABLE_BUCKET, bucketRows, settings, nowMs) : null,
+    tokenCapacity: includeTokenCapacity ? store.getTokenCapacity(FABLE.id, FABLE_BUCKET, bucketRows, settings, nowMs) : null,
   };
 }
 
@@ -426,7 +427,7 @@ function tokenCapacityEvidence(store, sourceId, nowMs) {
  * @returns {TokenCapacityEstimate}
  */
 function getTokenCapacity(store, sourceId, bucketId, observations, settings, nowMs, capturedQuotaRevision = /** @type {number | null} */ (null)) {
-  const ledgerSource = sourceId === 'claude-fable' ? 'claude' : sourceId;
+  const ledgerSource = ledgerSourceOf(sourceId);
   const evidence = store.tokenCapacityEvidence(ledgerSource, nowMs);
   const quotaRevision = capturedQuotaRevision ?? /** @type {{ value: number }} */ (store.prepare(`SELECT COALESCE(SUM(revision), 0) AS value
       FROM analytics_revisions WHERE domain = 'quota' AND source_id = ?`).get(sourceId)).value;

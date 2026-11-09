@@ -9,6 +9,7 @@ const { IncrementalReadError, planIncrementalRead, readCompleteLines } = require
 const { epochToIso } = require('./time.cjs');
 const { MAX_QUOTA_RESET_AHEAD_MS } = require('./quota-time.cjs');
 const { codexQuotaLabel, durationLabel } = require('./codex-quota-label.cjs');
+const { CODEX } = require('./providers.mjs');
 const { codexAgentMetadata, textId } = require('./task-usage.cjs');
 
 /** @typedef {import('./types').Store} Store */
@@ -229,8 +230,8 @@ function quotaWindow(window) {
  */
 function recordRateLimit(store, raw, observedAt, provenance, extra = {}, { onRejected } = {}) {
   if (!raw) return 0;
-  const sourceId = 'codex';
-  const limitId = raw.limitId ?? raw.limit_id ?? 'codex';
+  const sourceId = CODEX.id;
+  const limitId = raw.limitId ?? raw.limit_id ?? CODEX.mainLimitId;
   const limitName = raw.limitName ?? raw.limit_name ?? limitId;
   const planType = raw.planType ?? raw.plan_type ?? null;
   let count = 0;
@@ -315,7 +316,7 @@ async function collectFromAppServer(store, binary, {
     try {
       const usage = await client.request('account/usage/read');
       for (const bucket of usage?.dailyUsageBuckets || []) {
-        store.upsertDailyUsage('codex', bucket.startDate, bucket.tokens);
+        store.upsertDailyUsage(CODEX.id, bucket.startDate, bucket.tokens);
         dailyBuckets += 1;
       }
     } catch {
@@ -495,7 +496,7 @@ function codexUsageEvent(entry, state) {
   const usage = entry.payload.info.last_token_usage;
   return {
     eventKey: eventKeyFor(state, entry.timestamp),
-    sourceId: 'codex', occurredAt: entry.timestamp, sessionId: state.sessionId,
+    sourceId: CODEX.id, occurredAt: entry.timestamp, sessionId: state.sessionId,
     model: state.model, project: state.project,
     inputTokens: usage.input_tokens, cachedInputTokens: usage.cached_input_tokens,
     cacheWriteInputTokens: usage.cache_write_input_tokens,
@@ -801,7 +802,7 @@ function importLocalSessions(store, days = 120) {
           }
           if (entry.payload?.rate_limits) {
             const raw = entry.payload.rate_limits;
-            const limitId = raw.limitId ?? raw.limit_id ?? 'codex';
+            const limitId = raw.limitId ?? raw.limit_id ?? CODEX.mainLimitId;
             const reading = rateLimitReading(raw);
             const kept = state.keptRateLimits?.[limitId];
             const at = Date.parse(entry.timestamp);
@@ -846,7 +847,7 @@ function importLocalSessions(store, days = 120) {
  * @param {number} [nowMs]
  */
 function hasActiveReading(store, nowMs = Date.now()) {
-  return store.hasUsableObservation('codex', nowMs, { activeWithinMs: MAX_QUOTA_RESET_AHEAD_MS });
+  return store.hasUsableObservation(CODEX.id, nowMs, { activeWithinMs: MAX_QUOTA_RESET_AHEAD_MS });
 }
 
 const withoutFullStop = (/** @type {unknown} */ text) => String(text || 'unknown reason').replace(/\.$/, '');
@@ -887,7 +888,7 @@ async function refreshCodex(store, {
     const detail = localWarning
       ? `Codex executable was not found. ${localWarning}`
       : 'Codex executable was not found.';
-    store.setSourceStatus('codex', status, detail, { ...local, localWarning });
+    store.setSourceStatus(CODEX.id, status, detail, { ...local, localWarning });
     return { binary: null, appServer: null, local, localWarning };
   }
 
@@ -907,7 +908,7 @@ async function refreshCodex(store, {
       const standing = active
         ? '; the last recorded reading is still active but was not replaced.'
         : ', and no earlier reading is still active, so the Codex allowance is unknown.';
-      store.setSourceStatus('codex', active ? 'stale' : 'unavailable',
+      store.setSourceStatus(CODEX.id, active ? 'stale' : 'unavailable',
         `${cause}${standing}${localWarning ? ' Local session records could not be scanned.' : ''}`, {
           binary,
           appServer,
@@ -930,7 +931,7 @@ async function refreshCodex(store, {
     if (appServer.rejected) {
       detail += ` ${appServer.rejected} allowance window${appServer.rejected === 1 ? '' : 's'} in the reading ${appServer.rejected === 1 ? 'was' : 'were'} rejected and left unchanged (${withoutFullStop(appServer.lastRejection)}).`;
     }
-    store.setSourceStatus('codex', 'connected', detail, {
+    store.setSourceStatus(CODEX.id, 'connected', detail, {
       binary,
       appServer,
       local,
@@ -946,7 +947,7 @@ async function refreshCodex(store, {
     // notification each time. A run in which the local scan failed as well
     // observed nothing.
     const status = !localScanFailed && hasActiveReading(store) ? 'observing' : 'error';
-    store.setSourceStatus('codex', status, `App server unavailable; ${localDetail} ${message}`, {
+    store.setSourceStatus(CODEX.id, status, `App server unavailable; ${localDetail} ${message}`, {
       binary,
       local,
       localWarning,
