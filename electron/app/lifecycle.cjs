@@ -26,10 +26,10 @@ const SHUTDOWN_TIMEOUT_MS = 15_000;
 function createLifecycleModule(main) {
   const { app, dialog, nativeTheme, powerMonitor, session } = main.electron;
   const lifecycle = closed({
-    renderingForced: /** @type {boolean} */ (undefined),
-    renderingMode: /** @type {'software' | 'hardware'} */ (undefined),
+    renderingForced: /** @type {boolean | undefined} */ (undefined),
+    renderingMode: /** @type {'software' | 'hardware' | undefined} */ (undefined),
     isQuitting: false,
-    shutdownPromise: /** @type {Promise<void>} */ (undefined),
+    shutdownPromise: /** @type {Promise<void> | undefined} */ (undefined),
     shutdownComplete: false,
     preparingUpdate: false,
     quitRequestedDuringUpdate: false,
@@ -73,7 +73,7 @@ function createLifecycleModule(main) {
     main.tray.flyout?.destroy();
     main.claudeSetup?.cancel();
     main.claudeCodeMod?.stop();
-    main.timers.clearInterval(main.refresh.refreshTimer);
+    main.timers.clearInterval(main.refresh.refreshTimer ?? undefined);
     main.timers.clearTimeout(main.tray.snoozeTimer);
     main.timers.clearTimeout(main.refresh.resumeTimer);
     main.refresh.refreshTimer = null;

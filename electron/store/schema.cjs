@@ -302,7 +302,7 @@ function migrateAnalyticsRevisions(store) {
     ['quota_observations', 'quota', ['source_id', 'bucket_id']],
     ['price_catalog', 'price', []],
   ])) {
-    const bump = (reference, condition = null) => {
+    const bump = (reference, condition = /** @type {string | null} */ (null)) => {
       const source = scope.includes('source_id') ? `${reference}.source_id` : "''";
       const bucket = scope.includes('bucket_id') ? `${reference}.bucket_id` : "''";
       const values = `'${domain}', ${source}, ${bucket}, 1`;

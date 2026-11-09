@@ -2,6 +2,8 @@
 
 const { flyoutBounds } = require('./flyout-position.cjs');
 
+/** @typedef {import('electron').BrowserWindow} BrowserWindow */
+
 // The tray flyout: a small frameless window above the tray icon showing the
 // allowances at a glance. Electron is injected so the lifecycle, sender and
 // navigation rules can be tested without launching it.
@@ -66,6 +68,7 @@ function normalizeNavigationTarget(value) {
 
 /** Holds the latest requested page until the dashboard collects it, exactly once. */
 function createNavigationQueue({ now = Date.now, ttlMs = NAVIGATION_TTL_MS } = {}) {
+  /** @type {{ target: any, at: number } | null} */
   let pending = null;
   return {
     request(target) {
@@ -77,7 +80,7 @@ function createNavigationQueue({ now = Date.now, ttlMs = NAVIGATION_TTL_MS } = {
       return entry && now() - entry.at <= ttlMs ? entry.target : null;
     },
     hasPending() {
-      return Boolean(pending) && now() - pending.at <= ttlMs;
+      return pending !== null && now() - pending.at <= ttlMs;
     },
   };
 }
@@ -145,28 +148,33 @@ function createTrayFlyout({
   measureMs = FLYOUT_MEASURE_MS,
   now = Date.now,
 }) {
+  /** @type {import('electron').BrowserWindow | null} */
   let win = null;
   let ready = false;
   // Whether the flyout should be on screen; true while a new window loads.
   let wanted = false;
+  /** @type {NodeJS.Timeout | null} */
   let releaseTimer = null;
+  /** @type {number | null} */
   let contentHeight = null;
   let holdUntil = -Infinity;
 
+  // The functions below read `win` only after alive() has vouched for it.
   const alive = () => Boolean(win && !win.isDestroyed());
 
   function place() {
     if (!alive()) return;
+    /** @type {any} */
     let anchor = null;
     try { anchor = getAnchor(); } catch { /* Keep the previous position. */ }
     if (!anchor) return;
     const height = contentHeight == null ? maxHeight : Math.min(maxHeight, Math.max(minHeight, contentHeight));
     const bounds = flyoutBounds({ ...anchor, width, height });
-    if (bounds) win.setBounds(bounds);
+    if (bounds) /** @type {BrowserWindow} */ (win).setBounds(bounds);
   }
 
   function cancelRelease() {
-    clearTimeout(releaseTimer);
+    clearTimeout(releaseTimer ?? undefined);
     releaseTimer = null;
   }
 
@@ -181,8 +189,8 @@ function createTrayFlyout({
 
   function reveal(reused) {
     place();
-    win.show();
-    win.focus();
+    /** @type {BrowserWindow} */ (win).show();
+    /** @type {BrowserWindow} */ (win).focus();
     try { onReveal({ reused }); } catch { /* Showing must not depend on a fresh payload. */ }
   }
 
@@ -270,7 +278,7 @@ function createTrayFlyout({
     const wasWanted = wanted;
     wanted = false;
     if (!alive()) return;
-    if (win.isVisible()) win.hide();
+    if (/** @type {BrowserWindow} */ (win).isVisible()) /** @type {BrowserWindow} */ (win).hide();
     if (wasWanted || !releaseTimer) scheduleRelease();
   }
 
@@ -296,7 +304,7 @@ function createTrayFlyout({
 
   function send(channel, payload) {
     if (!alive()) return false;
-    win.webContents.send(channel, payload);
+    /** @type {BrowserWindow} */ (win).webContents.send(channel, payload);
     return true;
   }
 

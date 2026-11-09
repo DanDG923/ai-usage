@@ -4,6 +4,7 @@ const { createAllowanceScaler } = require('./allowance-changes.cjs');
 const { FORECAST_LOOKBACK_MS } = require('./quota-time.cjs');
 const { evidenceTimes, normaliseObservation } = require('./forecast.cjs');
 const { OFFICIAL_PROVENANCES: CALIBRATION_PROVENANCES } = require('./quota-provenance.mjs');
+const { present } = require('./present.cjs');
 
 const DAY_MS = 86_400_000;
 const WEEK_MS = 7 * DAY_MS;
@@ -118,11 +119,11 @@ function normalizeEvent(row, scope, nowMs) {
   const fields = ['input_tokens', 'cached_input_tokens', 'cache_write_input_tokens', 'output_tokens', 'reasoning_output_tokens'];
   const [input, read, write, output, reasoning] = fields.map((field) => row[field] ?? 0);
   if (![input, read, write, output, reasoning].every((value) => Number.isSafeInteger(value) && value >= 0)
-    || reasoning > output || (scope.eventSource === 'codex' && read > input)) return { at, invalid: true };
+    || reasoning > output || (scope.eventSource === 'codex' && read > input)) return { at, invalid: /** @type {const} */ (true) };
   const mix = { input: scope.eventSource === 'codex' ? input - read : input,
     cacheRead: read, cacheWrite: write, output };
   const tokens = Object.values(mix).reduce((sum, value) => sum + value, 0);
-  if (!Number.isSafeInteger(tokens)) return { at, invalid: true };
+  if (!Number.isSafeInteger(tokens)) return { at, invalid: /** @type {const} */ (true) };
   return { at, tokens, mix, model: typeof row.model === 'string' && row.model.trim() ? row.model : 'Unknown' };
 }
 
@@ -165,6 +166,7 @@ function roundedTokens(value, direction = 'round') {
 
 /** @param {{ sourceId?: string, bucketId?: string, observations?: any[], events?: any[], nowMs?: number, excludedDates?: string[], allowanceChanges?: any[] }} [evidence] */
 function estimateTokenCapacity({ sourceId, bucketId, observations = [], events = [], nowMs = Date.now(), excludedDates = [], allowanceChanges = [] } = {}) {
+  /** @type {import('../src/types').TokenCapacityEstimate} */
   const result = { status: 'unavailable', reason: null, weeklyTokens: null, weeklyRange: null,
     remainingTokens: null, remainingRange: null, remainingAsOf: null, confidence: 'low',
     intervals: 0, cycles: 0, observedPercent: 0, calibratedAt: null, modelMix: [], tokenMix: { ...EMPTY_MIX },
@@ -187,7 +189,7 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
   // How current each figure is known to be, which decides whether it is fresh.
   const known = new Map(evidenceTimes(ordered, { known: true }).map((at, index) => [ordered[index], at]));
   const allReadings = (Array.isArray(observations) ? observations : [])
-    .map((row) => normalizeObservation(row, sourceId, bucketId, scope, nowMs, evidence, known)).filter(Boolean)
+    .map((row) => normalizeObservation(row, sourceId, bucketId, scope, nowMs, evidence, known)).filter(present)
     .map((row) => {
       // A share of the allowance in force when the figure was fetched.
       const scale = scaler ? scaler(row.evidence) : 1;
@@ -225,7 +227,7 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
   // over the period they cover; retain transcript-only history outside it.
   const liveReadings = sourceId === 'codex' ? readings.filter((row) => row.provenance === 'official') : [];
   const calibrationReadings = liveReadings.length >= 2 ? readings.filter((row) =>
-    row.provenance !== 'local-official' || row.at < liveReadings[0].at || row.at > liveReadings.at(-1).at) : readings;
+    row.provenance !== 'local-official' || row.at < liveReadings[0].at || row.at > /** @type {typeof liveReadings[number]} */ (liveReadings.at(-1)).at) : readings;
   if (calibrationReadings.length < readings.length) {
     result.warnings.push('Live Codex readings take priority over overlapping transcript snapshots for calibration.');
   }
@@ -283,7 +285,7 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
   if (closeResets) result.warnings.push('Reset times shifted within a day; confidence remains limited.');
 
   const ledger = (Array.isArray(events) ? events : []).map((row) => normalizeEvent(row, scope, nowMs))
-    .filter(Boolean).sort((a, b) => a.at - b.at);
+    .filter(present).sort((a, b) => a.at - b.at);
   const matched = [];
   let cursor = 0, missing = false, invalid = false;
   for (const interval of intervals) {
@@ -365,7 +367,8 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
     && !mixChanged && !broad && !inconsistent && !missing && !invalid && !closeResets
     && !retained.some((entry) => entry.manual) ? 'medium' : 'low';
 
-  const latestOfficial = readings.at(-1), latestAny = allReadings.at(-1);
+  // Never empty: the function has returned already when there are no official readings.
+  const latestOfficial = /** @type {typeof readings[number]} */ (readings.at(-1)), latestAny = allReadings.at(-1);
   // A local estimate can see replenishment before the provider publishes a
   // new reset timestamp. Once that happens, the old official percentage is no
   // longer a current-window anchor, even if later estimates rise again.

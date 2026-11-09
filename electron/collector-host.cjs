@@ -8,6 +8,7 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_IDLE_TIMEOUT_MS = 30_000;
 
 function createCollectorHost({ fork, modulePath, config, requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS, idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS, forkOptions = {}, onLog = /** @type {(message: string) => void} */ (() => {}) }) {
+  /** @type {any} */
   let child = null;
   let idleTimer;
   let nextId = 1;
@@ -44,7 +45,7 @@ function createCollectorHost({ fork, modulePath, config, requestTimeoutMs = DEFA
   // Fail the in-flight requests of one child (or of every child when no
   // owner is given). A recycled child's late exit event must not reject a
   // request that was already registered against its replacement.
-  function failAll(error, owner = null) {
+  function failAll(error, owner = /** @type {any} */ (null)) {
     for (const [id, entry] of pending) {
       if (owner && entry.child !== owner) continue;
       clearTimeout(entry.timer);

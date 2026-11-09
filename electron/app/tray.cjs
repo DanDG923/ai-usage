@@ -20,10 +20,10 @@ const TRAY_SIZE = 32;
 function createTrayModule(main) {
   const { app, BrowserWindow, clipboard, Menu, nativeImage, screen, Tray } = main.electron;
   const tray = closed({
-    icon: /** @type {import('electron').Tray} */ (undefined),
+    icon: /** @type {import('electron').Tray | undefined} */ (undefined),
     // The tray flyout controller; its window exists only while shown or recently hidden.
     flyout: /** @type {ReturnType<typeof createTrayFlyout> | null} */ (null),
-    snoozeTimer: /** @type {NodeJS.Timeout} */ (undefined),
+    snoozeTimer: /** @type {NodeJS.Timeout | undefined} */ (undefined),
     trayState: '',
     trayMenuSnoozed: /** @type {boolean | null} */ (null),
     applyFlyoutChrome, trayIconFor, alertsSnoozed, traySummary, buildTrayMenu, createTray, flyoutAnchor,
@@ -54,7 +54,7 @@ function createTrayModule(main) {
 
   function alertsSnoozed() {
     const until = main.store?.getSettings().alertsSnoozedUntil;
-    return Boolean(until) && Date.parse(until) > Date.now();
+    return Boolean(until) && Date.parse(/** @type {string} */ (until)) > Date.now();
   }
 
   function traySummary() {
@@ -218,7 +218,7 @@ function createTrayModule(main) {
       const current = push && !main.dashboard.isVisible()
         ? main.store.getTraySnapshot(Date.now()) : main.snapshots.patchSnapshotSettings();
       tray.updateTray(current);
-      if (push && main.dashboard.isVisible()) main.dashboard.window.webContents.send('dashboard:updated', current);
+      if (push && main.dashboard.isVisible()) main.dashboard.window?.webContents.send('dashboard:updated', current);
       return current;
     });
   }

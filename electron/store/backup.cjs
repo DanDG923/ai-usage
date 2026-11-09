@@ -288,7 +288,7 @@ function restoreFromExport(store, payload) {
         if (!knownSources.has(row.source_id) || typeof row.event_key !== 'string' || !row.event_key) throw unreadable();
         const tokens = (value) => {
           const parsed = value == null ? 0 : finiteNumber(value);
-          if (!Number.isSafeInteger(parsed) || parsed < 0) throw unreadable();
+          if (parsed === null || !Number.isSafeInteger(parsed) || parsed < 0) throw unreadable();
           return parsed;
         };
         const cacheWrite1h = tokens(row.cache_write_1h_input_tokens);
@@ -354,7 +354,7 @@ function restoreFromExport(store, payload) {
       try {
         const tokens = finiteNumber(row.tokens);
         if (!knownSources.has(row.source_id) || !isForecastDate(row.usage_date)
-          || !Number.isSafeInteger(tokens) || tokens < 0) throw unreadable();
+          || tokens === null || !Number.isSafeInteger(tokens) || tokens < 0) throw unreadable();
         counts.dailyUsage += insertDailyUsage.run(row.source_id, row.usage_date, tokens).changes;
       } catch (error) {
         // Database errors may roll back the transaction. Continuing after
@@ -421,7 +421,7 @@ function restoreFromExport(store, payload) {
 }
 
 /** @param {import('../store.cjs').Store} store */
-function pruneBackups(store, retentionCount = DEFAULT_SETTINGS.backupRetentionCount, keepPath = null) {
+function pruneBackups(store, retentionCount = DEFAULT_SETTINGS.backupRetentionCount, keepPath = /** @type {string | null} */ (null)) {
   const keep = Math.max(1, Math.min(365, Number(retentionCount) || DEFAULT_SETTINGS.backupRetentionCount));
   const protectedPath = keepPath ? path.resolve(keepPath) : null;
   const rows = store.prepare('SELECT * FROM backups ORDER BY created_at DESC, id DESC').all();

@@ -145,8 +145,11 @@ function createClaudeCodeMod({
   const paths = claudeCodeModPaths(root);
   let busy = false;
   let state = 'off';
+  /** @type {any} */
   let lastGlance = null;
+  /** @type {any} */
   let lastSnapshot = null;
+  /** @type {NodeJS.Timeout | null} */
   let checker = null;
   let lastBeatAt = -Infinity;
   // Folder → its watcher. Each is made on its own, so one the file system
@@ -154,11 +157,14 @@ function createClaudeCodeMod({
   const watchers = new Map();
   const unwatchable = new Set();
   let lastSyncAt = -Infinity;
+  /** @type {NodeJS.Timeout | null} */
   let readingTimer = null;
+  /** @type {NodeJS.Timeout | null} */
   let requestRetry = null;
   // Requests from before this moment were left while the mod was off.
   let ignoreRequestsBefore = -Infinity;
   // The plugin state the app last saw, or null before its first look.
+  /** @type {string | null} */
   let lastSeenState = null;
   let lastReadingImportAt = -Infinity;
   let stopped = false;
@@ -286,6 +292,7 @@ function createClaudeCodeMod({
       const filePath = path.join(paths.requests, name);
       let stat;
       try { stat = fs.statSync(filePath); } catch { continue; }
+      /** @type {any} */
       let request = null;
       try {
         if (stat.size <= 4096) request = JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -380,15 +387,15 @@ function createClaudeCodeMod({
       try { watcher.close(); } catch { /* Already closed. */ }
     }
     watchers.clear();
-    clearTimeout(readingTimer);
+    clearTimeout(readingTimer ?? undefined);
     readingTimer = null;
-    clearTimeout(requestRetry);
+    clearTimeout(requestRetry ?? undefined);
     requestRetry = null;
   }
 
   function stopWatching() {
     unfollow();
-    clearInterval(checker);
+    clearInterval(checker ?? undefined);
     checker = null;
   }
 

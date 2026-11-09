@@ -20,6 +20,7 @@ function createMaintenanceHost({
   idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS, now = Date.now,
   createWorker = (modulePath, options) => new Worker(modulePath, options),
 }) {
+  /** @type {any} */
   let worker = null;
   let closing = false;
   let closePromise;
@@ -143,7 +144,7 @@ function createMaintenanceHost({
         target.postMessage({ id, type, payload });
       } catch (error) {
         pending.delete(id);
-        clearTimeout(timer);
+        clearTimeout(timer ?? undefined);
         reject(error);
       }
     });

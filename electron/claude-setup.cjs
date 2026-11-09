@@ -27,13 +27,13 @@ function runCommand(file, args, { timeoutMs = 15000, acceptExitOne = false, envi
 // `environment` is the one the app was launched with: the update check
 // removes GitHub tokens from process.env, and Claude must not inherit that.
 /**
- * @param {object} [options]
- * @param {string} [options.statePath]
+ * @param {object} options
+ * @param {string} options.statePath
  * @param {typeof findClaudeBinary} [options.findBinary]
  * @param {typeof runCommand} [options.run]
  * @param {typeof spawn} [options.launch]
- * @param {() => unknown} [options.installHelper]
- * @param {() => unknown} [options.uninstallHelper]
+ * @param {() => unknown} options.installHelper
+ * @param {() => unknown} options.uninstallHelper
  * @param {() => boolean} [options.helperInstalled]
  * @param {NodeJS.ProcessEnv} [options.environment]
  * @param {typeof downloadInstaller} [options.fetchInstaller]
@@ -43,9 +43,11 @@ function runCommand(file, args, { timeoutMs = 15000, acceptExitOne = false, envi
 function createClaudeSetup({
   statePath, findBinary = findClaudeBinary, run = runCommand, launch = spawn, installHelper, uninstallHelper, helperInstalled = () => false,
   environment = process.env, fetchInstaller = downloadInstaller, installerPin = shippedPin, log = () => {},
-} = {}) {
+} = /** @type {any} */ ({})) {
   let busy = false;
+  /** @type {import('node:child_process').ChildProcess | null} */
   let child = null;
+  /** @type {(() => void) | null} */
   let cancelPending = null;
   const systemRoot = process.env.SystemRoot || 'C:\\Windows';
   const powershell = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');

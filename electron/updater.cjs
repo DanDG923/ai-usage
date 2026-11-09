@@ -42,7 +42,7 @@ function notesText(notes) {
 // The manifest may list several files. Verify against the entry that names
 // the file actually downloaded; the single-file top-level digest is the fallback.
 function fileName(value) {
-  return String(value || '').split(/[/\\]/).pop().toLowerCase();
+  return /** @type {string} */ (String(value || '').split(/[/\\]/).pop()).toLowerCase();
 }
 
 function manifestDigest(info, downloadedFile) {
@@ -71,7 +71,9 @@ function createUpdateChecker({
   platform = process.platform, beforeInstall = async () => {}, onInstallError = /** @type {(message?: string) => void} */ (() => {}),
   // When both are supplied the app verifies and launches the installer itself,
   // retrying a refused launch before it quits; otherwise electron-updater does.
-  launchInstaller = null, quitForInstall = null, installDirectoryWritable = () => false,
+  launchInstaller = /** @type {((options: any) => Promise<any>) | null} */ (null),
+  quitForInstall = /** @type {(() => void) | null} */ (null),
+  installDirectoryWritable = /** @type {() => boolean} */ (() => false),
   onStatus = /** @type {(status: object) => void} */ (() => {}), onLog = /** @type {(message: string) => void} */ (() => {}),
 }) {
   // The feed is a public GitHub repository: checks and downloads are anonymous
@@ -81,12 +83,17 @@ function createUpdateChecker({
   const available = Boolean((lazy || updaterOption) && isPackaged && feed && !isPortable && platform === 'win32');
   let loadedUpdater = lazy ? null : updaterOption;
   let loaded = !lazy;
+  /** @type {NodeJS.Timeout | null} */
   let timer = null;
+  /** @type {any} */
   let operation = null;
   let downloaded = false;
+  /** @type {string | null} */
   let downloadedFile = null;
+  /** @type {string | null} */
   let downloadedSha512 = null;
   let candidate = false;
+  /** @type {any} */
   let lastFailure = null;
   let result = {
     status: available ? 'idle' : 'unavailable', available,
@@ -230,8 +237,8 @@ function createUpdateChecker({
   }
 
   function stop() {
-    clearTimeout(timer);
-    clearInterval(timer);
+    clearTimeout(timer ?? undefined);
+    clearInterval(timer ?? undefined);
     timer = null;
   }
 

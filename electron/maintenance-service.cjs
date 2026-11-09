@@ -28,6 +28,7 @@ function createMaintenanceService({ databasePath, backupDirectory, openStore = (
   let store;
   let closed = false;
   let queue = Promise.resolve();
+  /** @type {any} */
   let desktopPreview = null;
 
   async function run(request) {
@@ -115,17 +116,18 @@ function createMaintenanceService({ databasePath, backupDirectory, openStore = (
 }
 
 if (parentPort) {
+  const port = parentPort;
   const service = createMaintenanceService(workerData);
-  parentPort.on('message', async ({ id, type, payload }) => {
+  port.on('message', async ({ id, type, payload }) => {
     try {
       const result = await service.handle({ ...payload, type });
       // Worker ports do not have a browser target origin.
       // oxlint-disable-next-line unicorn/require-post-message-target-origin
-      parentPort.postMessage({ id, ok: true, result });
-      if (type === 'close') parentPort.close();
+      port.postMessage({ id, ok: true, result });
+      if (type === 'close') port.close();
     } catch (error) {
       // oxlint-disable-next-line unicorn/require-post-message-target-origin
-      parentPort.postMessage({ id, ok: false, error: { message: error?.message || String(error) } });
+      port.postMessage({ id, ok: false, error: { message: error?.message || String(error) } });
     }
   });
 }

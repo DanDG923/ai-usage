@@ -222,11 +222,11 @@ function calculateCost(store, row) {
     ? Number(row.input_tokens || 0) + cacheWriteTotal
     : Number(row.input_tokens || 0) + cacheWriteTotal + Number(row.cached_input_tokens || 0);
   const rule = LONG_CONTEXT_PRICING.get(price.model);
-  const longContext = Boolean(rule) && (row.contextTier != null
+  const longContext = rule !== undefined && (row.contextTier != null
     ? row.contextTier > LONG_CONTEXT_THRESHOLDS.indexOf(rule.threshold)
     : promptTokens > rule.threshold);
-  const inputMultiplier = longContext ? rule.input : 1;
-  const outputMultiplier = longContext ? rule.output : 1;
+  const inputMultiplier = rule && longContext ? rule.input : 1;
+  const outputMultiplier = rule && longContext ? rule.output : 1;
   const actualUsd = (
     regularInput * price.input_usd_per_million * inputMultiplier
     + cacheWrite5m * price.cache_write_usd_per_million * inputMultiplier

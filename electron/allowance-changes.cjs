@@ -74,7 +74,7 @@ function normalizeAllowanceChanges(value) {
 // can skip the work entirely.
 /**
  * @param {any[]} changes
- * @param {string} sourceId
+ * @param {string | undefined} sourceId
  * @param {{ bucketId?: string, windowMinutes?: number, nowMs?: number }} [options]
  */
 function createAllowanceScaler(changes, sourceId, { bucketId, windowMinutes, nowMs = Date.now() } = {}) {

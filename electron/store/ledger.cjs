@@ -53,6 +53,7 @@ function recordObservation(store, observation) {
   // copy would outlive the settings and evidence it was computed from.
   if (observation.provenance === 'derived-tokens') throw new Error('Derived Fable estimates are projected, not stored.');
   const provenance = optionalText(observation.provenance, 'Observation provenance');
+  /** @type {number | null} */
   let windowMinutes = null;
   if (observation.windowMinutes != null) {
     if (!['number', 'string'].includes(typeof observation.windowMinutes)) {
@@ -280,7 +281,7 @@ function getImportedFile(store, filePath) {
 }
 
 /** @param {import('../store.cjs').Store} store */
-function markImportedFile(store, filePath, modifiedMs, sizeBytes, state = null) {
+function markImportedFile(store, filePath, modifiedMs, sizeBytes, state = /** @type {any} */ (null)) {
   store.prepare(`
       INSERT INTO imported_files(file_path, modified_ms, size_bytes, imported_at, state_json)
       VALUES (?, ?, ?, ?, ?)

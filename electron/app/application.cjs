@@ -30,11 +30,14 @@ const systemTimers = { setTimeout, clearTimeout, setInterval, clearInterval };
  * @property {Record<string, any>} pkg package.json
  * @property {NodeJS.ProcessEnv} launchEnvironment
  * @property {typeof systemTimers} timers
- * @property {import('../store.cjs').Store | undefined} store
- * @property {ReturnType<typeof import('../collector-host.cjs').createCollectorHost> | undefined} collectors
- * @property {ReturnType<typeof import('../maintenance-host.cjs').createMaintenanceHost> | undefined} maintenance
+ *
+ * Created at startup. They are typed as present because nothing that reads
+ * them runs before then; the update checker and the mod are read with `?.`.
+ * @property {import('../store.cjs').Store} store
+ * @property {ReturnType<typeof import('../collector-host.cjs').createCollectorHost>} collectors
+ * @property {ReturnType<typeof import('../maintenance-host.cjs').createMaintenanceHost>} maintenance
  * @property {ReturnType<typeof import('../updater.cjs').createUpdateChecker> | undefined} updateChecker
- * @property {ReturnType<typeof import('../claude-setup.cjs').createClaudeSetup> | undefined} claudeSetup
+ * @property {ReturnType<typeof import('../claude-setup.cjs').createClaudeSetup>} claudeSetup
  * @property {ReturnType<typeof import('../claude-code-mod.cjs').createClaudeCodeMod> | null} claudeCodeMod
  * @property {ReturnType<typeof createDatabaseQueue>} databaseJobs
  * @property {ReturnType<typeof createPathsModule>} paths

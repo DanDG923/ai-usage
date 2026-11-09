@@ -24,10 +24,11 @@ function createCollectorService({
   databasePath,
   backupDirectory,
   inboxPath,
-  claudeCodeReadingsDirectory = null,
+  claudeCodeReadingsDirectory = /** @type {string | null} */ (null),
   collectors = { codex: refreshCodex, claude: refreshClaude },
   openStore = (database, backups) => new UsageStore(database, backups),
 }) {
+  /** @type {import('./store.cjs').Store | null} */
   let store = null;
   const getStore = () => (store ??= openStore(databasePath, backupDirectory));
 
@@ -50,7 +51,7 @@ function createCollectorService({
       if (readPlanUsage === true) waiting.options.readPlanUsage = true;
       return waiting.promise;
     }
-    const entry = { options: { readPlanUsage: readPlanUsage === true }, promise: null };
+    const entry = { options: { readPlanUsage: readPlanUsage === true }, promise: /** @type {Promise<any> | null} */ (null) };
     const start = () => { pending[source] = null; return run({ ...entry.options }); };
     entry.promise = queue.then(start, start);
     pending[source] = entry;

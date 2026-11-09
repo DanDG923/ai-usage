@@ -8,6 +8,7 @@
     "allowJs": true,
     "checkJs": true,
     "strict": false,
+    "strictNullChecks": true,
     "strictFunctionTypes": true,
     "strictBindCallApply": true,
     "noImplicitThis": true,

@@ -99,7 +99,7 @@ class JsonLineClient {
     }
   }
 
-  request(method, params = null, timeoutMs = 20_000) {
+  request(method, params = /** @type {any} */ (null), timeoutMs = 20_000) {
     if (this.closed) return Promise.reject(this.failure ?? new Error('Codex app server client is closed.'));
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
@@ -208,6 +208,7 @@ async function collectFromAppServer(store, binary, {
     // Daily account history is useful for context but must not make a valid,
     // newer allowance reading disappear when that optional endpoint fails.
     let dailyBuckets = 0;
+    /** @type {string | null} */
     let usageWarning = null;
     try {
       const usage = await client.request('account/usage/read');
@@ -518,13 +519,16 @@ function importLocalSessions(store, days = 120) {
   let events = 0;
   let observations = 0;
   let rejected = 0;
+  /** @type {string | null} */
   let lastRejection = null;
   let duplicateEvents = 0;
   let reconciledEvents = 0;
+  /** @type {any} */
   let reconciliationBackup = null;
   // A rollout the OS refused to open (antivirus scan, OneDrive hydration) is
   // retried next refresh; counting it keeps "connected" honest meanwhile.
   let readErrors = 0;
+  /** @type {string | null} */
   let lastReadError = null;
 
   for (const { fullPath, stat } of files) {
@@ -669,6 +673,7 @@ async function refreshCodex(store, {
 } = {}) {
   const binary = findBinary();
   let local = { importedFiles: 0, events: 0, observations: 0 };
+  /** @type {string | null} */
   let localWarning = null;
   try {
     local = importSessions(store);

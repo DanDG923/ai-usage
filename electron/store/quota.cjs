@@ -154,7 +154,7 @@ function getQuota(store, sourceId, settings = store.getSettings(), nowMs = Date.
       // When this value was last known to hold. A status-line redraw is
       // recorded now but may carry limits its session fetched hours ago.
       // Readings agree in the allowance in force now, as the forecast's do.
-      evidenceAt: iso(latestEvidenceAt(observations, { ...restatementOptions, known: true })),
+      evidenceAt: iso(/** @type {number} */ (latestEvidenceAt(observations, { ...restatementOptions, known: true }))),
       usedPercent: latest.used_percent,
       remainingPercent: latest.remaining_percent,
       resetsAt: latest.resets_at,
@@ -183,7 +183,8 @@ function getQuota(store, sourceId, settings = store.getSettings(), nowMs = Date.
   // notifications, cycle history and cards follow the same window as the
   // top-level fields here even when every window was recorded in one scan.
   const selection = selectDisplayedWindows(windows, { nowMs });
-  return { ...selection.primary, windows: [...selection.active, ...selection.expired] };
+  // There is at least one window, so the selection names a headline.
+  return { .../** @type {QuotaWindow} */ (selection.primary), windows: [...selection.active, ...selection.expired] };
 }
 
 /** @param {import('../store.cjs').Store} store */
@@ -210,7 +211,7 @@ function learnedForecast(store, sourceId, bucketId, observations, options, revis
 /** @param {import('../store.cjs').Store} store */
 function projectedFableWindow(store, windows, bucketRows, settings, forecastOptions, nowMs, includeTokenCapacity = true) {
   const current = selectDisplayedWindows(windows, { nowMs }).primary;
-  if (current && Date.parse(current.resetsAt) > nowMs && isOfficialWindow(current)) return null;
+  if (current && Date.parse(String(current.resetsAt)) > nowMs && isOfficialWindow(current)) return null;
   const projection = store.getFableProjection(settings, nowMs);
   if (!projection.available) return null;
   const point = (entry) => ({
@@ -254,7 +255,7 @@ function getFableProjection(store, settings, nowMs) {
   if (cached && cached.revision === revision && cached.key === key && nowMs >= cached.evaluatedAt && nowMs < cached.expiresAt) return cached.value;
   const value = projectFableAllowance(store, nowMs, projectionOptions);
   let expiresAt = nowMs + 60_000;
-  if (value.available) expiresAt = Math.min(expiresAt, Date.parse(value.resetsAt));
+  if (value.available) expiresAt = Math.min(expiresAt, Date.parse(String(value.resetsAt)));
   for (const change of allowanceChanges) {
     const at = Date.parse(change.at);
     if (at > nowMs) expiresAt = Math.min(expiresAt, at);
@@ -282,7 +283,7 @@ function getFableProjection(store, settings, nowMs) {
 // For active windows, only each bucket's latest usable reading counts:
 // a corrected reset must supersede an older, apparently still-active one.
 /** @param {import('../store.cjs').Store} store */
-function hasUsableObservation(store, sourceId, nowMs = Date.now(), { activeWithinMs = null } = {}) {
+function hasUsableObservation(store, sourceId, nowMs = Date.now(), { activeWithinMs = /** @type {number | null} */ (null) } = {}) {
   const rows = store.prepare(`SELECT bucket_id, observed_at, resets_at, window_minutes FROM quota_observations
       WHERE source_id = ? AND observed_at <= ? ORDER BY observed_at DESC, id DESC`)
     .iterate(sourceId, iso(nowMs + QUOTA_CLOCK_SKEW_MS));
@@ -331,7 +332,7 @@ function tokenCapacityEvidence(store, sourceId, nowMs) {
 }
 
 /** @param {import('../store.cjs').Store} store */
-function getTokenCapacity(store, sourceId, bucketId, observations, settings, nowMs, capturedQuotaRevision = null) {
+function getTokenCapacity(store, sourceId, bucketId, observations, settings, nowMs, capturedQuotaRevision = /** @type {number | null} */ (null)) {
   const ledgerSource = sourceId === 'claude-fable' ? 'claude' : sourceId;
   const evidence = store.tokenCapacityEvidence(ledgerSource, nowMs);
   const quotaRevision = capturedQuotaRevision ?? store.prepare(`SELECT COALESCE(SUM(revision), 0) AS value

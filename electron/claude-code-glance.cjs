@@ -193,6 +193,7 @@ function verdictOf(snapshot, providers, nowMs) {
 // When the visible sources last collected: what "Updated" means in the flyout.
 function collectedAt(snapshot, providers) {
   const ids = new Set(SOURCES.filter(({ id }) => providers.some((provider) => provider.id === id)).map(({ healthId }) => healthId));
+  /** @type {any} */
   let latest = null;
   for (const source of snapshot.sources || []) {
     if (ids.size && !ids.has(source.id)) continue;
@@ -206,7 +207,7 @@ function collectedAt(snapshot, providers) {
  * The glance from a tray or dashboard snapshot. The snapshot's own build time
  * is the clock, as the flyout uses it, so a budget never mixes two instants.
  */
-function buildGlance(snapshot, { nowMs = Date.now(), appVersion = null } = {}) {
+function buildGlance(snapshot, { nowMs = Date.now(), appVersion = /** @type {string | null} */ (null) } = {}) {
   const value = snapshot && typeof snapshot === 'object' ? snapshot : {};
   const settings = value.settings || {};
   const generatedMs = Date.parse(value.generatedAt);

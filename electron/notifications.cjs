@@ -29,7 +29,7 @@ function emptyState() {
     lastRiskNotifiedAt: 0,
     lastResetSignatures: {},
     lastFallbackSignatures: {},
-    lastDigestDay: null,
+    lastDigestDay: /** @type {string | null} */ (null),
   };
 }
 

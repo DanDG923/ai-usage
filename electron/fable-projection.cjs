@@ -390,7 +390,8 @@ function computeProjection(store, nowMs, { freshReadGraceMs } = {}) {
   // The overall figure holds as of its evidence, not its latest redraw: an
   // idle session re-records limits it fetched earlier, and Fable activity
   // since that fetch is still unaccounted for.
-  const overallObservedMs = latestEvidenceAt(readings.length ? readings : [latest]);
+  // Checked finite on the next line, so a number from there on.
+  const overallObservedMs = /** @type {number} */ (latestEvidenceAt(readings.length ? readings : [latest]));
   if (!Number.isFinite(overallUsed) || !Number.isFinite(overallObservedMs)) {
     return { derived: false, reason: 'invalid-overall-reading' };
   }
@@ -404,9 +405,9 @@ function computeProjection(store, nowMs, { freshReadGraceMs } = {}) {
       && Math.abs(new Date(row.resets_at).getTime() - resetMs) <= 60_000) || null;
   const baseUsed = anchor ? usedOf(anchor) : 0;
   // Likewise the anchor's figure holds as of its own evidence.
-  const baseAtMs = anchor ? Math.max(cycleStartMs, latestEvidenceAt(
+  const baseAtMs = anchor ? Math.max(cycleStartMs, /** @type {number} */ (latestEvidenceAt(
     officialBetween(store, 'claude-fable', FABLE_BUCKET, new Date(cycleStartMs).toISOString(), nowMs)
-      .filter((row) => Math.abs(new Date(row.resets_at).getTime() - resetMs) <= 60_000))) : cycleStartMs;
+      .filter((row) => Math.abs(new Date(row.resets_at).getTime() - resetMs) <= 60_000)))) : cycleStartMs;
 
   // Structural ceiling at the timestamp of the latest overall observation.
   // Activity after that instant is deliberately added outside the ceiling.
@@ -423,6 +424,7 @@ function computeProjection(store, nowMs, { freshReadGraceMs } = {}) {
   let steps = [];
   let stepped = 0;
   let tail = 0;
+  /** @type {number | null} */
   let ratePerPressure = null;
   let clamped = false;
   if (pair.ratePerPressure != null) {

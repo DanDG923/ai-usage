@@ -32,7 +32,7 @@ function optionalText(value, label) {
   return value || null;
 }
 
-function json(value, fallback = null) {
+function json(value, fallback = /** @type {any} */ (null)) {
   if (value == null) return fallback;
   try {
     return JSON.parse(value);
@@ -81,7 +81,9 @@ function dateKey(value, timeZone) {
 // otherwise a third of the aggregation.
 const QUARTER_HOUR_MS = 15 * 60_000;
 function createLocalPartsLookup(timeZone) {
+  /** @type {number | null} */
   let slot = null;
+  /** @type {any} */
   let parts = null;
   return (value) => {
     const ms = typeof value === 'number' ? value : Date.parse(value);

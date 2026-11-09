@@ -36,13 +36,13 @@ const appIconPath = path.join(ELECTRON_DIR, '..', 'build', 'icon.png');
 function createDashboardModule(main) {
   const { app, BrowserWindow, dialog, nativeImage, nativeTheme, screen } = main.electron;
   const dashboard = closed({
-    window: /** @type {import('electron').BrowserWindow | null} */ (undefined),
-    windowIdle: /** @type {ReturnType<typeof createWindowIdleRelease>} */ (undefined),
-    savedWindowBounds: /** @type {import('electron').Rectangle} */ (undefined),
+    window: /** @type {import('electron').BrowserWindow | null | undefined} */ (undefined),
+    windowIdle: /** @type {ReturnType<typeof createWindowIdleRelease> | undefined} */ (undefined),
+    savedWindowBounds: /** @type {import('electron').Rectangle | undefined} */ (undefined),
     savedWindowMaximized: false,
     lastDashboardReload: 0,
     navigation: createNavigationQueue(),
-    deferredWindowReveal: /** @type {ReturnType<typeof createDeferredWindowReveal>} */ (undefined),
+    deferredWindowReveal: /** @type {ReturnType<typeof createDeferredWindowReveal>} */ (/** @type {unknown} */ (undefined)),
     isVisible, loadAppIcon, showFatalError, resolvedTheme, applyTheme, applyWindowChrome, loadWindowContents,
     createWindow, showMainWindow, openDashboardAt,
   });
@@ -165,7 +165,8 @@ function createDashboardModule(main) {
     dashboard.window.on('show', () => {
       if (main.store && !main.lifecycle.storageClosing()) {
         main.snapshots.invalidateSnapshot();
-        dashboard.window.webContents.send('dashboard:updated', main.snapshots.snapshot());
+        // A window that is being shown exists.
+        /** @type {import('electron').BrowserWindow} */ (dashboard.window).webContents.send('dashboard:updated', main.snapshots.snapshot());
       }
       main.refresh.refreshIfStale({ trigger: REFRESH_TRIGGERS.WINDOW_SHOW });
     });

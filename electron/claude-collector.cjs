@@ -106,7 +106,9 @@ function datedStatusLineFetch(store, payload, capturedAt) {
     const shared = (value) => (same && value && value <= capturedAt ? value : null);
     return { fetchedAfter: shared(previous.fetched_after), seenSince: shared(previous.seen_since) };
   }
+  /** @type {any} */
   let fetchedAfter = null;
+  /** @type {any} */
   let seenSince = null;
   if (Object.keys(limits).length) {
     // A readable window that is new, or that changed from a readable one, came
@@ -187,7 +189,7 @@ function recordStatusLineLimits(store, payload, capturedAt, { fetchedAfter, seen
 }
 
 /** @param {import('./store.cjs').Store} store */
-function importClaudeInboxFile(store, inboxPath, state = null) {
+function importClaudeInboxFile(store, inboxPath, state = /** @type {any} */ (null)) {
   if (!fs.existsSync(inboxPath)) return emptyInboxResult();
   let stat;
   try {
@@ -370,6 +372,7 @@ function importClaudeCodeReadings(store, directory, { nowMs = Date.now() } = {})
       result.readErrors += 1;
       continue;
     }
+    /** @type {any} */
     let payload = null;
     try { payload = text == null ? null : JSON.parse(text.replace(/^﻿/, '')); } catch { /* Judged below. */ }
     if (payload === null && text != null && nowMs - stat.mtimeMs < TORN_READING_GRACE_MS) continue;
@@ -507,10 +510,13 @@ function importClaudeTranscripts(store, days = 120) {
   let usageEvents = 0;
   let fableEvents = 0;
   let repairedEvents = 0;
+  /** @type {any} */
   let reconciliationBackup = null;
   let rejectedRows = 0;
+  /** @type {string | null} */
   let lastRejection = null;
   let readErrors = 0;
+  /** @type {string | null} */
   let lastReadError = null;
 
   for (const { fullPath, stat } of files) {
@@ -804,7 +810,7 @@ function uninstallClaudeHelper() {
 // `emptyReadMs` is a later read that succeeded without returning any window,
 // which omitted every window stored before it.
 /** @param {import('./store.cjs').Store} store */
-function latestPlanUsageReading(store, nowMs, graceMs, emptyReadMs = null) {
+function latestPlanUsageReading(store, nowMs, graceMs, emptyReadMs = /** @type {number | null} */ (null)) {
   const rows = store.prepare(`SELECT id, bucket_id, observed_at, resets_at, window_minutes, used_percent, remaining_percent, provenance, fetched_after, seen_since
     FROM quota_observations WHERE source_id = 'claude' AND observed_at <= ? AND observed_at >= ? ORDER BY observed_at ASC, id ASC`)
     .all(new Date(nowMs + QUOTA_CLOCK_SKEW_MS).toISOString(), new Date(nowMs - 8 * 24 * 60 * 60 * 1000).toISOString());
@@ -815,6 +821,7 @@ function latestPlanUsageReading(store, nowMs, graceMs, emptyReadMs = null) {
     buckets.get(row.bucket_id).push(row);
   }
   const latest = new Map();
+  /** @type {number | null} */
   let lastPlanUsageReadMs = null;
   const restatementOptions = { nowMs, freshReadGraceMs: graceMs, allowanceChanges: store.getSettings().allowanceChanges, sourceId: 'claude' };
   for (const [bucketId, bucketRows] of buckets) {
@@ -826,11 +833,12 @@ function latestPlanUsageReading(store, nowMs, graceMs, emptyReadMs = null) {
     if (planReadMs != null) lastPlanUsageReadMs = Math.max(lastPlanUsageReadMs ?? -Infinity, planReadMs);
     if (accepted.length) {
       const evidenceOptions = { ...restatementOptions, known: true };
-      latest.set(bucketId, { ...accepted.at(-1), evidence_at: new Date(latestEvidenceAt(accepted, evidenceOptions)).toISOString(),
-        own_evidence_at: new Date(evidenceTimes(accepted, evidenceOptions).at(-1)).toISOString(), plan_read_ms: planReadMs });
+      // `accepted` is not empty here, so its last reading and its evidence both exist.
+      latest.set(bucketId, { ...accepted.at(-1), evidence_at: new Date(/** @type {number} */ (latestEvidenceAt(accepted, evidenceOptions))).toISOString(),
+        own_evidence_at: new Date(/** @type {number} */ (evidenceTimes(accepted, evidenceOptions).at(-1))).toISOString(), plan_read_ms: planReadMs });
     }
   }
-  if (Number.isFinite(emptyReadMs) && !(lastPlanUsageReadMs >= emptyReadMs)) lastPlanUsageReadMs = emptyReadMs;
+  if (Number.isFinite(emptyReadMs) && !((lastPlanUsageReadMs ?? 0) >= /** @type {number} */ (emptyReadMs))) lastPlanUsageReadMs = emptyReadMs;
   // A window the latest plan-usage read did not return (a model or app limit
   // the provider stopped reporting) keeps its older row until it resets, and
   // Refresh cannot renew it, so it does not decide whether Claude is current.
@@ -947,6 +955,7 @@ async function refreshClaude(store, inboxPath, options = {}) {
   // One definition of where the helper lives, shared with install and uninstall:
   // a second guess here would drive the Enable/Disable button from a path the
   // other two do not use.
+  /** @type {string | null} */
   let helperPath = null;
   try { ({ helperPath } = helperPaths()); } catch { /* No Windows profile; nothing is installed. */ }
   let helperInstalled = false;

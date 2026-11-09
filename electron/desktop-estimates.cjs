@@ -64,6 +64,7 @@ function parseDesktopExport(payload) {
       if (!textCache.has(message)) textCache.set(message, visibleText(message));
       return textCache.get(message);
     };
+    /** @type {any} */
     let latestHuman = null;
     for (const message of messages) {
       if (message?.sender === 'human') { latestHuman = message; continue; }
@@ -161,7 +162,7 @@ function insertDesktopEstimate(store, row, models = storedDesktopModels(store)) 
 }
 
 /** @param {import('./store.cjs').Store} store */
-function saveDesktopEstimates(store, rows, assumedModel = null) {
+function saveDesktopEstimates(store, rows, assumedModel = /** @type {string | null} */ (null)) {
   if (assumedModel !== null && (!modelName(assumedModel) || !store.resolvePrice(assumedModel))) {
     throw new Error('Choose a priced Claude model or leave missing models unknown.');
   }

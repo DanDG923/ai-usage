@@ -6,6 +6,7 @@
 function createWindowIdleRelease({ window, isBusy, onRelease, idleMs = 30_000 }) {
   let timer;
   let generation = 0;
+  /** @type {any} */
   let requested = null;
   const hidden = () => !window.isDestroyed() && !window.isVisible();
   function cancel() {

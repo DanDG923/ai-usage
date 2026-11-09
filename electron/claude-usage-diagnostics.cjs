@@ -12,6 +12,7 @@ const SNAPSHOT_MAX_AGE_S = 60;
 function createUsageDiagnostics() {
   let pending = '';
   let truncated = false;
+  /** @type {{ outcome: string, code: string | null, httpStatus: number | null }} */
   let state = { outcome: 'unverified', code: null, httpStatus: null };
   function line(value) {
     if (/fetchUtilization: GET \/api\/oauth\/usage \(attempt \d+\)/.test(value)) {

@@ -18,11 +18,11 @@ const STALE_AFTER_MS = 5 * 60_000;
 function createRefreshModule(main) {
   const { utilityProcess } = main.electron;
   const refresh = closed({
-    refreshTimer: /** @type {NodeJS.Timeout | null} */ (undefined),
+    refreshTimer: /** @type {NodeJS.Timeout | null | undefined} */ (undefined),
     lastRefreshAt: 0,
-    resumeTimer: /** @type {NodeJS.Timeout} */ (undefined),
+    resumeTimer: /** @type {NodeJS.Timeout | undefined} */ (undefined),
     refreshIntervalMs: 0,
-    refreshRuns: /** @type {ReturnType<typeof createRefreshCoalescer>} */ (undefined),
+    refreshRuns: /** @type {ReturnType<typeof createRefreshCoalescer>} */ (/** @type {unknown} */ (undefined)),
     automaticCollectionEnabled, scheduleAutomaticRefresh, refreshIfStale, scheduleLaunchRefresh, onResume,
     createCollectors, collectorOutcome, publishAfterWrite, answerClaudeCodeRequest, importClaudeCodeReading,
     refreshAll, collectAll, refreshClaudeOnly,
@@ -39,7 +39,7 @@ function createRefreshModule(main) {
     const minutes = Number(main.store.getSettings().refreshIntervalMinutes);
     const intervalMs = Number.isFinite(minutes) && minutes > 0 ? minutes * 60_000 : 0;
     if (intervalMs === refresh.refreshIntervalMs && (refresh.refreshTimer || intervalMs === 0)) return;
-    main.timers.clearInterval(refresh.refreshTimer);
+    main.timers.clearInterval(refresh.refreshTimer ?? undefined);
     refresh.refreshTimer = null;
     refresh.refreshIntervalMs = intervalMs;
     if (!intervalMs) return;
@@ -104,7 +104,7 @@ function createRefreshModule(main) {
   // snapshot, then the things that can fail. A backup error used to skip the
   // publish, silently freezing an open window for the life of the process.
   function publishAfterWrite(current, { push = true } = {}) {
-    if (push && main.dashboard.isVisible()) main.dashboard.window.webContents.send('dashboard:updated', current);
+    if (push && main.dashboard.isVisible()) main.dashboard.window?.webContents.send('dashboard:updated', current);
     main.tray.updateTray(current);
     try {
       main.alerts.showNotifications(current);
@@ -163,6 +163,7 @@ function createRefreshModule(main) {
       refresh.publishAfterWrite(updated);
       return updated;
     });
+    /** @type {string | null} */
     let backupError = null;
     try {
       // Asked here first, so the storage worker is not started after every

@@ -173,6 +173,11 @@ function usedPercentOf(row) {
   return clamp(Number.isFinite(row.usedPercent) ? row.usedPercent : 100 - row.remainingPercent, 0, 100);
 }
 
+/**
+ * @param {number | null} [observedResetAt]
+ * @param {((startMs: number, endMs: number) => boolean) | null} [excluded]
+ * @param {Map<string, number> | null} [dayWeights]
+ */
 function windowPaceOf(rows, schedule, observedResetAt = null, nowMs = Date.now(), excluded = null, dayWeights = null) {
   const last = rows.at(-1);
   const usedEnd = usedPercentOf(last);
@@ -201,6 +206,10 @@ function windowPaceOf(rows, schedule, observedResetAt = null, nowMs = Date.now()
 // phase mix cannot tell us where it occurred; distribute that unknown
 // remainder by elapsed exposure instead, otherwise one +1 just after the
 // active-hours boundary can assign an entire 13% window burn to off-schedule use.
+/**
+ * @param {((startMs: number, endMs: number) => boolean) | null} [excluded]
+ * @param {Map<string, number> | null} [dayWeights]
+ */
 function splitWindowUsage(rows, schedule, nowMs, startMs, endMs, used, excluded = null, dayWeights = null) {
   if (excluded?.(startMs, endMs)) {
     // A cumulative provider total includes the ignored day's burn. Only clean
@@ -339,6 +348,7 @@ function rescaleObservations(rows, options) {
   });
 }
 
+/** @param {number | null} [rateElapsedHours] */
 function addIntervalSamples(samples, before, after, schedule, nowMs, rateElapsedHours = null) {
   const elapsedHours = (after.observedAt - before.observedAt) / HOUR_MS;
   if (!(elapsedHours > 0)) return;
@@ -346,10 +356,10 @@ function addIntervalSamples(samples, before, after, schedule, nowMs, rateElapsed
   if (delta < 0 || delta > 70) return;
   const ageDays = Math.max(0, (nowMs - after.observedAt) / DAY_MS);
   const provenanceWeight = ['official', 'official-statusline'].includes(after.provenance) ? 1 : 0.65;
-  const smoothingHours = rateElapsedHours > 0 ? rateElapsedHours : elapsedHours;
+  const smoothingHours = rateElapsedHours != null && rateElapsedHours > 0 ? rateElapsedHours : elapsedHours;
   const rate = delta / smoothingHours;
   const allocationRate = delta / elapsedHours;
-  const coverageScale = rateElapsedHours > 0 ? rateElapsedHours / elapsedHours : 1;
+  const coverageScale = rateElapsedHours != null && rateElapsedHours > 0 ? rateElapsedHours / elapsedHours : 1;
   const phases = new Map();
   let cursor = before.observedAt;
   while (cursor < after.observedAt) {
@@ -547,6 +557,7 @@ function withoutStaleRestatements(rows, { nowMs = Date.now(), freshReadGraceMs =
     if (!restatesSessionLimits(parsed[index])) next = parsed[index];
   }
   // The newest evidence so far, and the span its fetch is known to lie in.
+  /** @type {{ reading: any, from: number, to: number } | null} */
   let newest = null;
   // Every redraw of one fetch carries its session's first redraw of it
   // (`seenSince`), which bounds the fetch from above. A dated reading without
@@ -569,7 +580,8 @@ function withoutStaleRestatements(rows, { nowMs = Date.now(), freshReadGraceMs =
       const after = nextFresh[index];
       if (after) return confirms(after);
       const graceMs = Math.max(freshReadGraceMs, freshnessLimitHours({ windowMinutes: reading.windowMinutes }) * HOUR_MS);
-      return nowMs - newest.to > graceMs;
+      // Only asked once a newer reading exists to answer to.
+      return nowMs - /** @type {NonNullable<typeof newest>} */ (newest).to > graceMs;
     };
     if (Number.isFinite(reading.fetchedAfter)) {
       if (!firstCarrier.has(reading.fetchedAfter)) firstCarrier.set(reading.fetchedAfter, reading.observedAt);
@@ -607,7 +619,8 @@ function withoutStaleRestatements(rows, { nowMs = Date.now(), freshReadGraceMs =
     // later window or a higher figure is still the later use: it becomes the
     // high-water mark a lower reading must answer to. Its fetch is known only
     // to be no later than its session's first redraw of it.
-    const newestUsed = newest && usedPercentOf(newest.reading);
+    // Read below only where `newest` is set.
+    const newestUsed = /** @type {number} */ (newest && usedPercentOf(newest.reading));
     const undated = () => ({ reading, from: -Infinity,
       to: Number.isFinite(reading.seenSince) ? Math.min(reading.seenSince, reading.observedAt) : reading.observedAt });
     if (newest && !sameReset(newest.reading)) {
@@ -910,6 +923,7 @@ function learnForecast({ normalised, current, currentCluster, clusters, schedule
   // instead of letting while-working burst rates run unchecked until reset.
   // Only the most recent qualifying window is used, so scan backwards and
   // stop there rather than pacing every historical cluster first.
+  /** @type {{ pace: number, activeHours: number, evidenceActiveHours: number } | null} */
   let priorEvidence = null;
   for (let index = clusters.length - 1; index >= 0 && !priorEvidence; index -= 1) {
     const entry = clusters[index];
@@ -1090,7 +1104,8 @@ function forecastQuotaWithLearning(observations, options = {}, dayWeights = null
     ? Math.min(options.evidence.at, current.observedAt) : latestEvidenceAt(normalised);
   const knownMs = measured && Number.isFinite(options.evidence.known)
     ? Math.min(options.evidence.known, current.observedAt) : latestEvidenceAt(normalised, { known: true });
-  const staleHours = Math.max(0, (nowMs - knownMs) / HOUR_MS);
+  // There is a current reading here, so its evidence has a time.
+  const staleHours = Math.max(0, (nowMs - /** @type {number} */ (knownMs)) / HOUR_MS);
   if (!Number.isFinite(resetMs) || resetMs <= nowMs) return unknownForecast({ expired: true, observed, staleHours });
 
   const remaining = Number.isFinite(current.remainingPercent) ? current.remainingPercent : 100 - current.usedPercent;
@@ -1268,6 +1283,7 @@ function earlyResetAdjustment(observations, options, nowMs) {
 // coverage below discards as a gap, so its unused off-schedule hours were lost.
 function collapseReadings(rows, nowMs) {
   const result = [];
+  /** @type {any} The row before this one, in time order. */
   let previous = null, run = 0, previousDay;
   for (const row of rows) {
     const day = localDayKey(new Date(row.observedAt));
@@ -1328,7 +1344,7 @@ function forecastQuota(observations, options = {}) {
   });
   const heavyRemaining = heavy.at(-1)?.remaining ?? ordinary.heavyRemaining;
   const paceRiskThreshold = Number(options.paceRiskThreshold ?? 1.2);
-  const watchRemainingThreshold = Math.max(100 - Number(options.hardLimitThreshold ?? 90), adjusted.reservePercent);
+  const watchRemainingThreshold = Math.max(100 - Number(options.hardLimitThreshold ?? 90), /** @type {number} */ (adjusted.reservePercent));
   const state = forecastState(adjusted.expectedRemaining, heavyRemaining, adjusted.paceRatio, paceRiskThreshold, watchRemainingThreshold);
   return { ...adjusted, state, heavyRemaining, heavyExhaustsAt: exhaustionTime(heavy),
     series: { ...adjusted.series, heavy }, resetAdjustment: adjustment };

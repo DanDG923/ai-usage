@@ -9,6 +9,7 @@ const { absolutePath, environmentValue, launchDirectory } = require('./windows-p
 // remembered briefly: long enough to serve one refresh, short enough that a
 // directory the setup flow has just created is seen on the next lookup.
 const PATH_CACHE_MS = 30_000;
+/** @type {any} */
 let pathCache = null;
 
 function pathDirectories(environment = process.env) {
@@ -64,7 +65,7 @@ function versionedBinary(root, name, newestModified = false) {
       .map((entry) => ({ version: entry.name, binary: executable(path.join(root, entry.name, name)) }))
       .filter((entry) => entry.binary)
       .flatMap((entry) => {
-        try { return [{ ...entry, modified: newestModified ? fs.statSync(entry.binary).mtimeMs : 0 }]; } catch { return []; }
+        try { return [{ ...entry, modified: newestModified ? fs.statSync(/** @type {string} */ (entry.binary)).mtimeMs : 0 }]; } catch { return []; }
       })
       .sort((a, b) => newestModified ? b.modified - a.modified : b.version.localeCompare(a.version, undefined, { numeric: true }));
     return versions[0]?.binary ?? null;

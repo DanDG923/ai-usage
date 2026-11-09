@@ -110,7 +110,7 @@ function installDirectoryWritable(executablePath = process.execPath) {
 // the user asked for from its window.
 function relaunchApplication({ app, environment, currentEnvironment = process.env, argv = process.argv }) {
   const names = Object.keys(environment || {}).filter((name) => /^(?:GH_TOKEN|GITHUB_TOKEN)$/i.test(name));
-  const previous = names.map((name) => [name, currentEnvironment[name]]);
+  const previous = names.map((name) => /** @type {[string, string | undefined]} */ ([name, currentEnvironment[name]]));
   try {
     for (const name of names) currentEnvironment[name] = environment[name];
     app.relaunch({ args: argv.slice(1).filter((arg) => arg !== '--hidden') });

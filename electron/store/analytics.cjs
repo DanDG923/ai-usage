@@ -370,7 +370,7 @@ function buildAnalytics(store, days, settings, nowMs) {
 // text is handed over in batches as the ledger is read, so a long, busy
 // period is never held in memory as one string; otherwise it is returned.
 /** @param {import('../store.cjs').Store} store */
-function exportLedgerCsv(store, days = 90, nowMs = Date.now(), write = null) {
+function exportLedgerCsv(store, days = 90, nowMs = Date.now(), write = /** @type {((chunk: string) => void) | null} */ (null)) {
   const since = iso(periodStart(days, nowMs));
   const escape = (value) => {
     const text = value == null ? '' : String(value);

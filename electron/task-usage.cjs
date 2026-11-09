@@ -116,6 +116,7 @@ class TaskUsage {
     const seen = new Set();
     let current = row.sessionId;
     // null marks ancestry that reaches a cycle, not any one session's fallback.
+    /** @type {any} */
     let root = null;
     while (current) {
       const key = usageKey(row.sourceId, current);

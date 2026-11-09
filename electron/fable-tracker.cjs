@@ -255,14 +255,15 @@ function getLastCurrentOfficial(store, nowMs) {
   if (!accepted.length) return null;
   // A manual entry can be the allowance, but never evidence that the provider
   // was read recently: a provider figure is dated by provider readings alone.
-  const chosen = accepted.at(-1);
+  const chosen = /** @type {typeof accepted[number]} */ (accepted.at(-1));
   const evidenceOptions = { ...restatementOptions, known: true };
   const evidence = isProviderProvenance(chosen.provenance)
     ? latestEvidenceAt(accepted.filter((row) => isProviderProvenance(row.provenance)), evidenceOptions) : Date.parse(chosen.observed_at);
   // Its own fetch as well, for the Refresh fallback, which must not borrow an
   // earlier read's time.
-  const latest = { ...chosen, evidence_at: new Date(evidence).toISOString(),
-    own_evidence_at: new Date(evidenceTimes(accepted, evidenceOptions).at(-1)).toISOString() };
+  // `accepted` is not empty, so both times exist.
+  const latest = { ...chosen, evidence_at: new Date(/** @type {number} */ (evidence)).toISOString(),
+    own_evidence_at: new Date(/** @type {number} */ (evidenceTimes(accepted, evidenceOptions).at(-1))).toISOString() };
   const window = { row: latest, bucketId: latest.bucket_id, observedAt: latest.observed_at, resetsAt: latest.resets_at,
     windowMinutes: latest.window_minutes, provenance: latest.provenance, metadata: {} };
   return selectDisplayedWindows([window], { nowMs }).active[0]?.row ?? null;
@@ -413,6 +414,7 @@ function createFableUsageTracker({ store, usagePort, activityReader, clock = () 
     const activityDurationMs = activityRead.elapsed();
 
     let normalized;
+    /** @type {any} */
     let providerFailure = null;
     let overallWindowsRecorded = 0;
     if (usageResult?.status === 'fulfilled') normalized = normalizeUsagePayload(usageResult.value, refreshedAt);
@@ -518,7 +520,8 @@ function createFableUsageTracker({ store, usagePort, activityReader, clock = () 
         durationMs: null,
         errorCode: null,
       } : {
-        attemptSucceeded: usageResult.status === 'fulfilled',
+        // Plan usage was requested on this branch, so its result exists.
+        attemptSucceeded: /** @type {NonNullable<typeof usageResult>} */ (usageResult).status === 'fulfilled',
         kind: providerFailure ? 'failed' : normalized.kind,
         overallWindowsRecorded,
         extraUsage: normalized?.kind !== 'invalid' ? normalized?.extraUsage ?? null : null,

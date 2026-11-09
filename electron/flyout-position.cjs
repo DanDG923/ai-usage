@@ -9,11 +9,19 @@ const EDGES = ['bottom', 'top', 'left', 'right'];
 
 /** @typedef {{ x: number, y: number, width: number, height: number }} Rect */
 
+/**
+ * @param {any} rect
+ * @returns {rect is Rect}
+ */
 function isRect(rect) {
   return Boolean(rect) && ['x', 'y', 'width', 'height'].every((key) => Number.isFinite(rect[key]));
 }
 
 // Windows reports an empty rectangle for an icon it cannot locate.
+/**
+ * @param {any} rect
+ * @returns {rect is Rect}
+ */
 function isUsableIcon(rect) {
   return isRect(rect) && rect.width > 0 && rect.height > 0;
 }

@@ -55,11 +55,13 @@ const settle = (promise) => promise.then(() => undefined, () => undefined);
 // and that run does not read it. Then it waits for the run and performs one
 // plan-usage refresh, which every such request arriving meanwhile shares.
 function createRefreshCoalescer(run) {
+  /** @type {{ readPlanUsage: boolean, promise: Promise<any> } | null} */
   let current = null;
+  /** @type {Promise<any> | null} */
   let followUp = null;
 
   function start(readPlanUsage) {
-    const entry = { readPlanUsage, promise: null };
+    const entry = { readPlanUsage, promise: /** @type {Promise<any>} */ (/** @type {unknown} */ (null)) };
     current = entry;
     entry.promise = (async () => {
       try {

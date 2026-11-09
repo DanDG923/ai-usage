@@ -82,7 +82,7 @@ function resolveWindowTarget({ isPackaged, devUrl, filePath }) {
 // deadline that fired. The timer is unref'd so it cannot itself keep an
 // otherwise finished process alive.
 function createDeadline(timeoutMs, message) {
-  const deadline = { expired: false, expiry: null, cancel: () => {} };
+  const deadline = { expired: false, expiry: /** @type {Promise<never>} */ (/** @type {unknown} */ (null)), cancel: () => {} };
   deadline.expiry = new Promise((_, reject) => {
     const timer = setTimeout(() => {
       deadline.expired = true;

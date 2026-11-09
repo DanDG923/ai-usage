@@ -197,6 +197,7 @@ function combineObserved(fableObserved, poolObserved, share) {
   const pool = (Array.isArray(poolObserved) ? poolObserved : []).filter((point) => finite(point?.at) && finite(point?.remaining));
   if (!own.length || !pool.length) return own;
   const latest = (points, at) => {
+    /** @type {any} */
     let found = null;
     for (const point of points) {
       if (point.at > at) break;
@@ -246,8 +247,9 @@ function cappedCapacity(capacity, poolAtReading, poolObservedAt, nowMs) {
 
 function constrain(window, pool, options) {
   const { nowMs, share, paceRiskThreshold, hardLimitThreshold } = options;
-  const capRemaining = displayed(window);
-  const poolRemaining = displayed(pool);
+  // applySharedPool has checked that both readings carry a figure.
+  const capRemaining = /** @type {number} */ (displayed(window));
+  const poolRemaining = /** @type {number} */ (displayed(pool));
   // Shown as whole percentages, the two figures must add up: Claude weekly
   // at 30% is 60% of Fable, not the 61% an unrounded 30.4% would give.
   const poolAsFable = clamp(Math.round(poolRemaining) / share, 0, MAX_POOL_AS_FABLE);
@@ -278,9 +280,9 @@ function constrain(window, pool, options) {
     poolAsFable,
     usableRemaining,
     binding,
-    bindingAtReset: null,
+    bindingAtReset: /** @type {'pool' | 'cap' | null} */ (null),
     heavyBindsAtReset: false,
-    cappedAtReset: null,
+    cappedAtReset: /** @type {'pool' | 'cap' | null} */ (null),
     // Either figure estimated, or two readings from different moments, make
     // the combination an estimate whichever side binds.
     estimated: estimated(window) || estimated(pool) || !(apart <= SAME_MOMENT_MS),
@@ -350,7 +352,9 @@ function constrain(window, pool, options) {
     : null;
   const expected = expectedPath.series;
   const heavy = heavyPath ? heavyPath.series : own.series.heavy;
-  const expectedRemaining = expected.at(-1).remaining;
+  // A combined series always holds at least its starting point.
+  const lastExpected = /** @type {typeof expected[number]} */ (expected.at(-1));
+  const expectedRemaining = lastExpected.remaining;
   const heavyRemaining = heavyPath ? heavy.at(-1).remaining : own.heavyRemaining;
   const exhaustsAt = exhaustionTime(expected);
   const heavyExhaustsAt = heavyPath ? exhaustionTime(heavy) : own.heavyExhaustsAt;
@@ -363,7 +367,7 @@ function constrain(window, pool, options) {
   // then still names the Claude weekly limit as the cause.
   summary.heavyBindsAtReset = Boolean(heavyPath?.poolBinds);
   // Which limit sets the figure at Fable's own reset: the lower of the two.
-  const ownEndRemaining = sampler(own.series.expected)(expected.at(-1).at);
+  const ownEndRemaining = sampler(own.series.expected)(lastExpected.at);
   summary.cappedAtReset = expectedRemaining < ownEndRemaining - EPSILON ? 'pool' : 'cap';
 
   // While the pool is what runs out, the Fable balance shrinks at the pool's
