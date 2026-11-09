@@ -40,8 +40,8 @@ import { useScrollSpy } from './settings/useScrollSpy';
 
 export type SettingsActions = {
   dataOperation: 'backup' | 'restore' | 'export' | null;
-  /** The Claude status-line helper change in flight, if any; its control is disabled meanwhile. */
-  helperOperation?: 'install' | 'uninstall' | null;
+  /** True while the Claude helper is being enabled or disabled. */
+  helperBusy: boolean;
   onSetupClaude: () => void;
   onSettings: (patch: Partial<SettingsType>) => Promise<void | boolean>;
   onPrice: (row: PriceRow) => Promise<void>;
@@ -298,9 +298,9 @@ export function Settings({
                   onSetupClaude={actions.onSetupClaude}
                   snapshot={snapshot}
                   update={update}
+                  helperBusy={actions.helperBusy}
                   onInstallClaude={actions.onInstallClaude}
                   onUninstallClaude={actions.onUninstallClaude}
-                  helperOperation={actions.helperOperation ?? null}
                   onClaudeCodeMod={actions.onClaudeCodeMod}
                 />,
               )}

@@ -152,6 +152,7 @@ test('an optional daily-usage failure does not discard a successful rate-limit r
 
   const result = await collectFromAppServer({
     recordObservation: (observation) => observations.push(observation),
+    transaction: (run) => run(),
     upsertDailyUsage() { throw new Error('no daily buckets should be written'); },
   }, 'codex.exe', { clientFactory: () => client });
 
@@ -209,6 +210,7 @@ test('an app-server failure does not mark the current scan successful', async ()
   const statuses = [];
   await refreshCodex({
     setSourceStatus: (...args) => statuses.push(args),
+    hasUsableObservation: () => true,
   }, {
     findBinary: () => 'codex.exe',
     importSessions: () => ({ importedFiles: 1, events: 1, observations: 1 }),
@@ -375,4 +377,284 @@ test('main Pro weekly and separate Spark windows keep their identity for existin
   assert.equal(quota.windows.filter(w => w.metadata.limitId === 'codex').length, 1);
   assert.equal(quota.windows.find(w => w.bucketId === 'codex_bengalfox:secondary').bucketName, 'GPT-5.3-Codex-Spark · Weekly');
   assert.equal(store.db.prepare("SELECT bucket_name FROM quota_observations WHERE bucket_id = 'codex_bengalfox:secondary'").get().bucket_name, 'Weekly');
+});
+
+// The tests below run the real collector against a temporary store, with only
+// the app server's responses stubbed.
+function temporaryStore(t) {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { UsageStore } = require('../electron/store.cjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-codex-status-'));
+  const store = new UsageStore(path.join(root, 'usage.sqlite'), path.join(root, 'Backups'));
+  t.after(() => { store.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  return store;
+}
+
+const codexSource = (store) => store.prepare("SELECT id, status, status_detail, last_success_at FROM sources WHERE id = 'codex'").get();
+const codexBuckets = (store) => store.prepare("SELECT DISTINCT bucket_id FROM quota_observations WHERE source_id = 'codex' ORDER BY bucket_id")
+  .all().map((row) => row.bucket_id);
+const liveWindow = (minutes, usedPercent, resetsInMs = minutes * 60_000) => ({
+  usedPercent, windowDurationMins: minutes, resetsAt: Math.floor((Date.now() + resetsInMs) / 1000),
+});
+const noLocalRows = () => ({ importedFiles: 0, events: 0, observations: 0 });
+
+// An app server that answers every request, with `rateLimits` as its reading.
+const answeringAppServer = (rateLimits) => (store, binary) => collectFromAppServer(store, binary, {
+  clientFactory: () => ({
+    notify() {},
+    close() {},
+    request: async (method) => (method === 'account/rateLimits/read' ? rateLimits : {}),
+  }),
+});
+
+const refreshWith = (store, collectAppServer, importSessions = noLocalRows) => refreshCodex(store, {
+  findBinary: () => 'codex.exe', importSessions, collectAppServer,
+});
+
+const EMPTY_READINGS = [
+  ['no result', null],
+  ['an empty result', {}],
+  ['no rate limits', { rateLimits: null, rateLimitsByLimitId: null }],
+  ['an empty limit map', { rateLimitsByLimitId: {} }],
+  ['a limit with no windows', { rateLimits: { limitId: 'codex', primary: null, secondary: null } }],
+  ['a window with no used percentage', { rateLimitsByLimitId: { codex: { primary: { windowDurationMins: 300, resetsAt: Math.floor(Date.now() / 1000) + 3600 } } } }],
+  ['a window with no reset', { rateLimitsByLimitId: { codex: { primary: { usedPercent: 12, windowDurationMins: 300 } } } }],
+  ['an unexpected shape', { rateLimits: 'unsupported', rateLimitsByLimitId: 'unsupported' }],
+];
+
+for (const [name, reading] of EMPTY_READINGS) {
+  test(`an app-server read with ${name} leaves the Codex allowance unknown instead of connected`, async (t) => {
+    const store = temporaryStore(t);
+    const result = await refreshWith(store, answeringAppServer(reading));
+
+    assert.equal(result.appServer.observations, 0);
+    const source = codexSource(store);
+    assert.equal(source.status, 'unavailable');
+    assert.equal(source.last_success_at, null, 'a read with no allowance is not a successful scan');
+    assert.match(source.status_detail, /returned no allowance reading/);
+    assert.match(source.status_detail, /allowance is unknown/);
+    // Unknown stays unknown: no figure was stored to stand in for the missing one.
+    assert.deepEqual(codexBuckets(store), []);
+    assert.equal(store.getQuota('codex', store.getSettings(), Date.now()), null);
+  });
+}
+
+test('an empty app-server read after a good one keeps the last reading and reports it as not replaced', async (t) => {
+  const store = temporaryStore(t);
+  const healthy = { rateLimits: { limitId: 'codex', planType: 'pro', primary: liveWindow(300, 30), secondary: liveWindow(10_080, 12) } };
+
+  await refreshWith(store, answeringAppServer(healthy));
+  const connected = codexSource(store);
+  assert.equal(connected.status, 'connected');
+  assert.equal(connected.status_detail, 'Connected through the local Codex app server.');
+  assert.ok(connected.last_success_at);
+  const stored = store.prepare("SELECT COUNT(*) AS n FROM quota_observations WHERE source_id = 'codex'").get().n;
+  assert.equal(stored, 2);
+
+  await refreshWith(store, answeringAppServer({}));
+  const afterEmpty = codexSource(store);
+  assert.equal(afterEmpty.status, 'stale');
+  assert.match(afterEmpty.status_detail, /returned no allowance reading/);
+  assert.match(afterEmpty.status_detail, /still active/);
+  assert.equal(afterEmpty.last_success_at, connected.last_success_at, 'the last good scan is the one that read an allowance');
+  assert.equal(store.prepare("SELECT COUNT(*) AS n FROM quota_observations WHERE source_id = 'codex'").get().n, stored);
+  assert.equal(store.getQuota('codex', store.getSettings(), Date.now()).windows.length, 2);
+
+  // The next good read reports exactly what a healthy refresh always has.
+  await refreshWith(store, answeringAppServer(healthy));
+  assert.equal(codexSource(store).status, 'connected');
+  assert.equal(codexSource(store).status_detail, 'Connected through the local Codex app server.');
+});
+
+test('an empty app-server read beside a reading whose window has ended reports no usable allowance', async (t) => {
+  const store = temporaryStore(t);
+  const day = 86_400_000;
+  recordRateLimit(store, {
+    limitId: 'codex',
+    primary: { usedPercent: 40, windowDurationMins: 300, resetsAt: Math.floor((Date.now() - day) / 1000) },
+  }, new Date(Date.now() - day - 3_600_000).toISOString(), 'official');
+  assert.equal(store.hasUsableObservation('codex'), true, 'the ended window is still valid history');
+
+  await refreshWith(store, answeringAppServer({}));
+  assert.equal(codexSource(store).status, 'unavailable');
+});
+
+test('a persistently failing app server keeps one status whether or not a run imports new local rows', async (t) => {
+  const { decideNotifications, emptyState } = require('../electron/notifications.cjs');
+  const store = temporaryStore(t);
+  const failing = async () => { throw new Error('server unavailable'); };
+  let run = 0;
+  const withNewRows = (target) => {
+    run += 1;
+    const observations = recordRateLimit(target, { limitId: 'codex', primary: liveWindow(300, 20 + run), secondary: liveWindow(10_080, 5) },
+      new Date(Date.now() - (10 - run) * 1000).toISOString(), 'local-official');
+    return { importedFiles: 1, events: 3, observations };
+  };
+
+  // What the app hands the notifier after each refresh.
+  const settings = { notifyFallback: true, notifyDesktop: true };
+  let previous = { settings, sources: [{ id: 'codex', status: 'connected' }] };
+  let state = decideNotifications({ previous: null, current: previous, state: emptyState() }).state;
+  const statuses = [];
+  const toasts = [];
+  for (const importSessions of [withNewRows, noLocalRows, withNewRows, noLocalRows, noLocalRows, withNewRows]) {
+    await refreshWith(store, failing, importSessions);
+    const source = codexSource(store);
+    statuses.push(source.status);
+    assert.equal(source.last_success_at, null);
+    assert.match(source.status_detail, /^App server unavailable; Local records were scanned\. server unavailable$/);
+    const current = { settings, sources: [source] };
+    const decided = decideNotifications({ previous, current, state });
+    toasts.push(...decided.notifications.filter((entry) => entry.kind === 'fallback'));
+    state = decided.state;
+    previous = current;
+  }
+
+  assert.deepEqual(toasts.map((entry) => entry.title), [], 'no cached-data toast while a reading stays in force');
+  assert.deepEqual(statuses, Array(6).fill('observing'));
+});
+
+test('a failing app server with no allowance still in force is an error, even on a run that imports old rows', async (t) => {
+  const store = temporaryStore(t);
+  const failing = async () => { throw new Error('server unavailable'); };
+  const day = 86_400_000;
+  const importsEndedWindow = (target) => ({
+    importedFiles: 1,
+    events: 1,
+    observations: recordRateLimit(target, {
+      limitId: 'codex',
+      primary: { usedPercent: 40, windowDurationMins: 300, resetsAt: Math.floor((Date.now() - day) / 1000) },
+    }, new Date(Date.now() - day - 3_600_000).toISOString(), 'local-official'),
+  });
+
+  const first = await refreshWith(store, failing, importsEndedWindow);
+  assert.equal(first.local.observations, 1);
+  assert.equal(codexSource(store).status, 'error');
+  await refreshWith(store, failing);
+  assert.equal(codexSource(store).status, 'error');
+});
+
+test('a rejected window in an app-server reading is reported without discarding the valid ones', async (t) => {
+  const store = temporaryStore(t);
+  const reading = {
+    rateLimitsByLimitId: {
+      codex: { planType: 'pro', primary: liveWindow(300, 30), secondary: liveWindow(10_080, 12) },
+      // Further ahead than the store accepts for any window.
+      codex_far: { limitName: 'Far', primary: liveWindow(300, 10, 40 * 86_400_000) },
+      codex_spark: { limitName: 'Spark', primary: liveWindow(300, 5) },
+    },
+  };
+
+  const result = await answeringAppServer(reading)(store, 'codex.exe');
+  assert.equal(result.observations, 3);
+  assert.equal(result.rejected, 1);
+  assert.match(result.lastRejection, /31 days/);
+  assert.deepEqual(codexBuckets(store), ['codex:primary', 'codex:secondary', 'codex_spark:primary']);
+
+  await refreshWith(store, answeringAppServer(reading));
+  const source = codexSource(store);
+  assert.equal(source.status, 'connected');
+  assert.ok(source.last_success_at);
+  assert.match(source.status_detail, /^Connected through the local Codex app server\. 1 allowance window in the reading was rejected and left unchanged \(.*31 days.*\)\.$/);
+});
+
+test('an app-server reading whose only window is rejected is not a successful read', async (t) => {
+  const store = temporaryStore(t);
+  const reading = { rateLimits: { limitId: 'codex', primary: liveWindow(300, 10, 40 * 86_400_000) } };
+
+  await refreshWith(store, answeringAppServer(reading));
+  const source = codexSource(store);
+  assert.equal(source.status, 'unavailable');
+  assert.equal(source.last_success_at, null);
+  assert.match(source.status_detail, /could not be recorded \(.*31 days.*\)/);
+  assert.deepEqual(codexBuckets(store), []);
+});
+
+test('a storage failure part-way through an app-server reading stores none of it', async (t) => {
+  const store = temporaryStore(t);
+  const failure = Object.assign(new Error('database is locked'), { code: 'ERR_SQLITE_ERROR' });
+  const record = store.recordObservation.bind(store);
+  let calls = 0;
+  store.recordObservation = (observation) => {
+    calls += 1;
+    if (calls === 2) throw failure;
+    return record(observation);
+  };
+  const reading = { rateLimits: { limitId: 'codex', primary: liveWindow(300, 30), secondary: liveWindow(10_080, 12) } };
+
+  await assert.rejects(answeringAppServer(reading)(store, 'codex.exe'), (error) => error === failure);
+  assert.equal(calls, 2);
+  assert.deepEqual(codexBuckets(store), [], 'the first window is not committed without the second');
+});
+
+test('an app-server failure beside a failed local scan is an error, with or without a reading in force', async (t) => {
+  const store = temporaryStore(t);
+  recordRateLimit(store, { limitId: 'codex', primary: liveWindow(300, 20) }, new Date().toISOString(), 'official');
+  assert.equal(store.hasUsableObservation('codex'), true);
+
+  await refreshWith(store, async () => { throw new Error('server unavailable'); }, () => { throw new Error('session file was rotated'); });
+  const source = codexSource(store);
+  assert.equal(source.status, 'error');
+  assert.match(source.status_detail, /^App server unavailable; Local session records were also unavailable\. server unavailable$/);
+});
+
+test('a missing Codex executable keeps one status whether or not a run imports new local rows', async (t) => {
+  const store = temporaryStore(t);
+  const withoutExecutable = (importSessions) => refreshCodex(store, {
+    findBinary: () => null,
+    importSessions,
+    collectAppServer: async () => { throw new Error('the app server must not be started without an executable'); },
+  });
+
+  await withoutExecutable(noLocalRows);
+  assert.equal(codexSource(store).status, 'unavailable', 'nothing has been read yet');
+
+  let run = 0;
+  const withNewRows = (target) => {
+    run += 1;
+    const observations = recordRateLimit(target, { limitId: 'codex', primary: liveWindow(300, 20 + run), secondary: liveWindow(10_080, 5) },
+      new Date(Date.now() - (10 - run) * 1000).toISOString(), 'local-official');
+    return { importedFiles: 1, events: 3, observations };
+  };
+  const statuses = [];
+  for (const importSessions of [withNewRows, noLocalRows, withNewRows, noLocalRows, noLocalRows]) {
+    const result = await withoutExecutable(importSessions);
+    assert.equal(result.binary, null);
+    const source = codexSource(store);
+    statuses.push(source.status);
+    assert.equal(source.status_detail, 'Codex executable was not found.');
+  }
+  assert.deepEqual(statuses, Array(5).fill('observing'));
+});
+
+test('a missing Codex executable with no allowance still in force is unavailable, even on a run that imports old rows', async (t) => {
+  const store = temporaryStore(t);
+  const day = 86_400_000;
+  const importsEndedWindow = (target) => ({
+    importedFiles: 1,
+    events: 1,
+    observations: recordRateLimit(target, {
+      limitId: 'codex',
+      primary: { usedPercent: 40, windowDurationMins: 300, resetsAt: Math.floor((Date.now() - day) / 1000) },
+    }, new Date(Date.now() - day - 3_600_000).toISOString(), 'local-official'),
+  });
+  const withoutExecutable = (importSessions) => refreshCodex(store, { findBinary: () => null, importSessions });
+
+  const first = await withoutExecutable(importsEndedWindow);
+  assert.equal(first.local.observations, 1);
+  assert.equal(codexSource(store).status, 'unavailable');
+  await withoutExecutable(noLocalRows);
+  assert.equal(codexSource(store).status, 'unavailable');
+});
+
+test('a missing Codex executable beside a failed local scan is still an error', async (t) => {
+  const store = temporaryStore(t);
+  recordRateLimit(store, { limitId: 'codex', primary: liveWindow(300, 20) }, new Date().toISOString(), 'official');
+
+  await refreshCodex(store, { findBinary: () => null, importSessions: () => { throw new Error('session file was rotated'); } });
+  const source = codexSource(store);
+  assert.equal(source.status, 'error');
+  assert.match(source.status_detail, /^Codex executable was not found\. Codex local session scan failed: session file was rotated$/);
 });

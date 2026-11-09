@@ -141,18 +141,18 @@ export function ClaudeCodeModSetting({
 export function SourcesSection({
   snapshot,
   update,
+  helperBusy,
   onInstallClaude,
   onUninstallClaude,
-  helperOperation = null,
   onSetupClaude,
   onClaudeCodeMod,
 }: {
   snapshot: Snapshot;
   update: (patch: Partial<Settings>) => Promise<void | boolean>;
+  /** True while the helper is being enabled or disabled; a second click then changes nothing. */
+  helperBusy: boolean;
   onInstallClaude: () => Promise<void>;
   onUninstallClaude: () => Promise<void>;
-  /** A helper change in flight: the control waits for it rather than sending a second write. */
-  helperOperation?: 'install' | 'uninstall' | null;
   onSetupClaude: () => void;
   onClaudeCodeMod: ClaudeCodeModAction;
 }) {
@@ -196,21 +196,21 @@ export function SourcesSection({
                   <button
                     type="button"
                     className="btn"
-                    disabled={Boolean(helperOperation)}
-                    aria-busy={helperOperation === 'uninstall' || undefined}
+                    disabled={helperBusy}
+                    aria-busy={helperBusy || undefined}
                     onClick={onUninstallClaude}
                   >
-                    {helperOperation === 'uninstall' ? 'Disabling helper…' : 'Disable helper'}
+                    Disable helper
                   </button>
                 ) : (
                   <button
                     type="button"
                     className="btn"
-                    disabled={Boolean(helperOperation)}
-                    aria-busy={helperOperation === 'install' || undefined}
+                    disabled={helperBusy}
+                    aria-busy={helperBusy || undefined}
                     onClick={onInstallClaude}
                   >
-                    {helperOperation === 'install' ? 'Enabling helper…' : 'Enable fallback helper'}
+                    Enable fallback helper
                   </button>
                 ))}
             </article>

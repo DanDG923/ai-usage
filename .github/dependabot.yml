@@ -11,6 +11,7 @@ updates:
         patterns: ['react', 'react-dom', '@types/react*', 'vite', '@vitejs/*']
     ignore:
       # Electron bundles Node 24; keep the Node types on the runtime's major.
+      # The Node that CI and the release build run on is set in .nvmrc.
       - dependency-name: '@types/node'
         update-types: ['version-update:semver-major']
   - package-ecosystem: github-actions

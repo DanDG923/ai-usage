@@ -17,39 +17,36 @@ concurrency:
   group: windows-release
   cancel-in-progress: false
 
-# Building and publishing are separate jobs. `build` installs dependencies,
-# runs the tests and packages the app with a read-only token that no step is
-# given. `publish` holds the only write permission; it checks out nothing,
-# installs nothing and runs no project or dependency code, only the checks
-# below and the GitHub CLI against the downloaded artifact.
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+
 jobs:
+  # Everything that installs dependencies or runs project code happens here,
+  # under a token that can only read the repository. Whatever a dependency
+  # does in this job, it cannot create, change or delete a release or a tag.
   build:
     runs-on: windows-latest
     timeout-minutes: 40
     permissions:
       contents: read
-    env:
-      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     outputs:
-      version: ${{ steps.version.outputs.version }}
-      commit: ${{ steps.version.outputs.commit }}
-      checksums_sha256: ${{ steps.checksums.outputs.sha256 }}
-      notes_sha256: ${{ steps.checksums.outputs.notes_sha256 }}
+      commit: ${{ steps.validate.outputs.commit }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.tag || github.ref }}
           persist-credentials: false
-      # .nvmrc pins the Node.js security release of 21 October 2026, chosen for its four high-severity CVE fixes.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           cache: npm
-      # Runs before any dependency is installed, so these outputs cannot be
-      # changed by dependency code later in the job.
+      # Runs before anything is installed, so nothing from a tag that is not
+      # on main is ever executed. The token it uses is read-only.
       - name: Validate version and destination
-        id: version
+        id: validate
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
           $package = Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json
@@ -59,9 +56,14 @@ jobs:
           if ($env:GITHUB_REPOSITORY -cne 'DanDG923/ai-usage' -or $package.build.publish.owner -cne 'DanDG923' -or $package.build.publish.repo -cne 'ai-usage' -or $package.build.publish.private -ne $false) {
             throw 'This workflow only publishes the configured public AI Usage repository.'
           }
+          # Only reviewed, merged work may enter the update feed: the tagged
+          # commit has to be an ancestor of main, not a side branch.
           $head = (git rev-parse 'HEAD^{commit}').Trim()
-          if ($LASTEXITCODE -ne 0 -or $head -cnotmatch '^[0-9a-f]{40}$') { throw 'Unable to resolve the tagged commit.' }
-          "version=$($package.version)" >> $env:GITHUB_OUTPUT
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to resolve the tagged commit.' }
+          $comparison = gh api "repos/$env:GITHUB_REPOSITORY/compare/main...$head" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $comparison.status -notin @('identical', 'behind')) {
+            throw 'The release tag must point at a commit that is already on main.'
+          }
           "commit=$head" >> $env:GITHUB_OUTPUT
       - run: npm ci --ignore-scripts
       - run: node node_modules/electron/install.js
@@ -71,58 +73,83 @@ jobs:
       - run: npm run version:check
       - run: npm run test:electron
       # build runs tests, renderer compilation, Windows packaging with
-      # --publish never, and the ASAR / manifest / checksum audit.
-      # This job has no write permission and passes no token to any step.
+      # --publish never, and the ASAR / manifest / checksum audit. No step
+      # after the validation above is given a token, and this job's token
+      # can only read the repository in any case.
       - run: npm run build
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-      - name: Record artifact checksums
-        id: checksums
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $sums = (Get-FileHash -LiteralPath (Join-Path 'release' 'SHA256SUMS.txt') -Algorithm SHA256).Hash.ToLowerInvariant()
-          $notes = (Get-FileHash -LiteralPath (Join-Path 'release' 'release-notes.md') -Algorithm SHA256).Hash.ToLowerInvariant()
-          "sha256=$sums" >> $env:GITHUB_OUTPUT
-          "notes_sha256=$notes" >> $env:GITHUB_OUTPUT
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-release
           path: |
-            release/AI-Usage-Setup-${{ steps.version.outputs.version }}-x64.exe
-            release/AI-Usage-Setup-${{ steps.version.outputs.version }}-x64.exe.blockmap
-            release/AI-Usage-Portable-${{ steps.version.outputs.version }}-x64.exe
+            release/AI-Usage-Setup-*-x64.exe
+            release/AI-Usage-Setup-*-x64.exe.blockmap
+            release/AI-Usage-Portable-*-x64.exe
             release/latest.yml
             release/SHA256SUMS.txt
             release/release-notes.md
           if-no-files-found: error
           retention-days: 7
 
+  # The only job allowed to write releases. It starts on a fresh runner,
+  # checks out package.json and nothing else, installs nothing and runs no
+  # project code: it validates, then hands the built files to `gh release`.
   publish:
     needs: build
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     permissions:
       contents: write
-    env:
-      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
-      RELEASE_VERSION: ${{ needs.build.outputs.version }}
-      RELEASE_COMMIT: ${{ needs.build.outputs.commit }}
-      CHECKSUMS_SHA256: ${{ needs.build.outputs.checksums_sha256 }}
-      NOTES_SHA256: ${{ needs.build.outputs.notes_sha256 }}
     steps:
-      - name: Validate destination and existing releases
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
+          sparse-checkout: /package.json
+          sparse-checkout-cone-mode: false
+      # The same checks as in the build job, repeated where the write
+      # permission is, against this job's own checkout of the tag.
+      - name: Validate version and destination
+        id: validate
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $repo = 'DanDG923/ai-usage'
-          if ($env:RELEASE_VERSION -cnotmatch '^\d+\.\d+\.\d+$' -or $env:RELEASE_TAG -cne "v$env:RELEASE_VERSION") {
+          $package = Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json
+          if ($env:RELEASE_TAG -cnotmatch '^v\d+\.\d+\.\d+$' -or $env:RELEASE_TAG -cne "v$($package.version)") {
             throw 'The version tag must match package.json exactly.'
           }
-          if ($env:GITHUB_REPOSITORY -cne $repo) {
+          if ($env:GITHUB_REPOSITORY -cne 'DanDG923/ai-usage' -or $package.build.publish.owner -cne 'DanDG923' -or $package.build.publish.repo -cne 'ai-usage' -or $package.build.publish.private -ne $false) {
             throw 'This workflow only publishes the configured public AI Usage repository.'
+          }
+          # Only reviewed, merged work may enter the update feed: the tagged
+          # commit has to be an ancestor of main, not a side branch.
+          $head = (git rev-parse 'HEAD^{commit}').Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to resolve the tagged commit.' }
+          $comparison = gh api "repos/$env:GITHUB_REPOSITORY/compare/main...$head" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $comparison.status -notin @('identical', 'behind')) {
+            throw 'The release tag must point at a commit that is already on main.'
+          }
+          "commit=$head" >> $env:GITHUB_OUTPUT
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-release
+          path: release
+      - name: Publish audited release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILT_COMMIT: ${{ needs.build.outputs.commit }}
+          VALIDATED_COMMIT: ${{ steps.validate.outputs.commit }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo = 'DanDG923/ai-usage'
+          # The two jobs check the tag out separately. Publish only when it
+          # still names the commit the build job packaged.
+          if ($env:BUILT_COMMIT -cnotmatch '^[0-9a-f]{40}$' -or $env:BUILT_COMMIT -cne $env:VALIDATED_COMMIT) {
+            throw 'The release tag no longer points at the commit that was built; nothing has been published.'
           }
           $repository = gh api "repos/$repo" | ConvertFrom-Json
           # Installed copies read the feed anonymously, so a release published
@@ -130,76 +157,17 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $repository.private -ne $false) {
             throw 'Release publication requires the destination repository to be public.'
           }
-          # The tag must still name the commit that was built.
-          $tagged = gh api "repos/$repo/commits/tags/$env:RELEASE_TAG" --jq '.sha'
-          if ($LASTEXITCODE -ne 0 -or $env:RELEASE_COMMIT -cnotmatch '^[0-9a-f]{40}$' -or "$tagged".Trim() -cne $env:RELEASE_COMMIT) {
-            throw 'The release tag no longer points at the commit that was built.'
-          }
-          # Only reviewed, merged work may enter the update feed: the tagged
-          # commit has to be an ancestor of main, not a side branch.
-          $comparison = gh api "repos/$repo/compare/main...$env:RELEASE_COMMIT" | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0 -or $comparison.status -notin @('identical', 'behind')) {
-            throw 'The release tag must point at a commit that is already on main.'
-          }
+          $version = (Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json).version
           $releases = gh api "repos/$repo/releases?per_page=100" | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0) { throw 'Unable to verify existing releases.' }
           foreach ($existing in $releases) {
             if ($existing.tag_name -ceq $env:RELEASE_TAG) {
               throw 'A release for this tag already exists. Review it before retrying; released assets are never overwritten.'
             }
-            if (-not $existing.draft -and -not $existing.prerelease -and $existing.tag_name -cmatch '^v(\d+\.\d+\.\d+)$' -and [version]$Matches[1] -ge [version]$env:RELEASE_VERSION) {
+            if (-not $existing.draft -and -not $existing.prerelease -and $existing.tag_name -cmatch '^v(\d+\.\d+\.\d+)$' -and [version]$Matches[1] -ge [version]$version) {
               throw 'A current or newer stable release already exists; refusing to move the update feed backwards.'
             }
           }
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: windows-release
-          path: release
-      - name: Verify downloaded artifacts
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $version = $env:RELEASE_VERSION
-          $checked = @(
-            "AI-Usage-Portable-$version-x64.exe",
-            "AI-Usage-Setup-$version-x64.exe",
-            "AI-Usage-Setup-$version-x64.exe.blockmap",
-            'latest.yml'
-          )
-          $expected = @($checked + @('SHA256SUMS.txt', 'release-notes.md')) | Sort-Object
-          $items = @(Get-ChildItem -LiteralPath 'release' -Force)
-          $present = @($items | ForEach-Object { $_.Name }) | Sort-Object
-          if (@($items | Where-Object { $_.PSIsContainer }).Count -ne 0 -or ($present -join '|') -cne ($expected -join '|')) {
-            throw 'The downloaded artifact does not contain exactly the expected files.'
-          }
-          $sumsPath = Join-Path 'release' 'SHA256SUMS.txt'
-          $notesPath = Join-Path 'release' 'release-notes.md'
-          if ((Get-FileHash -LiteralPath $sumsPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $env:CHECKSUMS_SHA256) {
-            throw 'SHA256SUMS.txt differs from the file the build job recorded.'
-          }
-          if ((Get-FileHash -LiteralPath $notesPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $env:NOTES_SHA256) {
-            throw 'release-notes.md differs from the file the build job recorded.'
-          }
-          $listed = @{}
-          foreach ($line in (Get-Content -LiteralPath $sumsPath)) {
-            if ($line -cnotmatch '^([0-9A-Fa-f]{64}) \*(.+)$') { throw "Unexpected line in SHA256SUMS.txt: $line" }
-            $listed[$Matches[2]] = $Matches[1].ToLowerInvariant()
-          }
-          if ($listed.Count -ne $checked.Count) { throw 'SHA256SUMS.txt does not list exactly the release assets.' }
-          foreach ($name in $checked) {
-            $sha256 = (Get-FileHash -LiteralPath (Join-Path 'release' $name) -Algorithm SHA256).Hash.ToLowerInvariant()
-            if (-not $listed.ContainsKey($name) -or $listed[$name] -cne $sha256) {
-              throw "Downloaded file does not match SHA256SUMS.txt: $name"
-            }
-          }
-      - name: Publish audited release
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $repo = 'DanDG923/ai-usage'
-          $version = $env:RELEASE_VERSION
           $assetNames = @(
             "AI-Usage-Setup-$version-x64.exe",
             "AI-Usage-Setup-$version-x64.exe.blockmap",
@@ -207,6 +175,25 @@ jobs:
             'latest.yml',
             'SHA256SUMS.txt'
           )
+          # The build job's output is data: it is never run here. Accept exactly
+          # the expected files, and only if they still match the checksums the
+          # release audit recorded for them.
+          $expectedFiles = $assetNames + 'release-notes.md'
+          $downloaded = @(Get-ChildItem -LiteralPath 'release' -Force -Recurse)
+          if ($downloaded.Count -ne $expectedFiles.Count -or @($downloaded | Where-Object { $_.PSIsContainer -or $_.Name -cnotin $expectedFiles }).Count -ne 0) {
+            throw 'The build artifact does not hold exactly the expected release files; nothing has been published.'
+          }
+          $checksummed = @($assetNames | Where-Object { $_ -cne 'SHA256SUMS.txt' })
+          $checksumLines = @(Get-Content -LiteralPath (Join-Path 'release' 'SHA256SUMS.txt'))
+          if ($checksumLines.Count -ne $checksummed.Count) {
+            throw 'SHA256SUMS.txt does not list exactly the release files; nothing has been published.'
+          }
+          foreach ($name in $checksummed) {
+            $actual = (Get-FileHash -LiteralPath (Join-Path 'release' $name) -Algorithm SHA256).Hash.ToUpperInvariant()
+            if (@($checksumLines | Where-Object { $_ -ceq "$actual *$name" }).Count -ne 1) {
+              throw "Downloaded file does not match SHA256SUMS.txt: $name. Nothing has been published."
+            }
+          }
           $assets = $assetNames | ForEach-Object { Join-Path 'release' $_ }
           $notesPath = Join-Path 'release' 'release-notes.md'
           gh release create $env:RELEASE_TAG @assets --repo $repo --verify-tag --draft --title "AI Usage $version" --notes-file $notesPath

@@ -122,12 +122,13 @@ export function ClaudeSetup({ requested, onClose }: { requested: boolean; onClos
       setBusy('');
     }
   }
-  function cancel() {
-    // The bridge rethrows a failed request; report it like the other setup steps.
+  // Cancelling is a request of its own: when it cannot be delivered the
+  // running step carries on, and the guide says so.
+  const cancel = () => {
     window.aiUsage?.cancelClaudeSetup().catch((failure: unknown) => {
-      setError(failure instanceof Error ? failure.message : 'Setup could not be cancelled. Please try again.');
+      setError(failure instanceof Error ? failure.message : 'Setup could not be cancelled.');
     });
-  }
+  };
   const installed = Boolean(status?.installed);
   const signedIn = status?.auth === 'signed-in';
   const signInUnchecked = status?.auth === 'unavailable' && installed;

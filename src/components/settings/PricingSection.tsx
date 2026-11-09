@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { LOCALE, localDateKey } from '../../lib';
 import type { PriceRow, Settings, Snapshot } from '../../types';
 import { API_EQUIVALENT_EXPLAINER, InfoTip } from '../InfoTip';
@@ -84,10 +84,12 @@ function PriceEditor({
   const valid = FIELDS.every(
     (key) => draft[key].trim() !== '' && Number.isFinite(Number(draft[key])) && Number(draft[key]) >= 0,
   );
-  // One write per row at a time: a second click waits for the first save.
+  // One save per row at a time: a double-click must not write the price twice.
+  const saveInFlight = useRef(false);
   const [saving, setSaving] = useState(false);
   const save = async () => {
-    if (!valid || saving) return;
+    if (!valid || saveInFlight.current) return;
+    saveInFlight.current = true;
     setSaving(true);
     try {
       // Once a catalogue row is edited locally, its old official URL/date no
@@ -99,9 +101,8 @@ function PriceEditor({
         effective_from: localDateKey(new Date()),
         source_url: null,
       });
-    } catch {
-      // The caller reports a failed save; the row stays editable.
     } finally {
+      saveInFlight.current = false;
       setSaving(false);
     }
   };

@@ -1,18 +1,18 @@
 import type { ProviderView } from './provider-view';
 import type { CycleRow, Snapshot } from './types';
 
-/** Providers report one reset up to a second or so apart across readings. */
-export const RESET_MATCH_TOLERANCE_MS = 60_000;
+// Providers report one reset up to a second or so apart across readings (see
+// snapshot-time.ts), so two reset times this close are the same reset.
+const RESET_TOLERANCE_MS = 60_000;
 
 /**
- * Whether a closed cycle ended before its scheduled reset: its end differs
- * from the reset by more than the reporting jitter. A row without an end, or
- * with an unreadable time, did not end early.
+ * Whether a window ended before its scheduled reset. Every list of past
+ * windows asks here, so the Activity page and a provider's page cannot
+ * disagree about one row: an end within the jitter of reported reset times is
+ * the ordinary reset.
  */
 export function cycleEndedEarly(row: Pick<CycleRow, 'endsAt' | 'resetsAt'>): boolean {
-  if (!row.endsAt) return false;
-  const gap = Math.abs(Date.parse(row.endsAt) - Date.parse(row.resetsAt));
-  return Number.isFinite(gap) && gap > RESET_MATCH_TOLERANCE_MS;
+  return Boolean(row.endsAt) && Math.abs(Date.parse(row.endsAt!) - Date.parse(row.resetsAt)) > RESET_TOLERANCE_MS;
 }
 
 /**
@@ -30,7 +30,7 @@ export function currentCycleFor(view: ProviderView, snapshot: Snapshot): CycleRo
     rows.find(
       (row) =>
         row.current &&
-        Math.abs(Date.parse(row.resetsAt) - Date.parse(quota.resetsAt)) <= RESET_MATCH_TOLERANCE_MS &&
+        Math.abs(Date.parse(row.resetsAt) - Date.parse(quota.resetsAt)) <= RESET_TOLERANCE_MS &&
         (!(quota.windowMinutes && quota.windowMinutes > 0) || row.windowMinutes === quota.windowMinutes),
     ) ?? null
   );

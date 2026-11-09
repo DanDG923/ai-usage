@@ -6,14 +6,13 @@ import { ClaudeSetup } from './components/ClaudeSetup';
 import { Costs } from './components/Costs';
 import { BareGlareshield, FooterStrip, Header, PageTitle, TABS, type Tab } from './components/Header';
 import { NoticeToast, createNoticeChannel } from './components/NoticeToast';
-import { helperRemovedNotice, refreshNotice } from './notices';
 import { Overview } from './components/Overview';
 import { ProviderDetail } from './components/ProviderDetail';
 import { Settings, type SettingsActions } from './components/Settings';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { snapshotAtTime } from './snapshot-time';
 import { readDashboardView, saveDashboardView } from './dashboard-view';
-import { formatInt } from './lib';
+import { formatInt, sourceLabel } from './lib';
 import { applyThemeAttribute } from './theme';
 import type { ProviderId } from './provider-view';
 import type { ManualObservation, PriceRow, Settings as SettingsType, Snapshot } from './types';
@@ -36,7 +35,10 @@ export default function App() {
   }, []);
   const [costQuery, setCostQuery] = useState(initialView.costQuery);
   const [dataOperation, setDataOperation] = useState<SettingsActions['dataOperation']>(null);
-  const [helperOperation, setHelperOperation] = useState<SettingsActions['helperOperation']>(null);
+  // Enabling or disabling the Claude helper rewrites Claude's settings; one
+  // change runs at a time, so a double-click cannot send a second write.
+  const [helperBusy, setHelperBusy] = useState(false);
+  const helperInFlight = useRef(false);
   const [setupRequested, setSetupRequested] = useState(false);
   const [days, setDays] = useState(initialView.days);
   const isBrowserPreview = !window.aiUsage && window.location.protocol !== 'file:';
@@ -143,7 +145,7 @@ export default function App() {
           desiredPeriod.current = committedPeriod.current;
           // The toast is not shown before the first snapshot; the loading
           // screen then explains the wait and offers Try again instead.
-          if (hasSnapshot.current) setNotice(BUSY_NOTICE, 'busy');
+          if (hasSnapshot.current) setNotice({ text: BUSY_NOTICE, tone: 'busy' });
           else setLoadError(BUSY_NOTICE);
           return;
         }
@@ -201,7 +203,7 @@ export default function App() {
 
   const refresh = async () => {
     if (!window.aiUsage) {
-      setNotice('The live collectors run in the installed desktop app.', 'ok');
+      setNotice({ text: 'The live collectors run in the installed desktop app.', tone: 'ok' });
       return;
     }
     if (manualRefreshInFlight.current) return;
@@ -211,8 +213,23 @@ export default function App() {
     try {
       const result = await window.aiUsage.refresh();
       commitSnapshot(result.snapshot);
-      const notice = refreshNotice(result);
-      setNotice(notice.text, notice.tone);
+      const failures = Object.entries(result.collectors || {}).filter(([, collector]) => collector?.error);
+      const warnings = Object.entries(result.collectors || {}).filter(
+        ([, collector]) => collector?.warning && !collector?.error,
+      );
+      const backup = result.backupError ? ` Scheduled backup failed: ${result.backupError}` : '';
+      setNotice({
+        text: `${
+          failures.length
+            ? `Refresh completed with ${failures.map(([source]) => sourceLabel(source)).join(' and ')} unavailable. Check Sources for details.`
+            : warnings.length
+              ? `Refresh completed using fallback data for ${warnings.map(([source]) => sourceLabel(source)).join(' and ')}. Check Sources for details.`
+              : 'All supported local sources refreshed.'
+        }${backup}`,
+        // A source that could not be read, or a scheduled backup that failed,
+        // is a failure and stays; fallback data is only a caution.
+        tone: failures.length || result.backupError ? 'warning' : warnings.length ? 'caution' : 'ok',
+      });
     } catch (error) {
       failWith('Refresh did not finish.')(error);
     } finally {
@@ -328,31 +345,47 @@ export default function App() {
   };
 
   const installClaude = async () => {
-    if (!window.aiUsage || helperOperation) return;
-    setHelperOperation('install');
+    if (!window.aiUsage || helperInFlight.current) return;
+    helperInFlight.current = true;
+    setHelperBusy(true);
     try {
       const result = await window.aiUsage.installClaudeHelper();
       commitSnapshot(result.snapshot);
-      setNotice('Claude allowance helper enabled. Fully restart Claude to activate it.', 'ok');
+      setNotice({ text: 'Claude allowance helper enabled. Fully restart Claude to activate it.', tone: 'ok' });
     } catch (error) {
       failWith('Claude helper could not be enabled.')(error);
     } finally {
-      setHelperOperation(null);
+      helperInFlight.current = false;
+      setHelperBusy(false);
     }
   };
 
   const uninstallClaude = async () => {
-    if (!window.aiUsage || helperOperation) return;
-    setHelperOperation('uninstall');
+    if (!window.aiUsage || helperInFlight.current) return;
+    helperInFlight.current = true;
+    setHelperBusy(true);
     try {
       const result = await window.aiUsage.uninstallClaudeHelper();
       commitSnapshot(result.snapshot);
-      const notice = helperRemovedNotice(result.result);
-      setNotice(notice.text, notice.tone);
+      const leftover =
+        result.result.managed && !result.result.helperScriptRemoved
+          ? ' The helper script is still in use and could not be deleted; it is no longer referenced.'
+          : '';
+      // The helper was disabled either way: a script left on disk is a detail
+      // of that success, not a failure.
+      setNotice({
+        text: result.result.restoredPreviousStatusLine
+          ? `Claude allowance helper disabled and your previous status line restored. Fully restart Claude.${leftover}`
+          : result.result.statusLineRemoved
+            ? `Claude allowance helper disabled and its status line removed. Fully restart Claude.${leftover}`
+            : 'Claude’s status line is not the one this app installed, so nothing was changed.',
+        tone: 'ok',
+      });
     } catch (error) {
       failWith('Claude helper could not be disabled.')(error);
     } finally {
-      setHelperOperation(null);
+      helperInFlight.current = false;
+      setHelperBusy(false);
     }
   };
 
@@ -362,12 +395,13 @@ export default function App() {
     try {
       if (action === 'status') return await bridge.getClaudeCodeMod();
       const status = action === 'install' ? await bridge.installClaudeCodeMod() : await bridge.uninstallClaudeCodeMod();
-      setNotice(
-        action === 'install'
-          ? 'Claude Code mod installed. Start a new Claude Code session, or run /reload-plugins in an open one, then type /ai-usage.'
-          : 'Claude Code mod removed. Open Claude Code sessions drop it when they next start.',
-        'ok',
-      );
+      setNotice({
+        text:
+          action === 'install'
+            ? 'Claude Code mod installed. Start a new Claude Code session, or run /reload-plugins in an open one, then type /ai-usage.'
+            : 'Claude Code mod removed. Open Claude Code sessions drop it when they next start.',
+        tone: 'ok',
+      });
       return status;
     } catch (error) {
       failWith(
@@ -387,7 +421,7 @@ export default function App() {
     try {
       const result = await window.aiUsage.createBackup();
       commitSnapshot(result.snapshot);
-      setNotice(`Backup saved to ${result.result.exportPath ?? result.result.databasePath}`, 'ok');
+      setNotice({ text: `Backup saved to ${result.result.exportPath ?? result.result.databasePath}`, tone: 'ok' });
     } catch (error) {
       failWith('Backup could not be created.')(error);
     } finally {
@@ -397,7 +431,7 @@ export default function App() {
 
   const restore = async () => {
     if (!window.aiUsage) {
-      setNotice('Restoring runs in the installed desktop app.', 'ok');
+      setNotice({ text: 'Restoring runs in the installed desktop app.', tone: 'ok' });
       return;
     }
     if (dataOperation) return;
@@ -407,10 +441,10 @@ export default function App() {
       if (result.cancelled || !result.result) return;
       commitSnapshot(result.snapshot);
       const { settings: settingCount, observations, usageEvents, dailyUsage, prices, skipped } = result.result;
-      setNotice(
-        `Restored ${observations} observations, ${usageEvents} token records, ${dailyUsage} daily totals, ${prices} prices and ${result.result.desktopEstimates ?? 0} chat estimates. Existing usage and edited prices were kept. ${settingCount} settings were replaced by the export's.${skipped ? ` ${skipped} unusable records were skipped.` : ''}`,
-        'ok',
-      );
+      setNotice({
+        text: `Restored ${observations} observations, ${usageEvents} token records, ${dailyUsage} daily totals, ${prices} prices and ${result.result.desktopEstimates ?? 0} chat estimates. Existing usage and edited prices were kept. ${settingCount} settings were replaced by the export's.${skipped ? ` ${skipped} unusable records were skipped.` : ''}`,
+        tone: 'ok',
+      });
     } catch (error) {
       failWith('That backup could not be restored.')(error);
     } finally {
@@ -420,12 +454,12 @@ export default function App() {
 
   const manual = async (observation: ManualObservation) => {
     if (!window.aiUsage) {
-      setNotice('Manual observations are saved by the installed desktop app.', 'ok');
+      setNotice({ text: 'Manual observations are saved by the installed desktop app.', tone: 'ok' });
       return false;
     }
     try {
       commitSnapshot(await window.aiUsage.addManualObservation(observation));
-      setNotice('Official observation added to the learner.', 'ok');
+      setNotice({ text: 'Official observation added to the learner.', tone: 'ok' });
       return true;
     } catch (error) {
       failWith('Observation could not be saved.')(error);
@@ -454,7 +488,7 @@ export default function App() {
         sourceUrl: row.source_url,
       });
       commitSnapshot(result.snapshot);
-      setNotice(`${row.model} pricing updated.`, 'ok');
+      setNotice({ text: `${row.model} pricing updated.`, tone: 'ok' });
     } catch (error) {
       failWith('Pricing could not be saved.')(error);
     }
@@ -462,7 +496,7 @@ export default function App() {
 
   const exportCsv = async (period: number) => {
     if (!window.aiUsage) {
-      setNotice('Exports are written by the installed desktop app.', 'ok');
+      setNotice({ text: 'Exports are written by the installed desktop app.', tone: 'ok' });
       return;
     }
     if (dataOperation) return;
@@ -470,10 +504,10 @@ export default function App() {
     try {
       const result = await window.aiUsage.exportCsv(period);
       if (result.cancelled) return;
-      setNotice(
-        `Exported ${result.rows == null ? '' : formatInt(result.rows)} records from the last ${result.days} days to ${result.filePath}`,
-        'ok',
-      );
+      setNotice({
+        text: `Exported ${result.rows == null ? '' : formatInt(result.rows)} records from the last ${result.days} days to ${result.filePath}`,
+        tone: 'ok',
+      });
     } catch (error) {
       failWith('The CSV export could not be written.')(error);
     } finally {
@@ -483,12 +517,12 @@ export default function App() {
 
   const copySummary = async () => {
     if (!window.aiUsage) {
-      setNotice('The summary is copied by the installed desktop app.', 'ok');
+      setNotice({ text: 'The summary is copied by the installed desktop app.', tone: 'ok' });
       return;
     }
     try {
       await window.aiUsage.copySummary();
-      setNotice('Usage summary copied to the clipboard.', 'ok');
+      setNotice({ text: 'Usage summary copied to the clipboard.', tone: 'ok' });
     } catch (error) {
       failWith('The summary could not be copied.')(error);
     }
@@ -505,7 +539,10 @@ export default function App() {
     try {
       const result = await window.aiUsage.snoozeAlerts(hours);
       commitSnapshot(result.snapshot);
-      setNotice(hours > 0 ? `Alerts snoozed for ${hours} hour${hours === 1 ? '' : 's'}.` : 'Alerts resumed.', 'ok');
+      setNotice({
+        text: hours > 0 ? `Alerts snoozed for ${hours} hour${hours === 1 ? '' : 's'}.` : 'Alerts resumed.',
+        tone: 'ok',
+      });
     } catch (error) {
       failWith('The snooze could not be saved.')(error);
     }
@@ -531,7 +568,7 @@ export default function App() {
 
   const actions: SettingsActions = {
     dataOperation,
-    helperOperation,
+    helperBusy,
     onSetupClaude: () => setSetupRequested(true),
     onSettings: settings,
     onPrice: price,

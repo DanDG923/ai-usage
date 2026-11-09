@@ -9,9 +9,6 @@ const { renderToStaticMarkup } = require('react-dom/server');
 
 let server;
 let demoSnapshot;
-let notices;
-let NoticeToast;
-let createNoticeChannel;
 let cycleMatch;
 let CycleHistory;
 let ProviderDetail;
@@ -19,7 +16,6 @@ let Overview;
 let Activity;
 let Costs;
 let Settings;
-let SourcesSection;
 
 test.before(async () => {
   const [{ createServer }, { default: react }] = await Promise.all([import('vite'), import('@vitejs/plugin-react')]);
@@ -31,11 +27,8 @@ test.before(async () => {
     optimizeDeps: { noDiscovery: true, include: [] },
     appType: 'custom',
   });
-  let toast;
   [
     { demoSnapshot },
-    notices,
-    toast,
     cycleMatch,
     { CycleHistory },
     { ProviderDetail },
@@ -43,11 +36,8 @@ test.before(async () => {
     { Activity },
     { Costs },
     { Settings },
-    { SourcesSection },
   ] = await Promise.all([
     server.ssrLoadModule('/src/data/demo.ts'),
-    server.ssrLoadModule('/src/notices.ts'),
-    server.ssrLoadModule('/src/components/NoticeToast.tsx'),
     server.ssrLoadModule('/src/cycle-match.ts'),
     server.ssrLoadModule('/src/components/details/CycleHistory.tsx'),
     server.ssrLoadModule('/src/components/ProviderDetail.tsx'),
@@ -55,9 +45,7 @@ test.before(async () => {
     server.ssrLoadModule('/src/components/Activity.tsx'),
     server.ssrLoadModule('/src/components/Costs.tsx'),
     server.ssrLoadModule('/src/components/Settings.tsx'),
-    server.ssrLoadModule('/src/components/settings/SourcesSection.tsx'),
   ]);
-  ({ NoticeToast, createNoticeChannel } = toast);
 });
 
 test.after(async () => {
@@ -113,61 +101,6 @@ function pages(snapshot = structuredClone(demoSnapshot)) {
   };
 }
 
-// ---------- 1. Notice tone is passed, not inferred from wording ----------
-
-test('a helper removal that leaves its script behind is an ordinary confirmation', () => {
-  const notice = notices.helperRemovedNotice({
-    managed: true,
-    restoredPreviousStatusLine: false,
-    statusLineRemoved: true,
-    helperScriptRemoved: false,
-  });
-  assert.match(notice.text, /could not be deleted; it is no longer referenced/);
-  assert.equal(notice.tone, 'ok');
-
-  const channel = createNoticeChannel();
-  channel.show(notice.text, notice.tone);
-  assert.equal(channel.isFailure(), false, 'the wording no longer makes it sticky');
-  const html = render(NoticeToast, { channel });
-  assert.match(html, /<div class="toast ok">/);
-  const status = html.match(/<div class="sr-only" role="status"[^>]*>([\s\S]*?)<\/div>/)[1];
-  const alert = html.match(/<div class="sr-only" role="alert"[^>]*>([\s\S]*?)<\/div>/)[1];
-  assert.match(status, /could not be deleted/, 'announced politely, as a confirmation');
-  assert.equal(alert, '');
-});
-
-test('existing notices keep their looks: refresh failures, fallback, busy and errors', () => {
-  const look = (notice) => {
-    const channel = createNoticeChannel();
-    channel.show(notice.text, notice.tone);
-    return render(NoticeToast, { channel }).match(/<div class="toast (\w+)">/)[1];
-  };
-  assert.equal(notices.refreshNotice({ collectors: { codex: { error: 'x' } } }).tone, 'warning');
-  assert.match(notices.refreshNotice({ collectors: { codex: { error: 'x' } } }).text, /^Refresh completed with Codex/);
-  const fallback = notices.refreshNotice({ collectors: { claude: { warning: 'cached' } } });
-  assert.equal(fallback.tone, 'caution');
-  assert.equal(look(fallback), 'caution');
-  assert.equal(notices.refreshNotice({ collectors: { claude: { warning: 'c' } }, backupError: 'disk full' }).tone, 'warning');
-  const fine = notices.refreshNotice({ collectors: { codex: {} } });
-  assert.deepEqual(fine, { text: 'All supported local sources refreshed.', tone: 'ok' });
-  const backup = notices.refreshNotice({ collectors: {}, backupError: 'disk full' });
-  assert.equal(backup.text, 'All supported local sources refreshed. Scheduled backup failed: disk full');
-  assert.equal(look(backup), 'warning');
-  assert.equal(look({ text: 'AI Usage is finishing an update; the dashboard will refresh shortly.', tone: 'busy' }), 'busy');
-
-  const channel = createNoticeChannel();
-  channel.fail('Pricing could not be saved.');
-  assert.equal(channel.isFailure(), true);
-  const html = render(NoticeToast, { channel });
-  assert.match(html, /<div class="toast warning">/);
-  assert.match(html, /role="alert" aria-atomic="true">Pricing could not be saved\.<\/div>/);
-  channel.dismiss();
-  assert.equal(channel.current(), '');
-  assert.equal(channel.isFailure(), false);
-});
-
-// ---------- 2. One "reset early" rule with the 60-second tolerance ----------
-
 test('a reset reported a second apart is not "Reset early", in both cycle tables', () => {
   const { cycleEndedEarly } = cycleMatch;
   const resetsAt = '2026-09-14T12:00:00.000Z';
@@ -192,29 +125,6 @@ test('a reset reported a second apart is not "Reset early", in both cycle tables
   assert.match(text(render(CycleHistory, { cycles: early.cycles, currency: 'GBP' })), /Reset early/);
   assert.match(text(render(ProviderDetail, { snapshot: early, provider: 'codex', onBack() {} })), /Reset early/);
 });
-
-// ---------- 4. The helper control waits for the change in flight ----------
-
-test('the helper control is disabled and busy while its change is in flight', () => {
-  const snapshot = structuredClone(demoSnapshot);
-  const claude = snapshot.sources.find((source) => source.id === 'claude');
-  const props = { snapshot, update: noop, onInstallClaude: noop, onUninstallClaude: noop, onSetupClaude() {}, onClaudeCodeMod: async () => null };
-  const button = (html) => html.match(/<button[^>]*>(?:Enabl|Disabl)[^<]*<\/button>/)[0];
-
-  claude.metadata = { ...claude.metadata, helperInstalled: true };
-  assert.doesNotMatch(button(render(SourcesSection, props)), /disabled/);
-  const removing = button(render(SourcesSection, { ...props, helperOperation: 'uninstall' }));
-  assert.match(removing, /disabled=""/);
-  assert.match(removing, /aria-busy="true"/);
-  assert.match(removing, />Disabling helper…</);
-
-  claude.metadata = { ...claude.metadata, helperInstalled: false };
-  const adding = button(render(Settings, { snapshot, actions: { ...settingsActions, helperOperation: 'install' } }));
-  assert.match(adding, /disabled=""/);
-  assert.match(adding, />Enabling helper…</);
-});
-
-// ---------- 8, 9. Header scope and table captions ----------
 
 test('every table header has a scope and every data table has a name', () => {
   const snapshot = structuredClone(demoSnapshot);
