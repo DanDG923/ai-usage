@@ -13,7 +13,6 @@ const readText = (name) => fs.readFileSync(path.join(root, name), 'utf8');
 test('release metadata, dependency pin, package exclusions, and docs agree', () => {
   const pkg = readJson('package.json');
   const lock = readJson('package-lock.json');
-  const readme = readText('README.md');
 
   assert.equal(require('../tools/bump-version.cjs').checkVersion(root, pkg.version), pkg.version);
   assert.equal(lock.version, pkg.version);
@@ -54,8 +53,10 @@ test('release metadata, dependency pin, package exclusions, and docs agree', () 
   assert.match(releaseAudit, /SHA256SUMS\.txt/);
   assert.match(releaseAudit, /source map/i);
   assert.match(releaseAudit, /private local data/i);
-  assert.match(readme, /actual local Fable token activity/i);
-  assert.match(readme, /experimental/i);
+  // The Fable tracking notes moved from the README to the forecasting guide.
+  const forecasting = readText('docs/forecasting.md');
+  assert.match(forecasting, /actual local Fable token activity/i);
+  assert.match(forecasting, /experimental/i);
 });
 
 test('public releases build without credentials and publish complete verified assets', () => {
