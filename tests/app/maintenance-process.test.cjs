@@ -361,3 +361,36 @@ test('a waiting job is failed with the stalled job ahead of it, at that job\'s l
   await assert.rejects(waiting, /did not respond in time \(restore-backup\)/);
   assert.equal(workers[0].terminated, 1);
 });
+
+test('a worker whose job could not be sent is still released when idle', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { workers, createWorker, reply } = fakeWorkers();
+  const host = createMaintenanceHost({ idleTimeoutMs: 30_000, createWorker });
+  const first = host.request('ping');
+  reply(workers[0], { ok: true });
+  await first;
+  t.mock.timers.tick(20_000);
+  // The next job cannot be handed to the worker (its payload cannot be cloned).
+  const send = workers[0].postMessage;
+  workers[0].postMessage = () => { throw new Error('could not be cloned'); };
+  await assert.rejects(host.request('cancel-desktop-export', { previewId: 'x' }), /could not be cloned/);
+  workers[0].postMessage = send;
+  assert.equal(host.running, true);
+  t.mock.timers.tick(30_000);
+  assert.equal(workers[0].sent.at(-1).type, 'close', 'the idle worker is asked to close its store');
+  assert.equal(host.running, false);
+  // The same holds when the very first job of a worker could not be sent.
+  const fresh = createMaintenanceHost({
+    idleTimeoutMs: 30_000,
+    createWorker: () => {
+      const worker = createWorker();
+      const deliver = worker.postMessage;
+      worker.postMessage = () => { worker.postMessage = deliver; throw new Error('could not be cloned'); };
+      return worker;
+    },
+  });
+  await assert.rejects(fresh.request('ping'), /could not be cloned/);
+  t.mock.timers.tick(30_000);
+  assert.equal(workers[1].sent.at(-1)?.type, 'close');
+  assert.equal(fresh.running, false);
+});

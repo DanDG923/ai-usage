@@ -67,7 +67,6 @@ function createMaintenanceHost({
     // Every job the worker had fails with that timeout.
     onTimeout: 'abandon',
     spawnFailure: 'reject',
-    idleAfterSendFailure: false,
     idleTimeoutMs,
     retireGraceMs: RETIRE_TIMEOUT_MS,
     // The worker exits by itself once its store is closed.

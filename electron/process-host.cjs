@@ -52,7 +52,6 @@ const { CLOSE_REQUEST, isReplyEnvelope } = require('./process-protocol.cjs');
  * @property {boolean} unrefRequestTimers true when a request that is only waiting for its time limit must not keep the main process alive
  * @property {'stop' | 'abandon'} onTimeout what an unanswered request does to the child and its other requests; see request()
  * @property {'throw' | 'reject'} spawnFailure whether request() throws when a child cannot be started, or returns a rejected promise
- * @property {boolean} idleAfterSendFailure whether the idle period starts again after a request that could not be sent
  * @property {number} idleTimeoutMs how long a child with no work is kept; zero or less keeps it for good
  * @property {number} retireGraceMs how long a released child has to exit before it is stopped
  * @property {boolean} stopOnCloseReply true to stop a released child as soon as it answers the close request, false to let it exit by itself
@@ -103,7 +102,7 @@ const { CLOSE_REQUEST, isReplyEnvelope } = require('./process-protocol.cjs');
  */
 function createProcessHost({
   name, spawn, listen, send, stop: stopChild, log, errors,
-  requestTimeoutMs, unrefRequestTimers, onTimeout, spawnFailure, idleAfterSendFailure,
+  requestTimeoutMs, unrefRequestTimers, onTimeout, spawnFailure,
   idleTimeoutMs, retireGraceMs, stopOnCloseReply, retirePayload,
   retireHoldMs = () => 0, onReply = () => {}, onChildGone = () => {}, exitLog,
 }) {
@@ -339,7 +338,8 @@ function createProcessHost({
         pending.delete(id);
         clearTimeout(entry.timer ?? undefined);
         reject(error);
-        if (idleAfterSendFailure) scheduleIdle();
+        // The child is still there, and may now have nothing to do.
+        scheduleIdle();
       }
     });
   }

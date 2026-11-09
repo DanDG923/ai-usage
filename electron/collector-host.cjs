@@ -74,7 +74,6 @@ function createCollectorHost({ fork, modulePath, config, requestTimeoutMs = DEFA
     // stopped, which fails its other requests as stopped.
     onTimeout: 'stop',
     spawnFailure: 'throw',
-    idleAfterSendFailure: true,
     idleTimeoutMs,
     retireGraceMs: RETIRE_TIMEOUT_MS,
     // The utility process does not exit once its store is closed, so it is
