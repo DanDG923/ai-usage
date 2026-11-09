@@ -19,8 +19,9 @@ function withTempStore(prefix, run) {
 }
 
 // An in-memory store closed after the test t, with settings applied if given.
+// Its backup folder is its own, never the system temp directory itself.
 function memoryStore(t, settings) {
-  const store = new UsageStore(':memory:', os.tmpdir());
+  const store = new UsageStore(':memory:', fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-memory-store-')));
   t.after(() => store.close());
   if (settings) store.updateSettings(settings);
   return store;

@@ -5,17 +5,13 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { UsageStore } = require('../../electron/store.cjs');
 const { importLocalSessions } = require('../../electron/codex-collector.cjs');
 const { importClaudeTranscripts } = require('../../electron/claude-collector.cjs');
+const { memoryStore } = require('../helpers/stores.cjs');
 const NOW = Date.parse('2026-09-06T12:00:00Z');
 
-function fixture(t) {
-  const store = new UsageStore(':memory:', os.tmpdir());
-  store.updateSettings({ currency: 'USD', usdToCurrency: 1 });
-  t.after(() => store.close());
-  return store;
-}
+// The shared in-memory store, which keeps its backups in a folder of its own.
+const fixture = (t) => memoryStore(t, { currency: 'USD', usdToCurrency: 1 });
 function add(store, id, { metadata = {}, ...overrides } = {}) {
   store.recordUsageEvent({ eventKey: id, sourceId: 'codex', sessionId: 'root', model: 'gpt-5.6-sol',
     occurredAt: new Date(NOW - 1000).toISOString(), project: '/work/app', inputTokens: 1000,
