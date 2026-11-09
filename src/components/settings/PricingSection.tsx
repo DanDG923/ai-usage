@@ -84,17 +84,26 @@ function PriceEditor({
   const valid = FIELDS.every(
     (key) => draft[key].trim() !== '' && Number.isFinite(Number(draft[key])) && Number(draft[key]) >= 0,
   );
-  const save = () => {
-    if (!valid) return;
-    // Once a catalogue row is edited locally, its old official URL/date no
-    // longer describes the saved values. Mark the replacement as today's
-    // local row instead of displaying borrowed provenance.
-    void onSave({
-      ...row,
-      ...Object.fromEntries(FIELDS.map((key) => [key, Number(draft[key])])),
-      effective_from: localDateKey(new Date()),
-      source_url: null,
-    });
+  // One write per row at a time: a second click waits for the first save.
+  const [saving, setSaving] = useState(false);
+  const save = async () => {
+    if (!valid || saving) return;
+    setSaving(true);
+    try {
+      // Once a catalogue row is edited locally, its old official URL/date no
+      // longer describes the saved values. Mark the replacement as today's
+      // local row instead of displaying borrowed provenance.
+      await onSave({
+        ...row,
+        ...Object.fromEntries(FIELDS.map((key) => [key, Number(draft[key])])),
+        effective_from: localDateKey(new Date()),
+        source_url: null,
+      });
+    } catch {
+      // The caller reports a failed save; the row stays editable.
+    } finally {
+      setSaving(false);
+    }
   };
   return (
     <tr className={unpricedSource ? 'unpriced-price-row' : ''}>
@@ -142,8 +151,9 @@ function PriceEditor({
           type="button"
           className="btn price-save"
           aria-label={`Save ${row.model} prices`}
-          disabled={!valid}
-          onClick={save}
+          disabled={!valid || saving}
+          aria-busy={saving || undefined}
+          onClick={() => void save()}
         >
           Save
         </button>
@@ -299,15 +309,26 @@ export function PricingSection({
       </SettingNote>
       <SettingBlock className="table-scroll price-table">
         <table>
+          <caption className="sr-only">Model prices in US dollars per million tokens</caption>
           <thead>
             <tr>
-              <th>Model / provenance</th>
-              <th className="num">Input</th>
-              <th className="num">Write 5m</th>
-              <th className="num">Write 1h</th>
-              <th className="num">Cache read</th>
-              <th className="num">Output</th>
-              <th>
+              <th scope="col">Model / provenance</th>
+              <th scope="col" className="num">
+                Input
+              </th>
+              <th scope="col" className="num">
+                Write 5m
+              </th>
+              <th scope="col" className="num">
+                Write 1h
+              </th>
+              <th scope="col" className="num">
+                Cache read
+              </th>
+              <th scope="col" className="num">
+                Output
+              </th>
+              <th scope="col">
                 <span className="sr-only">Save price</span>
               </th>
             </tr>

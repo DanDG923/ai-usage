@@ -122,6 +122,12 @@ export function ClaudeSetup({ requested, onClose }: { requested: boolean; onClos
       setBusy('');
     }
   }
+  function cancel() {
+    // The bridge rethrows a failed request; report it like the other setup steps.
+    window.aiUsage?.cancelClaudeSetup().catch((failure: unknown) => {
+      setError(failure instanceof Error ? failure.message : 'Setup could not be cancelled. Please try again.');
+    });
+  }
   const installed = Boolean(status?.installed);
   const signedIn = status?.auth === 'signed-in';
   const signInUnchecked = status?.auth === 'unavailable' && installed;
@@ -140,7 +146,7 @@ export function ClaudeSetup({ requested, onClose }: { requested: boolean; onClos
           event.stopPropagation();
           if (event.key === 'Escape') {
             event.preventDefault();
-            if (busy) void window.aiUsage?.cancelClaudeSetup();
+            if (busy) cancel();
             else void act('skip');
             return;
           }
@@ -233,7 +239,7 @@ export function ClaudeSetup({ requested, onClose }: { requested: boolean; onClos
             </button>
           )}
           {busy && (
-            <button type="button" className="btn" onClick={() => void window.aiUsage?.cancelClaudeSetup()}>
+            <button type="button" className="btn" onClick={cancel}>
               Cancel
             </button>
           )}

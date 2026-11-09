@@ -110,13 +110,25 @@ export function TaskTable({ snapshot, query }: { snapshot: Snapshot; query: stri
                     <caption className="sr-only">Agent usage for {task.taskId || task.sessionId}</caption>
                     <thead>
                       <tr>
-                        <th>Agent / model</th>
-                        <th className="num">Uncached input</th>
-                        <th className="num">Cache read</th>
-                        <th className="num">Cache write</th>
-                        <th className="num">Output</th>
-                        <th className="num">Records</th>
-                        <th className="num">API-equivalent</th>
+                        <th scope="col">Agent / model</th>
+                        <th scope="col" className="num">
+                          Uncached input
+                        </th>
+                        <th scope="col" className="num">
+                          Cache read
+                        </th>
+                        <th scope="col" className="num">
+                          Cache write
+                        </th>
+                        <th scope="col" className="num">
+                          Output
+                        </th>
+                        <th scope="col" className="num">
+                          Records
+                        </th>
+                        <th scope="col" className="num">
+                          API-equivalent
+                        </th>
                       </tr>
                     </thead>
                     <tbody>

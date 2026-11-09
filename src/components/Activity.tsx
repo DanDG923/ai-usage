@@ -74,150 +74,163 @@ export function Activity({ snapshot, days }: { snapshot: Snapshot; days: number 
   const showDaily = snapshot.settings.showCodexSubscription !== false;
   const tapeKey = views.some((view) => view.remaining != null && view.expectedRemaining != null);
   return (
-    <main
-      className="page activity-page"
-      id="panel-activity"
-      role="tabpanel"
-      aria-labelledby="tab-activity"
-      tabIndex={-1}
-    >
-      <section className="page-lead product-lead log-lead">
-        <div>
-          <h1>Activity and evidence</h1>
-          <p>Source freshness, local usage patterns, and the reset history behind each allowance forecast.</p>
-        </div>
-        <span className="badge log-count">
-          {cycleCount} reset cycle{cycleCount === 1 ? '' : 's'} shown
-        </span>
-      </section>
-
-      {views.length > 0 ? (
-        <section className="pnl log-panel log-evidence" aria-labelledby="evidence-log-heading">
-          <div className="log-heading">
-            <h2 className="pnl-title" id="evidence-log-heading">
-              Source evidence
-            </h2>
-            <p>Balances are never presented as current when their local source or observation is stale.</p>
+    <main>
+      <div
+        className="page activity-page"
+        id="panel-activity"
+        role="tabpanel"
+        aria-labelledby="tab-activity"
+        tabIndex={-1}
+      >
+        <section className="page-lead product-lead log-lead">
+          <div>
+            <h1>Activity and evidence</h1>
+            <p>Source freshness, local usage patterns, and the reset history behind each allowance forecast.</p>
           </div>
-          <div className="log-scroll">
-            <table className="evidence-table">
-              <thead>
-                <tr>
-                  <th className="log-col-provider">Provider</th>
-                  <th className="log-col-status">Status</th>
-                  <th className="log-col-time">Last observation</th>
-                  <th className="log-col-provenance">Provenance</th>
-                  <th className="log-col-tape">Current → expected at reset</th>
-                </tr>
-              </thead>
-              <tbody>
-                {views.map((view) => {
-                  const state = sourceState(view);
-                  const Icon = state.icon;
-                  return (
-                    <tr key={view.id}>
-                      <td className="log-provider">
-                        <span className={`swatch ${view.id}`} aria-hidden="true" />
-                        <strong>{view.name}</strong>
-                        <small>{view.subtitle}</small>
-                      </td>
-                      <td>
-                        <span className={`evidence-state ${state.tone}`}>
-                          <Icon aria-hidden="true" />
-                          {state.label}
-                        </span>
-                      </td>
-                      <td className="evidence-time">
-                        {view.current ? (
-                          <ObservedAt value={view.current.evidenceAt ?? view.current.observedAt} nowMs={nowMs} />
-                        ) : (
-                          'Not observed'
-                        )}
-                        <small>
-                          {view.source?.last_success_at ? (
-                            <>
-                              Source succeeded <RelativeTime value={view.source.last_success_at} nowMs={nowMs} />
-                            </>
+          <span className="badge log-count">
+            {cycleCount} reset cycle{cycleCount === 1 ? '' : 's'} shown
+          </span>
+        </section>
+
+        {views.length > 0 ? (
+          <section className="pnl log-panel log-evidence" aria-labelledby="evidence-log-heading">
+            <div className="log-heading">
+              <h2 className="pnl-title" id="evidence-log-heading">
+                Source evidence
+              </h2>
+              <p>Balances are never presented as current when their local source or observation is stale.</p>
+            </div>
+            <div className="log-scroll">
+              <table className="evidence-table">
+                <caption className="sr-only">Source evidence for each provider</caption>
+                <thead>
+                  <tr>
+                    <th scope="col" className="log-col-provider">
+                      Provider
+                    </th>
+                    <th scope="col" className="log-col-status">
+                      Status
+                    </th>
+                    <th scope="col" className="log-col-time">
+                      Last observation
+                    </th>
+                    <th scope="col" className="log-col-provenance">
+                      Provenance
+                    </th>
+                    <th scope="col" className="log-col-tape">
+                      Current → expected at reset
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {views.map((view) => {
+                    const state = sourceState(view);
+                    const Icon = state.icon;
+                    return (
+                      <tr key={view.id}>
+                        <td className="log-provider">
+                          <span className={`swatch ${view.id}`} aria-hidden="true" />
+                          <strong>{view.name}</strong>
+                          <small>{view.subtitle}</small>
+                        </td>
+                        <td>
+                          <span className={`evidence-state ${state.tone}`}>
+                            <Icon aria-hidden="true" />
+                            {state.label}
+                          </span>
+                        </td>
+                        <td className="evidence-time">
+                          {view.current ? (
+                            <ObservedAt value={view.current.evidenceAt ?? view.current.observedAt} nowMs={nowMs} />
                           ) : (
-                            'No successful source reading yet'
+                            'Not observed'
                           )}
-                        </small>
-                      </td>
-                      <td>
-                        <span className="chip">{view.provenance.replaceAll('-', ' ')}</span>
-                      </td>
-                      <td className="log-tape-cell">
-                        <span className="log-tape-row">
-                          <strong className="num">
-                            {view.remaining == null ? '—' : `${view.estimated ? '~' : ''}${percent(view.remaining)}`}
-                          </strong>
-                          <EvidenceTape view={view} />
-                          <span className="num">{percent(view.expectedRemaining)}</span>
-                        </span>
-                        {view.expired && <small>Window expired</small>}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          {tapeKey && (
-            <div className="log-tape-key" aria-hidden="true">
-              <span>
-                <i className="left" />
-                Left at reset
-              </span>
-              <span>
-                <i className="used" />
-                Likely used before reset
-              </span>
+                          <small>
+                            {view.source?.last_success_at ? (
+                              <>
+                                Source succeeded <RelativeTime value={view.source.last_success_at} nowMs={nowMs} />
+                              </>
+                            ) : (
+                              'No successful source reading yet'
+                            )}
+                          </small>
+                        </td>
+                        <td>
+                          <span className="chip">{view.provenance.replaceAll('-', ' ')}</span>
+                        </td>
+                        <td className="log-tape-cell">
+                          <span className="log-tape-row">
+                            <strong className="num">
+                              {view.remaining == null ? '—' : `${view.estimated ? '~' : ''}${percent(view.remaining)}`}
+                            </strong>
+                            <EvidenceTape view={view} />
+                            <span className="num">{percent(view.expectedRemaining)}</span>
+                          </span>
+                          {view.expired && <small>Window expired</small>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
-          )}
-        </section>
-      ) : (
-        <section className="pnl log-panel log-none">
-          <h2 className="pnl-title">No subscriptions shown</h2>
-          <p>
-            Show a subscription in Settings to see its allowance evidence and reset cycles. Your saved history is
-            retained.
-          </p>
-        </section>
-      )}
-
-      <div className="log-grid">
-        {snapshot.costs.activityGrid ? (
-          <ActivityHeatmap
-            grid={snapshot.costs.activityGrid}
-            currency={snapshot.costs.currency}
-            days={snapshot.costs.periodDays}
-          />
+            {tapeKey && (
+              <div className="log-tape-key" aria-hidden="true">
+                <span>
+                  <i className="left" />
+                  Left at reset
+                </span>
+                <span>
+                  <i className="used" />
+                  Likely used before reset
+                </span>
+              </div>
+            )}
+          </section>
         ) : (
-          <section className="pnl log-panel heatmap-panel" aria-labelledby="heatmap-heading">
-            <div className="log-heading">
-              <h2 className="pnl-title" id="heatmap-heading">
-                When the work happens
-              </h2>
-            </div>
-            <div className="empty-chart">Hourly activity appears after local token records have been collected.</div>
+          <section className="pnl log-panel log-none">
+            <h2 className="pnl-title">No subscriptions shown</h2>
+            <p>
+              Show a subscription in Settings to see its allowance evidence and reset cycles. Your saved history is
+              retained.
+            </p>
           </section>
         )}
-        {showDaily && (
-          <section className="pnl log-panel log-daily" aria-labelledby="daily-usage-heading">
-            <div className="log-heading">
-              <h2 className="pnl-title" id="daily-usage-heading">
-                Daily Codex usage
-              </h2>
-              <p>
-                Official daily token totals from the local Codex service over the current {days}-day analysis period.
-              </p>
-            </div>
-            <DailyUsageChart rows={snapshot.dailyUsage || []} days={days} />
-          </section>
-        )}
-      </div>
 
-      {views.length > 0 && <CycleHistory cycles={visibleCycles} currency={snapshot.costs.currency} />}
+        <div className="log-grid">
+          {snapshot.costs.activityGrid ? (
+            <ActivityHeatmap
+              grid={snapshot.costs.activityGrid}
+              currency={snapshot.costs.currency}
+              days={snapshot.costs.periodDays}
+            />
+          ) : (
+            <section className="pnl log-panel heatmap-panel" aria-labelledby="heatmap-heading">
+              <div className="log-heading">
+                <h2 className="pnl-title" id="heatmap-heading">
+                  When the work happens
+                </h2>
+              </div>
+              <div className="empty-chart">Hourly activity appears after local token records have been collected.</div>
+            </section>
+          )}
+          {showDaily && (
+            <section className="pnl log-panel log-daily" aria-labelledby="daily-usage-heading">
+              <div className="log-heading">
+                <h2 className="pnl-title" id="daily-usage-heading">
+                  Daily Codex usage
+                </h2>
+                <p>
+                  Official daily token totals from the local Codex service over the current {days}-day analysis period.
+                </p>
+              </div>
+              <DailyUsageChart rows={snapshot.dailyUsage || []} days={days} />
+            </section>
+          )}
+        </div>
+
+        {views.length > 0 && <CycleHistory cycles={visibleCycles} currency={snapshot.costs.currency} />}
+      </div>
     </main>
   );
 }

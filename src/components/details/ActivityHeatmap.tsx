@@ -90,6 +90,7 @@ export function ActivityHeatmap({ grid, currency, days }: { grid: number[][]; cu
                     key={hour}
                     className={`hm-cell h${heatStep(value, max)}${isBusiest ? ' busiest' : ''}`}
                     title={`${DAYS[day]} ${hourLabel(hour)} · ${money(value, currency)}`}
+                    aria-label={`${DAYS[day]} ${hourLabel(hour)} · ${money(value, currency)}`}
                   />
                 );
               })}
@@ -116,9 +117,9 @@ export function ActivityHeatmap({ grid, currency, days }: { grid: number[][]; cu
               <caption>API-equivalent cost by weekday and hour</caption>
               <thead>
                 <tr>
-                  <th>Day</th>
-                  <th>Hour</th>
-                  <th>Cost</th>
+                  <th scope="col">Day</th>
+                  <th scope="col">Hour</th>
+                  <th scope="col">Cost</th>
                 </tr>
               </thead>
               <tbody>

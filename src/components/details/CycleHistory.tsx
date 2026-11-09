@@ -1,3 +1,4 @@
+import { cycleEndedEarly } from '../../cycle-match';
 import { compactNumber, dayDate, money, percent } from '../../lib';
 import type { CycleRow, Snapshot } from '../../types';
 
@@ -35,7 +36,12 @@ function CycleBars({ rows, provider }: { rows: CycleRow[]; provider: CycleKey })
       {ordered.map((row) => {
         const height = Math.max(3, Math.min(100, row.peakUsedPercent));
         return (
-          <div key={row.resetsAt} className={`cycle-bar${row.current ? ' current' : ''}`} title={cycleLabel(row)}>
+          <div
+            key={row.resetsAt}
+            className={`cycle-bar${row.current ? ' current' : ''}`}
+            title={cycleLabel(row)}
+            aria-label={cycleLabel(row)}
+          >
             <i style={{ height: `${height}%` }}>
               <b className={height >= 85 ? 'inside' : undefined}>{percent(row.peakUsedPercent)}</b>
             </i>
@@ -79,11 +85,19 @@ export function CycleHistory({ cycles, currency }: { cycles: Snapshot['cycles'];
                   <caption className="sr-only">{LABELS[key]} reset windows, newest first</caption>
                   <thead>
                     <tr>
-                      <th>Window ends</th>
-                      <th className="num">Peak used</th>
-                      <th className="num">Readings</th>
-                      <th className="num">Tokens</th>
-                      <th className="num">API-equivalent</th>
+                      <th scope="col">Window ends</th>
+                      <th scope="col" className="num">
+                        Peak used
+                      </th>
+                      <th scope="col" className="num">
+                        Readings
+                      </th>
+                      <th scope="col" className="num">
+                        Tokens
+                      </th>
+                      <th scope="col" className="num">
+                        API-equivalent
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -94,7 +108,7 @@ export function CycleHistory({ cycles, currency }: { cycles: Snapshot['cycles'];
                             {dayDate(row.endsAt ?? row.resetsAt)}
                             {row.current ? <span className="chip">Current</span> : null}
                           </span>
-                          {row.endsAt && row.endsAt !== row.resetsAt ? <small>Reset early</small> : null}
+                          {cycleEndedEarly(row) ? <small>Reset early</small> : null}
                         </td>
                         <td className="num cycle-peak">{percent(row.peakUsedPercent)}</td>
                         <td className="num">{row.readings}</td>

@@ -323,7 +323,8 @@ div.gs-brand {
   margin-bottom: var(--sp-5);
   outline: none;
 }
-.page-title + .page {
+/* Each page is a tabpanel inside its own <main> landmark. */
+.page-title + main > .page {
   margin-top: 16px;
 }
 

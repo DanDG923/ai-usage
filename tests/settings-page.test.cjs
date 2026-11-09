@@ -173,7 +173,7 @@ test('the unpriced count lists each detected model once and skips priced ones', 
 
 test('the Settings page keeps one screen-reader heading, the tab panel and every section target', () => {
   const html = renderSettings(structuredClone(demoSnapshot));
-  assert.match(html, /<main class="page settings-page" id="panel-settings" role="tabpanel" aria-labelledby="tab-settings" tabindex="-1">/);
+  assert.match(html, /^<main><div class="page settings-page" id="panel-settings" role="tabpanel" aria-labelledby="tab-settings" tabindex="-1">/);
   assert.equal((html.match(/<h1\b/g) || []).length, 1);
   assert.match(html, /<h1 class="sr-only">Settings<\/h1>/);
   assert.match(text(html), /Everything stays on this PC/);

@@ -143,6 +143,7 @@ export function SourcesSection({
   update,
   onInstallClaude,
   onUninstallClaude,
+  helperOperation = null,
   onSetupClaude,
   onClaudeCodeMod,
 }: {
@@ -150,6 +151,8 @@ export function SourcesSection({
   update: (patch: Partial<Settings>) => Promise<void | boolean>;
   onInstallClaude: () => Promise<void>;
   onUninstallClaude: () => Promise<void>;
+  /** A helper change in flight: the control waits for it rather than sending a second write. */
+  helperOperation?: 'install' | 'uninstall' | null;
   onSetupClaude: () => void;
   onClaudeCodeMod: ClaudeCodeModAction;
 }) {
@@ -190,12 +193,24 @@ export function SourcesSection({
               </dl>
               {source.id === 'claude' &&
                 (source.metadata?.helperInstalled ? (
-                  <button type="button" className="btn" onClick={onUninstallClaude}>
-                    Disable helper
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={Boolean(helperOperation)}
+                    aria-busy={helperOperation === 'uninstall' || undefined}
+                    onClick={onUninstallClaude}
+                  >
+                    {helperOperation === 'uninstall' ? 'Disabling helper…' : 'Disable helper'}
                   </button>
                 ) : (
-                  <button type="button" className="btn" onClick={onInstallClaude}>
-                    Enable fallback helper
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={Boolean(helperOperation)}
+                    aria-busy={helperOperation === 'install' || undefined}
+                    onClick={onInstallClaude}
+                  >
+                    {helperOperation === 'install' ? 'Enabling helper…' : 'Enable fallback helper'}
                   </button>
                 ))}
             </article>

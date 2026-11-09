@@ -6,13 +6,14 @@ import { ClaudeSetup } from './components/ClaudeSetup';
 import { Costs } from './components/Costs';
 import { BareGlareshield, FooterStrip, Header, PageTitle, TABS, type Tab } from './components/Header';
 import { NoticeToast, createNoticeChannel } from './components/NoticeToast';
+import { helperRemovedNotice, refreshNotice } from './notices';
 import { Overview } from './components/Overview';
 import { ProviderDetail } from './components/ProviderDetail';
 import { Settings, type SettingsActions } from './components/Settings';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { snapshotAtTime } from './snapshot-time';
 import { readDashboardView, saveDashboardView } from './dashboard-view';
-import { formatInt, sourceLabel } from './lib';
+import { formatInt } from './lib';
 import { applyThemeAttribute } from './theme';
 import type { ProviderId } from './provider-view';
 import type { ManualObservation, PriceRow, Settings as SettingsType, Snapshot } from './types';
@@ -35,6 +36,7 @@ export default function App() {
   }, []);
   const [costQuery, setCostQuery] = useState(initialView.costQuery);
   const [dataOperation, setDataOperation] = useState<SettingsActions['dataOperation']>(null);
+  const [helperOperation, setHelperOperation] = useState<SettingsActions['helperOperation']>(null);
   const [setupRequested, setSetupRequested] = useState(false);
   const [days, setDays] = useState(initialView.days);
   const isBrowserPreview = !window.aiUsage && window.location.protocol !== 'file:';
@@ -141,7 +143,7 @@ export default function App() {
           desiredPeriod.current = committedPeriod.current;
           // The toast is not shown before the first snapshot; the loading
           // screen then explains the wait and offers Try again instead.
-          if (hasSnapshot.current) setNotice(BUSY_NOTICE);
+          if (hasSnapshot.current) setNotice(BUSY_NOTICE, 'busy');
           else setLoadError(BUSY_NOTICE);
           return;
         }
@@ -199,7 +201,7 @@ export default function App() {
 
   const refresh = async () => {
     if (!window.aiUsage) {
-      setNotice('The live collectors run in the installed desktop app.');
+      setNotice('The live collectors run in the installed desktop app.', 'ok');
       return;
     }
     if (manualRefreshInFlight.current) return;
@@ -209,26 +211,16 @@ export default function App() {
     try {
       const result = await window.aiUsage.refresh();
       commitSnapshot(result.snapshot);
-      const failures = Object.entries(result.collectors || {}).filter(([, collector]) => collector?.error);
-      const warnings = Object.entries(result.collectors || {}).filter(
-        ([, collector]) => collector?.warning && !collector?.error,
-      );
-      const backup = result.backupError ? ` Scheduled backup failed: ${result.backupError}` : '';
-      setNotice(
-        `${
-          failures.length
-            ? `Refresh completed with ${failures.map(([source]) => sourceLabel(source)).join(' and ')} unavailable. Check Sources for details.`
-            : warnings.length
-              ? `Refresh completed using fallback data for ${warnings.map(([source]) => sourceLabel(source)).join(' and ')}. Check Sources for details.`
-              : 'All supported local sources refreshed.'
-        }${backup}`,
-      );
+      const notice = refreshNotice(result);
+      setNotice(notice.text, notice.tone);
     } catch (error) {
       failWith('Refresh did not finish.')(error);
     } finally {
       manualRefreshInFlight.current = false;
       setManualRefreshing(false);
-      setRefreshing(false);
+      // A period read started meanwhile owns `refreshing` now; its own finally
+      // clears it when that read lands, as the onUpdated push does above.
+      if (pendingPeriod.current == null) setRefreshing(false);
     }
   };
 
@@ -250,7 +242,7 @@ export default function App() {
         target && (target.closest('input, select, textarea, [contenteditable="true"]') || target.isContentEditable),
       );
       if (event.key === 'Escape') {
-        if (notices.current()) notices.show('');
+        if (notices.current()) notices.dismiss();
         // Escape in a field (the reserve slider, a search box) stays with that field.
         else if (shortcutState.current.detail && !typing) shortcutState.current.closeDetail();
         return;
@@ -336,34 +328,31 @@ export default function App() {
   };
 
   const installClaude = async () => {
-    if (!window.aiUsage) return;
+    if (!window.aiUsage || helperOperation) return;
+    setHelperOperation('install');
     try {
       const result = await window.aiUsage.installClaudeHelper();
       commitSnapshot(result.snapshot);
-      setNotice('Claude allowance helper enabled. Fully restart Claude to activate it.');
+      setNotice('Claude allowance helper enabled. Fully restart Claude to activate it.', 'ok');
     } catch (error) {
       failWith('Claude helper could not be enabled.')(error);
+    } finally {
+      setHelperOperation(null);
     }
   };
 
   const uninstallClaude = async () => {
-    if (!window.aiUsage) return;
+    if (!window.aiUsage || helperOperation) return;
+    setHelperOperation('uninstall');
     try {
       const result = await window.aiUsage.uninstallClaudeHelper();
       commitSnapshot(result.snapshot);
-      const leftover =
-        result.result.managed && !result.result.helperScriptRemoved
-          ? ' The helper script is still in use and could not be deleted; it is no longer referenced.'
-          : '';
-      setNotice(
-        result.result.restoredPreviousStatusLine
-          ? `Claude allowance helper disabled and your previous status line restored. Fully restart Claude.${leftover}`
-          : result.result.statusLineRemoved
-            ? `Claude allowance helper disabled and its status line removed. Fully restart Claude.${leftover}`
-            : 'Claude’s status line is not the one this app installed, so nothing was changed.',
-      );
+      const notice = helperRemovedNotice(result.result);
+      setNotice(notice.text, notice.tone);
     } catch (error) {
       failWith('Claude helper could not be disabled.')(error);
+    } finally {
+      setHelperOperation(null);
     }
   };
 
@@ -377,6 +366,7 @@ export default function App() {
         action === 'install'
           ? 'Claude Code mod installed. Start a new Claude Code session, or run /reload-plugins in an open one, then type /ai-usage.'
           : 'Claude Code mod removed. Open Claude Code sessions drop it when they next start.',
+        'ok',
       );
       return status;
     } catch (error) {
@@ -397,7 +387,7 @@ export default function App() {
     try {
       const result = await window.aiUsage.createBackup();
       commitSnapshot(result.snapshot);
-      setNotice(`Backup saved to ${result.result.exportPath ?? result.result.databasePath}`);
+      setNotice(`Backup saved to ${result.result.exportPath ?? result.result.databasePath}`, 'ok');
     } catch (error) {
       failWith('Backup could not be created.')(error);
     } finally {
@@ -407,7 +397,7 @@ export default function App() {
 
   const restore = async () => {
     if (!window.aiUsage) {
-      setNotice('Restoring runs in the installed desktop app.');
+      setNotice('Restoring runs in the installed desktop app.', 'ok');
       return;
     }
     if (dataOperation) return;
@@ -419,6 +409,7 @@ export default function App() {
       const { settings: settingCount, observations, usageEvents, dailyUsage, prices, skipped } = result.result;
       setNotice(
         `Restored ${observations} observations, ${usageEvents} token records, ${dailyUsage} daily totals, ${prices} prices and ${result.result.desktopEstimates ?? 0} chat estimates. Existing usage and edited prices were kept. ${settingCount} settings were replaced by the export's.${skipped ? ` ${skipped} unusable records were skipped.` : ''}`,
+        'ok',
       );
     } catch (error) {
       failWith('That backup could not be restored.')(error);
@@ -429,12 +420,12 @@ export default function App() {
 
   const manual = async (observation: ManualObservation) => {
     if (!window.aiUsage) {
-      setNotice('Manual observations are saved by the installed desktop app.');
+      setNotice('Manual observations are saved by the installed desktop app.', 'ok');
       return false;
     }
     try {
       commitSnapshot(await window.aiUsage.addManualObservation(observation));
-      setNotice('Official observation added to the learner.');
+      setNotice('Official observation added to the learner.', 'ok');
       return true;
     } catch (error) {
       failWith('Observation could not be saved.')(error);
@@ -463,7 +454,7 @@ export default function App() {
         sourceUrl: row.source_url,
       });
       commitSnapshot(result.snapshot);
-      setNotice(`${row.model} pricing updated.`);
+      setNotice(`${row.model} pricing updated.`, 'ok');
     } catch (error) {
       failWith('Pricing could not be saved.')(error);
     }
@@ -471,7 +462,7 @@ export default function App() {
 
   const exportCsv = async (period: number) => {
     if (!window.aiUsage) {
-      setNotice('Exports are written by the installed desktop app.');
+      setNotice('Exports are written by the installed desktop app.', 'ok');
       return;
     }
     if (dataOperation) return;
@@ -481,6 +472,7 @@ export default function App() {
       if (result.cancelled) return;
       setNotice(
         `Exported ${result.rows == null ? '' : formatInt(result.rows)} records from the last ${result.days} days to ${result.filePath}`,
+        'ok',
       );
     } catch (error) {
       failWith('The CSV export could not be written.')(error);
@@ -491,12 +483,12 @@ export default function App() {
 
   const copySummary = async () => {
     if (!window.aiUsage) {
-      setNotice('The summary is copied by the installed desktop app.');
+      setNotice('The summary is copied by the installed desktop app.', 'ok');
       return;
     }
     try {
       await window.aiUsage.copySummary();
-      setNotice('Usage summary copied to the clipboard.');
+      setNotice('Usage summary copied to the clipboard.', 'ok');
     } catch (error) {
       failWith('The summary could not be copied.')(error);
     }
@@ -513,7 +505,7 @@ export default function App() {
     try {
       const result = await window.aiUsage.snoozeAlerts(hours);
       commitSnapshot(result.snapshot);
-      setNotice(hours > 0 ? `Alerts snoozed for ${hours} hour${hours === 1 ? '' : 's'}.` : 'Alerts resumed.');
+      setNotice(hours > 0 ? `Alerts snoozed for ${hours} hour${hours === 1 ? '' : 's'}.` : 'Alerts resumed.', 'ok');
     } catch (error) {
       failWith('The snooze could not be saved.')(error);
     }
@@ -539,6 +531,7 @@ export default function App() {
 
   const actions: SettingsActions = {
     dataOperation,
+    helperOperation,
     onSetupClaude: () => setSetupRequested(true),
     onSettings: settings,
     onPrice: price,
