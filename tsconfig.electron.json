@@ -17,5 +17,5 @@
     "resolveJsonModule": true,
     "types": ["node"]
   },
-  "include": ["electron/**/*.cjs", "electron/**/*.mjs", "electron/**/*.d.mts"]
+  "include": ["electron/**/*.cjs", "electron/**/*.mjs", "electron/**/*.d.mts", "electron/**/*.d.ts"]
 }

@@ -15,7 +15,14 @@ const COMPACT_AFTER_MS = 60 * DAY_MS;
 // Omitting metadata keeps whatever the source already had. A failure path
 // reporting only a status must not erase facts it never gathered — the
 // Enable/Disable helper control reads one of them.
-/** @param {import('../store.cjs').Store} store */
+/**
+ * @param {import('../store.cjs').Store} store
+ * @param {string} id
+ * @param {string} status
+ * @param {string | null} [detail]
+ * @param {Record<string, any>} [metadata]
+ * @param {{ scanSucceeded?: boolean }} [options]
+ */
 function setSourceStatus(store, id, status, detail, metadata, options = {}) {
   if (!KNOWN_SOURCE_IDS.has(id)) throw new Error(`Unknown source: ${id || 'missing'}.`);
   if (typeof status !== 'string' || !status.trim()) throw new Error('Source status is required.');
