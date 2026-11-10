@@ -5,17 +5,30 @@
 // Electron so every taskbar edge can be tested without a screen.
 
 const FLYOUT_MARGIN = 8;
+/** @typedef {'bottom' | 'top' | 'left' | 'right'} Edge */
+/** @type {Edge[]} */
 const EDGES = ['bottom', 'top', 'left', 'right'];
 
+/** @typedef {{ x: number, y: number, width: number, height: number }} Rect */
+
+/**
+ * @param {any} rect
+ * @returns {rect is Rect}
+ */
 function isRect(rect) {
   return Boolean(rect) && ['x', 'y', 'width', 'height'].every((key) => Number.isFinite(rect[key]));
 }
 
 // Windows reports an empty rectangle for an icon it cannot locate.
+/**
+ * @param {any} rect
+ * @returns {rect is Rect}
+ */
 function isUsableIcon(rect) {
   return isRect(rect) && rect.width > 0 && rect.height > 0;
 }
 
+/** @param {Record<Edge, number>} distances */
 function nearestEdge(distances) {
   return EDGES.reduce((best, edge) => (distances[edge] < distances[best] ? edge : best), EDGES[0]);
 }
@@ -25,6 +38,7 @@ function nearestEdge(distances) {
  * taskbar, so the widest gap between them is the taskbar. An auto-hidden
  * taskbar leaves no gap; the edge nearest the icon is the one it slides from.
  */
+/** @param {{ trayBounds?: Rect, workArea?: Rect, displayBounds?: Rect }} [anchor] */
 function taskbarEdge({ trayBounds, workArea, displayBounds } = {}) {
   if (!isRect(workArea)) return 'bottom';
   if (isRect(displayBounds)) {
@@ -49,6 +63,11 @@ function taskbarEdge({ trayBounds, workArea, displayBounds } = {}) {
   });
 }
 
+/**
+ * @param {number} value
+ * @param {number} low
+ * @param {number} high
+ */
 function clamp(value, low, high) {
   return Math.min(Math.max(value, low), Math.max(low, high));
 }
@@ -60,6 +79,7 @@ function clamp(value, low, high) {
  * cannot locate opens the flyout in the notification-area corner. Returns null
  * when there is no usable work area.
  */
+/** @param {{ trayBounds?: Rect, workArea?: Rect, displayBounds?: Rect, width?: number, height?: number, margin?: number }} [request] */
 function flyoutBounds({ trayBounds, workArea, displayBounds, width, height, margin = FLYOUT_MARGIN } = {}) {
   if (!isRect(workArea) || workArea.width <= 0 || workArea.height <= 0) return null;
   const edge = taskbarEdge({ trayBounds, workArea, displayBounds });

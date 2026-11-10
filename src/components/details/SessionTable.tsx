@@ -38,15 +38,20 @@ export function SessionTable({ snapshot, query }: { snapshot: Snapshot; query: s
       </div>
       <div className="table-scroll">
         <table className="costs-table session-table">
+          <caption className="sr-only">Tracked sessions by API-equivalent cost</caption>
           <thead>
             <tr>
-              <th>Source</th>
-              <th>Project</th>
-              <th>Session</th>
-              <th>Model</th>
-              <th>Last activity</th>
-              <th className="num">Tokens</th>
-              <th className="num">API-equivalent</th>
+              <th scope="col">Source</th>
+              <th scope="col">Project</th>
+              <th scope="col">Session</th>
+              <th scope="col">Model</th>
+              <th scope="col">Last activity</th>
+              <th scope="col" className="num">
+                Tokens
+              </th>
+              <th scope="col" className="num">
+                API-equivalent
+              </th>
             </tr>
           </thead>
           <tbody>

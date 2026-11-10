@@ -8,822 +8,823 @@
  * Keys are monochrome: ink and white only. A provider hue never lands on a
  * control, and a status colour always travels with its icon and word.
  */
+@layer components {
+  /* ---------- Labels, keycaps, links ---------- */
 
-/* ---------- Labels, keycaps, links ---------- */
+  .lbl {
+    color: var(--text-2);
+    font-size: var(--fs-11);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    line-height: 14px;
+    text-transform: uppercase;
+  }
 
-.lbl {
-  color: var(--text-2);
-  font-size: var(--fs-11);
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  line-height: 14px;
-  text-transform: uppercase;
-}
+  .kc {
+    display: inline-block;
+    padding: 1px 5px;
+    border: 1px solid var(--rule-strong);
+    border-radius: var(--radius);
+    color: var(--text-2);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 400;
+    letter-spacing: 0;
+    line-height: 14px;
+    text-transform: none;
+  }
 
-.kc {
-  display: inline-block;
-  padding: 1px 5px;
-  border: 1px solid var(--rule-strong);
-  border-radius: var(--radius);
-  color: var(--text-2);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 400;
-  letter-spacing: 0;
-  line-height: 14px;
-  text-transform: none;
-}
+  .lnk {
+    color: var(--text);
+    text-decoration: none;
+    border-bottom: 1px solid var(--link);
+  }
+  .lnk:hover {
+    border-bottom-color: var(--text);
+  }
 
-.lnk {
-  color: var(--text);
-  text-decoration: none;
-  border-bottom: 1px solid var(--link);
-}
-.lnk:hover {
-  border-bottom-color: var(--text);
-}
+  /* ---------- Keys ---------- */
 
-/* ---------- Keys ---------- */
+  /* Secondary key: paper (Daylight) or black (night) face, control border. */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 32px;
+    padding: 0 14px;
+    border: 1px solid var(--control);
+    border-radius: var(--radius);
+    background: var(--control-face);
+    color: var(--text);
+    font-family: var(--font-sans);
+    font-size: var(--fs-12);
+    font-weight: 700;
+    text-decoration: none;
+    white-space: nowrap;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+  .btn:hover:not(:disabled) {
+    border-color: var(--control-hover);
+    background: var(--current);
+  }
+  .btn svg {
+    flex: none;
+    width: 16px;
+    height: 16px;
+  }
 
-/* Secondary key: paper (Daylight) or black (night) face, control border. */
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  min-height: 32px;
-  padding: 0 14px;
-  border: 1px solid var(--control);
-  border-radius: var(--radius);
-  background: var(--control-face);
-  color: var(--text);
-  font-family: var(--font-sans);
-  font-size: var(--fs-12);
-  font-weight: 700;
-  text-decoration: none;
-  white-space: nowrap;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  cursor: pointer;
-}
-.btn:hover:not(:disabled) {
-  border-color: var(--control-hover);
-  background: var(--current);
-}
-.btn svg {
-  flex: none;
-  width: 16px;
-  height: 16px;
-}
+  /* Primary key: an ink fill with the on-ink label; one per view at most. */
+  .btn-p,
+  .btn-on {
+    border-color: var(--text);
+    background: var(--text);
+    color: var(--on-ink);
+  }
+  .btn-p:hover:not(:disabled) {
+    border-color: var(--primary-hover);
+    background: var(--primary-hover);
+  }
+  .btn-lg {
+    min-height: 44px;
+    font-size: var(--fs-13);
+  }
 
-/* Primary key: an ink fill with the on-ink label; one per view at most. */
-.btn-p,
-.btn-on {
-  border-color: var(--text);
-  background: var(--text);
-  color: var(--on-ink);
-}
-.btn-p:hover:not(:disabled) {
-  border-color: var(--primary-hover);
-  background: var(--primary-hover);
-}
-.btn-lg {
-  min-height: 44px;
-  font-size: var(--fs-13);
-}
+  .btn:disabled {
+    border-color: var(--rule);
+    background: var(--control-face);
+    color: var(--text-3);
+    cursor: not-allowed;
+  }
+  .btn[aria-busy='true']:disabled {
+    cursor: progress;
+  }
 
-.btn:disabled {
-  border-color: var(--rule);
-  background: var(--control-face);
-  color: var(--text-3);
-  cursor: not-allowed;
-}
-.btn[aria-busy='true']:disabled {
-  cursor: progress;
-}
+  /* Icon key: a 32px square. */
+  .ibtn {
+    flex: none;
+    width: 32px;
+    height: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 1px solid var(--control);
+    border-radius: var(--radius);
+    background: var(--control-face);
+    color: var(--text);
+    cursor: pointer;
+  }
+  .ibtn:hover:not(:disabled) {
+    border-color: var(--control-hover);
+    background: var(--current);
+  }
+  .ibtn:disabled {
+    border-color: var(--rule);
+    color: var(--text-3);
+    cursor: progress;
+  }
+  .ibtn svg {
+    width: 16px;
+    height: 16px;
+  }
 
-/* Icon key: a 32px square. */
-.ibtn {
-  flex: none;
-  width: 32px;
-  height: 32px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: 1px solid var(--control);
-  border-radius: var(--radius);
-  background: var(--control-face);
-  color: var(--text);
-  cursor: pointer;
-}
-.ibtn:hover:not(:disabled) {
-  border-color: var(--control-hover);
-  background: var(--current);
-}
-.ibtn:disabled {
-  border-color: var(--rule);
-  color: var(--text-3);
-  cursor: progress;
-}
-.ibtn svg {
-  width: 16px;
-  height: 16px;
-}
+  /* Segmented keys (a period or a chart style): one frame, pressed key inked. */
+  .seg {
+    display: inline-flex;
+    border: 1px solid var(--control);
+    border-radius: var(--radius);
+  }
+  .seg > .btn {
+    border: 0;
+    border-radius: 0;
+  }
+  .seg > .btn[aria-pressed='true'] {
+    background: var(--text);
+    color: var(--on-ink);
+  }
 
-/* Segmented keys (a period or a chart style): one frame, pressed key inked. */
-.seg {
-  display: inline-flex;
-  border: 1px solid var(--control);
-  border-radius: var(--radius);
-}
-.seg > .btn {
-  border: 0;
-  border-radius: 0;
-}
-.seg > .btn[aria-pressed='true'] {
-  background: var(--text);
-  color: var(--on-ink);
-}
+  /* ---------- Fields and switches ---------- */
 
-/* ---------- Fields and switches ---------- */
+  .fld {
+    height: 32px;
+    padding: 0 8px;
+    border: 1px solid var(--control);
+    border-radius: var(--radius);
+    background: var(--control-face);
+    color: var(--text);
+    font-family: var(--font-sans);
+    font-size: var(--fs-13);
+  }
+  .fld:hover:not(:disabled) {
+    border-color: var(--control-hover);
+  }
+  .fld:disabled {
+    border-color: var(--rule);
+    color: var(--text-3);
+    cursor: not-allowed;
+  }
+  .fld.num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
 
-.fld {
-  height: 32px;
-  padding: 0 8px;
-  border: 1px solid var(--control);
-  border-radius: var(--radius);
-  background: var(--control-face);
-  color: var(--text);
-  font-family: var(--font-sans);
-  font-size: var(--fs-13);
-}
-.fld:hover:not(:disabled) {
-  border-color: var(--control-hover);
-}
-.fld:disabled {
-  border-color: var(--rule);
-  color: var(--text-3);
-  cursor: not-allowed;
-}
-.fld.num {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
+  /* Switch: a lamp and the state word (ON / OFF), never colour alone. */
+  .sw {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 32px;
+    min-width: 72px;
+    padding: 0 10px;
+    border: 1px solid var(--control);
+    border-radius: var(--radius);
+    background: var(--control-face);
+    color: var(--text);
+    font-size: var(--fs-11);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+  .sw:hover:not(:disabled) {
+    border-color: var(--control-hover);
+    background: var(--panel-2);
+  }
+  .sw-lamp {
+    flex: none;
+    width: 10px;
+    height: 10px;
+    border: 1.5px solid var(--text);
+  }
+  .sw[aria-checked='true'] .sw-lamp,
+  .sw:has(input:checked) .sw-lamp {
+    background: var(--text);
+  }
 
-/* Switch: a lamp and the state word (ON / OFF), never colour alone. */
-.sw {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  height: 32px;
-  min-width: 72px;
-  padding: 0 10px;
-  border: 1px solid var(--control);
-  border-radius: var(--radius);
-  background: var(--control-face);
-  color: var(--text);
-  font-size: var(--fs-11);
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  cursor: pointer;
-}
-.sw:hover:not(:disabled) {
-  border-color: var(--control-hover);
-  background: var(--panel-2);
-}
-.sw-lamp {
-  flex: none;
-  width: 10px;
-  height: 10px;
-  border: 1.5px solid var(--text);
-}
-.sw[aria-checked='true'] .sw-lamp,
-.sw:has(input:checked) .sw-lamp {
-  background: var(--text);
-}
+  /* Range slider (every <input type="range">): the native track and thumb in
+     ink, across the full width on a 32px row so the thumb is easy to catch. */
+  input[type='range'] {
+    width: 100%;
+    height: 32px;
+    margin: 0;
+    accent-color: var(--text);
+    cursor: pointer;
+  }
 
-/* Range slider (every <input type="range">): the native track and thumb in
-   ink, across the full width on a 32px row so the thumb is easy to catch. */
-input[type='range'] {
-  width: 100%;
-  height: 32px;
-  margin: 0;
-  accent-color: var(--text);
-  cursor: pointer;
-}
+  /* ---------- Panels ---------- */
 
-/* ---------- Panels ---------- */
+  .pnl,
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+  }
+  .pnl {
+    padding: var(--sp-4);
+  }
+  /* A panel heading: caps label in ink, with an optional note at the right. */
+  .pnl-title {
+    margin: 0;
+    color: var(--text);
+    font-size: var(--fs-12);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    line-height: 14px;
+    text-transform: uppercase;
+  }
 
-.pnl,
-.panel {
-  background: var(--panel);
-  border: 1px solid var(--rule);
-  border-radius: var(--radius);
-}
-.pnl {
-  padding: var(--sp-4);
-}
-/* A panel heading: caps label in ink, with an optional note at the right. */
-.pnl-title {
-  margin: 0;
-  color: var(--text);
-  font-size: var(--fs-12);
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  line-height: 14px;
-  text-transform: uppercase;
-}
+  /* ---------- Master Caution annunciator ---------- */
 
-/* ---------- Master Caution annunciator ---------- */
-
-/*
- * <section class="annunciator" data-tone="risk">
- *   <div class="annunciator-lozenge">icon + word</div>
- *   <div class="annunciator-body">h2 verdict, p guidance, p secondary</div>
- *   <div class="annunciator-action">one primary key</div>   (optional)
- * </section>
- * data-tone takes the forecast states: risk fills the lozenge with Master
- * Caution amber, critical with the warning red; watch and safe draw an
- * outlined lozenge in their colour; unknown (waiting, learning, or a partial
- * all-clear) is neutral grey and dashed, with no green check. failure (the
- * allowances could not be read at all) is the load-failure frame: a red
- * outline and a red icon over the word.
- */
-.annunciator {
-  display: grid;
-  grid-template-columns: 132px minmax(0, 1fr);
-  min-height: 112px;
-  border: 1px solid var(--rule);
-  border-radius: var(--radius);
-  background: var(--panel);
-}
-.annunciator:has(> .annunciator-action) {
-  grid-template-columns: 132px minmax(0, 1fr) 300px;
-}
-.annunciator-lozenge {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 12px;
-  border-right: 1px solid var(--rule);
-  color: var(--text-2);
-  font-size: var(--fs-12);
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-align: center;
-  text-transform: uppercase;
-}
-.annunciator-lozenge svg {
-  width: 28px;
-  height: 28px;
-}
-.annunciator-body {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 8px;
-  padding: 18px 24px;
-  min-width: 0;
-}
-.annunciator-body h2 {
-  font-size: var(--fs-22);
-  line-height: 1.2;
-  letter-spacing: 0.01em;
-}
-.annunciator-body p {
-  font-size: var(--fs-15);
-  line-height: 1.5;
-}
-.annunciator-body p + p {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text-2);
-  font-size: var(--fs-13);
-}
-.annunciator-action {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 10px;
-  padding: 18px 24px;
-  border-left: 1px solid var(--rule);
-}
-.annunciator[data-tone='risk'] {
-  border-color: var(--caution);
-}
-.annunciator[data-tone='risk'] .annunciator-lozenge {
-  border-right: 0;
-  background: var(--amber);
-  color: var(--on-amber);
-}
-.annunciator[data-tone='critical'] {
-  border-color: var(--warning);
-}
-.annunciator[data-tone='critical'] .annunciator-lozenge {
-  border-right: 0;
-  background: var(--warning);
-  color: var(--on-ink);
-}
-.annunciator[data-tone='watch'] {
-  border-color: var(--caution);
-}
-.annunciator[data-tone='watch'] .annunciator-lozenge {
-  color: var(--caution);
-}
-.annunciator[data-tone='safe'] {
-  border-color: var(--ok);
-}
-.annunciator[data-tone='safe'] .annunciator-lozenge {
-  color: var(--ok);
-}
-.annunciator[data-tone='unknown'] {
-  border: 1px dashed var(--text-3);
-}
-.annunciator[data-tone='unknown'] .annunciator-lozenge {
-  border-right: 1px dashed var(--rule-strong);
-  background: var(--panel-2);
-  color: var(--text-2);
-}
-.annunciator[data-tone='failure'] {
-  border-color: var(--warning);
-}
-.annunciator[data-tone='failure'] .annunciator-lozenge {
-  color: var(--warning);
-}
-@media (max-width: 1000px) {
-  .annunciator:has(> .annunciator-action) {
+  /*
+   * <section class="annunciator" data-tone="risk">
+   *   <div class="annunciator-lozenge">icon + word</div>
+   *   <div class="annunciator-body">h2 verdict, p guidance, p secondary</div>
+   *   <div class="annunciator-action">one primary key</div>   (optional)
+   * </section>
+   * data-tone takes the forecast states: risk fills the lozenge with Master
+   * Caution amber, critical with the warning red; watch and safe draw an
+   * outlined lozenge in their colour; unknown (waiting, learning, or a partial
+   * all-clear) is neutral grey and dashed, with no green check. failure (the
+   * allowances could not be read at all) is the load-failure frame: a red
+   * outline and a red icon over the word.
+   */
+  .annunciator {
+    display: grid;
     grid-template-columns: 132px minmax(0, 1fr);
+    min-height: 112px;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    background: var(--panel);
+  }
+  .annunciator:has(> .annunciator-action) {
+    grid-template-columns: 132px minmax(0, 1fr) 300px;
+  }
+  .annunciator-lozenge {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 12px;
+    border-right: 1px solid var(--rule);
+    color: var(--text-2);
+    font-size: var(--fs-12);
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-align: center;
+    text-transform: uppercase;
+  }
+  .annunciator-lozenge svg {
+    width: 28px;
+    height: 28px;
+  }
+  .annunciator-body {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 8px;
+    padding: 18px 24px;
+    min-width: 0;
+  }
+  .annunciator-body h2 {
+    font-size: var(--fs-22);
+    line-height: 1.2;
+    letter-spacing: 0.01em;
+  }
+  .annunciator-body p {
+    font-size: var(--fs-15);
+    line-height: 1.5;
+  }
+  .annunciator-body p + p {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-2);
+    font-size: var(--fs-13);
   }
   .annunciator-action {
-    grid-column: 1 / -1;
-    border-top: 1px solid var(--rule);
-    border-left: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 10px;
+    padding: 18px 24px;
+    border-left: 1px solid var(--rule);
   }
-}
-
-/* ---------- Challenge-response rows ---------- */
-
-/* LABEL ········ VALUE. The leader is an empty element with a dotted rule,
-   never dot characters, so the label and value stay adjacent in the text. */
-.cr {
-  display: grid;
-  grid-template-columns: auto minmax(12px, 1fr) auto;
-  align-items: center;
-  padding: 11px 0;
-  border-bottom: 1px solid var(--rule-soft);
-}
-.cr:last-child {
-  border-bottom: 0;
-}
-.cr > dt,
-.cr > dd {
-  margin: 0;
-}
-.cr > :last-child:not(.lead) {
-  text-align: right;
-}
-.lead {
-  flex: 1;
-  min-width: 12px;
-  margin: 0 8px 4px;
-  border-bottom: 1px dotted var(--lead);
-}
-.cr > .lead {
-  align-self: end;
-  margin: 0 12px 5px;
-}
-
-/* A compact fact list (source times, diagnostics): <dl class="fact-list"> of
-   <div><dt>LABEL</dt><dd>value</dd></div>. The leader is the term's ::after,
-   never text, so the label and value stay adjacent. */
-.fact-list {
-  display: flex;
-  flex-direction: column;
-  margin: 0;
-  font-size: var(--fs-12);
-}
-.fact-list > div {
-  display: flex;
-  align-items: baseline;
-  min-width: 0;
-  padding: 1px 0;
-}
-.fact-list dt {
-  flex: 1 1 auto;
-  display: flex;
-  align-items: baseline;
-  min-width: 48px;
-  color: var(--text-2);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  line-height: 14px;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-.fact-list dt::after {
-  content: '';
-  flex: 1;
-  min-width: 12px;
-  margin: 0 8px;
-  border-bottom: 1px dotted var(--lead);
-  transform: translateY(-3px);
-}
-.fact-list dd {
-  flex: 0 1 auto;
-  max-width: 62%;
-  margin: 0;
-  color: var(--text);
-  font-variant-numeric: tabular-nums;
-  overflow-wrap: anywhere;
-  text-align: right;
-}
-
-/* ---------- Disclosure ---------- */
-
-.disclosure > summary {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: fit-content;
-  min-height: 32px;
-  list-style: none;
-  cursor: pointer;
-}
-.disclosure > summary::-webkit-details-marker {
-  display: none;
-}
-.disclosure > summary:hover {
-  color: var(--ink-strong);
-}
-.disclosure > summary svg {
-  flex: none;
-  width: 14px;
-  height: 14px;
-  transition: transform 150ms ease;
-}
-.disclosure[open] > summary svg {
-  transform: rotate(90deg);
-}
-.disclosure-body {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  max-width: 760px;
-  margin: 4px 0 0 22px;
-  color: var(--text-2);
-}
-
-/* ---------- State pill, badges, chips, swatches ---------- */
-
-/* An outlined caps lozenge: the status colour, its icon and its word. */
-.state-pill {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 8px;
-  border: 1px solid currentColor;
-  border-radius: var(--radius);
-  color: var(--text-3);
-  font-size: var(--fs-11);
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  line-height: 16px;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-.state-pill svg {
-  flex: none;
-  width: 14px;
-  height: 14px;
-}
-.state-pill.safe {
-  color: var(--ok);
-}
-.state-pill.watch,
-.state-pill.risk {
-  color: var(--caution);
-}
-.state-pill.critical {
-  color: var(--warning);
-}
-.state-pill.unknown {
-  border-style: dashed;
-}
-
-/* A neutral outlined caps chip ("Preview data", "Unpriced", counts). */
-.badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
-  border: 1px solid var(--rule-strong);
-  border-radius: var(--radius);
-  color: var(--text-2);
-  font-size: var(--fs-11);
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  line-height: 14px;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-.badge svg {
-  width: 14px;
-  height: 14px;
-}
-
-/* A smaller outlined caps chip for a table cell (provenance, the open window). */
-.chip {
-  display: inline-block;
-  padding: 1px 6px;
-  border: 1px solid var(--rule-strong);
-  border-radius: var(--radius);
-  color: var(--text-2);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  line-height: 14px;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-/* Provider swatch: the only place provider colour marks identity outside a chart. */
-.swatch {
-  display: inline-block;
-  flex: none;
-  width: 8px;
-  height: 8px;
-  background: var(--text-3);
-}
-.swatch.lg {
-  width: 12px;
-  height: 12px;
-}
-.swatch.codex {
-  background: var(--codex);
-}
-.swatch.claude {
-  background: var(--claude);
-}
-.swatch.fable,
-.swatch.claude-fable {
-  background: var(--fable);
-}
-
-/* ---------- Info tip ---------- */
-
-.info-tip {
-  position: relative;
-  display: inline-flex;
-  vertical-align: middle;
-}
-.info-tip-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: 1px solid var(--control);
-  border-radius: var(--radius);
-  background: var(--control-face);
-  color: var(--text);
-  cursor: help;
-}
-.info-tip-button:hover {
-  border-color: var(--control-hover);
-  background: var(--current);
-}
-.info-tip-button svg {
-  width: 14px;
-  height: 14px;
-}
-.info-tip-body {
-  display: none;
-  position: absolute;
-  z-index: 30;
-  top: calc(100% + 8px);
-  left: 50%;
-  transform: translateX(-50%);
-  width: min(320px, 80vw);
-  padding: 10px 12px;
-  border: 1px solid var(--link);
-  border-radius: var(--radius);
-  background: var(--panel-2);
-  color: var(--text);
-  font-family: var(--font-sans);
-  font-size: var(--fs-12);
-  font-weight: 400;
-  letter-spacing: 0;
-  line-height: 1.5;
-  text-align: left;
-  text-transform: none;
-  white-space: normal;
-}
-.info-tip:hover .info-tip-body,
-.info-tip:focus-within .info-tip-body,
-.info-tip.open .info-tip-body {
-  display: block;
-}
-
-/* ---------- Toast ---------- */
-
-/* One at a time, centred above the footer strip. The edge repeats the icon's
-   colour and the words carry the meaning. Failures stay until dismissed. */
-.toast {
-  position: fixed;
-  z-index: 40;
-  left: 50%;
-  bottom: calc(var(--footer-height) + 16px);
-  transform: translateX(-50%);
-  width: max-content;
-  max-width: min(620px, calc(100vw - var(--page-gutter) * 2));
-  min-height: 44px;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 6px 6px 6px 14px;
-  border: 1px solid var(--rule-strong);
-  border-left: 3px solid var(--ok);
-  border-radius: var(--radius);
-  background: var(--panel);
-  color: var(--text);
-  font-size: var(--fs-13);
-}
-.toast-icon {
-  display: flex;
-  flex: none;
-  color: var(--ok);
-}
-.toast-icon svg {
-  width: 16px;
-  height: 16px;
-}
-.toast-text {
-  flex: 1;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.toast .ibtn {
-  border-color: var(--rule);
-}
-.toast.caution {
-  border-left-color: var(--caution);
-}
-.toast.caution .toast-icon {
-  color: var(--caution);
-}
-.toast.busy {
-  border-left-color: var(--text-2);
-}
-.toast.busy .toast-icon {
-  color: var(--text-2);
-}
-.toast.warning {
-  border-color: var(--warning);
-}
-.toast.warning .toast-icon {
-  color: var(--warning);
-}
-.toast.warning .ibtn {
-  border-color: var(--control);
-}
-
-/* ---------- Modal dialog ---------- */
-
-/* <div class="scrim"><section class="dialog" role="dialog" aria-modal="true">:
-   one panel centred over the dimmed window, scrolling inside itself when the
-   window is short. */
-.scrim {
-  position: fixed;
-  z-index: 100;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 16px;
-  background: color-mix(in srgb, var(--ground) 76%, transparent);
-}
-.dialog {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  width: min(640px, 100%);
-  max-height: calc(100vh - 32px);
-  overflow-y: auto;
-  padding: 32px;
-  border: 1px solid var(--text-3);
-  border-radius: var(--radius);
-  background: var(--panel);
-  color: var(--text);
-}
-.dialog:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
-}
-@media (max-width: 720px) {
-  .dialog {
-    padding: 24px 20px;
+  .annunciator[data-tone='risk'] {
+    border-color: var(--caution);
   }
-}
-
-/* ---------- Whole-window state panel (loading, load failure, render error) ---------- */
-
-.state-panel {
-  width: min(540px, 100%);
-  display: grid;
-  grid-template-columns: 28px minmax(0, 1fr);
-  gap: 16px;
-  padding: var(--sp-5);
-  border: 1px solid var(--rule);
-  border-radius: var(--radius);
-  background: var(--panel);
-}
-.state-panel-icon {
-  display: flex;
-  color: var(--text-2);
-}
-.state-panel-icon svg {
-  width: 28px;
-  height: 28px;
-}
-.state-panel-body {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
-  min-width: 0;
-}
-.state-panel h1 {
-  font-size: var(--fs-18);
-  line-height: 1.3;
-}
-.state-panel p {
-  color: var(--text-2);
-}
-.state-panel-message {
-  font-variant-numeric: tabular-nums;
-  overflow-wrap: anywhere;
-}
-.state-panel .btn {
-  margin-top: 6px;
-}
-.state-panel.is-error {
-  border-color: var(--warning);
-}
-.state-panel.is-error .state-panel-icon {
-  color: var(--warning);
-}
-/* An indeterminate progress track: the read has no percentage to show. */
-.state-progress {
-  position: relative;
-  align-self: stretch;
-  height: 4px;
-  margin-top: 6px;
-  overflow: hidden;
-  background: var(--grid);
-}
-.state-progress::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 28%;
-  width: 22%;
-  height: 100%;
-  background: var(--text-2);
-  animation: state-progress 1.6s ease-in-out infinite;
-}
-@keyframes state-progress {
-  from {
-    left: -22%;
+  .annunciator[data-tone='risk'] .annunciator-lozenge {
+    border-right: 0;
+    background: var(--amber);
+    color: var(--on-amber);
   }
-  to {
-    left: 100%;
+  .annunciator[data-tone='critical'] {
+    border-color: var(--warning);
   }
-}
-@media (prefers-reduced-motion: reduce) {
-  .state-progress::before {
-    animation: none;
+  .annunciator[data-tone='critical'] .annunciator-lozenge {
+    border-right: 0;
+    background: var(--warning);
+    color: var(--on-ink);
   }
-}
+  .annunciator[data-tone='watch'] {
+    border-color: var(--caution);
+  }
+  .annunciator[data-tone='watch'] .annunciator-lozenge {
+    color: var(--caution);
+  }
+  .annunciator[data-tone='safe'] {
+    border-color: var(--ok);
+  }
+  .annunciator[data-tone='safe'] .annunciator-lozenge {
+    color: var(--ok);
+  }
+  .annunciator[data-tone='unknown'] {
+    border: 1px dashed var(--text-3);
+  }
+  .annunciator[data-tone='unknown'] .annunciator-lozenge {
+    border-right: 1px dashed var(--rule-strong);
+    background: var(--panel-2);
+    color: var(--text-2);
+  }
+  .annunciator[data-tone='failure'] {
+    border-color: var(--warning);
+  }
+  .annunciator[data-tone='failure'] .annunciator-lozenge {
+    color: var(--warning);
+  }
+  @media (max-width: 1000px) {
+    .annunciator:has(> .annunciator-action) {
+      grid-template-columns: 132px minmax(0, 1fr);
+    }
+    .annunciator-action {
+      grid-column: 1 / -1;
+      border-top: 1px solid var(--rule);
+      border-left: 0;
+    }
+  }
 
-@media (forced-colors: active) {
-  .pnl,
-  .panel,
-  .annunciator,
-  .dialog,
-  .state-panel,
+  /* ---------- Challenge-response rows ---------- */
+
+  /* LABEL ········ VALUE. The leader is an empty element with a dotted rule,
+     never dot characters, so the label and value stay adjacent in the text. */
+  .cr {
+    display: grid;
+    grid-template-columns: auto minmax(12px, 1fr) auto;
+    align-items: center;
+    padding: 11px 0;
+    border-bottom: 1px solid var(--rule-soft);
+  }
+  .cr:last-child {
+    border-bottom: 0;
+  }
+  .cr > dt,
+  .cr > dd {
+    margin: 0;
+  }
+  .cr > :last-child:not(.lead) {
+    text-align: right;
+  }
+  .lead {
+    flex: 1;
+    min-width: 12px;
+    margin: 0 8px 4px;
+    border-bottom: 1px dotted var(--lead);
+  }
+  .cr > .lead {
+    align-self: end;
+    margin: 0 12px 5px;
+  }
+
+  /* A compact fact list (source times, diagnostics): <dl class="fact-list"> of
+     <div><dt>LABEL</dt><dd>value</dd></div>. The leader is the term's ::after,
+     never text, so the label and value stay adjacent. */
+  .fact-list {
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    font-size: var(--fs-12);
+  }
+  .fact-list > div {
+    display: flex;
+    align-items: baseline;
+    min-width: 0;
+    padding: 1px 0;
+  }
+  .fact-list dt {
+    flex: 1 1 auto;
+    display: flex;
+    align-items: baseline;
+    min-width: 48px;
+    color: var(--text-2);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    line-height: 14px;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .fact-list dt::after {
+    content: '';
+    flex: 1;
+    min-width: 12px;
+    margin: 0 8px;
+    border-bottom: 1px dotted var(--lead);
+    transform: translateY(-3px);
+  }
+  .fact-list dd {
+    flex: 0 1 auto;
+    max-width: 62%;
+    margin: 0;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+    text-align: right;
+  }
+
+  /* ---------- Disclosure ---------- */
+
+  .disclosure > summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: fit-content;
+    min-height: 32px;
+    list-style: none;
+    cursor: pointer;
+  }
+  .disclosure > summary::-webkit-details-marker {
+    display: none;
+  }
+  .disclosure > summary:hover {
+    color: var(--ink-strong);
+  }
+  .disclosure > summary svg {
+    flex: none;
+    width: 14px;
+    height: 14px;
+    transition: transform 150ms ease;
+  }
+  .disclosure[open] > summary svg {
+    transform: rotate(90deg);
+  }
+  .disclosure-body {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-width: 760px;
+    margin: 4px 0 0 22px;
+    color: var(--text-2);
+  }
+
+  /* ---------- State pill, badges, chips, swatches ---------- */
+
+  /* An outlined caps lozenge: the status colour, its icon and its word. */
+  .state-pill {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px;
+    border: 1px solid currentColor;
+    border-radius: var(--radius);
+    color: var(--text-3);
+    font-size: var(--fs-11);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    line-height: 16px;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .state-pill svg {
+    flex: none;
+    width: 14px;
+    height: 14px;
+  }
+  .state-pill.safe {
+    color: var(--ok);
+  }
+  .state-pill.watch,
+  .state-pill.risk {
+    color: var(--caution);
+  }
+  .state-pill.critical {
+    color: var(--warning);
+  }
+  .state-pill.unknown {
+    border-style: dashed;
+  }
+
+  /* A neutral outlined caps chip ("Preview data", "Unpriced", counts). */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border: 1px solid var(--rule-strong);
+    border-radius: var(--radius);
+    color: var(--text-2);
+    font-size: var(--fs-11);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    line-height: 14px;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .badge svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  /* A smaller outlined caps chip for a table cell (provenance, the open window). */
+  .chip {
+    display: inline-block;
+    padding: 1px 6px;
+    border: 1px solid var(--rule-strong);
+    border-radius: var(--radius);
+    color: var(--text-2);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    line-height: 14px;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  /* Provider swatch: the only place provider colour marks identity outside a chart. */
+  .swatch {
+    display: inline-block;
+    flex: none;
+    width: 8px;
+    height: 8px;
+    background: var(--text-3);
+  }
+  .swatch.lg {
+    width: 12px;
+    height: 12px;
+  }
+  .swatch.codex {
+    background: var(--codex);
+  }
+  .swatch.claude {
+    background: var(--claude);
+  }
+  .swatch.fable,
+  .swatch.claude-fable {
+    background: var(--fable);
+  }
+
+  /* ---------- Info tip ---------- */
+
+  .info-tip {
+    position: relative;
+    display: inline-flex;
+    vertical-align: middle;
+  }
+  .info-tip-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid var(--control);
+    border-radius: var(--radius);
+    background: var(--control-face);
+    color: var(--text);
+    cursor: help;
+  }
+  .info-tip-button:hover {
+    border-color: var(--control-hover);
+    background: var(--current);
+  }
+  .info-tip-button svg {
+    width: 14px;
+    height: 14px;
+  }
+  .info-tip-body {
+    display: none;
+    position: absolute;
+    z-index: 30;
+    top: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(320px, 80vw);
+    padding: 10px 12px;
+    border: 1px solid var(--link);
+    border-radius: var(--radius);
+    background: var(--panel-2);
+    color: var(--text);
+    font-family: var(--font-sans);
+    font-size: var(--fs-12);
+    font-weight: 400;
+    letter-spacing: 0;
+    line-height: 1.5;
+    text-align: left;
+    text-transform: none;
+    white-space: normal;
+  }
+  .info-tip:hover .info-tip-body,
+  .info-tip:focus-within .info-tip-body,
+  .info-tip.open .info-tip-body {
+    display: block;
+  }
+
+  /* ---------- Toast ---------- */
+
+  /* One at a time, centred above the footer strip. The edge repeats the icon's
+     colour and the words carry the meaning. Failures stay until dismissed. */
   .toast {
-    border: 1px solid CanvasText;
+    position: fixed;
+    z-index: 40;
+    left: 50%;
+    bottom: calc(var(--footer-height) + 16px);
+    transform: translateX(-50%);
+    width: max-content;
+    max-width: min(620px, calc(100vw - var(--page-gutter) * 2));
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 6px 6px 14px;
+    border: 1px solid var(--rule-strong);
+    border-left: 3px solid var(--ok);
+    border-radius: var(--radius);
+    background: var(--panel);
+    color: var(--text);
+    font-size: var(--fs-13);
   }
-  .annunciator-lozenge,
-  .sw-lamp {
-    forced-color-adjust: none;
+  .toast-icon {
+    display: flex;
+    flex: none;
+    color: var(--ok);
+  }
+  .toast-icon svg {
+    width: 16px;
+    height: 16px;
+  }
+  .toast-text {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .toast .ibtn {
+    border-color: var(--rule);
+  }
+  .toast.caution {
+    border-left-color: var(--caution);
+  }
+  .toast.caution .toast-icon {
+    color: var(--caution);
+  }
+  .toast.busy {
+    border-left-color: var(--text-2);
+  }
+  .toast.busy .toast-icon {
+    color: var(--text-2);
+  }
+  .toast.warning {
+    border-color: var(--warning);
+  }
+  .toast.warning .toast-icon {
+    color: var(--warning);
+  }
+  .toast.warning .ibtn {
+    border-color: var(--control);
+  }
+
+  /* ---------- Modal dialog ---------- */
+
+  /* <div class="scrim"><section class="dialog" role="dialog" aria-modal="true">:
+     one panel centred over the dimmed window, scrolling inside itself when the
+     window is short. */
+  .scrim {
+    position: fixed;
+    z-index: 100;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    background: color-mix(in srgb, var(--ground) 76%, transparent);
+  }
+  .dialog {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: min(640px, 100%);
+    max-height: calc(100vh - 32px);
+    overflow-y: auto;
+    padding: 32px;
+    border: 1px solid var(--text-3);
+    border-radius: var(--radius);
+    background: var(--panel);
+    color: var(--text);
+  }
+  .dialog:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+  @media (max-width: 720px) {
+    .dialog {
+      padding: 24px 20px;
+    }
+  }
+
+  /* ---------- Whole-window state panel (loading, load failure, render error) ---------- */
+
+  .state-panel {
+    width: min(540px, 100%);
+    display: grid;
+    grid-template-columns: 28px minmax(0, 1fr);
+    gap: 16px;
+    padding: var(--sp-5);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    background: var(--panel);
+  }
+  .state-panel-icon {
+    display: flex;
+    color: var(--text-2);
+  }
+  .state-panel-icon svg {
+    width: 28px;
+    height: 28px;
+  }
+  .state-panel-body {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    min-width: 0;
+  }
+  .state-panel h1 {
+    font-size: var(--fs-18);
+    line-height: 1.3;
+  }
+  .state-panel p {
+    color: var(--text-2);
+  }
+  .state-panel-message {
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+  }
+  .state-panel .btn {
+    margin-top: 6px;
+  }
+  .state-panel.is-error {
+    border-color: var(--warning);
+  }
+  .state-panel.is-error .state-panel-icon {
+    color: var(--warning);
+  }
+  /* An indeterminate progress track: the read has no percentage to show. */
+  .state-progress {
+    position: relative;
+    align-self: stretch;
+    height: 4px;
+    margin-top: 6px;
+    overflow: hidden;
+    background: var(--grid);
+  }
+  .state-progress::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 28%;
+    width: 22%;
+    height: 100%;
+    background: var(--text-2);
+    animation: state-progress 1.6s ease-in-out infinite;
+  }
+  @keyframes state-progress {
+    from {
+      left: -22%;
+    }
+    to {
+      left: 100%;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .state-progress::before {
+      animation: none;
+    }
+  }
+
+  @media (forced-colors: active) {
+    .pnl,
+    .panel,
+    .annunciator,
+    .dialog,
+    .state-panel,
+    .toast {
+      border: 1px solid CanvasText;
+    }
+    .annunciator-lozenge,
+    .sw-lamp {
+      forced-color-adjust: none;
+    }
   }
 }

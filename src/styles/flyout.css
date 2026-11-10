@@ -1,0 +1,409 @@
+/*
+ * Tray flyout (Deck-Tray): the compact Master Caution annunciator, three
+ * allowance cells with a mini fuel tape each, the tape legend and the action
+ * keys. Keys, the annunciator and its tones (including the failure frame),
+ * swatches and the progress track come from components.css; this file
+ * only sizes them for a 380px window. Every rule is scoped to the flyout page.
+ * Each cell's provider hue is the one --series variable, as in charts.css.
+ *
+ * The panel colour matches the native window background set in
+ * electron/flyout.cjs (FLYOUT_BACKGROUND: the night and Daylight --panel).
+ */
+@layer flyout {
+  :root {
+    --flyout-bg: var(--panel);
+  }
+
+  html:has(.flyout-body),
+  body.flyout-body {
+    background: var(--flyout-bg);
+  }
+
+  /* Past the 540px cap (a long error line) the page scrolls: a thin, quiet bar. */
+  html:has(.flyout-body) {
+    scrollbar-width: thin;
+    scrollbar-color: var(--rule-strong) transparent;
+  }
+
+  /* The window takes its height from the page (200 to 540px), so nothing may be
+     sized by the viewport: base.css gives body a 100vh minimum. */
+  body.flyout-body {
+    min-height: 0;
+    overflow-x: hidden;
+    user-select: none;
+  }
+
+  .flyout {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--rule-strong);
+    border-radius: 4px;
+    background: var(--flyout-bg);
+    color: var(--text);
+    font-size: var(--fs-13);
+    line-height: 1.45;
+    overflow: hidden;
+  }
+
+  /* ---------- Header: mark, freshness, refresh ---------- */
+
+  .flyout-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 10px 10px 14px;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .flyout-brand-mark {
+    flex: none;
+    width: 18px;
+    height: 18px;
+    color: var(--text);
+  }
+
+  .flyout-heading {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .flyout-title {
+    font-weight: 700;
+  }
+
+  .flyout-updated {
+    overflow: hidden;
+    color: var(--text-2);
+    font-size: var(--fs-11);
+    font-variant-numeric: tabular-nums;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .flyout .ibtn {
+    width: 40px;
+    height: 40px;
+  }
+
+  .flyout .ibtn svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  /* Refreshing, or nothing to refresh: the key stays focusable but inert. */
+  .flyout-refresh[aria-disabled='true'] {
+    cursor: default;
+  }
+
+  .flyout-refresh[aria-disabled='true']:hover {
+    border-color: var(--control);
+    background: var(--control-face);
+  }
+
+  /* ---------- Verdict: the compact annunciator ---------- */
+
+  .flyout-verdict.annunciator {
+    grid-template-columns: 44px minmax(0, 1fr);
+    min-height: 0;
+    margin: 12px 12px 0;
+  }
+
+  .flyout-verdict .annunciator-lozenge {
+    padding: 0;
+  }
+
+  .flyout-verdict .annunciator-lozenge svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .flyout-verdict .annunciator-body {
+    gap: 3px;
+    padding: 10px 12px;
+  }
+
+  .flyout-verdict .annunciator-body h2 {
+    font-size: var(--fs-13);
+    line-height: 1.3;
+    letter-spacing: 0;
+  }
+
+  .flyout-verdict .annunciator-body p {
+    color: var(--text-2);
+    font-size: var(--fs-12);
+    line-height: 1.45;
+  }
+
+  /* ---------- Error line: only when an action fails ---------- */
+
+  .flyout-error {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin: 12px 12px 0;
+    color: var(--text);
+    font-size: var(--fs-12);
+    overflow-wrap: anywhere;
+  }
+
+  .flyout-error svg {
+    flex: none;
+    width: 14px;
+    height: 14px;
+    margin-top: 2px;
+    color: var(--warning);
+  }
+
+  /* ---------- Allowance cells ---------- */
+
+  .flyout-list {
+    display: grid;
+    grid-auto-columns: minmax(0, 1fr);
+    grid-auto-flow: column;
+    gap: 6px;
+    margin: 12px 0 0;
+    padding: 0 12px;
+    list-style: none;
+  }
+
+  .flyout-list > li {
+    display: flex;
+    min-width: 0;
+  }
+
+  .flyout-row {
+    --series: var(--text-3);
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+    padding: 10px 8px;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    background: transparent;
+    color: var(--text);
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .flyout-row:hover {
+    border-color: var(--control-hover);
+    background: var(--panel-2);
+  }
+
+  .flyout-row[data-provider='codex'] {
+    --series: var(--codex);
+  }
+
+  .flyout-row[data-provider='claude'] {
+    --series: var(--claude);
+  }
+
+  .flyout-row[data-provider='fable'] {
+    --series: var(--fable);
+  }
+
+  .flyout-row-name {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .flyout-row-name strong {
+    overflow: hidden;
+    font-size: var(--fs-12);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* The plan and window, two lines at most so the tapes stay level. */
+  .flyout-row-plan {
+    display: -webkit-box;
+    min-height: 26px;
+    overflow: hidden;
+    color: var(--text-2);
+    font-size: 10px;
+    line-height: 1.3;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .flyout-row-gauge {
+    display: grid;
+    grid-template-columns: 18px minmax(0, 1fr);
+    align-items: end;
+    gap: 8px;
+  }
+
+  /* The mini fuel tape: a recessed well filled from the bottom. */
+  .flyout-tape {
+    position: relative;
+    display: block;
+    height: 84px;
+    border: 1px solid var(--rule-strong);
+    background: var(--panel-2);
+  }
+
+  .flyout-fill {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    left: 0;
+  }
+
+  .flyout-fill-used {
+    background: color-mix(in srgb, var(--series) 35%, transparent);
+  }
+
+  .flyout-fill-reset {
+    background: var(--series);
+  }
+
+  /* A balance with no forecast yet: outlined, so it matches neither legend entry. */
+  .flyout-fill-now {
+    border: 1.5px solid var(--series);
+    background: transparent;
+  }
+
+  .flyout-left {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .flyout-left strong {
+    font-family: var(--font-mono);
+    font-size: var(--fs-22);
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  .flyout-left small {
+    color: var(--text-2);
+    font-size: var(--fs-11);
+  }
+
+  .flyout-left-none strong {
+    color: var(--text-3);
+  }
+
+  .flyout-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--text-2);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    line-height: 14px;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  .flyout-status svg {
+    flex: none;
+    width: 12px;
+    height: 12px;
+  }
+
+  .flyout-status[data-state='safe'] {
+    color: var(--ok);
+  }
+
+  .flyout-status[data-state='watch'],
+  .flyout-status[data-state='risk'] {
+    color: var(--caution);
+  }
+
+  .flyout-status[data-state='critical'] {
+    color: var(--warning);
+  }
+
+  /* Balanced lines; a forecast's two halves (TrayFlyout's detail) wrap whole. */
+  .flyout-row-detail {
+    color: var(--text-2);
+    font-size: var(--fs-11);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.3;
+    text-wrap: balance;
+  }
+
+  .flyout-row-detail > span {
+    display: inline-block;
+  }
+
+  /* ---------- Tape legend ---------- */
+
+  .flyout-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    padding: 8px 12px 0;
+    color: var(--text-2);
+    font-size: var(--fs-11);
+  }
+
+  .flyout-legend span {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  .flyout-chip {
+    flex: none;
+    width: 10px;
+    height: 10px;
+  }
+
+  .flyout-chip-reset {
+    background: var(--text-2);
+  }
+
+  .flyout-chip-used {
+    background: color-mix(in srgb, var(--text-2) 35%, transparent);
+  }
+
+  /* ---------- Action keys ---------- */
+
+  .flyout-footer {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 40px;
+    gap: 6px;
+    margin-top: 12px;
+    padding: 12px;
+    border-top: 1px solid var(--rule);
+  }
+
+  .flyout-footer-single {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* The flyout's keys are sentence case at 13px, as the artboard sets them. */
+  .flyout-footer .btn {
+    min-height: 40px;
+    padding: 0 8px;
+    font-size: var(--fs-13);
+    letter-spacing: 0;
+    text-transform: none;
+  }
+
+  @media (forced-colors: active) {
+    .flyout,
+    .flyout-row,
+    .flyout-tape {
+      border: 1px solid CanvasText;
+    }
+
+    .flyout-fill,
+    .flyout-chip,
+    .flyout-row .swatch {
+      forced-color-adjust: none;
+    }
+  }
+}

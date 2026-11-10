@@ -305,7 +305,29 @@ app.whenReady().then(async () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   waiting.destroy();
-  console.log('RENDERER_DOM_PASS: pushes, retained tasks, periods, reset timer, refresh state, currency, setup cancel, single writes, notice tone, settings navigation and search, keyboard focus and alerts, declined first read');
+  // The browser preview has no desktop bridge: R does what its Refresh button does, and says so.
+  const preview = new BrowserWindow({ show: false, width: 1280, height: 900,
+    webPreferences: { contextIsolation: true, sandbox: true, backgroundThrottling: false, offscreen: true } });
+  const inPreview = (fn) => preview.webContents.executeJavaScript(`((r) => r instanceof Node ? true : r)((${fn.toString()})())`);
+  const inPreviewUntil = async (fn, what) => {
+    for (let attempt = 0; !(await inPreview(fn)); attempt++) {
+      if (attempt > 100) throw new Error(what);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
+  await preview.loadURL(process.env.AI_USAGE_RENDERER_URL);
+  await inPreviewUntil(() => document.querySelector('button[aria-keyshortcuts="R"]'), 'The preview did not load its demo data.');
+  await inPreview(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'r' })));
+  await inPreviewUntil(() => document.querySelector('.toast'), 'R did nothing in the browser preview.');
+  const byKey = await inPreview(() => document.querySelector('.toast').textContent);
+  await inPreview(() => document.querySelector('[aria-label="Dismiss message"]').click());
+  await inPreviewUntil(() => !document.querySelector('.toast'), 'The preview notice was not dismissed.');
+  await inPreview(() => document.querySelector('button[aria-keyshortcuts="R"]').click());
+  await inPreviewUntil(() => document.querySelector('.toast'), 'The preview Refresh button showed no notice.');
+  assert.equal(byKey, await inPreview(() => document.querySelector('.toast').textContent), 'R and the Refresh button agree in the preview');
+  assert.match(byKey, /installed desktop app/);
+  preview.destroy();
+  console.log('RENDERER_DOM_PASS: pushes, retained tasks, periods, reset timer, refresh state, currency, setup cancel, single writes, notice tone, settings navigation and search, keyboard focus and alerts, declined first read, preview refresh shortcut');
   app.exit(0);
  } catch (error) { console.error(error); app.exit(1); }
 }).catch((error) => { console.error(error); app.exit(1); });

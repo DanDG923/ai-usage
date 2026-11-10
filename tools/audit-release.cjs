@@ -76,6 +76,23 @@ function assertArchive(entries) {
   if (privateLocalData.length) fail(`private local data is packaged: ${privateLocalData.slice(0, 5).join(', ')}`);
 }
 
+// The main process is not bundled, so a source file left out of the archive
+// is a require that fails at launch. Every file under electron/ that the
+// process can load must be packaged, whichever folder it is in. Type
+// declarations are for the type checker only, and the packager leaves .d.ts
+// files out.
+function assertMainProcessSources(entries, directory = path.join(root, 'electron')) {
+  const packaged = new Set(entries);
+  const base = path.dirname(directory);
+  const missing = fs.readdirSync(directory, { recursive: true })
+    .map((name) => path.join(directory, name))
+    .filter((file) => fs.statSync(file).isFile() && /\.(?:cjs|mjs|js|json)$/.test(file))
+    .map((file) => path.relative(base, file).replaceAll('\\', '/'))
+    .filter((entry) => !packaged.has(entry))
+    .sort();
+  if (missing.length) fail(`main-process source files are absent from ASAR: ${missing.slice(0, 5).join(', ')}`);
+}
+
 function assertPublicFeed() {
   const configurationPath = path.join(releaseDirectory, 'win-unpacked', 'resources', 'app-update.yml');
   if (!fs.existsSync(configurationPath)) fail('packaged update configuration is missing');
@@ -113,6 +130,7 @@ async function auditArtifacts() {
 async function main() {
   const entries = normalizedEntries();
   assertArchive(entries);
+  assertMainProcessSources(entries);
   assertPublicFeed();
   if (unpackedOnly) {
     process.stdout.write(`${JSON.stringify({
@@ -143,4 +161,4 @@ if (require.main === module) main().catch((error) => {
   process.exitCode = 1;
 });
 
-module.exports = { assertArchive };
+module.exports = { assertArchive, assertMainProcessSources };

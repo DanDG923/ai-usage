@@ -6,93 +6,94 @@
  * allowances fold into a disclosure. The pages set only the spacing around
  * the rows (overview.css, provider.css).
  */
-
-.provider-session {
-  display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr);
-  align-items: center;
-  column-gap: 10px;
-  row-gap: 3px;
-  padding: 9px 0;
-  border-top: 1px solid var(--rule);
-}
-.provider-session .state-pill {
-  margin-left: 0;
-  gap: 5px;
-  padding: 2px 6px;
-  font-size: 10px;
-  line-height: 14px;
-}
-.provider-session .state-pill svg {
-  width: 12px;
-  height: 12px;
-}
-.provider-session strong {
-  font-size: 17px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-.provider-session > span {
-  min-width: 0;
-  font-weight: 700;
-  overflow-wrap: anywhere;
-}
-.provider-session small {
-  grid-column: 1 / -1;
-  color: var(--text-2);
-  font-size: var(--fs-12);
-  font-variant-numeric: tabular-nums;
-}
-
-.provider-model-allowances {
-  padding: 4px 12px 8px;
-  border: 1px solid var(--rule);
-  border-radius: var(--radius);
-}
-.provider-model-allowances > summary {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: fit-content;
-  min-height: 32px;
-  color: var(--text);
-  font-size: var(--fs-11);
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  list-style: none;
-  text-transform: uppercase;
-  cursor: pointer;
-}
-.provider-model-allowances > summary::-webkit-details-marker {
-  display: none;
-}
-.provider-model-allowances > summary:hover {
-  color: var(--ink-strong);
-}
-.provider-model-allowances > summary svg {
-  flex: none;
-  width: 14px;
-  height: 14px;
-  transition: transform 150ms ease;
-}
-.provider-model-allowances[open] > summary svg {
-  transform: rotate(90deg);
-}
-.provider-model-allowances > p {
-  margin: 0 0 4px;
-  color: var(--text-2);
-  font-size: var(--fs-12);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .provider-model-allowances > summary svg {
-    transition: none;
+@layer windows {
+  .provider-session {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr);
+    align-items: center;
+    column-gap: 10px;
+    row-gap: 3px;
+    padding: 9px 0;
+    border-top: 1px solid var(--rule);
   }
-}
+  .provider-session .state-pill {
+    margin-left: 0;
+    gap: 5px;
+    padding: 2px 6px;
+    font-size: 10px;
+    line-height: 14px;
+  }
+  .provider-session .state-pill svg {
+    width: 12px;
+    height: 12px;
+  }
+  .provider-session strong {
+    font-size: 17px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .provider-session > span {
+    min-width: 0;
+    font-weight: 700;
+    overflow-wrap: anywhere;
+  }
+  .provider-session small {
+    grid-column: 1 / -1;
+    color: var(--text-2);
+    font-size: var(--fs-12);
+    font-variant-numeric: tabular-nums;
+  }
 
-@media (forced-colors: active) {
   .provider-model-allowances {
-    border: 1px solid CanvasText;
+    padding: 4px 12px 8px;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+  }
+  .provider-model-allowances > summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: fit-content;
+    min-height: 32px;
+    color: var(--text);
+    font-size: var(--fs-11);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    list-style: none;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+  .provider-model-allowances > summary::-webkit-details-marker {
+    display: none;
+  }
+  .provider-model-allowances > summary:hover {
+    color: var(--ink-strong);
+  }
+  .provider-model-allowances > summary svg {
+    flex: none;
+    width: 14px;
+    height: 14px;
+    transition: transform 150ms ease;
+  }
+  .provider-model-allowances[open] > summary svg {
+    transform: rotate(90deg);
+  }
+  .provider-model-allowances > p {
+    margin: 0 0 4px;
+    color: var(--text-2);
+    font-size: var(--fs-12);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .provider-model-allowances > summary svg {
+      transition: none;
+    }
+  }
+
+  @media (forced-colors: active) {
+    .provider-model-allowances {
+      border: 1px solid CanvasText;
+    }
   }
 }

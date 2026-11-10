@@ -10,7 +10,52 @@ const { UsageStore } = require('./store.cjs');
 const { refreshCodex } = require('./codex-collector.cjs');
 const { refreshClaude } = require('./claude-collector.cjs');
 const { runCollectors } = require('./collector-runner.cjs');
+const { CLAUDE, CODEX } = require('./providers.mjs');
 
+/** @typedef {import('./store.cjs').Store} Store */
+/** @typedef {import('./providers.mjs').CollectorId} CollectorId */
+
+/**
+ * Where the collectors read and write. The host passes this to the process
+ * as its one argument.
+ *
+ * @typedef {object} CollectorConfig
+ * @property {string} databasePath
+ * @property {string} backupDirectory
+ * @property {string} inboxPath the status-line helper's inbox
+ * @property {string | null} [claudeCodeReadingsDirectory] where the Claude Code mod leaves its readings
+ */
+
+// The protocol between the host and this process is the shared one: a request
+// carries an id; its reply carries the same id and either a result or an
+// error message.
+/** @typedef {import('./process-protocol.cjs').RequestEnvelope} RequestEnvelope */
+/** @typedef {import('./process-protocol.cjs').ReplyEnvelope} ReplyEnvelope */
+
+/**
+ * A request as the service handles it: its type, with the payload's fields
+ * beside it.
+ *
+ * @typedef {{ type: string, readPlanUsage?: boolean }} CollectorRequest
+ */
+
+/**
+ * One collector's outcome as it crosses to the main process: what
+ * Promise.allSettled reports, with a failure reduced to its message.
+ *
+ * @typedef {{ status: 'fulfilled', value: Record<string, unknown> } | { status: 'rejected', reason: { message: string } }} SettledOutcome
+ */
+
+/**
+ * A collection waiting for its turn, and the options it will start with.
+ *
+ * @typedef {{ options: { readPlanUsage: boolean }, promise: Promise<Record<string, unknown>> }} QueuedRun
+ */
+
+/**
+ * @param {PromiseSettledResult<Record<string, unknown>>} entry
+ * @returns {SettledOutcome}
+ */
 function serializeSettled(entry) {
   if (entry.status === 'fulfilled') return { status: 'fulfilled', value: entry.value };
   const reason = entry.reason;
@@ -20,14 +65,24 @@ function serializeSettled(entry) {
   };
 }
 
+/**
+ * @param {object} config
+ * @param {string} config.databasePath
+ * @param {string} config.backupDirectory
+ * @param {string} config.inboxPath
+ * @param {string | null} [config.claudeCodeReadingsDirectory]
+ * @param {{ codex: typeof refreshCodex, claude: typeof refreshClaude }} [config.collectors]
+ * @param {(database: string, backups: string) => Store} [config.openStore]
+ */
 function createCollectorService({
   databasePath,
   backupDirectory,
   inboxPath,
-  claudeCodeReadingsDirectory = null,
+  claudeCodeReadingsDirectory = /** @type {string | null} */ (null),
   collectors = { codex: refreshCodex, claude: refreshClaude },
   openStore = (database, backups) => new UsageStore(database, backups),
 }) {
+  /** @type {Store | null} */
   let store = null;
   const getStore = () => (store ??= openStore(databasePath, backupDirectory));
 
@@ -36,8 +91,19 @@ function createCollectorService({
   // against itself: two SDK control queries and two transcript scans over the
   // same files at once waste work and race on the cursor. Sources share a
   // lane; waiting requests for the same source share their result.
+  //
+  // One entry per collector the provider registry names. The two collectors
+  // are started by hand below because they are not alike: only Claude's takes
+  // the status-line inbox, and only Claude's reads plan usage, and then only
+  // when a person asked for it.
   let queue = Promise.resolve();
+  /** @type {Record<CollectorId, QueuedRun | null>} */
   const pending = { codex: null, claude: null };
+  /**
+   * @param {CollectorId} source
+   * @param {(options: { readPlanUsage: boolean }) => Promise<Record<string, unknown>>} run
+   * @param {{ readPlanUsage?: boolean }} [options]
+   */
   function queued(source, run, { readPlanUsage = false } = {}) {
     // Coalesce waiting requests, but preserve one follow-up when a request
     // arrives during an active scan. Serial sources prevent a synchronous
@@ -50,20 +116,23 @@ function createCollectorService({
       if (readPlanUsage === true) waiting.options.readPlanUsage = true;
       return waiting.promise;
     }
-    const entry = { options: { readPlanUsage: readPlanUsage === true }, promise: null };
+    // The promise is set two lines down, once `start` exists to be queued.
+    const entry = { options: { readPlanUsage: readPlanUsage === true }, promise: /** @type {QueuedRun['promise']} */ (/** @type {unknown} */ (null)) };
     const start = () => { pending[source] = null; return run({ ...entry.options }); };
     entry.promise = queue.then(start, start);
     pending[source] = entry;
     queue = entry.promise.then(() => undefined, () => undefined);
     return entry.promise;
   }
-  const runCodex = () => queued('codex', () => collectors.codex(getStore()));
+  const runCodex = () => queued(CODEX.collector, () => collectors.codex(getStore()));
+  /** @param {boolean} readPlanUsage */
   const runClaude = (readPlanUsage) => queued(
-    'claude',
+    CLAUDE.collector,
     (options) => collectors.claude(getStore(), inboxPath, { readPlanUsage: options.readPlanUsage, claudeCodeReadingsDirectory }),
     { readPlanUsage },
   );
 
+  /** @param {CollectorRequest} request */
   async function handle(request) {
     switch (request?.type) {
       case 'refresh-all': {
@@ -100,20 +169,29 @@ function createCollectorService({
 // Wire a service to Electron's parent port. Each request carries an id; each
 // reply carries the same id and either a structured-clone-safe result or a
 // plain error message.
+/**
+ * @param {import('electron').ParentPort & { start?: () => void }} port Electron's parent port, or a stand-in that has to be started
+ * @param {{ handle: (request: CollectorRequest) => Promise<unknown> }} service
+ */
 function serveParentPort(port, service) {
+  /** @param {ReplyEnvelope} reply */
+  const answer = (reply) => port.postMessage(reply);
   port.on('message', async (event) => {
-    const { id, type, payload } = event?.data || {};
+    // The host in this app wrote the message; handle() refuses a type it does not know.
+    const { id, type, payload } = /** @type {RequestEnvelope} */ (event?.data || {});
     try {
-      const result = await service.handle({ type, ...payload });
-      port.postMessage({ id, ok: true, result });
+      // The type is written last: a field of the payload never chooses the operation.
+      const result = await service.handle({ ...payload, type });
+      answer({ id, ok: true, result });
     } catch (error) {
-      port.postMessage({ id, ok: false, error: { message: error instanceof Error ? error.message : String(error) } });
+      answer({ id, ok: false, error: { message: error instanceof Error ? error.message : String(error) } });
     }
   });
   if (typeof port.start === 'function') port.start();
 }
 
 if (process.parentPort) {
+  /** @type {any} What the host passed: paths only, checked by the service. */
   let config = {};
   try {
     config = JSON.parse(process.argv[2] || '{}');

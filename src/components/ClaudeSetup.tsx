@@ -1,7 +1,7 @@
 /* oxlint-disable jsx-a11y/no-noninteractive-element-interactions -- The modal handles Escape and traps Tab to keep keyboard focus inside the dialog. */
 import { AlertOctagon, AlertTriangle, CheckCircle2, CircleDashed, Hourglass, Info } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import '../settings.css';
+import '../styles/pages/settings.css';
 import type { ClaudeSetupStatus } from '../types';
 
 type StepState = 'done' | 'warn' | 'todo';

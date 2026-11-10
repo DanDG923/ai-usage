@@ -3,21 +3,36 @@
 // The glance the Claude Code mod draws: the tray flyout's figures, already
 // decided, so the mod is a view and never a second copy of the forecast.
 // Every rule here mirrors the renderer (src/provider-view.ts, src/lib.ts,
-// src/budget.ts and the flyout's verdict); tests/claude-code-glance.test.cjs
+// src/budget.ts and the flyout's verdict); tests/claude-code/claude-code-glance.test.cjs
 // compares the two on the demo snapshots so they cannot drift apart.
 
 const { SOURCES, evidenceNeedsRefresh, stalePoolWindow, subscriptionVisible } = require('./dashboard-decision.cjs');
 const { isMainWindow, selectDisplayedWindows } = require('./quota-selection.cjs');
 const { displayedRemaining, isEstimated, poolLimited, primaryWindow, quotaWindows } = require('./notifications.cjs');
+const { CODEX, FABLE, allowanceHost, isMainLimitId, providerBySnapshotKey } = require('./providers.mjs');
+
+/** @typedef {import('./types').QuotaWindow} QuotaWindow */
+/** @typedef {import('./types').ForecastState} ForecastState */
+/** @typedef {import('./notifications.cjs').SnapshotLike} SnapshotLike */
+/** @typedef {import('./providers.mjs').SnapshotKey} ProviderId The key a snapshot lists a provider under. */
+/** @typedef {ReturnType<typeof providerRow>} GlanceProvider */
+/** @typedef {ReturnType<typeof buildGlance>} Glance The file the Claude Code mod reads. */
 
 const GLANCE_SCHEMA = 1;
+// Compared with whatever a snapshot carries, which may be no state at all.
+/** @type {Set<unknown>} */
 const STATES = new Set(['safe', 'watch', 'risk', 'critical', 'unknown']);
 const FALLEN_BACK = new Set(['stale', 'degraded', 'error']);
 
-const clampPercent = (value) => (Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : null);
+// Number.isFinite is true only for a number, so `value` is one where it is clamped.
+/** @param {number | null | undefined} value */
+const clampPercent = (value) => (Number.isFinite(value) ? Math.max(0, Math.min(100, /** @type {number} */ (value))) : null);
+/** @param {string} text */
 const sentence = (text) => (text ? text.charAt(0).toUpperCase() + text.slice(1) : text);
+/** @param {unknown} value */
 const isoOrNull = (value) => (typeof value === 'string' && Number.isFinite(Date.parse(value)) ? value : null);
 
+/** @param {number | null | undefined} minutes */
 function windowLabel(minutes) {
   if (minutes == null) return 'allowance window';
   if (minutes >= 40_320) return 'monthly';
@@ -26,34 +41,47 @@ function windowLabel(minutes) {
   return `${Math.round(minutes / 60)}-hour`;
 }
 
+/**
+ * @param {string | null | undefined} planType
+ * @param {ProviderId} provider
+ */
 function planName(planType, provider) {
   const value = typeof planType === 'string' ? planType.trim() : '';
   if (!value) return 'Allowance';
-  if (value.toLowerCase() === 'pro') return provider === 'codex' ? 'ChatGPT Pro' : 'Claude Pro';
+  if (value.toLowerCase() === 'pro') return provider === CODEX.snapshotKey ? 'ChatGPT Pro' : 'Claude Pro';
   if (value.toLowerCase() === 'max') return 'Claude Max';
   return value;
 }
 
+/** @param {QuotaWindow} window */
 function modelAllowanceName(window) {
+  /** @type {Record<string, unknown>} */
   const { limitId, limitName } = window.metadata || {};
   if (typeof limitId === 'string') {
-    if (limitId === 'codex') return null;
+    if (isMainLimitId(limitId)) return null;
     return typeof limitName === 'string' && limitName.trim() ? limitName : limitId;
   }
   if (isMainWindow(window) || /^fable/i.test(window.bucketId) || !window.bucketName?.trim()) return null;
   return window.bucketName.replace(/\s*weekly$/i, '').trim() || null;
 }
 
+/** @param {QuotaWindow} window */
 function allowanceWindowLabel(window) {
   const model = modelAllowanceName(window);
   const duration = windowLabel(window.windowMinutes);
   return model ? `${model} · ${duration}` : `${duration} ${window.windowMinutes === 300 ? 'session' : 'allowance'}`;
 }
 
+/**
+ * @param {ProviderId} id
+ * @param {QuotaWindow | null} current
+ * @param {import('./types').Source | null} source
+ */
 function subtitleOf(id, current, source) {
   if (!current) return 'Awaiting data';
   let measurement = planName(current.planType, id);
-  if (id === 'fable') {
+  // Fable has no plan of its own to name; its card says where the figure came from.
+  if (id === FABLE.snapshotKey) {
     measurement = current.provenance === 'derived-tokens' ? 'Local estimate'
       : current.provenance === 'manual-official' ? 'Manual observation' : 'Provider reading';
     if (source && FALLEN_BACK.has(source.status)) measurement = `Stale ${measurement.toLowerCase()}`;
@@ -62,6 +90,10 @@ function subtitleOf(id, current, source) {
   return `${sentence(measurement)} · ${model ? `${model} · ` : ''}${sentence(windowLabel(current.windowMinutes))}`;
 }
 
+/**
+ * @param {QuotaWindow | null | undefined} window
+ * @returns {ForecastState}
+ */
 function stateOf(window) {
   if (!window || window.forecast?.expired) return 'unknown';
   return STATES.has(window.forecast?.state) ? window.forecast.state : 'unknown';
@@ -69,6 +101,11 @@ function stateOf(window) {
 
 // Active hours between two instants, stepping local hour boundaries as the
 // forecast engine and src/budget.ts do.
+/**
+ * @param {number} startMs
+ * @param {number} endMs
+ * @param {import('./types').Schedule} schedule
+ */
 function activeHoursBetween(startMs, endMs, schedule) {
   if (!(endMs > startMs)) return 0;
   let total = 0;
@@ -90,6 +127,11 @@ function activeHoursBetween(startMs, endMs, schedule) {
 // The share of the allowance that fits in each remaining active day while
 // keeping the reserve: src/budget.ts dailyBudget's `budget`, or null where it
 // declines one (a session window, under a day left, no forecast yet).
+/**
+ * @param {QuotaWindow} window
+ * @param {Partial<import('./types').Settings>} settings
+ * @param {number} nowMs
+ */
 function dailyBudget(window, settings, nowMs) {
   const forecast = window?.forecast;
   if (!forecast || forecast.expired || forecast.state === 'unknown' || forecast.expectedRemaining == null) return null;
@@ -105,19 +147,28 @@ function dailyBudget(window, settings, nowMs) {
   if (!(hoursPerDay > 0) || !(activeHoursLeft >= 0.5)) return null;
   const activeDaysLeft = activeHoursLeft / hoursPerDay;
   if ((window.windowMinutes != null && window.windowMinutes < 1_440) || activeDaysLeft < 1) return null;
-  const remaining = Math.max(0, Math.min(100, displayedRemaining(window)));
+  // A window always has a figure; only a missing window has none.
+  const remaining = Math.max(0, Math.min(100, /** @type {number} */ (displayedRemaining(window))));
   const reserve = Math.max(0, Math.min(90, forecast.reservePercent ?? settings.reservePercent ?? 0));
   return Math.max(0, remaining - reserve) / activeDaysLeft;
 }
 
+/** @param {number} value */
 const paceLabel = (value) => `${value < 20 ? value.toFixed(1) : Math.round(value)}%`;
 
+/**
+ * @param {typeof SOURCES[number]} source
+ * @param {SnapshotLike} snapshot
+ */
 function providerRow({ id, healthId, label }, snapshot) {
   const quota = snapshot.quotas?.[id] ?? null;
   const current = primaryWindow(quota);
   const expired = Boolean(current?.forecast?.expired);
   const source = (snapshot.sources || []).find((entry) => entry.id === healthId) ?? null;
-  const poolWindow = id === 'fable' ? stalePoolWindow(current, snapshot.quotas?.claude) : null;
+  // The weekly window of the provider whose pool this one sits inside (Claude, for Fable).
+  const poolHost = allowanceHost(providerBySnapshotKey(id));
+  const poolWindow = poolHost ? stalePoolWindow(current, snapshot.quotas?.[poolHost.snapshotKey]) : null;
+  /** @type {Partial<import('../src/types').Forecast>} */
   const forecast = current?.forecast || {};
   const live = Boolean(current && !expired);
   const aged = quotaWindows(quota).some((entry) => !entry.forecast?.expired && evidenceNeedsRefresh(entry)) || Boolean(poolWindow);
@@ -147,7 +198,12 @@ function providerRow({ id, healthId, label }, snapshot) {
 
 // The Overview's secondary sentence (src/lib.ts verdictSentence): the
 // subscriptions that are on track, never one that is hidden or failing.
+/**
+ * @param {Partial<import('./types').DashboardVerdict>} verdict
+ * @param {SnapshotLike} snapshot
+ */
 function onTrackSentence(verdict, snapshot) {
+  /** @type {Partial<import('./types').Settings>} */
   const settings = snapshot.settings || {};
   const affected = new Set((verdict.affected || []).map((entry) => String(entry).split(' · ')[0].trim()));
   const others = SOURCES
@@ -165,6 +221,12 @@ function onTrackSentence(verdict, snapshot) {
 }
 
 // The flyout's annunciator (src/components/TrayFlyout.tsx verdictView).
+/**
+ * @param {SnapshotLike} snapshot
+ * @param {GlanceProvider[]} providers
+ * @param {number} nowMs
+ * @returns {{ state: ForecastState, headline: string, detail: string }}
+ */
 function verdictOf(snapshot, providers, nowMs) {
   if (!providers.length) {
     return { state: 'unknown', headline: 'No subscriptions shown', detail: 'Choose subscriptions in AI Usage settings to see their allowances here.' };
@@ -172,8 +234,10 @@ function verdictOf(snapshot, providers, nowMs) {
   if (providers.every((provider) => provider.waiting)) {
     return { state: 'unknown', headline: 'Waiting for allowance readings', detail: 'They appear after the next refresh.' };
   }
+  /** @type {Partial<import('./types').DashboardVerdict>} */
   const verdict = snapshot.dashboardVerdict || {};
-  const state = STATES.has(verdict.state) ? verdict.state : 'unknown';
+  // The set holds the five states only, so a missing or unlisted one has become 'unknown'.
+  const state = /** @type {ForecastState} */ (STATES.has(verdict.state) ? verdict.state : 'unknown');
   if (state === 'safe') return { state, headline: 'All allowances on track', detail: '' };
   let detail = onTrackSentence(verdict, snapshot);
   const details = Array.isArray(verdict.details) ? verdict.details : [];
@@ -190,8 +254,13 @@ function verdictOf(snapshot, providers, nowMs) {
 }
 
 // When the visible sources last collected: what "Updated" means in the flyout.
+/**
+ * @param {SnapshotLike} snapshot
+ * @param {GlanceProvider[]} providers
+ */
 function collectedAt(snapshot, providers) {
   const ids = new Set(SOURCES.filter(({ id }) => providers.some((provider) => provider.id === id)).map(({ healthId }) => healthId));
+  /** @type {number | null} */
   let latest = null;
   for (const source of snapshot.sources || []) {
     if (ids.size && !ids.has(source.id)) continue;
@@ -204,11 +273,16 @@ function collectedAt(snapshot, providers) {
 /**
  * The glance from a tray or dashboard snapshot. The snapshot's own build time
  * is the clock, as the flyout uses it, so a budget never mixes two instants.
+ * @param {SnapshotLike | null | undefined} snapshot
+ * @param {{ nowMs?: number, appVersion?: string | null }} [options]
  */
-function buildGlance(snapshot, { nowMs = Date.now(), appVersion = null } = {}) {
+function buildGlance(snapshot, { nowMs = Date.now(), appVersion = /** @type {string | null} */ (null) } = {}) {
+  /** @type {SnapshotLike} */
   const value = snapshot && typeof snapshot === 'object' ? snapshot : {};
+  /** @type {Partial<import('./types').Settings>} */
   const settings = value.settings || {};
-  const generatedMs = Date.parse(value.generatedAt);
+  // A missing build time parses as NaN, and the clock below is then `nowMs`.
+  const generatedMs = Date.parse(/** @type {string} */ (value.generatedAt));
   const clockMs = Number.isFinite(generatedMs) ? generatedMs : nowMs;
   const providers = SOURCES.filter(({ id }) => subscriptionVisible(settings, id)).map((source) => providerRow(source, value));
   return {

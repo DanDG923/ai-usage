@@ -1,197 +1,26 @@
-import {
-  AlertTriangle,
-  Bell,
-  BellOff,
-  CircleCheck,
-  CircleDashed,
-  OctagonAlert,
-  PanelTop,
-  RefreshCw,
-  Settings as SettingsIcon,
-} from 'lucide-react';
+import { Bell, BellOff, OctagonAlert, PanelTop, RefreshCw, Settings as SettingsIcon } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { Component, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { dailyBudget, paceLabel } from '../budget';
-import { percent, quotaWindows, relativeTime, timeLabel, verdictSentence, whenLabel } from '../lib';
-import { providerViews, type ProviderView } from '../provider-view';
+import { normalizeFlyoutSnapshot } from '../flyout-snapshot';
+import { STATE_WORD, percent, relativeTime, timeLabel, whenLabel } from '../lib';
+import { flyoutVerdict, type FlyoutVerdict, type FlyoutVerdictTone } from '../overview-view';
+import { latestSuccessAt, providerViews, type ProviderView } from '../provider-view';
 import { applyThemeAttribute } from '../theme';
-import type {
-  DashboardNavigation,
-  DashboardVerdict,
-  FlyoutBridge,
-  FlyoutSnapshot,
-  ForecastState,
-  Quota,
-  Settings,
-  Snapshot,
-  Source,
-} from '../types';
+import type { DashboardNavigation, FlyoutBridge, FlyoutSnapshot, Snapshot } from '../types';
+import { BrandMark } from './BrandMark';
+import { ALERT_STATE_ICON } from './StatePill';
 
-// A cell's status is an icon and a word. Watch keeps the warning triangle, as
-// the tray always drew it; a state still learning is a dashed circle.
-const STATUS: Record<ForecastState, { label: string; icon: LucideIcon }> = {
-  safe: { label: 'On track', icon: CircleCheck },
-  watch: { label: 'Watch', icon: AlertTriangle },
-  risk: { label: 'At risk', icon: AlertTriangle },
-  critical: { label: 'Critical', icon: OctagonAlert },
-  unknown: { label: 'Learning', icon: CircleDashed },
-};
-
-const STATES = Object.keys(STATUS) as ForecastState[];
-
-const WAITING_VERDICT: DashboardVerdict = {
-  state: 'unknown',
-  reason: null,
-  label: 'Waiting for allowance readings',
-  windowsChecked: 0,
-  affected: [],
-  details: [],
-};
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-// Only windows carrying a forecast can be drawn; anything else is treated as
-// no reading rather than risking a render error in a glanceable surface.
-function hasForecast(value: unknown) {
-  return isRecord(value) && isRecord(value.forecast);
-}
-
-function normalizeQuota(value: unknown): Quota | null {
-  if (!hasForecast(value)) return null;
-  const quota = value as unknown as Quota;
-  const windows = Array.isArray(quota.windows) ? quota.windows.filter(hasForecast) : [];
-  return { ...quota, windows };
-}
-
-function normalizeVerdict(value: unknown): DashboardVerdict {
-  if (!isRecord(value) || !STATES.includes(value.state as ForecastState)) return WAITING_VERDICT;
-  const verdict = value as unknown as DashboardVerdict;
-  return {
-    ...verdict,
-    label: typeof verdict.label === 'string' ? verdict.label : WAITING_VERDICT.label,
-    affected: Array.isArray(verdict.affected) ? verdict.affected.filter((entry) => typeof entry === 'string') : [],
-    details: Array.isArray(verdict.details) ? verdict.details.filter(isRecord) : [],
-  };
-}
-
-/**
- * The flyout accepts whatever the main process sends and fills anything
- * missing with an explicit "no reading" shape, never with invented numbers.
- */
-export function normalizeFlyoutSnapshot(value: unknown): FlyoutSnapshot | null {
-  if (!isRecord(value)) return null;
-  const quotas = isRecord(value.quotas) ? value.quotas : {};
-  return {
-    generatedAt: typeof value.generatedAt === 'string' ? value.generatedAt : '',
-    timezone: typeof value.timezone === 'string' ? value.timezone : undefined,
-    settings: (isRecord(value.settings) ? value.settings : {}) as Settings,
-    sources: (Array.isArray(value.sources) ? value.sources.filter(isRecord) : []) as Source[],
-    quotas: {
-      codex: normalizeQuota(quotas.codex),
-      claude: normalizeQuota(quotas.claude),
-      fable: normalizeQuota(quotas.fable),
-    },
-    fableApplies: typeof value.fableApplies === 'boolean' ? value.fableApplies : undefined,
-    dashboardVerdict: normalizeVerdict(value.dashboardVerdict),
-  };
-}
+// The normalisation is pure and lives in flyout-snapshot.ts; the flyout still
+// exports it beside the component that depends on it.
+export { normalizeFlyoutSnapshot };
 
 function errorText(reason: unknown) {
   return reason instanceof Error ? reason.message : String(reason || 'Unknown local error.');
 }
 
-/** The Flight Deck mark (a fuel tape with a trace running into it), as BrandMark in Header.tsx. */
-function BrandMark() {
-  return (
-    <svg
-      className="flyout-brand-mark"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.75"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M14 3h5v18h-5z M14 12h5 M3.5 16l4.5-5 3 3 3.5-4.5" />
-    </svg>
-  );
-}
-
-// A snapshot's generatedAt is when it was built, which is every time the
-// flyout opens. When the sources were last collected is what "Updated" means.
-function lastCollectedAt(views: ProviderView[], sources: Source[]) {
-  const relevant = views.length ? views.map((view) => view.source) : sources;
-  let latest = Number.NaN;
-  for (const source of relevant) {
-    const at = Date.parse(source?.last_success_at ?? '');
-    if (Number.isFinite(at) && !(at <= latest)) latest = at;
-  }
-  return Number.isFinite(latest) ? latest : null;
-}
-
-/**
- * The annunciator tone: a forecast state, as the Overview's annunciator takes
- * them, or failure when the allowances could not be read at all. Unknown is
- * the neutral dashed lozenge: waiting, learning, or a partial all-clear.
- */
-type VerdictTone = ForecastState | 'failure';
-type VerdictView = { tone: VerdictTone; headline: string; detail: string };
-
-const VERDICT_ICON: Record<VerdictTone, LucideIcon> = {
-  safe: CircleCheck,
-  watch: AlertTriangle,
-  risk: AlertTriangle,
-  critical: OctagonAlert,
-  unknown: CircleDashed,
-  failure: OctagonAlert,
-};
-
-function verdictView(snapshot: FlyoutSnapshot, views: ProviderView[], snapshotMs: number): VerdictView {
-  if (!views.length) {
-    return {
-      tone: 'unknown',
-      headline: 'No subscriptions shown',
-      detail: 'Choose subscriptions in Settings to see their allowances here.',
-    };
-  }
-  if (views.every((view) => !view.current || view.expired)) {
-    return {
-      tone: 'unknown',
-      headline: 'Waiting for allowance readings',
-      detail: 'They appear after the next refresh.',
-    };
-  }
-  const verdict = snapshot.dashboardVerdict;
-  if (verdict.state === 'safe') return { tone: 'safe', headline: 'All allowances on track', detail: '' };
-  const { settings, quotas } = snapshot;
-  // As the Overview does: hidden subscriptions are never named as on track.
-  const sentence = verdictSentence(
-    verdict,
-    {
-      codex: settings.showCodexSubscription !== false ? quotas.codex : null,
-      claude: settings.showClaudeSubscription !== false ? quotas.claude : null,
-      fable: settings.showClaudeSubscription !== false ? quotas.fable : null,
-    },
-    snapshot.sources,
-  );
-  let detail = sentence.secondary;
-  const affected = verdict.details.filter((entry) => entry.state !== 'safe');
-  if (new Set(affected.map((entry) => entry.sourceId)).size === 1) {
-    // Budget the window the verdict names, which may be a shorter session
-    // beside the headline weekly allowance; dailyBudget declines windows under a day.
-    const view = views.find((entry) => entry.id === affected[0].sourceId);
-    // As the Overview's status line: the named window, else the headline one.
-    const window =
-      quotaWindows(view?.quota).find((entry) => entry.bucketId === affected[0].bucketId && !entry.forecast.expired) ??
-      view?.current;
-    const budget = window ? dailyBudget(window, settings, snapshotMs) : null;
-    if (budget && budget.budget > 0) detail = `Stay under ${paceLabel(budget.budget)} a day to reach the reset.`;
-  }
-  return { tone: verdict.state, headline: sentence.headline, detail };
-}
+// The annunciator and each row's status draw watch as the warning triangle,
+// as the tray always has; a failed read takes the critical icon.
+const VERDICT_ICON: Record<FlyoutVerdictTone, LucideIcon> = { ...ALERT_STATE_ICON, failure: OctagonAlert };
 
 /** The compact Master Caution annunciator: an icon lozenge beside the verdict. */
 function Verdict({
@@ -199,7 +28,7 @@ function Verdict({
   role = 'status',
   children,
 }: {
-  view: VerdictView;
+  view: FlyoutVerdict;
   role?: 'status' | 'alert';
   children?: ReactNode;
 }) {
@@ -227,8 +56,9 @@ function ProviderRow({
   nowMs: number;
   onOpen?: (target: DashboardNavigation) => void;
 }) {
-  const status = STATUS[view.state] ?? STATUS.unknown;
-  const StatusIcon = status.icon;
+  // A state still learning is a dashed circle.
+  const state = view.state in STATE_WORD ? view.state : 'unknown';
+  const StatusIcon = ALERT_STATE_ICON[state];
   const waiting = !view.current || view.expired;
   const learning = view.state === 'unknown';
   const remaining = waiting ? null : view.remaining;
@@ -293,7 +123,7 @@ function ProviderRow({
         </span>
         <span className="flyout-status" data-state={view.state}>
           <StatusIcon aria-hidden="true" />
-          {status.label}
+          {STATE_WORD[state]}
         </span>
         <span className="flyout-row-detail">{detail}</span>
       </button>
@@ -325,8 +155,8 @@ export function TrayFlyout({
   const views = snapshot ? providerViews(snapshot as unknown as Snapshot) : [];
   const parsedMs = snapshot ? Date.parse(snapshot.generatedAt) : Number.NaN;
   const snapshotMs = Number.isFinite(parsedMs) ? parsedMs : nowMs;
-  const verdict: VerdictView = snapshot
-    ? verdictView(snapshot, views, snapshotMs)
+  const verdict: FlyoutVerdict = snapshot
+    ? flyoutVerdict(snapshot, views, snapshotMs)
     : snapshot === null
       ? {
           // A read that failed is a failure; a store that is only closing
@@ -336,7 +166,11 @@ export function TrayFlyout({
           detail: 'Open the dashboard for details.',
         }
       : { tone: 'unknown', headline: 'Loading allowances…', detail: '' };
-  const collectedAt = snapshot ? lastCollectedAt(views, snapshot.sources) : null;
+  // A snapshot's generatedAt is when it was built, which is every time the
+  // flyout opens. When the sources were last collected is what "Updated" means.
+  const collectedAt = snapshot
+    ? latestSuccessAt(views.length ? views.map((view) => view.source) : snapshot.sources)
+    : null;
   const updated = refreshing
     ? 'Refreshing…'
     : collectedAt == null
@@ -350,7 +184,7 @@ export function TrayFlyout({
   return (
     <div className="flyout">
       <header className="flyout-header">
-        <BrandMark />
+        <BrandMark className="flyout-brand-mark" />
         <div className="flyout-heading">
           <span className="flyout-title">AI Usage</span>
           {updated && <span className="flyout-updated">{updated}</span>}

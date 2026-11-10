@@ -1,6 +1,6 @@
 import { SOURCES, evidenceNeedsRefresh, stalePoolWindow } from '../electron/dashboard-decision.mjs';
 import { isMainWindow, selectDisplayedWindows } from '../electron/quota-selection.mjs';
-import type { DashboardVerdict, Quota, QuotaWindow, Snapshot } from './types';
+import type { DashboardVerdict, ForecastState, Quota, QuotaWindow, Snapshot } from './types';
 
 /**
  * Every formatter in the renderer uses this locale rather than the OS one, so
@@ -70,6 +70,18 @@ export function shortDate(value?: string | number | null) {
   const date = parseDate(value);
   return date ? SHORT_DATE.format(date) : '—';
 }
+
+/** A forecast state in words, wherever it is named beside its icon. */
+export const STATE_WORD: Record<ForecastState, string> = {
+  safe: 'On track',
+  watch: 'Watch',
+  risk: 'At risk',
+  critical: 'Critical',
+  unknown: 'Learning',
+};
+
+/** Weekday names by Date#getDay() index, Sunday first. */
+export const DAY_NAMES: readonly string[] = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 /** The local calendar day as YYYY-MM-DD; toISOString() would give the UTC day. */
 export function localDateKey(date: Date) {
@@ -165,6 +177,14 @@ export const HEALTHY_SOURCE_STATUSES: ReadonlySet<string> = new Set([
   'estimating',
   'activity-only',
 ]);
+
+/** Source states that mean cached data is being served (see electron/store.cjs setSourceStatus). */
+export const STALE_SOURCE_STATUSES: ReadonlySet<string> = new Set(['stale', 'degraded']);
+
+/** Whether a source's data is not current: its collector is failing, or serving cached data. */
+export function sourceNeedsAttention(status: string) {
+  return status === 'error' || STALE_SOURCE_STATUSES.has(status);
+}
 
 export function sourceLabel(id: string) {
   return SOURCES.find((source) => source.id === id || source.healthId === id)?.label ?? id;
@@ -288,9 +308,7 @@ export function verdictSentence(
     .filter((entry) => !affectedNames.includes(entry.name))
     .filter(
       (entry) =>
-        !sources.some(
-          (source) => sourceLabel(source.id) === entry.name && ['error', 'stale', 'degraded'].includes(source.status),
-        ),
+        !sources.some((source) => sourceLabel(source.id) === entry.name && sourceNeedsAttention(source.status)),
     )
     .filter((entry) => {
       const active = quotaWindows(entry.quota).filter((window) => !window.forecast.expired);

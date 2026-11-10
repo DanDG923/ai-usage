@@ -9,7 +9,71 @@ const { IncrementalReadError, planIncrementalRead, readCompleteLines } = require
 const { epochToIso } = require('./time.cjs');
 const { MAX_QUOTA_RESET_AHEAD_MS } = require('./quota-time.cjs');
 const { codexQuotaLabel, durationLabel } = require('./codex-quota-label.cjs');
+const { CODEX } = require('./providers.mjs');
 const { codexAgentMetadata, textId } = require('./task-usage.cjs');
+const { errorCode } = require('./caught.cjs');
+
+/** @typedef {import('./types').Store} Store */
+/** @typedef {import('./types').IsoTime} IsoTime */
+/** @typedef {import('node:sqlite').SQLInputValue} SQLInputValue */
+
+/**
+ * A request the app server has not answered yet.
+ * @typedef {{ resolve: (result: any) => void, reject: (error: Error) => void, timer: NodeJS.Timeout }} PendingRequest
+ */
+
+/** @typedef {ReturnType<typeof codexAgentMetadata>} AgentMetadata */
+
+/**
+ * What one rollout log's cursor carries from one read to the next: the
+ * session, model and project set by earlier lines than the token counts that
+ * need them, and what has already been kept. Cursors written by earlier
+ * versions lack the later fields.
+ * @typedef {object} SessionState
+ * @property {string} sessionId
+ * @property {string | null} model
+ * @property {string | null} project
+ * @property {number} agentAttributionVersion
+ * @property {number} accountingVersion
+ * @property {number} eventKeyVersion
+ * @property {string | null} [ownId] The file's own session id, once its first session_meta is read.
+ * @property {string} [copiedFrom] The parent session a fork's history was copied from.
+ * @property {number} [copiedUntil] Token counts stamped up to here are the parent's.
+ * @property {AgentMetadata} [agent]
+ * @property {string | null} [taskId]
+ * @property {{ fingerprint: string, eventKey: string } | null} [lastTokenSnapshot]
+ * @property {string} [lastEventAt]
+ * @property {number} [sameInstantEvents]
+ * @property {Record<string, { reading: string, at: number }>} [keptRateLimits] The last rate-limit reading stored for each limit.
+ */
+
+/**
+ * A token count as the ledger will record it.
+ * @typedef {import('./types').UsageEventInput & {
+ *   sessionId: string,
+ *   metadata: { source: string, taskId: string | null } & Partial<AgentMetadata>,
+ * }} CodexUsageEvent
+ */
+
+/**
+ * What a scan of the local rollout logs did.
+ * @typedef {object} SessionImportSummary
+ * @property {number} importedFiles
+ * @property {number} events
+ * @property {number} observations
+ * @property {number} rejected
+ * @property {string | null} lastRejection
+ * @property {number} duplicateEvents
+ * @property {number} reconciledEvents
+ * @property {ReturnType<Store['createBackup']> | null} reconciliationBackup The safety copy made before a repair, if one was needed.
+ * @property {number} readErrors
+ * @property {string | null} lastReadError
+ */
+
+/**
+ * The counts of a scan that has not run, or failed before it returned.
+ * @typedef {{ importedFiles: number, events: number, observations: number, readErrors?: undefined, lastReadError?: undefined }} NoSessionImport
+ */
 
 // Read from the manifest so the version reported to Codex cannot drift.
 const APP_VERSION = require('../package.json').version;
@@ -19,6 +83,7 @@ const APP_VERSION = require('../package.json').version;
 // final stderr output is useful there; the full buffer stays in this process.
 const MAX_STDERR_EXCERPT = 240;
 
+/** @param {unknown} stderr */
 function stderrExcerpt(stderr) {
   const text = String(stderr || '').replace(/[\p{Cc}\p{Cf}]+/gu, ' ').replace(/\s+/g, ' ').trim();
   if (!text) return '';
@@ -26,12 +91,19 @@ function stderrExcerpt(stderr) {
 }
 
 class JsonLineClient {
+  /**
+   * @param {string} binary
+   * @param {typeof spawn} [spawnProcess]
+   */
   constructor(binary, spawnProcess = spawn) {
     this.nextId = 1;
+    /** @type {Map<number, PendingRequest>} */
     this.pending = new Map();
     this.stderr = '';
     this.closed = false;
+    /** @type {Error | null} */
     this.failure = null;
+    /** @type {import('node:readline').Interface | null} */
     this.lines = null;
     this.child = spawnProcess(binary, ['app-server', '--stdio'], {
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -41,8 +113,8 @@ class JsonLineClient {
     this.child.once('error', (error) => {
       this.fail(new Error(`Codex app server process error: ${error.message}`));
     });
-    for (const pipe of ['stdin', 'stdout', 'stderr']) {
-      this.child[pipe].on('error', (error) => {
+    for (const pipe of /** @type {const} */ (['stdin', 'stdout', 'stderr'])) {
+      this.child[pipe].on('error', (/** @type {Error} */ error) => {
         this.fail(new Error(`Codex app server ${pipe} error: ${error.message}`));
       });
     }
@@ -75,6 +147,7 @@ class JsonLineClient {
     });
   }
 
+  /** @param {unknown} error */
   fail(error) {
     if (this.closed) return;
     this.closed = true;
@@ -87,6 +160,7 @@ class JsonLineClient {
     this.pending.clear();
   }
 
+  /** @param {{ id?: number, method: string, params?: unknown }} message */
   writeMessage(message) {
     if (this.closed) throw this.failure ?? new Error('Codex app server client is closed.');
     try {
@@ -94,13 +168,19 @@ class JsonLineClient {
         if (error) this.fail(new Error(`Codex app server stdin write failed: ${error.message}`));
       });
     } catch (error) {
-      const failure = new Error(`Codex app server stdin write failed: ${error.message}`);
+      const failure = new Error(`Codex app server stdin write failed: ${/** @type {Error | null | undefined} */ (error)?.message}`);
       this.fail(failure);
       throw failure;
     }
   }
 
-  request(method, params = null, timeoutMs = 20_000) {
+  /**
+   * @param {string} method
+   * @param {unknown} [params]
+   * @param {number} [timeoutMs]
+   * @returns {Promise<any>} The app server's result, in whatever shape the method answers with.
+   */
+  request(method, params = /** @type {any} */ (null), timeoutMs = 20_000) {
     if (this.closed) return Promise.reject(this.failure ?? new Error('Codex app server client is closed.'));
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
@@ -113,6 +193,10 @@ class JsonLineClient {
     });
   }
 
+  /**
+   * @param {string} method
+   * @param {object} [params]
+   */
   notify(method, params = {}) {
     this.writeMessage({ method, params });
   }
@@ -123,6 +207,7 @@ class JsonLineClient {
   }
 }
 
+/** @param {Record<string, any> | null | undefined} window One window of a rate-limit payload. */
 function quotaWindow(window) {
   if (!window) return null;
   const rawUsedPercent = window.usedPercent ?? window.used_percent;
@@ -136,10 +221,18 @@ function quotaWindow(window) {
   };
 }
 
+/**
+ * @param {Store} store
+ * @param {any} raw
+ * @param {string} observedAt
+ * @param {string} provenance
+ * @param {object} [extra]
+ * @param {{ onRejected?: (error: unknown) => void }} [options]
+ */
 function recordRateLimit(store, raw, observedAt, provenance, extra = {}, { onRejected } = {}) {
   if (!raw) return 0;
-  const sourceId = 'codex';
-  const limitId = raw.limitId ?? raw.limit_id ?? 'codex';
+  const sourceId = CODEX.id;
+  const limitId = raw.limitId ?? raw.limit_id ?? CODEX.mainLimitId;
   const limitName = raw.limitName ?? raw.limit_name ?? limitId;
   const planType = raw.planType ?? raw.plan_type ?? null;
   let count = 0;
@@ -171,13 +264,19 @@ function recordRateLimit(store, raw, observedAt, provenance, extra = {}, { onRej
       // fast. Coded runtime/SQLite failures always propagate, so the caller's
       // transaction rolls back and a log's cursor cannot advance past records
       // that failed to persist.
-      if (!onRejected || error?.code) throw error;
+      if (!onRejected || errorCode(error)) throw error;
       onRejected(error);
     }
   }
   return count;
 }
 
+/**
+ * @param {Store} store
+ * @param {string} binary
+ * @param {object} [options]
+ * @param {(executable: string) => Pick<JsonLineClient, 'request' | 'notify' | 'close'>} [options.clientFactory]
+ */
 async function collectFromAppServer(store, binary, {
   clientFactory = (executable) => new JsonLineClient(executable),
 } = {}) {
@@ -213,11 +312,12 @@ async function collectFromAppServer(store, binary, {
     // Daily account history is useful for context but must not make a valid,
     // newer allowance reading disappear when that optional endpoint fails.
     let dailyBuckets = 0;
+    /** @type {string | null} */
     let usageWarning = null;
     try {
       const usage = await client.request('account/usage/read');
       for (const bucket of usage?.dailyUsageBuckets || []) {
-        store.upsertDailyUsage('codex', bucket.startDate, bucket.tokens);
+        store.upsertDailyUsage(CODEX.id, bucket.startDate, bucket.tokens);
         dailyBuckets += 1;
       }
     } catch {
@@ -229,12 +329,19 @@ async function collectFromAppServer(store, binary, {
   }
 }
 
+/**
+ * @param {string} root
+ * @param {number} cutoffMs
+ * @param {Set<string>} [legacyFiles]
+ * @param {Set<string>} [movedLegacyNames]
+ */
 function listSessionFiles(root, cutoffMs, legacyFiles = new Set(), movedLegacyNames = new Set()) {
   if (!fs.existsSync(root)) return [];
   const result = [];
   const stack = [root];
   while (stack.length) {
-    const current = stack.pop();
+    // The loop runs only while the stack holds a folder.
+    const current = /** @type {string} */ (stack.pop());
     let entries;
     try { entries = fs.readdirSync(current, { withFileTypes: true }); }
     catch { continue; }
@@ -256,6 +363,12 @@ function listSessionFiles(root, cutoffMs, legacyFiles = new Set(), movedLegacyNa
 // Rate-limit notifications repeat the last request's usage without advancing
 // the cumulative counters. Only complete, valid counter snapshots establish
 // that identity; older logs without totals retain their per-record behaviour.
+/**
+ * @param {Record<string, any> | null | undefined} info The `info` of a token_count record.
+ * @param {unknown} sessionId
+ * @param {unknown} model
+ * @param {unknown} occurredAt
+ */
 function usageFingerprint(info, sessionId, model, occurredAt) {
   if (typeof sessionId !== 'string' || !sessionId.trim()) return null;
   if ((model != null && typeof model !== 'string') || !epochToIso(occurredAt)) return null;
@@ -280,10 +393,21 @@ function usageFingerprint(info, sessionId, model, occurredAt) {
 // copy are the parent's usage, recorded from the parent's own rollout.
 const COPIED_HISTORY_MS = 1000;
 
-function* sessionEntries(lines, state, onRejected = () => {}) {
+/**
+ * @param {Iterable<string>} lines
+ * @param {SessionState} state Updated as the lines are read.
+ * @param {(message: string) => void} [onRejected]
+ * @returns {Generator<Record<string, any>, void, unknown>} Each record of the log that is an object.
+ */
+function* sessionEntries(lines, state, onRejected = /** @type {(message: string) => void} */ (() => {})) {
   for (const line of lines) {
     let entry;
-    try { entry = JSON.parse(line); } catch { continue; }
+    try { entry = JSON.parse(line); } catch {
+      // Only whole lines are read, so this is not a record still being
+      // written. Counted, or a damaged log looks like a quiet one.
+      if (line.trim()) onRejected('Codex session line is not valid JSON.');
+      continue;
+    }
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
       onRejected('Codex session record must be an object.');
       continue;
@@ -304,8 +428,10 @@ function* sessionEntries(lines, state, onRejected = () => {}) {
       // carry no ownId and keep the identity they already recorded.
       if (state.ownId === null && typeof id === 'string' && id.trim()) state.ownId = id;
     }
+    // `copiedUntil` is unset until a copied session_meta is read, and no time
+    // compares as earlier than an unset one, so nothing is skipped before then.
     if (entry.type === 'event_msg' && entry.payload?.type === 'token_count'
-      && Date.parse(entry.timestamp) <= state.copiedUntil) continue;
+      && Date.parse(entry.timestamp) <= /** @type {number} */ (state.copiedUntil)) continue;
     if (entry.type === 'turn_context') {
       state.model = entry.payload?.model || state.model;
       state.taskId = textId(entry.payload?.root_turn_id)
@@ -323,6 +449,10 @@ function* sessionEntries(lines, state, onRejected = () => {}) {
 // timestamp alone upserted the second over the first, silently dropping its
 // tokens. The ordinal lives in the cursor state, so a resumed read and a
 // rescan from the start of the file assign every record the same key.
+/**
+ * @param {SessionState} state
+ * @param {string} timestamp
+ */
 function eventKeyFor(state, timestamp) {
   if (state.lastEventAt === timestamp) state.sameInstantEvents = (state.sameInstantEvents || 0) + 1;
   else {
@@ -335,6 +465,11 @@ function eventKeyFor(state, timestamp) {
 
 // Before forks kept their own identity, a fork's records were filed under
 // its parent's session id. A rescan must not import them a second time.
+/**
+ * @param {Store} store
+ * @param {SessionState} state
+ * @param {string} eventKey
+ */
 function parentFiledKey(store, state, eventKey) {
   const prefix = `codex:${state.sessionId}:`;
   if (!state.copiedFrom || !eventKey.startsWith(prefix)) return null;
@@ -349,6 +484,7 @@ const RATE_LIMIT_HEARTBEAT_MS = 15 * 60_000;
 
 // Everything a stored reading carries except its time: a changed plan or
 // limit name is a new reading, and must be validated like one.
+/** @param {Record<string, any>} raw A rate-limit payload. */
 function rateLimitReading(raw) {
   return JSON.stringify([raw.planType ?? raw.plan_type ?? null, raw.limitName ?? raw.limit_name ?? null,
     ...['primary', 'secondary'].map((label) => {
@@ -357,11 +493,16 @@ function rateLimitReading(raw) {
     })]);
 }
 
+/**
+ * @param {Record<string, any>} entry A token_count record with its last usage.
+ * @param {SessionState} state
+ * @returns {CodexUsageEvent}
+ */
 function codexUsageEvent(entry, state) {
   const usage = entry.payload.info.last_token_usage;
   return {
     eventKey: eventKeyFor(state, entry.timestamp),
-    sourceId: 'codex', occurredAt: entry.timestamp, sessionId: state.sessionId,
+    sourceId: CODEX.id, occurredAt: entry.timestamp, sessionId: state.sessionId,
     model: state.model, project: state.project,
     inputTokens: usage.input_tokens, cachedInputTokens: usage.cached_input_tokens,
     cacheWriteInputTokens: usage.cache_write_input_tokens,
@@ -374,8 +515,8 @@ function codexUsageEvent(entry, state) {
 // A repair may remove only the exact old importer row still matching the log.
 // Manual/imported/conflicting edits are left alone, as are records whose source
 // file is unavailable. Keep the same guard for the preflight and the DELETE.
-const DUPLICATE_METADATA_FIELDS = ['agentAttributionVersion', 'agentId', 'agentKind', 'parentSessionId',
-  'rootSessionId', 'agentName', 'agentRole', 'taskId'];
+const DUPLICATE_METADATA_FIELDS = /** @type {const} */ (['agentAttributionVersion', 'agentId', 'agentKind', 'parentSessionId',
+  'rootSessionId', 'agentName', 'agentRole', 'taskId']);
 const DUPLICATE_ROW_GUARD = `event_key = ? AND source_id = 'codex'
   AND occurred_at = ? AND session_id IS ? AND model IS ? AND project IS ?
   AND input_tokens = ? AND cached_input_tokens = ? AND cache_write_input_tokens = ?
@@ -386,6 +527,10 @@ const DUPLICATE_ROW_GUARD = `event_key = ? AND source_id = 'codex'
     AND NOT EXISTS (SELECT 1 FROM json_each(metadata_json) WHERE key NOT IN ('source', ${DUPLICATE_METADATA_FIELDS.map((field) => `'${field}'`).join(', ')}))
     ELSE 0 END`;
 
+/**
+ * @param {CodexUsageEvent} event
+ * @returns {SQLInputValue[]} The values DUPLICATE_ROW_GUARD binds, in order.
+ */
 function duplicateRowParameters(event) {
   return [event.eventKey, epochToIso(event.occurredAt), event.sessionId.trim(),
     typeof event.model === 'string' ? event.model.trim() || null : null,
@@ -395,6 +540,11 @@ function duplicateRowParameters(event) {
     ...DUPLICATE_METADATA_FIELDS.map((field) => event.metadata[field] ?? null)];
 }
 
+/**
+ * @param {Store} store
+ * @param {string} eventKey
+ * @param {CodexUsageEvent} event
+ */
 function retainedSnapshotExists(store, eventKey, event) {
   return Boolean(store.prepare(`SELECT 1 AS found FROM usage_events
     WHERE event_key = ? AND source_id = 'codex' AND session_id IS ?
@@ -410,7 +560,17 @@ function retainedSnapshotExists(store, eventKey, event) {
 // Version 1.0.34 introduced ordinal keys without invalidating old cursors.
 // Before replaying a collision, verify every held row against its source group.
 // Conflicting/manual rows stay untouched, including the rest of that group.
+/**
+ * @param {Store} store
+ * @param {Iterable<string>} lines
+ * @param {SessionState} initialState
+ * @param {object} checks
+ * @param {boolean} checks.checkCollisions
+ * @param {boolean} checks.checkDuplicates
+ * @param {boolean} checks.protectSingles
+ */
 function collisionMigration(store, lines, initialState, { checkCollisions, checkDuplicates, protectSingles }) {
+  /** @type {Map<string, CodexUsageEvent[]>} */
   const groups = new Map();
   const state = { ...initialState };
   let backupNeeded = false;
@@ -430,9 +590,11 @@ function collisionMigration(store, lines, initialState, { checkCollisions, check
     if (checkCollisions) {
       const base = `codex:${state.sessionId}:${entry.timestamp}`;
       if (!groups.has(base)) groups.set(base, []);
-      groups.get(base).push(event);
+      // Set on the line above when it was missing.
+      /** @type {CodexUsageEvent[]} */ (groups.get(base)).push(event);
     }
   }
+  /** @type {Set<string>} */
   const blocked = new Set();
   for (const [base, events] of groups) {
     if (events.length < 2 && !protectSingles) continue;
@@ -448,7 +610,7 @@ function collisionMigration(store, lines, initialState, { checkCollisions, check
           return store.prepare(`SELECT 1 FROM usage_events WHERE ${DUPLICATE_ROW_GUARD}`)
             .get(...duplicateRowParameters({ ...candidate, eventKey: event.eventKey }));
         } catch (error) {
-          if (error?.code) throw error;
+          if (errorCode(error)) throw error;
           return false;
         }
       })) conflict = true;
@@ -459,7 +621,7 @@ function collisionMigration(store, lines, initialState, { checkCollisions, check
   return { blocked, backupNeeded };
 }
 
-const normalizedPath = (filePath) => path.resolve(filePath).replaceAll('\\', '/').toLowerCase();
+const normalizedPath = (/** @type {string} */ filePath) => path.resolve(filePath).replaceAll('\\', '/').toLowerCase();
 
 // Archiving a thread in Codex moves its rollout from sessions/ to
 // archived_sessions/, and unarchiving moves it back. It is the same log, so it
@@ -467,11 +629,16 @@ const normalizedPath = (filePath) => path.resolve(filePath).replaceAll('\\', '/'
 // and nothing already imported is read again. Rollout names carry their start
 // time and session id, so a cursor under the other folder for a file that is no
 // longer there is this log's. A copy whose original is still in place is not.
+/**
+ * @param {Store} store
+ * @param {string} fullPath
+ * @param {string[]} prefixes The folders rollouts live in, normalized, each ending in a slash.
+ */
 function movedRolloutCursor(store, fullPath, prefixes) {
   const target = normalizedPath(fullPath);
   const name = `/${path.basename(target)}`;
-  const rows = store.prepare(`SELECT file_path FROM imported_files
-    WHERE substr(lower(replace(file_path, char(92), '/')), -?) = ?`).all(name.length, name);
+  const rows = /** @type {{ file_path: string }[]} */ (store.prepare(`SELECT file_path FROM imported_files
+    WHERE substr(lower(replace(file_path, char(92), '/')), -?) = ?`).all(name.length, name));
   for (const { file_path: candidate } of rows) {
     const normalized = normalizedPath(candidate);
     if (normalized === target || !prefixes.some((prefix) => normalized.startsWith(prefix))) continue;
@@ -483,6 +650,11 @@ function movedRolloutCursor(store, fullPath, prefixes) {
 // A Codex rollout log carries its session id, working directory, and model in
 // earlier lines than the token counts that need them. That context is kept in
 // the import cursor's state so an appended chunk can be parsed on its own.
+/**
+ * @param {Store} store
+ * @param {number} [days] How far back a log may have last changed and still be scanned.
+ * @returns {SessionImportSummary}
+ */
 function importLocalSessions(store, days = 120) {
   // CODEX_HOME relocates the whole Codex directory; honour it the way the
   // CLI does. Without an absolute home there is nothing safe to scan.
@@ -504,7 +676,7 @@ function importLocalSessions(store, days = 120) {
         OR COALESCE(json_extract(state_json, '$.agentAttributionVersion'), 0) != 1
         OR COALESCE(json_extract(state_json, '$.eventKeyVersion'), 0) != 1
         ELSE 1 END`);
-  const legacyRows = prefixes.flatMap((prefix) => legacyQuery.all(prefix.length, prefix));
+  const legacyRows = prefixes.flatMap((prefix) => /** @type {{ file_path: string }[]} */ (legacyQuery.all(prefix.length, prefix)));
   const legacyFiles = new Set(legacyRows.map((row) => path.resolve(row.file_path).toLowerCase()));
   // Archiving or unarchiving keeps a log's old modification time, so a legacy
   // log past the lookback must keep its exemption under its new folder, or its
@@ -518,13 +690,16 @@ function importLocalSessions(store, days = 120) {
   let events = 0;
   let observations = 0;
   let rejected = 0;
+  /** @type {string | null} */
   let lastRejection = null;
   let duplicateEvents = 0;
   let reconciledEvents = 0;
+  /** @type {SessionImportSummary['reconciliationBackup']} */
   let reconciliationBackup = null;
   // A rollout the OS refused to open (antivirus scan, OneDrive hydration) is
   // retried next refresh; counting it keeps "connected" honest meanwhile.
   let readErrors = 0;
+  /** @type {string | null} */
   let lastReadError = null;
 
   for (const { fullPath, stat } of files) {
@@ -538,7 +713,8 @@ function importLocalSessions(store, days = 120) {
       // Moved with nothing new: the cursor follows the log to its new place.
       if (movedFrom) {
         store.transaction(() => {
-          store.markImportedFile(fullPath, stat.mtimeMs, stat.size, previous.state);
+          // There is no plan only when a cursor was passed in, so `previous` is set.
+          store.markImportedFile(fullPath, stat.mtimeMs, stat.size, /** @type {NonNullable<typeof previous>} */ (previous).state);
           store.forgetImportedFile(movedFrom);
         });
       }
@@ -547,17 +723,20 @@ function importLocalSessions(store, days = 120) {
     // A cursor written before context was stored cannot resume mid-file.
     const resumable = plan.resumed && previous?.state && typeof previous.state === 'object';
     const startOffset = resumable ? plan.startOffset : 0;
+    // A read resumes only from a cursor, so `previous` is set when it does.
+    /** @type {SessionState} */
     const state = resumable
-      ? { ...previous.state }
+      ? { .../** @type {NonNullable<typeof previous>} */ (previous).state }
       : { sessionId: path.basename(fullPath, '.jsonl'), model: null, project: null, agentAttributionVersion: 1, accountingVersion: 1, eventKeyVersion: 1, ownId: null };
     let chunk;
     try {
       chunk = readCompleteLines(fullPath, startOffset, stat.size, { streaming: true });
     } catch (error) {
       readErrors += 1;
-      lastReadError = error?.code || (error instanceof Error ? error.message : String(error));
+      lastReadError = /** @type {NodeJS.ErrnoException} */ (error)?.code || (error instanceof Error ? error.message : String(error));
       continue;
     }
+    /** @type {Pick<SessionImportSummary, 'events' | 'observations' | 'rejected' | 'lastRejection' | 'duplicateEvents' | 'reconciledEvents'>} */
     const beforeFile = { events, observations, rejected, lastRejection, duplicateEvents, reconciledEvents };
     try {
       // VACUUM-backed safety copies must happen outside the file transaction.
@@ -577,7 +756,7 @@ function importLocalSessions(store, days = 120) {
       if (!reconciliationBackup && migration.backupNeeded) {
         reconciliationBackup = store.createBackup();
       }
-      const recordLocalRateLimit = (entry) => recordRateLimit(store, entry.payload.rate_limits, entry.timestamp, 'local-official', {}, {
+      const recordLocalRateLimit = (/** @type {Record<string, any>} */ entry) => recordRateLimit(store, entry.payload.rate_limits, entry.timestamp, 'local-official', {}, {
         onRejected: (error) => {
           rejected += 1;
           lastRejection = error instanceof Error ? error.message : String(error);
@@ -586,6 +765,7 @@ function importLocalSessions(store, days = 120) {
       // One commit per file: the rows and the cursor that says they were read
       // land together, and a first import no longer pays a WAL sync per event.
       store.transaction(() => {
+        /** @type {Map<string, Record<string, any>>} */
         const repeatedRateLimits = new Map();
         for (const entry of sessionEntries(chunk.lines, state, (message) => { rejected += 1; lastRejection = message; })) {
           if (entry.type !== 'event_msg' || entry.payload?.type !== 'token_count') continue;
@@ -604,8 +784,10 @@ function importLocalSessions(store, days = 120) {
             } else if (duplicate) {
               duplicateEvents += 1;
               if (reconciliationBackup && event.eventKey !== previousSnapshot.eventKey) {
-                reconciledEvents += store.prepare(`DELETE FROM usage_events WHERE ${DUPLICATE_ROW_GUARD}`)
-                  .run(...duplicateRowParameters(event)).changes;
+                // The count of rows changed is a plain number: the store does
+                // not ask SQLite for big integers.
+                reconciledEvents += /** @type {number} */ (store.prepare(`DELETE FROM usage_events WHERE ${DUPLICATE_ROW_GUARD}`)
+                  .run(...duplicateRowParameters(event)).changes);
               }
             } else if (parentKey) {
               duplicateEvents += 1;
@@ -617,7 +799,7 @@ function importLocalSessions(store, days = 120) {
                 state.lastTokenSnapshot = fingerprint ? { fingerprint, eventKey: event.eventKey } : null;
                 events += 1;
               } catch (error) {
-                if (error?.code) throw error;
+                if (errorCode(error)) throw error;
                 state.lastTokenSnapshot = null;
                 rejected += 1;
                 lastRejection = error instanceof Error ? error.message : String(error);
@@ -626,7 +808,7 @@ function importLocalSessions(store, days = 120) {
           }
           if (entry.payload?.rate_limits) {
             const raw = entry.payload.rate_limits;
-            const limitId = raw.limitId ?? raw.limit_id ?? 'codex';
+            const limitId = raw.limitId ?? raw.limit_id ?? CODEX.mainLimitId;
             const reading = rateLimitReading(raw);
             const kept = state.keptRateLimits?.[limitId];
             const at = Date.parse(entry.timestamp);
@@ -643,7 +825,8 @@ function importLocalSessions(store, days = 120) {
         // is never older than the log.
         for (const [limitId, entry] of repeatedRateLimits) {
           observations += recordLocalRateLimit(entry);
-          state.keptRateLimits = { ...state.keptRateLimits, [limitId]: { ...state.keptRateLimits[limitId], at: Date.parse(entry.timestamp) } };
+          // A reading counts as repeated only against one already kept for its limit.
+          state.keptRateLimits = { ...state.keptRateLimits, [limitId]: { .../** @type {NonNullable<SessionState['keptRateLimits']>} */ (state.keptRateLimits)[limitId], at: Date.parse(entry.timestamp) } };
         }
         store.markImportedFile(fullPath, stat.mtimeMs, startOffset + chunk.consumedBytes, state);
         if (movedFrom) store.forgetImportedFile(movedFrom);
@@ -665,19 +848,32 @@ function importLocalSessions(store, days = 120) {
 // the app server or a session log. A run's count of new rows cannot answer
 // that: it is zero whenever nothing was appended since the last refresh. No
 // window runs longer than the bound, so it only limits how far back to look.
+/**
+ * @param {Store} store
+ * @param {number} [nowMs]
+ */
 function hasActiveReading(store, nowMs = Date.now()) {
-  return store.hasUsableObservation('codex', nowMs, { activeWithinMs: MAX_QUOTA_RESET_AHEAD_MS });
+  return store.hasUsableObservation(CODEX.id, nowMs, { activeWithinMs: MAX_QUOTA_RESET_AHEAD_MS });
 }
 
-const withoutFullStop = (text) => String(text || 'unknown reason').replace(/\.$/, '');
+const withoutFullStop = (/** @type {unknown} */ text) => String(text || 'unknown reason').replace(/\.$/, '');
 
+/**
+ * @param {Store} store
+ * @param {object} [options]
+ * @param {typeof findCodexBinary} [options.findBinary]
+ * @param {typeof importLocalSessions} [options.importSessions]
+ * @param {typeof collectFromAppServer} [options.collectAppServer]
+ */
 async function refreshCodex(store, {
   findBinary = findCodexBinary,
   importSessions = importLocalSessions,
   collectAppServer = collectFromAppServer,
 } = {}) {
   const binary = findBinary();
+  /** @type {SessionImportSummary | NoSessionImport} */
   let local = { importedFiles: 0, events: 0, observations: 0 };
+  /** @type {string | null} */
   let localWarning = null;
   let localScanFailed = false;
   try {
@@ -698,7 +894,7 @@ async function refreshCodex(store, {
     const detail = localWarning
       ? `Codex executable was not found. ${localWarning}`
       : 'Codex executable was not found.';
-    store.setSourceStatus('codex', status, detail, { ...local, localWarning });
+    store.setSourceStatus(CODEX.id, status, detail, { ...local, localWarning });
     return { binary: null, appServer: null, local, localWarning };
   }
 
@@ -718,7 +914,7 @@ async function refreshCodex(store, {
       const standing = active
         ? '; the last recorded reading is still active but was not replaced.'
         : ', and no earlier reading is still active, so the Codex allowance is unknown.';
-      store.setSourceStatus('codex', active ? 'stale' : 'unavailable',
+      store.setSourceStatus(CODEX.id, active ? 'stale' : 'unavailable',
         `${cause}${standing}${localWarning ? ' Local session records could not be scanned.' : ''}`, {
           binary,
           appServer,
@@ -741,7 +937,7 @@ async function refreshCodex(store, {
     if (appServer.rejected) {
       detail += ` ${appServer.rejected} allowance window${appServer.rejected === 1 ? '' : 's'} in the reading ${appServer.rejected === 1 ? 'was' : 'were'} rejected and left unchanged (${withoutFullStop(appServer.lastRejection)}).`;
     }
-    store.setSourceStatus('codex', 'connected', detail, {
+    store.setSourceStatus(CODEX.id, 'connected', detail, {
       binary,
       appServer,
       local,
@@ -757,7 +953,7 @@ async function refreshCodex(store, {
     // notification each time. A run in which the local scan failed as well
     // observed nothing.
     const status = !localScanFailed && hasActiveReading(store) ? 'observing' : 'error';
-    store.setSourceStatus('codex', status, `App server unavailable; ${localDetail} ${message}`, {
+    store.setSourceStatus(CODEX.id, status, `App server unavailable; ${localDetail} ${message}`, {
       binary,
       local,
       localWarning,

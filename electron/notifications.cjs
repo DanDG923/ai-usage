@@ -4,9 +4,52 @@ const { SOURCES: SUBSCRIPTION_SOURCES, subscriptionVisible } = require('./dashbo
 const { selectDisplayedWindows } = require('./quota-selection.cjs');
 const { localDayKey } = require('./time.cjs');
 
+/** @typedef {import('./types').Quota} Quota */
+/** @typedef {import('./types').QuotaWindow} QuotaWindow */
+/** @typedef {import('./types').Source} Source */
+
+/**
+ * A source as a snapshot lists it. The time of its last collection is read
+ * under either spelling.
+ * @typedef {Source & { lastSuccessAt?: string | null }} SnapshotSource
+ */
+
+/**
+ * A tray or dashboard snapshot as this module reads it. Any part may be
+ * missing, since each is read defensively; only the dashboard's has costs.
+ * @typedef {Omit<Partial<import('./types').TraySnapshot>, 'sources'>
+ *   & { sources?: SnapshotSource[] }
+ *   & Partial<Pick<import('./types').Snapshot, 'costs'>>} SnapshotLike
+ */
+
+/**
+ * The snapshot before the current one. Only each window's bucket, reset and
+ * use, and each source's status, are compared, so a copy trimmed to those
+ * serves as well as a whole snapshot.
+ * @typedef {Pick<QuotaWindow, 'bucketId' | 'resetsAt' | 'usedPercent'>} PreviousWindow
+ * @typedef {{
+ *   quotas?: Partial<Record<import('./providers.mjs').SnapshotKey, { windows?: PreviousWindow[] } | null>>,
+ *   sources?: Pick<Source, 'id' | 'status'>[],
+ * }} PreviousSnapshot
+ */
+
+/**
+ * What decideNotifications remembers between refreshes; saved as JSON.
+ * @typedef {{
+ *   lastRiskSignature: string,
+ *   lastRiskNotifiedAt: number,
+ *   lastResetSignatures: Record<string, string>,
+ *   lastFallbackSignatures: Record<string, string>,
+ *   lastDigestDay: string | null,
+ * }} NotificationState
+ */
+
+/** @typedef {{ kind: 'risk' | 'reset' | 'fallback' | 'digest', title: string, body: string }} DesktopNotification */
+
 // The same subscription list the dashboard verdict uses; this module has
 // always addressed the snapshot quota key as `key`.
 const SOURCES = SUBSCRIPTION_SOURCES.map(({ id, ...source }) => ({ key: id, ...source }));
+/** @param {SnapshotLike | null | undefined} snapshot */
 const visibleSources = (snapshot) => SOURCES.filter((source) => subscriptionVisible(snapshot?.settings, source.key));
 
 // One ongoing risk episode is worth one notification, not one per refresh.
@@ -16,53 +59,74 @@ const FALLEN_BACK = new Set(['stale', 'degraded', 'error']);
 
 // Automatic refreshes can age a Claude reading or carry forward a failed
 // read. They never introduce a new plan-usage failure themselves.
+/** @param {Source | null | undefined} source */
 function agedWithoutReading(source) {
   if (source?.status !== 'stale') return false;
+  // The part of the Claude collector's status report that says whether this
+  // run asked for plan usage.
+  /** @type {{ planUsage?: { requested?: boolean }, automatic?: { provider?: { kind?: string } } }} */
   const metadata = source.metadata || {};
   return metadata.planUsage?.requested === false
     || metadata.automatic?.provider?.kind === 'not-requested';
 }
 
+/** @returns {NotificationState} */
 function emptyState() {
   return {
     lastRiskSignature: '',
     lastRiskNotifiedAt: 0,
     lastResetSignatures: {},
     lastFallbackSignatures: {},
-    lastDigestDay: null,
+    lastDigestDay: /** @type {string | null} */ (null),
   };
 }
 
+/**
+ * A quota's windows.
+ * @template W
+ * @param {{ windows?: W[] } | null | undefined} quota
+ * @returns {W[]}
+ */
 function quotaWindows(quota) {
   if (!quota) return [];
-  return Array.isArray(quota.windows) && quota.windows.length ? quota.windows : [quota];
+  // A quota that lists no windows is its own single window.
+  return Array.isArray(quota.windows) && quota.windows.length ? quota.windows : [/** @type {W} */ (quota)];
 }
 
 // The same window the dashboard card headlines, by the shared rule.
+/** @param {Quota | null | undefined} quota */
 function primaryWindow(quota) {
   return selectDisplayedWindows(quotaWindows(quota)).primary;
 }
 
 // The dashboard's "left now" rule (src/lib.ts). Fable is capped by what is
 // left of the shared Claude weekly pool.
+/** @param {QuotaWindow | null | undefined} window */
 function displayedRemaining(window) {
   if (!window) return null;
   if (window.sharedPool?.status === 'applied') return window.sharedPool.usableRemaining;
+  /** @type {Partial<import('./types').Forecast>} */
   const forecast = window.forecast || {};
   if (forecast.currentIsEstimated && forecast.estimatedCurrentRemaining != null) return forecast.estimatedCurrentRemaining;
   return window.remainingPercent;
 }
 
+/** @param {QuotaWindow | null | undefined} window */
 function isEstimated(window) {
   if (window?.sharedPool?.status === 'applied') return Boolean(window.sharedPool.estimated);
   return Boolean(window?.forecast?.currentIsEstimated && window?.forecast?.estimatedCurrentRemaining != null);
 }
 
 // "usable" when the Claude weekly limit, not Fable's own, sets what is left.
+/** @param {QuotaWindow | null | undefined} window */
 function poolLimited(window) {
   return window?.sharedPool?.status === 'applied' && window.sharedPool.binding === 'pool';
 }
 
+/**
+ * @param {string} resetsAt
+ * @param {number} nowMs
+ */
 function resetDistance(resetsAt, nowMs) {
   const hours = Math.max(0, (Date.parse(resetsAt) - nowMs) / 3_600_000);
   if (hours < 1) return 'under an hour';
@@ -73,6 +137,10 @@ function resetDistance(resetsAt, nowMs) {
 
 // A plain-text digest of the dashboard: the tray tooltip, the daily digest,
 // and "copy summary" all read from this so they can never disagree.
+/**
+ * @param {SnapshotLike | null | undefined} snapshot
+ * @param {number} [nowMs]
+ */
 function buildSummaryLines(snapshot, nowMs = Date.now()) {
   const lines = [];
   for (const source of visibleSources(snapshot)) {
@@ -81,6 +149,7 @@ function buildSummaryLines(snapshot, nowMs = Date.now()) {
       lines.push(`${source.label}: no allowance reading yet`);
       continue;
     }
+    /** @type {Partial<import('../src/types').Forecast>} */
     const forecast = window.forecast || {};
     const remaining = displayedRemaining(window);
     const estimated = isEstimated(window);
@@ -89,7 +158,7 @@ function buildSummaryLines(snapshot, nowMs = Date.now()) {
       continue;
     }
     const parts = [poolLimited(window)
-      ? `${estimated ? '~' : ''}${Math.round(remaining ?? 0)}% usable (Fable limit ${Math.round(window.sharedPool.capRemaining)}% left)`
+      ? `${estimated ? '~' : ''}${Math.round(remaining ?? 0)}% usable (Fable limit ${Math.round(/** @type {import('../src/types').SharedPoolApplied} */ (window.sharedPool).capRemaining)}% left)`
       : `${estimated ? '~' : ''}${Math.round(remaining ?? 0)}% left`];
     if (window.resetsAt) parts.push(`resets in ${resetDistance(window.resetsAt, nowMs)}`);
     if (forecast.expectedRemaining != null) parts.push(`expected ${Math.round(forecast.expectedRemaining)}% at reset`);
@@ -99,6 +168,10 @@ function buildSummaryLines(snapshot, nowMs = Date.now()) {
   return lines;
 }
 
+/**
+ * @param {SnapshotLike | null | undefined} snapshot
+ * @param {number} [nowMs]
+ */
 function buildSummaryText(snapshot, nowMs = Date.now()) {
   const verdict = snapshot?.dashboardVerdict?.label || 'Usage status unknown';
   const costs = snapshot?.costs;
@@ -113,6 +186,7 @@ function buildSummaryText(snapshot, nowMs = Date.now()) {
   ].join('\n');
 }
 
+/** @param {SnapshotLike | null | undefined} snapshot */
 function buildTrayTooltip(snapshot) {
   const verdict = snapshot?.dashboardVerdict?.label || 'AI Usage';
   const compact = visibleSources(snapshot).map((source) => {
@@ -134,13 +208,24 @@ function buildTrayTooltip(snapshot) {
 // previous snapshot, the persisted decision state, and the clock; returns the
 // notifications to show and the state to persist. Snoozed alerts are dropped,
 // not deferred — when the snooze ends, the next refresh judges afresh.
+/**
+ * @param {{
+ *   previous?: PreviousSnapshot | null,
+ *   current?: SnapshotLike | null,
+ *   state?: NotificationState,
+ *   nowMs?: number,
+ * }} input
+ * @returns {{ notifications: DesktopNotification[], state: NotificationState }}
+ */
 function decideNotifications({ previous, current, state = emptyState(), nowMs = Date.now() }) {
   const next = { ...emptyState(), ...state, lastResetSignatures: { ...state.lastResetSignatures }, lastFallbackSignatures: { ...state.lastFallbackSignatures } };
   // Saved before 1.0.52 renamed the allowance: an open episode must not alert again.
   next.lastRiskSignature = String(next.lastRiskSignature || '').split('|')
     .map((part) => (part === 'Fable 5 · Fable 5 weekly' ? 'Fable · Fable weekly' : part === 'Fable 5' ? 'Fable' : part))
     .join('|');
+  /** @type {Partial<import('./types').Settings>} */
   const settings = current?.settings || {};
+  /** @type {DesktopNotification[]} */
   const notifications = [];
   const snoozedUntil = settings.alertsSnoozedUntil ? Date.parse(settings.alertsSnoozedUntil) : Number.NaN;
   const snoozed = Number.isFinite(snoozedUntil) && snoozedUntil > nowMs;
@@ -158,10 +243,12 @@ function decideNotifications({ previous, current, state = emptyState(), nowMs = 
     if (!repeated && !coolingDown) {
       next.lastRiskSignature = signature;
       next.lastRiskNotifiedAt = nowMs;
-      const runsOut = visibleSources(current).flatMap((source) => quotaWindows(current.quotas?.[source.key]).filter((window) => !window.forecast?.expired))
+      // The verdict was read from `current`, so there is one; and the filter
+      // before the parse leaves only run-out times that are set.
+      const runsOut = visibleSources(current).flatMap((source) => quotaWindows(/** @type {SnapshotLike} */ (current).quotas?.[source.key]).filter((window) => !window.forecast?.expired))
         .map((window) => window?.forecast?.exhaustsAt)
         .filter(Boolean)
-        .map((at) => Date.parse(at))
+        .map((at) => Date.parse(/** @type {string} */ (at)))
         .filter(Number.isFinite)
         .sort((a, b) => a - b)[0];
       const when = runsOut
@@ -196,6 +283,7 @@ function decideNotifications({ previous, current, state = emptyState(), nowMs = 
 
   // Compare each bucket only with itself. Changing the riskiest window is not
   // a reset. Legacy per-provider signatures safely reseed without an alert.
+  /** @type {Record<string, string>} */
   const resetSignatures = {};
   for (const source of visibleSources(current)) {
     for (const window of quotaWindows(current?.quotas?.[source.key])) {
@@ -224,7 +312,9 @@ function decideNotifications({ previous, current, state = emptyState(), nowMs = 
   next.lastResetSignatures = resetSignatures;
 
   // Fallback: a collector that was healthy (or merely aged) and now failed.
+  /** @type {Map<string, Source>} */
   const health = new Map((current?.sources || []).map((source) => [source.id, source]));
+  /** @type {Map<string, Pick<Source, 'id' | 'status'>>} */
   const previousHealth = new Map((previous?.sources || []).map((source) => [source.id, source]));
   for (const source of visibleSources(current)) {
     const now = health.get(source.healthId);

@@ -6,6 +6,12 @@ const QUOTA_CLOCK_SKEW_MS = 5 * 60_000;
 // Matches the store's learning horizon while retaining historical rows on disk.
 const FORECAST_LOOKBACK_MS = 45 * DAY_MS;
 
+/**
+ * @param {number} observedMs
+ * @param {number} resetMs
+ * @param {number | null | undefined} windowMinutes
+ * @param {number} nowMs
+ */
 function validQuotaTime(observedMs, resetMs, windowMinutes, nowMs) {
   return Number.isFinite(nowMs) && Number.isFinite(observedMs) && Number.isFinite(resetMs)
     && observedMs <= nowMs + QUOTA_CLOCK_SKEW_MS

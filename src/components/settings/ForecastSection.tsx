@@ -1,12 +1,11 @@
 import { ChevronRight } from 'lucide-react';
 import { Fragment, useId, useRef, useState } from 'react';
+import { DAY_NAMES } from '../../lib';
 import type { Settings, Snapshot } from '../../types';
 import { AllowanceChanges } from './AllowanceChanges';
 import { budgetPreview } from './budget-preview';
 import { ForecastExcludedDates } from './ForecastExcludedDates';
 import { NumericSetting, SettingColumns, SettingNote, SettingRow, SettingsSection, hourOptions } from './fields';
-
-const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 export function ForecastSection({
   snapshot,

@@ -1,5 +1,5 @@
 import { AlertOctagon, Info, Upload } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { DesktopImportPreview, Snapshot } from '../types';
 import { compactNumber, formatInt, money } from '../lib';
 import { Disclosure } from './details/Disclosure';
@@ -21,6 +21,22 @@ export function DesktopEstimates({
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const estimates = snapshot.desktopEstimates;
+  // The main process holds a parsed export until it is imported or cancelled.
+  // Leaving the page with a preview open cancels it rather than leaving it
+  // held for the rest of its lifetime; an import already sent for that
+  // preview is left to finish, and a failed cancel is of no consequence.
+  const openPreview = useRef<string | null>(null);
+  const importing = useRef<string | null>(null);
+  useEffect(() => {
+    openPreview.current = preview?.id ?? null;
+  }, [preview]);
+  useEffect(
+    () => () => {
+      const id = openPreview.current;
+      if (id && id !== importing.current) window.aiUsage?.cancelDesktopExport(id).catch(() => {});
+    },
+    [],
+  );
   const perform = async (action: () => Promise<void>) => {
     if (busy) return;
     setBusy(true);
@@ -49,7 +65,13 @@ export function DesktopEstimates({
   const save = () =>
     perform(async () => {
       if (!preview || !window.aiUsage) return;
-      const result = await window.aiUsage.importDesktopExport(preview.id, assumedModel || null);
+      importing.current = preview.id;
+      let result;
+      try {
+        result = await window.aiUsage.importDesktopExport(preview.id, assumedModel || null);
+      } finally {
+        importing.current = null;
+      }
       if (result.snapshot) onSnapshot(result.snapshot);
       setPreview(null);
       setNotice(
@@ -222,15 +244,24 @@ export function DesktopEstimates({
         )}
       </div>
       <div className="table-scroll">
-        <table className="costs-table desktop-table">
+        {/* Named by attribute: a caption, even a hidden one, makes this table a pixel taller. */}
+        <table className="costs-table desktop-table" aria-label="Claude desktop and web chat estimates by model">
           <thead>
             <tr>
-              <th>Model</th>
-              <th>Model evidence</th>
-              <th className="num">Replies</th>
-              <th className="num">Est. prompt tokens</th>
-              <th className="num">Est. reply tokens</th>
-              <th className="num">Est. text value</th>
+              <th scope="col">Model</th>
+              <th scope="col">Model evidence</th>
+              <th scope="col" className="num">
+                Replies
+              </th>
+              <th scope="col" className="num">
+                Est. prompt tokens
+              </th>
+              <th scope="col" className="num">
+                Est. reply tokens
+              </th>
+              <th scope="col" className="num">
+                Est. text value
+              </th>
             </tr>
           </thead>
           <tbody>

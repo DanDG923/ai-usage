@@ -2,8 +2,67 @@
 
 const { createAllowanceScaler } = require('./allowance-changes.cjs');
 const { FORECAST_LOOKBACK_MS } = require('./quota-time.cjs');
-const { evidenceTimes, normaliseObservation } = require('./forecast.cjs');
+const { evidenceTimes, normaliseObservation } = require('./quota-evidence.cjs');
 const { OFFICIAL_PROVENANCES: CALIBRATION_PROVENANCES } = require('./quota-provenance.mjs');
+const { present } = require('./present.cjs');
+const { CLAUDE, CLAUDE_MODEL_IDS, CODEX, cachedInputInsideInput, claudeModelFamily, isWeeklyBucket, providerById } = require('./providers.mjs');
+
+/** @typedef {import('./types').ObservationRow} ObservationRow */
+/**
+ * The columns of usage_events an estimate reads.
+ * @typedef {Pick<import('./types').UsageEventRow, 'source_id' | 'occurred_at' | 'model' | 'input_tokens' | 'cached_input_tokens'
+ *   | 'cache_write_input_tokens' | 'output_tokens' | 'reasoning_output_tokens'>} TokenEventRow
+ */
+/** @typedef {import('./types').AllowanceChange} AllowanceChange */
+
+/**
+ * Token counts, or shares of a total, by kind.
+ * @typedef {{ input: number, cacheRead: number, cacheWrite: number, output: number }} TokenMix
+ */
+
+/** @typedef {import('./providers.mjs').ModelMatcher} ModelMatcher */
+
+/**
+ * Which token records can explain movement in one weekly limit.
+ * @typedef {object} Scope
+ * @property {string} eventSource The ledger source whose records count.
+ * @property {ModelMatcher} modelMatches Whether a record's model draws on this limit.
+ * @property {'overall' | 'model'} kind Whether the limit covers every model or one family.
+ */
+
+/**
+ * One weekly reading, checked and with its times as milliseconds.
+ * @typedef {object} CapacityReading
+ * @property {number} at When it was recorded.
+ * @property {number} reset
+ * @property {number} used Percent, in the allowance in force now once rescaled.
+ * @property {string | null} plan
+ * @property {boolean} official
+ * @property {boolean} manual
+ * @property {string} provenance
+ * @property {number} evidence When its figure was fetched, as far as is known.
+ * @property {number} known How current its figure is known to be.
+ * @property {boolean} confirms Whether it is a read or a dated fetch, which can show a replenishment.
+ * @property {number | null} seenSince A status-line reading's first redraw of its fetch.
+ */
+
+/**
+ * A rise in the used percentage between two fetches, with the tokens
+ * recorded between them.
+ * @typedef {object} MatchedInterval
+ * @property {number} before
+ * @property {number} after
+ * @property {number} delta Percentage points.
+ * @property {number} cycle Which allowance cycle it fell in, counted from zero.
+ * @property {boolean} manual Whether either end was entered by hand.
+ * @property {number} tokens
+ * @property {TokenMix} mix
+ * @property {Map<string, number>} models Tokens by model.
+ * @property {number} capacity The weekly token capacity this interval implies.
+ * @property {number} weight
+ */
+
+/** @typedef {ReturnType<typeof mixOf>} MixShares */
 
 const DAY_MS = 86_400_000;
 const WEEK_MS = 7 * DAY_MS;
@@ -15,18 +74,24 @@ const RESET_TOLERANCE_MS = 60_000;
 const MIN_INTERVAL_PERCENT = 5;
 const MIN_INTERVALS = 3;
 const OFFICIAL_PROVENANCES = new Set(CALIBRATION_PROVENANCES);
-const MODEL_IDS = new Set(['claude-fable-5-1', 'claude-fable-5', 'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-sonnet-5-5', 'claude-sonnet-5', 'claude-haiku-5-5', 'claude-haiku-4-5']);
+/** @type {Set<string>} */
+const MODEL_IDS = new Set(CLAUDE_MODEL_IDS);
 const EMPTY_MIX = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
 const BASE_WARNINGS = [
   'This estimates capacity for the observed model and token mix, not a fixed provider token limit.',
   'Only locally recorded activity is matched; usage from other devices or apps may be missing.',
 ];
 
+/** @param {unknown} value */
 function asTime(value) {
   const result = typeof value === 'number' ? value : typeof value === 'string' ? Date.parse(value) : NaN;
   return Number.isFinite(result) ? result : NaN;
 }
 
+/**
+ * @param {{ metadata_json?: string | null }} row
+ * @returns {Record<string, any>} Whatever the collector stored, parsed.
+ */
 function metadataOf(row) {
   try {
     const value = JSON.parse(row.metadata_json || '{}');
@@ -34,37 +99,42 @@ function metadataOf(row) {
   } catch { return {}; }
 }
 
+/**
+ * @param {string | undefined} sourceId
+ * @param {string} bucketId
+ * @returns {Scope | null}
+ */
 function scopeFor(sourceId, bucketId) {
-  const family = (name) => {
-    const pattern = new RegExp(`^claude-${name}(?:-|$)`, 'i');
-    return (model) => pattern.test(model || '');
-  };
-  if (sourceId === 'codex' && ['codex:weekly', 'codex:primary', 'codex:secondary'].includes(bucketId)) {
-    // Spark is metered separately. Its tokens remain in the ledger but cannot
-    // explain movement in the main Codex allowance or increase its capacity.
-    return { eventSource: 'codex', modelMatches: (model) =>
-      !/^gpt-5\.3-codex-spark(?:$|-(?:\d{8}|\d{4}-\d{2}-\d{2})$)/i.test(typeof model === 'string' ? model.trim() : ''), kind: 'overall' };
+  // A provider's own weekly allowance: the registry says which ledger source
+  // and which models count toward it.
+  const provider = providerById(sourceId);
+  if (provider && isWeeklyBucket(sourceId, bucketId)) {
+    return { eventSource: provider.ledgerSource, modelMatches: provider.countsModel, kind: provider.weeklyScope };
   }
-  if (sourceId === 'claude-fable' && ['fable_seven_day', 'fable:seven_day_fable'].includes(bucketId)) {
-    return { eventSource: 'claude', modelMatches: family('fable'), kind: 'model' };
-  }
-  if (sourceId !== 'claude') return null;
-  if (bucketId === 'seven_day') return { eventSource: 'claude', modelMatches: () => true, kind: 'overall' };
+  // The rest is Claude's alone: the weekly limits it reports per model family
+  // or per model, beside the overall one.
+  if (provider !== CLAUDE) return null;
+  const eventSource = CLAUDE.ledgerSource;
+  /** @type {Record<string, string>} */
   const known = { seven_day_opus: 'opus', seven_day_sonnet: 'sonnet' };
-  if (Object.hasOwn(known, bucketId)) return { eventSource: 'claude', modelMatches: family(known[bucketId]), kind: 'model' };
+  if (Object.hasOwn(known, bucketId)) return { eventSource, modelMatches: claudeModelFamily(known[bucketId]), kind: 'model' };
   if (!String(bucketId).startsWith('model_scoped:')) return null;
   let label;
   try { label = decodeURIComponent(bucketId.slice('model_scoped:'.length)).trim().toLowerCase(); }
   catch { return null; }
   const familyLabel = /^(?:claude )?(opus|sonnet|fable)$/.exec(label);
-  if (familyLabel) return { eventSource: 'claude', modelMatches: family(familyLabel[1]), kind: 'model' };
+  if (familyLabel) return { eventSource, modelMatches: claudeModelFamily(familyLabel[1]), kind: 'model' };
   if (!MODEL_IDS.has(label)) return null;
-  return { eventSource: 'claude', kind: 'model', modelMatches: (model) => {
+  return { eventSource, kind: 'model', modelMatches: (model) => {
     const value = String(model || '').toLowerCase();
     return value === label || (value.startsWith(`${label}-`) && /^(?:\d{8}|\d{4}-\d{2}-\d{2})$/.test(value.slice(label.length + 1)));
   } };
 }
 
+/**
+ * @param {string[]} dates
+ * @returns {(before: number, after: number) => boolean}
+ */
 function excludedIntervals(dates) {
   const ranges = (Array.isArray(dates) ? dates : []).flatMap((value) => {
     if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return [];
@@ -78,6 +148,16 @@ function excludedIntervals(dates) {
   return (before, after) => ranges.some((range) => range.start <= after && range.end > before);
 }
 
+/**
+ * @param {ObservationRow} row
+ * @param {string | undefined} sourceId
+ * @param {string | undefined} bucketId
+ * @param {Scope} scope
+ * @param {number} nowMs
+ * @param {Map<ObservationRow, number>} evidence When each row's figure was fetched.
+ * @param {Map<ObservationRow, number>} known How current each row's figure is known to be.
+ * @returns {CapacityReading | null}
+ */
 function normalizeObservation(row, sourceId, bucketId, scope, nowMs, evidence, known) {
   if (!row || row.source_id !== sourceId || row.bucket_id !== bucketId || row.window_minutes !== 10_080) return null;
   const prepared = normaliseObservation(row);
@@ -88,8 +168,11 @@ function normalizeObservation(row, sourceId, bucketId, scope, nowMs, evidence, k
   if (row.remaining_percent != null && (typeof row.remaining_percent !== 'number'
     || !Number.isFinite(row.remaining_percent) || Math.abs(used + row.remaining_percent - 100) > 0.1)) return null;
   const metadata = metadataOf(row);
+  // A provider that names its limits (Codex) may record another limit in
+  // the same bucket; only its main one is this allowance.
+  const mainLimitId = providerById(sourceId)?.mainLimitId ?? null;
   if ((metadata.scope && metadata.scope !== scope.kind)
-    || (sourceId === 'codex' && metadata.limitId != null && metadata.limitId !== 'codex')) return null;
+    || (mainLimitId != null && metadata.limitId != null && metadata.limitId !== mainLimitId)) return null;
   return { at, reset, used, plan: typeof row.plan_type === 'string' ? row.plan_type.trim().toLowerCase() || null : null,
     official: OFFICIAL_PROVENANCES.has(row.provenance), manual: row.provenance === 'manual-official',
     provenance: row.provenance, evidence: Math.min(at, evidence.get(row) ?? at), known: Math.min(at, known.get(row) ?? at),
@@ -97,35 +180,50 @@ function normalizeObservation(row, sourceId, bucketId, scope, nowMs, evidence, k
     // redraw may restate older limits.
     confirms: row.provenance !== 'official-statusline' || Number.isFinite(prepared.fetchedAfter),
     // A status-line reading's first redraw of its fetch: the fetch was no later.
-    seenSince: Number.isFinite(prepared.seenSince) ? Math.min(at, prepared.seenSince) : null };
+    // The finite test rules out a missing one, which the checker cannot tell.
+    seenSince: Number.isFinite(prepared.seenSince) ? Math.min(at, /** @type {number} */ (prepared.seenSince)) : null };
 }
 
 // Where an interval that ends on a reading closes: its fetch, or, when that
 // cannot be ordered after the interval's start, the first later moment its
 // figure is known to have been fetched by. Boundaries then only move forward,
 // so no tokens fall between intervals or into two. Null when none is later.
+/**
+ * @param {CapacityReading} reading
+ * @param {number} startMs
+ */
 function closingMs(reading, startMs) {
-  for (const at of [reading.evidence, reading.seenSince, reading.at]) {
+  // A missing time is null, which the finite test below passes over.
+  for (const at of /** @type {number[]} */ ([reading.evidence, reading.seenSince, reading.at])) {
     if (Number.isFinite(at) && at > startMs) return at;
   }
   return null;
 }
 
+/**
+ * @param {TokenEventRow} row
+ * @param {Scope} scope
+ * @param {number} nowMs
+ */
 function normalizeEvent(row, scope, nowMs) {
   if (!row || row.source_id !== scope.eventSource || !scope.modelMatches(row.model)) return null;
   const at = asTime(row.occurred_at);
   if (!Number.isFinite(at) || at > nowMs || at < nowMs - LOOKBACK_MS) return null;
-  const fields = ['input_tokens', 'cached_input_tokens', 'cache_write_input_tokens', 'output_tokens', 'reasoning_output_tokens'];
+  const fields = /** @type {const} */ (['input_tokens', 'cached_input_tokens', 'cache_write_input_tokens', 'output_tokens', 'reasoning_output_tokens']);
   const [input, read, write, output, reasoning] = fields.map((field) => row[field] ?? 0);
   if (![input, read, write, output, reasoning].every((value) => Number.isSafeInteger(value) && value >= 0)
-    || reasoning > output || (scope.eventSource === 'codex' && read > input)) return { at, invalid: true };
-  const mix = { input: scope.eventSource === 'codex' ? input - read : input,
+    || reasoning > output || (cachedInputInsideInput(scope.eventSource) && read > input)) return { at, invalid: /** @type {const} */ (true) };
+  const mix = { input: cachedInputInsideInput(scope.eventSource) ? input - read : input,
     cacheRead: read, cacheWrite: write, output };
   const tokens = Object.values(mix).reduce((sum, value) => sum + value, 0);
-  if (!Number.isSafeInteger(tokens)) return { at, invalid: true };
+  if (!Number.isSafeInteger(tokens)) return { at, invalid: /** @type {const} */ (true) };
   return { at, tokens, mix, model: typeof row.model === 'string' && row.model.trim() ? row.model : 'Unknown' };
 }
 
+/**
+ * @param {{ capacity: number, weight: number }[]} entries
+ * @param {number} fraction
+ */
 function weightedQuantile(entries, fraction) {
   const sorted = [...entries].sort((a, b) => a.capacity - b.capacity);
   const target = sorted.reduce((sum, entry) => sum + entry.weight, 0) * fraction;
@@ -137,38 +235,52 @@ function weightedQuantile(entries, fraction) {
   return sorted.at(-1)?.capacity ?? 0;
 }
 
+/** @param {Pick<MatchedInterval, 'tokens' | 'models' | 'mix'>[]} intervals */
 function mixOf(intervals) {
+  /** @type {Map<string, number>} */
   const models = new Map();
   const tokenMix = { ...EMPTY_MIX };
   let tokens = 0;
   for (const interval of intervals) {
     tokens += interval.tokens;
     for (const [model, count] of interval.models) models.set(model, (models.get(model) || 0) + count);
-    for (const key of Object.keys(tokenMix)) tokenMix[key] += interval.mix[key];
+    // The keys of a mix are its four kinds and no others, here and wherever else they are listed.
+    for (const key of /** @type {(keyof TokenMix)[]} */ (Object.keys(tokenMix))) tokenMix[key] += interval.mix[key];
   }
   return { models: new Map([...models].map(([model, count]) => [model, tokens > 0 ? count / tokens : 0])),
-    tokens: Object.fromEntries(Object.entries(tokenMix).map(([key, count]) => [key, tokens > 0 ? count / tokens : 0])) };
+    tokens: /** @type {typeof EMPTY_MIX} */ (Object.fromEntries(Object.entries(tokenMix).map(([key, count]) => [key, tokens > 0 ? count / tokens : 0]))) };
 }
 
+/**
+ * @param {MixShares} left
+ * @param {MixShares} right
+ */
 function mixDistance(left, right) {
   const models = new Set([...left.models.keys(), ...right.models.keys()]);
   const modelDistance = [...models].reduce((sum, model) => sum + Math.abs((left.models.get(model) || 0) - (right.models.get(model) || 0)), 0) / 2;
-  const tokenDistance = Object.keys(EMPTY_MIX).reduce((sum, key) => sum + Math.abs(left.tokens[key] - right.tokens[key]), 0) / 2;
+  const tokenDistance = /** @type {(keyof TokenMix)[]} */ (Object.keys(EMPTY_MIX)).reduce((sum, key) => sum + Math.abs(left.tokens[key] - right.tokens[key]), 0) / 2;
   return Math.max(modelDistance, tokenDistance);
 }
 
+/**
+ * @param {number} value
+ * @param {'round' | 'floor' | 'ceil'} [direction]
+ */
 function roundedTokens(value, direction = 'round') {
   if (!(value > 0)) return 0;
   const step = Math.max(1, 10 ** (Math.floor(Math.log10(value)) - 1));
   return Math[direction](value / step) * step;
 }
 
+/** @param {{ sourceId?: string, bucketId?: string, observations?: ObservationRow[], events?: TokenEventRow[], nowMs?: number, excludedDates?: string[], allowanceChanges?: AllowanceChange[] }} [evidence] */
 function estimateTokenCapacity({ sourceId, bucketId, observations = [], events = [], nowMs = Date.now(), excludedDates = [], allowanceChanges = [] } = {}) {
+  /** @type {import('../src/types').TokenCapacityEstimate} */
   const result = { status: 'unavailable', reason: null, weeklyTokens: null, weeklyRange: null,
     remainingTokens: null, remainingRange: null, remainingAsOf: null, confidence: 'low',
     intervals: 0, cycles: 0, observedPercent: 0, calibratedAt: null, modelMix: [], tokenMix: { ...EMPTY_MIX },
     warnings: [...BASE_WARNINGS] };
-  const scope = scopeFor(sourceId, bucketId);
+  // A missing bucket fails every test in scopeFor, which then finds no scope.
+  const scope = scopeFor(sourceId, /** @type {string} */ (bucketId));
   if (!scope || !Number.isFinite(nowMs)) {
     return { ...result, reason: 'This limit cannot be matched safely to a known weekly token scope.' };
   }
@@ -186,7 +298,7 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
   // How current each figure is known to be, which decides whether it is fresh.
   const known = new Map(evidenceTimes(ordered, { known: true }).map((at, index) => [ordered[index], at]));
   const allReadings = (Array.isArray(observations) ? observations : [])
-    .map((row) => normalizeObservation(row, sourceId, bucketId, scope, nowMs, evidence, known)).filter(Boolean)
+    .map((row) => normalizeObservation(row, sourceId, bucketId, scope, nowMs, evidence, known)).filter(present)
     .map((row) => {
       // A share of the allowance in force when the figure was fetched.
       const scale = scaler ? scaler(row.evidence) : 1;
@@ -222,9 +334,9 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
   // them creates apparent corrections at every percentage step and continually
   // throws away the accumulating calibration interval. Prefer live readings
   // over the period they cover; retain transcript-only history outside it.
-  const liveReadings = sourceId === 'codex' ? readings.filter((row) => row.provenance === 'official') : [];
+  const liveReadings = sourceId === CODEX.id ? readings.filter((row) => row.provenance === 'official') : [];
   const calibrationReadings = liveReadings.length >= 2 ? readings.filter((row) =>
-    row.provenance !== 'local-official' || row.at < liveReadings[0].at || row.at > liveReadings.at(-1).at) : readings;
+    row.provenance !== 'local-official' || row.at < liveReadings[0].at || row.at > /** @type {typeof liveReadings[number]} */ (liveReadings.at(-1)).at) : readings;
   if (calibrationReadings.length < readings.length) {
     result.warnings.push('Live Codex readings take priority over overlapping transcript snapshots for calibration.');
   }
@@ -251,7 +363,7 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
       anchor = after; highWater = after.used; cycleReset = after.reset; cycle += 1; recovering = false;
       continue;
     }
-    if (sourceId === 'codex' && (anchor.provenance === 'local-official') !== (after.provenance === 'local-official')) {
+    if (sourceId === CODEX.id && (anchor.provenance === 'local-official') !== (after.provenance === 'local-official')) {
       // A source handoff has no known delay, so never match tokens across it.
       anchor = after; highWater = after.used; recovering = false;
       continue;
@@ -282,19 +394,20 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
   if (closeResets) result.warnings.push('Reset times shifted within a day; confidence remains limited.');
 
   const ledger = (Array.isArray(events) ? events : []).map((row) => normalizeEvent(row, scope, nowMs))
-    .filter(Boolean).sort((a, b) => a.at - b.at);
+    .filter(present).sort((a, b) => a.at - b.at);
   const matched = [];
   let cursor = 0, missing = false, invalid = false;
   for (const interval of intervals) {
     while (cursor < ledger.length && ledger[cursor].at <= interval.before) cursor += 1;
-    const item = { ...interval, tokens: 0, mix: { ...EMPTY_MIX }, models: new Map() };
+    // Its capacity and weight are set below, before it is kept.
+    const item = /** @type {MatchedInterval} */ ({ ...interval, tokens: 0, mix: { ...EMPTY_MIX }, models: new Map() });
     let invalidInterval = false;
     while (cursor < ledger.length && ledger[cursor].at <= interval.after) {
       const event = ledger[cursor++];
       if (event.invalid) { invalidInterval = true; continue; }
       item.tokens += event.tokens;
       item.models.set(event.model, (item.models.get(event.model) || 0) + event.tokens);
-      for (const key of Object.keys(item.mix)) item.mix[key] += event.mix[key];
+      for (const key of /** @type {(keyof TokenMix)[]} */ (Object.keys(item.mix))) item.mix[key] += event.mix[key];
     }
     if (invalidInterval || !Number.isSafeInteger(item.tokens)) { invalid = true; continue; }
     if (!(item.tokens > 0)) { missing = true; continue; }
@@ -331,7 +444,8 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
   result.intervals = retained.length;
   result.cycles = new Set(retained.map((entry) => entry.cycle)).size;
   result.observedPercent = retained.reduce((sum, entry) => sum + entry.delta, 0);
-  result.calibratedAt = retained.length ? new Date(retained.at(-1).after).toISOString() : null;
+  // Not empty where its length has just been tested.
+  result.calibratedAt = retained.length ? new Date(/** @type {MatchedInterval} */ (retained.at(-1)).after).toISOString() : null;
   if (retained.length < MIN_INTERVALS) {
     result.reason = 'Learning from official usage: at least three matched intervals of 5 percentage points are needed.';
     return result;
@@ -364,7 +478,8 @@ function estimateTokenCapacity({ sourceId, bucketId, observations = [], events =
     && !mixChanged && !broad && !inconsistent && !missing && !invalid && !closeResets
     && !retained.some((entry) => entry.manual) ? 'medium' : 'low';
 
-  const latestOfficial = readings.at(-1), latestAny = allReadings.at(-1);
+  // Never empty: the function has returned already when there are no official readings.
+  const latestOfficial = /** @type {typeof readings[number]} */ (readings.at(-1)), latestAny = allReadings.at(-1);
   // A local estimate can see replenishment before the provider publishes a
   // new reset timestamp. Once that happens, the old official percentage is no
   // longer a current-window anchor, even if later estimates rise again.

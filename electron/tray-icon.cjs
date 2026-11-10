@@ -6,6 +6,7 @@
 // Flight Deck status colours (src/styles/tokens.css, night set): ok #3ecf7a,
 // caution #f2a93b for watch and at risk, warning #ff5f52 for critical, and
 // text-3 #7d848e while the state is unknown.
+/** @type {Record<import('./types').ForecastState, number[]>} */
 const STATE_COLORS = {
   safe: [0x3e, 0xcf, 0x7a],
   watch: [0xf2, 0xa9, 0x3b],
@@ -14,11 +15,21 @@ const STATE_COLORS = {
   unknown: [0x7d, 0x84, 0x8e],
 };
 
+/**
+ * @param {Buffer} buffer
+ * @param {number} offset
+ * @param {number[]} rgb
+ * @param {number} alpha
+ */
 function blend(buffer, offset, rgb, alpha) {
   // BGRA byte order, straight alpha in the output.
   const [red, green, blue] = rgb;
   const existingAlpha = buffer[offset + 3] / 255;
   const outAlpha = alpha + existingAlpha * (1 - alpha);
+  /**
+   * @param {number} channelIndex
+   * @param {number} value
+   */
   const mix = (channelIndex, value) => {
     const existing = buffer[offset + channelIndex];
     const result = outAlpha > 0 ? (value * alpha + existing * existingAlpha * (1 - alpha)) / outAlpha : value;
@@ -30,8 +41,16 @@ function blend(buffer, offset, rgb, alpha) {
   buffer[offset + 3] = Math.round(outAlpha * 255);
 }
 
+/**
+ * @param {Buffer} bitmap
+ * @param {number} width
+ * @param {number} height
+ * @param {string} state
+ * @param {{ radius?: number, centerX?: number, centerY?: number }} [options]
+ */
 function paintStateDot(bitmap, width, height, state, options = {}) {
-  const rgb = STATE_COLORS[state] || STATE_COLORS.unknown;
+  // Any other name has no colour of its own and takes the unknown one.
+  const rgb = STATE_COLORS[/** @type {import('./types').ForecastState} */ (state)] || STATE_COLORS.unknown;
   const radius = options.radius ?? Math.max(3, Math.round(Math.min(width, height) * 0.2));
   const centerX = options.centerX ?? width - radius - 1;
   const centerY = options.centerY ?? height - radius - 1;

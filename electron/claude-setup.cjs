@@ -6,6 +6,7 @@ const { execFile, spawn } = require('node:child_process');
 const { findClaudeBinary, providerProcessOptions } = require('./provider-executable.cjs');
 const { fetchInstaller: downloadInstaller, verifyInstallerScript } = require('./claude-installer.cjs');
 const shippedPin = require('./claude-installer-pin.json');
+const { errorCode } = require('./caught.cjs');
 
 // The vendor installer is fetched, checked against the digest pinned at
 // release time, written beside the setup state, and only then run from that
@@ -14,6 +15,12 @@ const shippedPin = require('./claude-installer-pin.json');
 const INSTALLER_FILE = 'claude-install.ps1';
 const INSTALL_TARGET = 'stable';
 
+/**
+ * @param {string} file
+ * @param {readonly string[]} args
+ * @param {{ timeoutMs?: number, acceptExitOne?: boolean, environment?: NodeJS.ProcessEnv }} [options]
+ * @returns {Promise<string>} What the command wrote to its standard output.
+ */
 function runCommand(file, args, { timeoutMs = 15000, acceptExitOne = false, environment = process.env } = {}) {
   return new Promise((resolve, reject) => {
     execFile(file, args, { ...providerProcessOptions(file, environment), windowsHide: true, timeout: timeoutMs, maxBuffer: 1024 * 1024 }, (error, stdout) => {
@@ -26,16 +33,32 @@ function runCommand(file, args, { timeoutMs = 15000, acceptExitOne = false, envi
 
 // `environment` is the one the app was launched with: the update check
 // removes GitHub tokens from process.env, and Claude must not inherit that.
+/**
+ * @param {object} options
+ * @param {string} options.statePath
+ * @param {typeof findClaudeBinary} [options.findBinary]
+ * @param {typeof runCommand} [options.run]
+ * @param {typeof spawn} [options.launch]
+ * @param {() => unknown} options.installHelper
+ * @param {() => unknown} options.uninstallHelper
+ * @param {() => boolean} [options.helperInstalled]
+ * @param {NodeJS.ProcessEnv} [options.environment]
+ * @param {typeof downloadInstaller} [options.fetchInstaller]
+ * @param {typeof shippedPin} [options.installerPin]
+ * @param {(message: string) => void} [options.log]
+ */
 function createClaudeSetup({
   statePath, findBinary = findClaudeBinary, run = runCommand, launch = spawn, installHelper, uninstallHelper, helperInstalled = () => false,
   environment = process.env, fetchInstaller = downloadInstaller, installerPin = shippedPin, log = () => {},
-} = {}) {
+} = /** @type {any} */ ({})) {
   let busy = false;
+  /** @type {import('node:child_process').ChildProcess | null} */
   let child = null;
+  /** @type {(() => void) | null} */
   let cancelPending = null;
   const systemRoot = process.env.SystemRoot || 'C:\\Windows';
   const powershell = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-  const save = (dismissed) => {
+  const save = (/** @type {boolean} */ dismissed) => {
     fs.mkdirSync(path.dirname(statePath), { recursive: true });
     fs.writeFileSync(statePath, JSON.stringify({ dismissed }), 'utf8');
   };
@@ -53,6 +76,7 @@ function createClaudeSetup({
     }
     return { installed: Boolean(binary), auth, helperInstalled: helperInstalled(), dismissed: dismissed(), busy };
   }
+  /** @param {() => Promise<Awaited<ReturnType<typeof status>> | void>} action Resolves with a status it has already checked, or with nothing. */
   async function exclusive(action) {
     if (busy) throw new Error('Claude setup is already running.');
     busy = true;
@@ -63,15 +87,20 @@ function createClaudeSetup({
       return { ...checked, helperInstalled: helperInstalled(), dismissed: dismissed(), busy: false };
     } finally { busy = false; }
   }
+  /**
+   * @param {string} file
+   * @param {readonly string[]} args
+   * @param {number} timeoutMs
+   */
   function interactiveCommand(file, args, timeoutMs) {
-    return new Promise((resolve, reject) => {
+    return new Promise((/** @type {(value?: void) => void} */ resolve, reject) => {
       // Claude opens the user's browser itself. Discard its output so OAuth
       // URLs, codes and account details never enter app logs or the renderer.
       child = launch(file, args, { ...providerProcessOptions(file, environment), windowsHide: true, stdio: 'ignore' });
       const active = child;
       const timer = setTimeout(() => cancel(), timeoutMs);
       let settled = false;
-      const finish = (error) => {
+      const finish = (/** @type {Error | null} */ error) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
@@ -97,6 +126,7 @@ function createClaudeSetup({
   const CANCELLED = 'Claude setup was cancelled or timed out. You can try again.';
   // Runs the download under a cancellation handle so Cancel (or shutdown)
   // aborts the request, and a response that still arrives is discarded.
+  /** @param {string} url */
   async function cancellableDownload(url) {
     const controller = new AbortController();
     let cancelled = false;
@@ -107,8 +137,8 @@ function createClaudeSetup({
       if (cancelled) throw Object.assign(new Error(CANCELLED), { code: 'CLAUDE_INSTALLER_DOWNLOAD_CANCELLED' });
       return bytes;
     } catch (error) {
-      if (cancelled || error?.code === 'CLAUDE_INSTALLER_DOWNLOAD_CANCELLED') throw Object.assign(new Error(CANCELLED), { code: 'CLAUDE_INSTALLER_DOWNLOAD_CANCELLED' });
-      log(`Claude installer download failed${error?.code ? ` (${error.code})` : ''}.`);
+      if (cancelled || errorCode(error) === 'CLAUDE_INSTALLER_DOWNLOAD_CANCELLED') throw Object.assign(new Error(CANCELLED), { code: 'CLAUDE_INSTALLER_DOWNLOAD_CANCELLED' });
+      log(`Claude installer download failed${errorCode(error) ? ` (${errorCode(error)})` : ''}.`);
       throw new Error('The Claude Code installer could not be downloaded. Check your connection and try again.');
     } finally {
       if (cancelPending === handle) cancelPending = null;
@@ -144,7 +174,7 @@ function createClaudeSetup({
       if (checked.auth !== 'signed-in') throw new Error('Sign-in is not complete. Please try again.');
       return checked;
     }),
-    finish: ({ enableHelper } = {}) => exclusive(async () => {
+    finish: (/** @type {{ enableHelper?: boolean }} */ { enableHelper } = {}) => exclusive(async () => {
       const checked = await status();
       if (checked.auth !== 'signed-in') throw new Error('Sign in to Claude before finishing setup.');
       if (enableHelper === true) await installHelper();

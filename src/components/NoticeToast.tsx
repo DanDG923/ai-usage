@@ -31,7 +31,7 @@ export function noticeIsSticky(notice: Notice) {
 }
 
 /**
- * The notice lives here rather than in App state: every handler in App
+ * The notice lives here rather than in App state: every dashboard action
  * publishes to it, but only the toast needs to render when it changes. When
  * it was App state, each message and its twelve-second auto-clear re-rendered
  * whichever page was mounted, Settings and its price table included.

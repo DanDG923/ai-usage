@@ -1,0 +1,20 @@
+/*
+ * The cascade layer order for both windows (the dashboard and the tray
+ * flyout): the one place precedence between stylesheets is decided. Both
+ * entry points (main.tsx, flyout.tsx) import this file first, and every other
+ * stylesheet puts its rules in the layer named after it, so which file wins
+ * no longer depends on import order or on how the build splits the CSS into
+ * chunks. A later layer beats an earlier one whatever the specificity; within
+ * a layer, specificity and then source order decide as usual.
+ *
+ * The order is the one the production build had before the layers existed:
+ * the shared chunk (tokens, base, components), then the dashboard's own
+ * (shell, charts, windows), then each page in the order App.tsx reaches it.
+ * The flyout loads tokens, base and components only, then its own layer.
+ *
+ * fonts.css holds only @font-face rules and stays outside the layers on
+ * purpose: nothing in it takes part in the cascade. Every style rule must be
+ * in a layer, because an unlayered rule beats all of them. !important
+ * reverses the order (earlier layers win): today only base uses it.
+ */
+@layer tokens, base, components, shell, charts, windows, pages.shared, pages.activity, pages.settings, pages.costs, pages.overview, pages.provider, flyout;

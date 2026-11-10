@@ -2,15 +2,9 @@ import { ChevronRight, Database, Search, SearchX, X } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
-import '../settings.css';
-import type {
-  ClaudeCodeModStatus,
-  ManualObservation,
-  PriceRow,
-  Settings as SettingsType,
-  Snapshot,
-  UpdateStatus,
-} from '../types';
+import { useDashboardActions, useDashboardState } from '../app/dashboard';
+import '../styles/pages/settings.css';
+import type { Settings as SettingsType, Snapshot } from '../types';
 import { AlertsSection } from './settings/AlertsSection';
 import { AppearanceSection } from './settings/AppearanceSection';
 import { DiagnosticsSection } from './settings/DiagnosticsSection';
@@ -38,27 +32,6 @@ import {
 } from './settings/settings-sections';
 import { useScrollSpy } from './settings/useScrollSpy';
 
-export type SettingsActions = {
-  dataOperation: 'backup' | 'restore' | 'export' | null;
-  /** True while the Claude helper is being enabled or disabled. */
-  helperBusy: boolean;
-  onSetupClaude: () => void;
-  onSettings: (patch: Partial<SettingsType>) => Promise<void | boolean>;
-  onPrice: (row: PriceRow) => Promise<void>;
-  onInstallClaude: () => Promise<void>;
-  onUninstallClaude: () => Promise<void>;
-  /** Null in the browser preview, or when the step failed (the failure is shown as a notice). */
-  onClaudeCodeMod: (action: 'status' | 'install' | 'uninstall') => Promise<ClaudeCodeModStatus | null>;
-  onBackup: () => Promise<void>;
-  onRestore: () => Promise<void>;
-  onOpenBackups: () => Promise<void>;
-  onManual: (observation: ManualObservation) => Promise<boolean>;
-  onExportCsv: (days: number) => Promise<void>;
-  onCopySummary: () => Promise<void>;
-  onSnooze: (hours: number) => Promise<void>;
-  onCheckUpdates: () => Promise<UpdateStatus | null>;
-};
-
 const SECTION_IDS = SETTINGS_SECTIONS.map((section) => section.id);
 const ADVANCED_IDS = SETTINGS_SECTIONS.filter((section) => section.advanced).map((section) => section.id);
 
@@ -75,23 +48,33 @@ function sameMatches(a: ReadonlySet<SettingsSectionId> | null, b: ReadonlySet<Se
  * `initialSection` (a section id such as "forecast", or a block such as
  * "subscription-fees") is scrolled to and focused when the page opens. A
  * `#section` hash in the address does the same, on arrival or when it changes.
+ *
+ * The sections take their actions from the dashboard themselves. Sources is
+ * the exception: it is also drawn on its own with explicit props, so its
+ * helper state and actions are handed to it here.
  */
 export function Settings({
   snapshot,
-  actions,
   initialSection,
+  onSetupClaude,
 }: {
   snapshot: Snapshot;
-  actions: SettingsActions;
   initialSection?: string | null;
+  /** Opens the Claude setup guide, which App owns. */
+  onSetupClaude: () => void;
 }) {
-  const [saving, setSaving] = useState(false);
+  const { updateSettings, installClaudeHelper, uninstallClaudeHelper, claudeCodeMod } = useDashboardActions();
+  const helperBusy = useDashboardState((state) => state.helperBusy);
+  // Saves can overlap (a toggle, then a field), so they are counted: the
+  // first to finish must not clear "Saving locally…" while another runs.
+  const [savesInFlight, setSavesInFlight] = useState(0);
+  const saving = savesInFlight > 0;
   const update = async (patch: Partial<SettingsType>) => {
-    setSaving(true);
+    setSavesInFlight((count) => count + 1);
     try {
-      return await actions.onSettings(patch);
+      return await updateSettings(patch);
     } finally {
-      setSaving(false);
+      setSavesInFlight((count) => count - 1);
     }
   };
 
@@ -213,130 +196,117 @@ export function Settings({
   );
 
   return (
-    <main
-      className="page settings-page"
-      id="panel-settings"
-      role="tabpanel"
-      aria-labelledby="tab-settings"
-      tabIndex={-1}
-    >
-      <h1 className="sr-only">Settings</h1>
-      <header className="settings-lead">
-        <p>Preferences for collection, forecasts, alerts, pricing, and your local data.</p>
-        <div className="settings-lead-facts">
-          <span className="settings-saving" role="status">
-            {saving ? 'Saving locally…' : ''}
-          </span>
-          <span className="badge settings-local">
-            <Database aria-hidden="true" />
-            Everything stays on this PC
-          </span>
-        </div>
-      </header>
-      <div className="settings-layout">
-        <div className="settings-sidebar">
-          <div className="settings-search" role="search">
-            <Search aria-hidden="true" />
-            <input
-              ref={searchRef}
-              type="search"
-              aria-label="Search settings"
-              aria-describedby="settings-search-status"
-              aria-controls="settings-sections"
-              placeholder="Search settings"
-              autoComplete="off"
-              spellCheck={false}
-              value={query}
-              onChange={(event) => runSearch(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key !== 'Escape' || !query) return;
-                event.preventDefault();
-                runSearch('');
-              }}
-              className="fld"
-            />
-            {query && (
-              <button type="button" className="settings-search-clear" aria-label="Clear search" onClick={clearSearch}>
-                <X aria-hidden="true" />
-              </button>
-            )}
+    <main>
+      <div
+        className="page settings-page"
+        id="panel-settings"
+        role="tabpanel"
+        aria-labelledby="tab-settings"
+        tabIndex={-1}
+      >
+        <h1 className="sr-only">Settings</h1>
+        <header className="settings-lead">
+          <p>Preferences for collection, forecasts, alerts, pricing, and your local data.</p>
+          <div className="settings-lead-facts">
+            <span className="settings-saving" role="status">
+              {saving ? 'Saving locally…' : ''}
+            </span>
+            <span className="badge settings-local">
+              <Database aria-hidden="true" />
+              Everything stays on this PC
+            </span>
           </div>
-          <SettingsNav
-            active={active}
-            matches={matches}
-            sources={sourcesBadge(snapshot.sources)}
-            unpriced={unpricedModelCount(snapshot)}
-            onNavigate={(id) => void reveal(id)}
-          />
-        </div>
-
-        <div className="settings-main">
-          <p id="settings-search-status" className="sr-only" role="status">
-            {searchStatus}
-          </p>
-          {noMatches && (
-            <div className="settings-empty">
-              <p>
-                <SearchX aria-hidden="true" />
-                No settings match “{search}”
-              </p>
-              <button type="button" className="btn" onClick={clearSearch}>
-                Clear search
-              </button>
+        </header>
+        <div className="settings-layout">
+          <div className="settings-sidebar">
+            <div className="settings-search" role="search">
+              <Search aria-hidden="true" />
+              <input
+                ref={searchRef}
+                type="search"
+                aria-label="Search settings"
+                aria-describedby="settings-search-status"
+                aria-controls="settings-sections"
+                placeholder="Search settings"
+                autoComplete="off"
+                spellCheck={false}
+                value={query}
+                onChange={(event) => runSearch(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== 'Escape' || !query) return;
+                  event.preventDefault();
+                  runSearch('');
+                }}
+                className="fld"
+              />
+              {query && (
+                <button type="button" className="settings-search-clear" aria-label="Clear search" onClick={clearSearch}>
+                  <X aria-hidden="true" />
+                </button>
+              )}
             </div>
-          )}
-
-          <div className="settings-content" id="settings-sections" ref={contentRef}>
-            {slot('subscriptions', <SubscriptionsSection snapshot={snapshot} update={update} />)}
-            {slot(
-              'sources',
-              <SourcesSection
-                onSetupClaude={actions.onSetupClaude}
-                snapshot={snapshot}
-                update={update}
-                helperBusy={actions.helperBusy}
-                onInstallClaude={actions.onInstallClaude}
-                onUninstallClaude={actions.onUninstallClaude}
-                onClaudeCodeMod={actions.onClaudeCodeMod}
-              />,
-            )}
-            {slot('forecast', <ForecastSection snapshot={snapshot} update={update} />)}
-            {slot('alerts', <AlertsSection snapshot={snapshot} update={update} onSnooze={actions.onSnooze} />)}
-            {slot('pricing', <PricingSection snapshot={snapshot} update={update} onPrice={actions.onPrice} />)}
-            {slot(
-              'storage',
-              <StorageSection
-                dataOperation={actions.dataOperation}
-                snapshot={snapshot}
-                update={update}
-                onBackup={actions.onBackup}
-                onRestore={actions.onRestore}
-                onOpenBackups={actions.onOpenBackups}
-                onExportCsv={actions.onExportCsv}
-                onCopySummary={actions.onCopySummary}
-              />,
-            )}
-            {slot(
-              'appearance',
-              <AppearanceSection snapshot={snapshot} update={update} onCheckUpdates={actions.onCheckUpdates} />,
-            )}
-
-            <details
-              className="settings-disclosure advanced-disclosure"
-              hidden={matches ? !ADVANCED_IDS.some((id) => matches.has(id)) : undefined}
-            >
-              <summary>
-                <ChevronRight aria-hidden="true" />
-                <strong>{ADVANCED_GROUP_LABEL}</strong>
-                <span>— Manual observations and diagnostics</span>
-              </summary>
-              <div className="settings-disclosure-body">
-                {slot('manual', <ManualSection onManual={actions.onManual} />)}
-                {slot('diagnostics', <DiagnosticsSection snapshot={snapshot} />)}
-              </div>
-            </details>
+            <SettingsNav
+              active={active}
+              matches={matches}
+              sources={sourcesBadge(snapshot.sources)}
+              unpriced={unpricedModelCount(snapshot)}
+              onNavigate={(id) => void reveal(id)}
+            />
           </div>
-          <div className="settings-end" ref={endRef} aria-hidden="true" />
+
+          <div className="settings-main">
+            <p id="settings-search-status" className="sr-only" role="status">
+              {searchStatus}
+            </p>
+            {noMatches && (
+              <div className="settings-empty">
+                <p>
+                  <SearchX aria-hidden="true" />
+                  No settings match “{search}”
+                </p>
+                <button type="button" className="btn" onClick={clearSearch}>
+                  Clear search
+                </button>
+              </div>
+            )}
+
+            <div className="settings-content" id="settings-sections" ref={contentRef}>
+              {slot('subscriptions', <SubscriptionsSection snapshot={snapshot} update={update} />)}
+              {slot(
+                'sources',
+                <SourcesSection
+                  onSetupClaude={onSetupClaude}
+                  snapshot={snapshot}
+                  update={update}
+                  helperBusy={helperBusy}
+                  onInstallClaude={installClaudeHelper}
+                  onUninstallClaude={uninstallClaudeHelper}
+                  onClaudeCodeMod={claudeCodeMod}
+                />,
+              )}
+              {slot('forecast', <ForecastSection snapshot={snapshot} update={update} />)}
+              {slot('alerts', <AlertsSection snapshot={snapshot} update={update} />)}
+              {slot('pricing', <PricingSection snapshot={snapshot} update={update} />)}
+              {slot('storage', <StorageSection snapshot={snapshot} update={update} />)}
+              {slot('appearance', <AppearanceSection snapshot={snapshot} update={update} />)}
+
+              <details
+                className="settings-disclosure advanced-disclosure"
+                hidden={matches ? !ADVANCED_IDS.some((id) => matches.has(id)) : undefined}
+              >
+                <summary>
+                  <ChevronRight aria-hidden="true" />
+                  <strong>{ADVANCED_GROUP_LABEL}</strong>
+                  <span>— Manual observations and diagnostics</span>
+                </summary>
+                <div className="settings-disclosure-body">
+                  {slot('manual', <ManualSection />)}
+                  {slot('diagnostics', <DiagnosticsSection snapshot={snapshot} />)}
+                </div>
+              </details>
+            </div>
+            <div className="settings-end" ref={endRef} aria-hidden="true" />
+          </div>
         </div>
       </div>
     </main>
