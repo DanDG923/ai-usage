@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.0.62 — 10 November 2026
+
+- Count every reading that comes from Codex or Claude itself at full weight when learning your burn rate. A Claude plan-usage read used to count for less than a status-line figure showing the same number, because only two kinds of reading were treated as the provider's own. Forecasts can shift slightly after this update, most where a manual entry sits beside provider readings.
+- Keep the dashboard loading when a stored allowance reading has no usable figure. One such reading used to stop every forecast from being built; that window now shows an unknown forecast instead. A missing figure is also no longer read as 0% left.
+- Stop Refresh failing when the latest Fable reading is stamped slightly ahead of the read and its window has already ended.
+- Show how many lines of a Codex or Claude transcript could not be read, under Settings → Diagnostics. They used to be skipped without a trace, so a damaged transcript looked like a quiet one.
+- Stop an export or backup that is waiting behind a long restore from failing with "did not respond in time". Its time limit now starts when its turn comes, not when it was queued, and it no longer ends the restore it was waiting for.
+- Write Claude Code's settings file safely when the status-line helper is enabled or disabled. A crash or power loss part-way through could leave that file cut short and unreadable; the new settings are now written beside it and swapped in whole.
+- Stop a double-click starting two backups, restores or exports.
+- Show costs under the period they cover. A background update for another period that arrived before the first load could show, for example, 90-day costs under "Last 30 days".
+- Fix the spinner stopping early while a new period loads, two quick Settings changes clearing each other's "saving" state, and a desktop-estimates preview that kept running after its panel closed.
+- Make the dashboard easier to use with a screen reader: tables have named headers, the page content is a landmark, and heatmap cells and cycle bars have text labels.
+- Report the Codex source's status from what was actually read, so an empty or failed read is no longer shown as connected, and the status no longer flips between refreshes while the Codex app server is unavailable.
+- Fix confirmations being shown as failures, ordinary resets being labelled "Reset early" on the Activity page, and double-clicks on the helper switch and a price's Save button sending two writes.
+- Reorganise the app's code without changing what it does: the database, the main process and the forecast are each split into smaller parts, and the main process is now fully type-checked. See `docs/development.md` for the layout.
+- Preserve local usage history, settings, observations, and backups during an in-place update.
+
 ## 1.0.61 — 8 November 2026
 
 - AI Usage is now open source under the MIT licence, and its source code and releases are public on GitHub. Updates no longer need the GitHub CLI or a GitHub sign-in: the app checks the public releases anonymously, and update requests carry no credential. Downloads still use the complete installer, checked against the release's SHA-512 before it runs. Copies of 1.0.60 and earlier find this update through their existing GitHub CLI sign-in; from this version on, no sign-in is needed.
