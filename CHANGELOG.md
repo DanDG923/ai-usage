@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.63 — 10 November 2026
+
+- Add built-in Claude Fable 5.2 API-equivalent pricing: $8 input, $10 five-minute and $16 one-hour cache writes, $0.20 cache reads and $40 output per million tokens, verified on 10 November 2026. Fable 5.2 was released on 9 November 2026 and its work was unpriced until now; existing records are priced when the catalogue loads, and saved custom prices are kept.
+- Weigh Fable 5.2 at its own rates in the Fable estimate. It used to be weighed as Fable 5, so its cache reads counted five times their rate and the rest of its work a quarter more.
+- Update Vite to 8.3.6, its React plugin to 6.2.1 and the Lucide icons to 1.70.0.
+- Preserve local usage history, settings, observations, and backups during an in-place update.
+
 ## 1.0.62 — 10 November 2026
 
 - Count every reading that comes from Codex or Claude itself at full weight when learning your burn rate. A Claude plan-usage read used to count for less than a status-line figure showing the same number, because only two kinds of reading were treated as the provider's own. Forecasts can shift slightly after this update, most where a manual entry sits beside provider readings.

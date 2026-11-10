@@ -1,6 +1,6 @@
 {
   "name": "ai-usage",
-  "version": "1.0.62",
+  "version": "1.0.63",
   "private": true,
   "license": "MIT",
   "description": "Local-first Windows dashboard for Codex, Claude, and Fable subscription allowances, run-out forecasts, and API-equivalent cost.",
