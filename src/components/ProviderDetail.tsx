@@ -260,8 +260,8 @@ function ClaudeWeeklyPanel({
             </tbody>
           </table>
           <p className="pd-detail">
-            Fable 5.2 costs less than 5.1 at API prices, and both cache reads cost less than Fable 5’s; Anthropic has not
-            said whether either uses less of the limit.
+            Fable 5.2 costs less than 5.1 at API prices, and both cache reads cost less than Fable 5’s; Anthropic has
+            not said whether either uses less of the limit.
           </p>
         </div>
       )}
