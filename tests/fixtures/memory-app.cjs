@@ -29,21 +29,36 @@ seeded.transaction(() => {
 });
 seeded.close();
 const filename = path.join(source, 'electron/main.cjs');
-const main = new Module(filename, module);
-main.filename = filename;
-// Node's module wrapper is needed to preserve the entry point's real scope.
-// oxlint-disable-next-line no-underscore-dangle
-main.paths = Module._nodeModulePaths(path.dirname(filename));
-// Test-only access to the actual entry point, without shipping a debug IPC API.
-// oxlint-disable-next-line no-underscore-dangle
-main._compile(fs.readFileSync(filename, 'utf8') + `
+let api;
+if (fs.existsSync(path.join(source, 'electron/app/application.cjs'))) {
+  // The entry point exports the application it started.
+  const application = require(filename);
+  api = {
+    showMainWindow: () => application.dashboard.showMainWindow(),
+    refreshAll: () => application.refresh.refreshAll(),
+    stopForShutdown: () => application.lifecycle.stopForShutdown(),
+    closeStorage: () => application.lifecycle.closeStorage(),
+    get window() { return application.dashboard.window; }, get collectors() { return application.collectors; },
+    get store() { return application.store; },
+    get cached() { return Boolean(application.snapshots.cachedSnapshot || application.snapshots.lastFullSnapshot); },
+  };
+} else {
+  // An older source tree, for a baseline: its entry point kept everything in
+  // module scope, which only the module wrapper can reach.
+  const main = new Module(filename, module);
+  main.filename = filename;
+  // oxlint-disable-next-line no-underscore-dangle
+  main.paths = Module._nodeModulePaths(path.dirname(filename));
+  // oxlint-disable-next-line no-underscore-dangle
+  main._compile(fs.readFileSync(filename, 'utf8') + `
 module.exports = {
   showMainWindow, refreshAll, closeStorage, stopForShutdown,
   get window() { return window; }, get collectors() { return collectors; },
-  get store() { return store; }, get refreshPromise() { return refreshPromise; },
+  get store() { return store; },
   get cached() { return Boolean(cachedSnapshot || lastFullSnapshot); },
 };`, filename);
-const api = main.exports;
+  api = main.exports;
+}
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const report = { mode, electron: process.versions.electron, records: 30_000, samples: [] };
 report.windowEvents = [];

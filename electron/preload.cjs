@@ -2,9 +2,17 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
+/** @typedef {import('electron').IpcRendererEvent} IpcRendererEvent */
+/** @typedef {import('../src/types').DashboardNavigation} DashboardNavigation */
+
+/**
+ * @param {string} channel
+ * @param {...unknown} args
+ * @returns {Promise<any>} what the main process answered; each bridge method says what that is
+ */
 async function invoke(channel, ...args) {
   try { return await ipcRenderer.invoke(channel, ...args); } catch (error) {
-    const message = String(error?.message || error).replace(/^Error invoking remote method ['"].+?['"]:\s*(?:Error:\s*)?/, '');
+    const message = String(/** @type {any} */ (error)?.message || error).replace(/^Error invoking remote method ['"].+?['"]:\s*(?:Error:\s*)?/, '');
     throw new Error(message);
   }
 }
@@ -13,10 +21,13 @@ async function invoke(channel, ...args) {
 // page collects it, so a dashboard that is still loading, or was released and
 // recreated, still lands on it. The main process hands each request out once;
 // one collected while no listener is subscribed is held for the next.
+/** @type {Set<(target: DashboardNavigation) => void>} */
 const navigationListeners = new Set();
+/** @type {DashboardNavigation | null} */
 let heldNavigation = null;
 let navigationSignal = false;
 
+/** @param {DashboardNavigation | null} target */
 function deliverNavigation(target) {
   if (!target || typeof target !== 'object') return;
   if (!navigationListeners.size) {
@@ -32,7 +43,9 @@ function collectNavigation() {
   void invoke('dashboard:take-navigation').then(deliverNavigation, () => {});
 }
 
-contextBridge.exposeInMainWorld('aiUsage', {
+// What the dashboard sees as window.aiUsage. It has to provide the Bridge the
+// renderer is written against.
+contextBridge.exposeInMainWorld('aiUsage', /** @satisfies {import('../src/types').Bridge} */ ({
   getClaudeSetup: () => invoke('claude-setup:status'),
   isClaudeSetupDismissed: () => invoke('claude-setup:dismissed'),
   configureClaude: (action, enableHelper) => invoke('claude-setup:configure', action, enableHelper),
@@ -68,7 +81,7 @@ contextBridge.exposeInMainWorld('aiUsage', {
   downloadUpdate: () => invoke('app:download-update'),
   installUpdate: () => invoke('app:install-update'),
   onPrepareSleep: (callback) => {
-    const listener = (_event, token) => {
+    const listener = (/** @type {IpcRendererEvent} */ _event, /** @type {number} */ token) => {
       let allowed = false;
       try { allowed = callback() === true; } catch { /* Keep unfinished UI alive. */ }
       void invoke('dashboard:sleep-ready', token, allowed).catch(() => {});
@@ -77,17 +90,17 @@ contextBridge.exposeInMainWorld('aiUsage', {
     return () => ipcRenderer.removeListener('dashboard:prepare-sleep', listener);
   },
   onUpdateStatus: (callback) => {
-    const listener = (_event, status) => callback(status);
+    const listener = (/** @type {IpcRendererEvent} */ _event, /** @type {import('../src/types').UpdateStatus} */ status) => callback(status);
     ipcRenderer.on('app:update-status-changed', listener);
     return () => ipcRenderer.removeListener('app:update-status-changed', listener);
   },
   onUpdated: (callback) => {
-    const listener = (_event, snapshot) => callback(snapshot);
+    const listener = (/** @type {IpcRendererEvent} */ _event, /** @type {import('../src/types').Snapshot} */ snapshot) => callback(snapshot);
     ipcRenderer.on('dashboard:updated', listener);
     return () => ipcRenderer.removeListener('dashboard:updated', listener);
   },
   onNavigate: (callback) => {
-    const listener = (target) => callback(target);
+    const listener = (/** @type {DashboardNavigation} */ target) => callback(target);
     navigationListeners.add(listener);
     if (!navigationSignal) {
       navigationSignal = true;
@@ -102,4 +115,4 @@ contextBridge.exposeInMainWorld('aiUsage', {
     collectNavigation();
     return () => { navigationListeners.delete(listener); };
   },
-});
+}));

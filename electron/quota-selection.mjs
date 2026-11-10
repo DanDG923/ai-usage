@@ -8,23 +8,16 @@
 // the caller: the store knows the clock, the renderer reads the flag the
 // store already set on each forecast from the same comparison.
 
+import { isMainBucket } from './providers.mjs';
 import { isProviderProvenance } from './quota-provenance.mjs';
-
-const CODEX_MAIN_BUCKET = /^codex:(?:primary|secondary|weekly)$/;
-const CLAUDE_MAIN_BUCKETS = new Set(['seven_day', 'five_hour']);
-const FABLE_MAIN_BUCKETS = new Set(['fable_seven_day', 'fable:seven_day_fable']);
 
 // The subscription's own allowance, as opposed to a model-specific or
 // OAuth-app limit reported alongside it. Bucket names are disjoint across
 // providers, so the window's own fields suffice. Manual and older restored
 // Codex readings may lack a limit id; the canonical bucket names stand in.
+// The bucket names of each provider are listed in the provider registry.
 export function isMainWindow(window) {
-  const bucketId = String(window?.bucketId || '');
-  const metadata = window?.metadata || {};
-  if (metadata.limitId === 'codex' || CODEX_MAIN_BUCKET.test(bucketId)) return true;
-  if (FABLE_MAIN_BUCKETS.has(bucketId)) return true;
-  if (metadata.scope) return metadata.scope === 'overall';
-  return CLAUDE_MAIN_BUCKETS.has(bucketId);
+  return isMainBucket(String(window?.bucketId || ''), window?.metadata || {});
 }
 
 export function isOfficialWindow(window) {

@@ -1,7 +1,7 @@
 /* oxlint-disable jsx-a11y/no-noninteractive-element-interactions -- The modal handles Escape and traps Tab to keep keyboard focus inside the dialog. */
 import { AlertOctagon, AlertTriangle, CheckCircle2, CircleDashed, Hourglass, Info } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import '../settings.css';
+import '../styles/pages/settings.css';
 import type { ClaudeSetupStatus } from '../types';
 
 type StepState = 'done' | 'warn' | 'todo';
@@ -122,6 +122,13 @@ export function ClaudeSetup({ requested, onClose }: { requested: boolean; onClos
       setBusy('');
     }
   }
+  // Cancelling is a request of its own: when it cannot be delivered the
+  // running step carries on, and the guide says so.
+  const cancel = () => {
+    window.aiUsage?.cancelClaudeSetup().catch((failure: unknown) => {
+      setError(failure instanceof Error ? failure.message : 'Setup could not be cancelled.');
+    });
+  };
   const installed = Boolean(status?.installed);
   const signedIn = status?.auth === 'signed-in';
   const signInUnchecked = status?.auth === 'unavailable' && installed;
@@ -140,7 +147,7 @@ export function ClaudeSetup({ requested, onClose }: { requested: boolean; onClos
           event.stopPropagation();
           if (event.key === 'Escape') {
             event.preventDefault();
-            if (busy) void window.aiUsage?.cancelClaudeSetup();
+            if (busy) cancel();
             else void act('skip');
             return;
           }
@@ -233,7 +240,7 @@ export function ClaudeSetup({ requested, onClose }: { requested: boolean; onClos
             </button>
           )}
           {busy && (
-            <button type="button" className="btn" onClick={() => void window.aiUsage?.cancelClaudeSetup()}>
+            <button type="button" className="btn" onClick={cancel}>
               Cancel
             </button>
           )}

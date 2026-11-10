@@ -1,4 +1,4 @@
-import { subscriptionVisible } from '../../electron/dashboard-decision.mjs';
+import { SOURCES, subscriptionVisible } from '../../electron/dashboard-decision.mjs';
 import { selectDisplayedWindows } from '../../electron/quota-selection.mjs';
 import { Ban, CircleDashed, Info } from 'lucide-react';
 import { niceScale } from '../chart-scale';
@@ -6,11 +6,7 @@ import { compactNumber, percent, quotaWindows, shortDate } from '../lib';
 import { snapshotNowMs } from '../snapshot-time';
 import type { QuotaWindow, Snapshot, TokenCapacityEstimate } from '../types';
 
-const PROVIDERS = [
-  { id: 'codex', name: 'Codex' },
-  { id: 'claude', name: 'Claude' },
-  { id: 'fable', name: 'Fable' },
-] as const;
+const PROVIDERS = SOURCES.map(({ id, label }) => ({ id, name: label }));
 
 /** Token categories in display order, each with its mark in the mix bar (ink first, then greys). */
 const TOKEN_CATEGORIES = [

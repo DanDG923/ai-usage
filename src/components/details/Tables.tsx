@@ -86,15 +86,24 @@ export const ProjectTable = memo(function ProjectTable({ costs, query }: { costs
       </div>
       <div className="table-scroll">
         <table className="costs-table project-table">
+          <caption className="sr-only">API-equivalent cost by project</caption>
           <thead>
             <tr>
-              <th>Project</th>
-              <th>Sources</th>
-              <th className="num">Sessions</th>
-              <th>Last activity</th>
-              <th className="num">Tokens</th>
-              <th className="num">Coverage</th>
-              <th className="num">API-equivalent</th>
+              <th scope="col">Project</th>
+              <th scope="col">Sources</th>
+              <th scope="col" className="num">
+                Sessions
+              </th>
+              <th scope="col">Last activity</th>
+              <th scope="col" className="num">
+                Tokens
+              </th>
+              <th scope="col" className="num">
+                Coverage
+              </th>
+              <th scope="col" className="num">
+                API-equivalent
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -150,17 +159,32 @@ export const ModelTable = memo(function ModelTable({ costs, query }: { costs: Co
       </div>
       <div className="table-scroll">
         <table className="costs-table model-table">
+          <caption className="sr-only">API-equivalent cost and tokens by model</caption>
           <thead>
             <tr>
-              <th>Model</th>
-              <th className="num">Uncached input</th>
-              <th className="num">Cache read</th>
-              <th className="num">Write 5m</th>
-              <th className="num">Write 1h</th>
-              <th className="num">Output</th>
-              <th className="num">Coverage</th>
-              <th>Share of priced cost</th>
-              <th className="num">API-equivalent</th>
+              <th scope="col">Model</th>
+              <th scope="col" className="num">
+                Uncached input
+              </th>
+              <th scope="col" className="num">
+                Cache read
+              </th>
+              <th scope="col" className="num">
+                Write 5m
+              </th>
+              <th scope="col" className="num">
+                Write 1h
+              </th>
+              <th scope="col" className="num">
+                Output
+              </th>
+              <th scope="col" className="num">
+                Coverage
+              </th>
+              <th scope="col">Share of priced cost</th>
+              <th scope="col" className="num">
+                API-equivalent
+              </th>
             </tr>
           </thead>
           <tbody>

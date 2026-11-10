@@ -8,8 +8,70 @@
 // rows to go stale, so there is nothing to rescale, retire or discard.
 
 const { createAllowanceScaler } = require('./allowance-changes.cjs');
-const { clusterByWindow, evidenceTimes, fetchMomentOf, latestEvidenceAt, normaliseObservation, restatesSessionLimits, withoutStaleRestatements } = require('./forecast.cjs');
+const { clusterByWindow } = require('./forecast/windows.cjs');
+const { evidenceTimes, fetchMomentOf, latestEvidenceAt, normaliseObservation, restatesSessionLimits, withoutStaleRestatements } = require('./quota-evidence.cjs');
+const { CLAUDE, FABLE } = require('./providers.mjs');
 const { OFFICIAL_PROVENANCES } = require('./quota-provenance.mjs');
+
+/** @typedef {import('./types').ObservationRow} ObservationRow */
+/** @typedef {import('./types').UsageEventRow} UsageEventRow */
+
+/**
+ * A reading's used percentage: as stored, or expressed in the current allowance.
+ * @typedef {(row: ObservationRow) => number} UsedOf
+ */
+
+/**
+ * One rise of the overall weekly figure, and the part of it that was Fable's.
+ * @typedef {{
+ *   at: string,
+ *   deltaOverall: number,
+ *   ceiling: number,
+ *   share: number,
+ *   deltaFable: number,
+ *   fablePressure: number,
+ * }} FableStep
+ */
+
+/**
+ * The estimate itself, with the evidence it was computed from.
+ * @typedef {{
+ *   usedPercent: number,
+ *   ceiling: number,
+ *   clamped: boolean,
+ *   method: 'fable-anchor-pair' | 'overall-share',
+ *   measuredSteps: number,
+ *   measuredPairs: number,
+ *   anchored: boolean,
+ *   confidence: number,
+ *   resetsAt: string,
+ *   windowMinutes: number,
+ *   planType: string,
+ *   series: { observedAt: string, usedPercent: number }[],
+ *   calibration: {
+ *     method: 'fable-anchor-pair' | 'overall-share',
+ *     allowanceShare: number,
+ *     overallUsedPercent: number,
+ *     ceiling: number,
+ *     clamped: boolean,
+ *     anchoredAt: string | null,
+ *     measuredSteps: number,
+ *     measuredPairs: number,
+ *     profile: string,
+ *     pairMeasuredPressure: number,
+ *     steppedPercent: number,
+ *     projectedTailPercent: number,
+ *     percentPerPressureUnit: number | null,
+ *   },
+ * }} FableEstimate
+ */
+
+/**
+ * What projectFableAllowance returns: the estimate, or the reason there is
+ * none. A refusal names the plan when the provider named one.
+ * @typedef {({ available: true, reason: null } & FableEstimate)
+ *   | { available: false, reason: string, planType?: string }} FableProjection
+ */
 
 // Every input is bounded by the projection's own clock. A reading dated
 // ahead of now — queued for an early reset, or left behind by a clock that
@@ -17,21 +79,34 @@ const { OFFICIAL_PROVENANCES } = require('./quota-provenance.mjs');
 // the current estimate before that reading's own timestamp.
 const OFFICIAL_PLACEHOLDERS = OFFICIAL_PROVENANCES.map(() => '?').join(', ');
 
+/**
+ * @param {import('./store.cjs').Store} store
+ * @param {string} sourceId
+ * @param {string} bucketId
+ * @param {number} nowMs
+ */
 function latestOfficialAt(store, sourceId, bucketId, nowMs) {
-  return store.prepare(`
+  return /** @type {ObservationRow | undefined} */ (store.prepare(`
     SELECT * FROM quota_observations
     WHERE source_id = ? AND bucket_id = ? AND provenance IN (${OFFICIAL_PLACEHOLDERS}) AND observed_at <= ?
     ORDER BY observed_at DESC, id DESC LIMIT 1
-  `).get(sourceId, bucketId, ...OFFICIAL_PROVENANCES, new Date(nowMs).toISOString()) ?? null;
+  `).get(sourceId, bucketId, ...OFFICIAL_PROVENANCES, new Date(nowMs).toISOString())) ?? null;
 }
 
+/**
+ * @param {import('./store.cjs').Store} store
+ * @param {string} sourceId
+ * @param {string} bucketId
+ * @param {string} sinceIso
+ * @param {number} nowMs
+ */
 function officialBetween(store, sourceId, bucketId, sinceIso, nowMs) {
-  return store.prepare(`
+  return /** @type {ObservationRow[]} */ (store.prepare(`
     SELECT * FROM quota_observations
     WHERE source_id = ? AND bucket_id = ? AND provenance IN (${OFFICIAL_PLACEHOLDERS})
       AND observed_at >= ? AND observed_at <= ?
     ORDER BY observed_at ASC, id ASC
-  `).all(sourceId, bucketId, ...OFFICIAL_PROVENANCES, sinceIso, new Date(nowMs).toISOString());
+  `).all(sourceId, bucketId, ...OFFICIAL_PROVENANCES, sinceIso, new Date(nowMs).toISOString()));
 }
 
 // Official readings as the Claude forecast sees them: expressed in today's
@@ -41,6 +116,13 @@ function officialBetween(store, sourceId, bucketId, sinceIso, nowMs) {
 // cycle. Percentages are compared only after a recorded allowance change is
 // applied: after a fourfold upgrade an earlier 8% is today's 2%, the same use
 // rather than a replenishment. Each cycle returns the original stored rows.
+/**
+ * @param {ObservationRow[]} rows
+ * @param {number} nowMs
+ * @param {number | undefined} freshReadGraceMs
+ * @param {UsedOf} [usedOf]
+ * @returns {ObservationRow[][]}
+ */
 function allowanceCycles(rows, nowMs, freshReadGraceMs, usedOf = rawUsedPercent) {
   const current = rows.map((row) => {
     const usedPercent = usedOf(row);
@@ -50,15 +132,18 @@ function allowanceCycles(rows, nowMs, freshReadGraceMs, usedOf = rawUsedPercent)
     .map((cluster) => cluster.rows.map((entry) => entry.row));
 }
 
-const FABLE_BUCKET = 'fable_seven_day';
+// This module is Fable's alone, and Fable is not a provider of its own: its
+// estimate is worked out from Claude's weekly readings and Claude's tokens.
+// The ids, buckets and share come from the two registry entries.
+const FABLE_BUCKET = FABLE.weeklyBucket;
 // One allowance covers every Fable version; Claude reports it as "Fable".
-const FABLE_BUCKET_NAME = 'Fable weekly';
-const OVERALL_BUCKET = 'seven_day';
+const FABLE_BUCKET_NAME = FABLE.weeklyBucketName;
+const OVERALL_BUCKET = CLAUDE.weeklyBucket;
 // Fable's cap is half the overall weekly allowance: spending all of Fable is
 // spending half the week. So one point of Fable is half a point of the overall
 // pool, and a Fable estimate at a given instant cannot exceed twice the overall
 // percentage observed at that same instant.
-const FABLE_ALLOWANCE_SHARE = 0.5;
+const FABLE_ALLOWANCE_SHARE = FABLE.allowanceShare;
 
 // Versioned allowance-pressure weights are deliberately independent of the
 // user-editable API price catalogue. They are only a stable attribution model
@@ -81,18 +166,23 @@ const FABLE_ALLOWANCE_SHARE = 0.5;
 // v4 adds Fable 5.2. The family fallback matched it to Fable 5, so its cache
 // reads weighed five times their $0.20 rate and every other category a quarter
 // more than its own.
-const ALLOWANCE_PRESSURE_V4 = [
-  ['claude-fable-5-2', 8, 10, 16, 0.2, 40],
-  ['claude-fable-5-1', 10, 12.5, 20, 0.25, 50],
-  ['claude-fable-5', 10, 12.5, 20, 1, 50],
-  ['claude-opus-5-5', 4, 5, 8, 0.2, 20],
-  ['claude-opus-5', 5, 6.25, 10, 0.5, 25],
-  ['claude-opus-4-8', 5, 6.25, 10, 0.5, 25],
-  ['claude-sonnet-5-5', 2, 2.5, 4, 0.1, 10],
-  ['claude-sonnet-5', 2, 2.5, 4, 0.2, 10],
-  ['claude-haiku-5-5', 0.1, 0.125, 0.2, 0.01, 0.5],
-  ['claude-haiku-4-5', 1, 1.25, 2, 0.1, 5],
-];
+//
+// One row per model the registry names, so a model added there without a
+// weight here does not type-check. Input, 5-minute write, 1-hour write, cache
+// read, output.
+/** @type {Record<import('./providers.mjs').ClaudeModelId, [number, number, number, number, number]>} */
+const ALLOWANCE_PRESSURE_V4 = {
+  'claude-fable-5-2': [8, 10, 16, 0.2, 40],
+  'claude-fable-5-1': [10, 12.5, 20, 0.25, 50],
+  'claude-fable-5': [10, 12.5, 20, 1, 50],
+  'claude-opus-5-5': [4, 5, 8, 0.2, 20],
+  'claude-opus-5': [5, 6.25, 10, 0.5, 25],
+  'claude-opus-4-8': [5, 6.25, 10, 0.5, 25],
+  'claude-sonnet-5-5': [2, 2.5, 4, 0.1, 10],
+  'claude-sonnet-5': [2, 2.5, 4, 0.2, 10],
+  'claude-haiku-5-5': [0.1, 0.125, 0.2, 0.01, 0.5],
+  'claude-haiku-4-5': [1, 1.25, 2, 0.1, 5],
+};
 
 // Any suffix falls back to its family here, dated or not, unlike pricing,
 // which takes only date suffixes: weighing a variant or point release as its
@@ -101,11 +191,13 @@ const ALLOWANCE_PRESSURE_V4 = [
 // a variant matches its exact family, not a shorter prefix. Built once; the
 // per-model answer is remembered because the pressure scan asks for it once
 // per usage event.
-const ALLOWANCE_PROFILES = ALLOWANCE_PRESSURE_V4
-  .map(([name, input, write5m, write1h, read, output]) => ({ name, input, write5m, write1h, read, output }))
+const ALLOWANCE_PROFILES = Object.entries(ALLOWANCE_PRESSURE_V4)
+  .map(([name, [input, write5m, write1h, read, output]]) => ({ name, input, write5m, write1h, read, output }))
   .sort((a, b) => b.name.length - a.name.length);
+/** @type {Map<string, typeof ALLOWANCE_PROFILES[number] | null>} */
 const allowanceProfiles = new Map();
 
+/** @param {string | null | undefined} model */
 function allowanceProfile(model) {
   const normalized = String(model || '').toLowerCase().trim();
   let profile = allowanceProfiles.get(normalized);
@@ -116,14 +208,20 @@ function allowanceProfile(model) {
   return profile;
 }
 
+/**
+ * @param {import('./store.cjs').Store} store
+ * @param {string | null} modelLike
+ * @param {string} sinceIso
+ * @param {string} untilIso
+ */
 function allowancePressure(store, modelLike, sinceIso, untilIso) {
-  const rows = store.prepare(`
+  const rows = /** @type {UsageEventRow[]} */ (store.prepare(`
     SELECT * FROM usage_events
     WHERE source_id = 'claude' AND occurred_at >= ? AND occurred_at < ?
       ${modelLike == null ? '' : "AND LOWER(COALESCE(model, '')) LIKE ?"}
   `).all(...(modelLike == null
     ? [sinceIso, untilIso]
-    : [sinceIso, untilIso, `%${String(modelLike).toLowerCase()}%`]));
+    : [sinceIso, untilIso, `%${String(modelLike).toLowerCase()}%`])));
   let pressure = 0;
   let tokens = 0;
   let coveredTokens = 0;
@@ -168,6 +266,7 @@ function allowancePressure(store, modelLike, sinceIso, untilIso) {
 // Whether a reading shows its figure held at its evidence moment: a read, or
 // a dated status-line fetch. An undated redraw is known only to be no newer
 // than its session's first redraw, so it cannot confirm a figure later.
+/** @param {ObservationRow} row */
 function confirmsFigure(row) {
   return !restatesSessionLimits(row) || Number.isFinite(normaliseObservation(row).fetchedAfter);
 }
@@ -176,23 +275,37 @@ function confirmsFigure(row) {
 // when fetches overlap and that falls before the interval's start, the first
 // later moment the new figure is known to have been fetched by. Boundaries
 // then only move forward, so no use falls between intervals or into two.
+/**
+ * @param {ObservationRow} row
+ * @param {number} evidenceMs
+ * @param {number} startMs
+ */
 function riseEndMs(row, evidenceMs, startMs) {
   const parsed = normaliseObservation(row);
   for (const at of [evidenceMs, parsed.seenSince, parsed.observedAt]) {
-    if (Number.isFinite(at) && at > startMs) return Math.min(at, parsed.observedAt);
+    // Number.isFinite is true only for a number, so `at` is one where it is compared.
+    if (Number.isFinite(at) && /** @type {number} */ (at) > startMs) return Math.min(/** @type {number} */ (at), parsed.observedAt);
   }
   return startMs;
 }
 
+/**
+ * @param {import('./store.cjs').Store} store
+ * @param {number} nowMs
+ * @param {UsedOf} [usedOf]
+ * @param {number} [freshReadGraceMs]
+ */
 function fablePairCalibration(store, nowMs, usedOf = rawUsedPercent, freshReadGraceMs) {
   const sinceIso = new Date(nowMs - 21 * 24 * 60 * 60 * 1000).toISOString();
   let deltaSum = 0;
   let pressureSum = 0;
   let pairs = 0;
-  const rows = officialBetween(store, 'claude-fable', FABLE_BUCKET, sinceIso, nowMs);
+  const rows = officialBetween(store, FABLE.id, FABLE_BUCKET, sinceIso, nowMs);
   for (const readings of allowanceCycles(rows, nowMs, freshReadGraceMs, usedOf)) {
     // Each figure is bounded by its evidence, as the projection's own tail is,
     // not by a redraw that may come well after its fetch.
+    // One time per reading, so every reading looked up below has its moment.
+    /** @type {Map<ObservationRow, number>} */
     const moments = new Map(evidenceTimes(readings).map((at, index) => [readings[index], at]));
     // Consumption is only a new high-water mark within the cycle. A backward
     // move is a correction or a mistyped reading, and the rebound after it
@@ -207,7 +320,7 @@ function fablePairCalibration(store, nowMs, usedOf = rawUsedPercent, freshReadGr
       if (!Number.isFinite(used)) continue;
       if (!Number.isFinite(fromMs)) {
         highWater = used;
-        fromMs = moments.get(after);
+        fromMs = /** @type {number} */ (moments.get(after));
         continue;
       }
       if (used < highWater) continue;
@@ -215,16 +328,16 @@ function fablePairCalibration(store, nowMs, usedOf = rawUsedPercent, freshReadGr
       // by less than the provider's rounding precision. Treating them as a
       // measured zero rate would freeze every later estimate.
       if (used === highWater) {
-        if (confirmsFigure(after)) fromMs = Math.max(fromMs, moments.get(after));
+        if (confirmsFigure(after)) fromMs = Math.max(fromMs, /** @type {number} */ (moments.get(after)));
         continue;
       }
       const delta = used - highWater;
       const startMs = fromMs;
-      const endMs = riseEndMs(after, moments.get(after), startMs);
+      const endMs = riseEndMs(after, /** @type {number} */ (moments.get(after)), startMs);
       highWater = used;
       fromMs = Math.max(fromMs, endMs);
       if (!(endMs > startMs)) continue;
-      const measured = allowancePressure(store, 'fable', new Date(startMs).toISOString(), new Date(endMs).toISOString());
+      const measured = allowancePressure(store, FABLE.ledgerModelLike, new Date(startMs).toISOString(), new Date(endMs).toISOString());
       if (!(measured.pressure > 0) || !measured.complete) continue;
       deltaSum += delta;
       pressureSum += measured.pressure;
@@ -240,7 +353,15 @@ function fablePairCalibration(store, nowMs, usedOf = rawUsedPercent, freshReadGr
 // caused it, in proportion to fixed allowance-pressure units. Each step is bounded
 // by two official readings, so only tokens between those readings matter — a
 // week of history this machine never saw cannot distort it.
+/**
+ * @param {import('./store.cjs').Store} store
+ * @param {ObservationRow[]} readings
+ * @param {number} fromMs
+ * @param {number} toMs
+ * @param {UsedOf} [usedOf]
+ */
 function fableStepsFromOverall(store, readings, fromMs, toMs, usedOf = rawUsedPercent) {
+  /** @type {FableStep[]} */
   const steps = [];
   let rejectedCoverage = 0;
   let highWater = readings.length ? usedOf(readings[0]) : NaN;
@@ -270,7 +391,7 @@ function fableStepsFromOverall(store, readings, fromMs, toMs, usedOf = rawUsedPe
     if (!(atMs > fromMs) || atMs > toMs) continue;
     const deltaOverall = Math.max(0, afterUsed - priorHighWater);
     if (!(deltaOverall > 0)) continue;
-    const fable = allowancePressure(store, 'fable', new Date(Math.max(fromMs, beforeMs)).toISOString(), at);
+    const fable = allowancePressure(store, FABLE.ledgerModelLike, new Date(Math.max(fromMs, beforeMs)).toISOString(), at);
     const all = allowancePressure(store, null, new Date(beforeMs).toISOString(), at);
     if (!all.complete) {
       rejectedCoverage += 1;
@@ -290,6 +411,7 @@ function fableStepsFromOverall(store, readings, fromMs, toMs, usedOf = rawUsedPe
   return { steps, rejectedCoverage };
 }
 
+/** @param {ObservationRow} row */
 function rawUsedPercent(row) {
   return Number(row.used_percent);
 }
@@ -298,8 +420,13 @@ function rawUsedPercent(row) {
 // allowance. Readings taken before a recorded allowance change are a share of
 // the earlier allowance; without the rescale the step at the change would be
 // calibrated as Fable consumption and the earlier pairs would run too cool.
+/**
+ * @param {import('./store.cjs').Store} store
+ * @param {number} nowMs
+ * @returns {UsedOf}
+ */
 function allowanceAdjustedUsed(store, nowMs) {
-  const scaler = createAllowanceScaler(store.getSettings().allowanceChanges, 'claude', {
+  const scaler = createAllowanceScaler(store.getSettings().allowanceChanges, CLAUDE.id, {
     bucketId: OVERALL_BUCKET, windowMinutes: 10_080, nowMs,
   });
   if (!scaler) return rawUsedPercent;
@@ -312,15 +439,20 @@ function allowanceAdjustedUsed(store, nowMs) {
 }
 
 // The plan named by the most recent official reading in the same window.
+/**
+ * @param {import('./store.cjs').Store} store
+ * @param {ObservationRow} overallWindow
+ * @param {number} nowMs
+ */
 function planEvidence(store, overallWindow, nowMs) {
   const resetMs = new Date(overallWindow.resets_at).getTime();
-  const row = store.prepare(`
+  const row = /** @type {Pick<ObservationRow, 'plan_type'> | undefined} */ (store.prepare(`
     SELECT plan_type FROM quota_observations
     WHERE source_id = 'claude' AND bucket_id = ? AND provenance IN (${OFFICIAL_PLACEHOLDERS}) AND observed_at <= ?
       AND resets_at >= ? AND resets_at <= ? AND plan_type IS NOT NULL AND TRIM(plan_type) != ''
     ORDER BY observed_at DESC, id DESC LIMIT 1
   `).get(OVERALL_BUCKET, ...OFFICIAL_PROVENANCES, new Date(nowMs).toISOString(),
-    new Date(resetMs - 60_000).toISOString(), new Date(resetMs + 60_000).toISOString());
+    new Date(resetMs - 60_000).toISOString(), new Date(resetMs + 60_000).toISOString()));
   return String(row?.plan_type || '').trim().toLowerCase();
 }
 
@@ -340,10 +472,16 @@ function planEvidence(store, overallWindow, nowMs) {
 // That ceiling must never be carried forward across later local activity: the
 // unobserved overall percentage moves too. A manual Fable reading re-anchors
 // the running total whenever one is present.
+/**
+ * @param {import('./store.cjs').Store} store
+ * @param {number} nowMs
+ * @param {{ freshReadGraceMs?: number }} [options]
+ * @returns {({ derived: true } & FableEstimate) | { derived: false, reason: string, planType?: string }}
+ */
 function computeProjection(store, nowMs, { freshReadGraceMs } = {}) {
   // Read the bucket directly rather than through getQuota, which forecasts
   // every window of every source on the way past.
-  const latest = latestOfficialAt(store, 'claude', OVERALL_BUCKET, nowMs);
+  const latest = latestOfficialAt(store, CLAUDE.id, OVERALL_BUCKET, nowMs);
   if (!latest) return { derived: false, reason: 'no-overall-reading' };
   // Anthropic includes Fable in the shared weekly pool on Max and qualifying
   // premium seats, while Pro and standard seats use credits instead. The local
@@ -370,7 +508,7 @@ function computeProjection(store, nowMs, { freshReadGraceMs } = {}) {
   // nothing observed before then — a step, an anchor or local activity — is
   // part of this cycle's use.
   const cycles = allowanceCycles(
-    officialBetween(store, 'claude', OVERALL_BUCKET, new Date(windowStartMs).toISOString(), nowMs)
+    officialBetween(store, CLAUDE.id, OVERALL_BUCKET, new Date(windowStartMs).toISOString(), nowMs)
       .filter((row) => Math.abs(new Date(row.resets_at).getTime() - resetMs) <= 60_000),
     nowMs, freshReadGraceMs, usedOf);
   const readings = cycles.at(-1) ?? [];
@@ -382,7 +520,8 @@ function computeProjection(store, nowMs, { freshReadGraceMs } = {}) {
   // The overall figure holds as of its evidence, not its latest redraw: an
   // idle session re-records limits it fetched earlier, and Fable activity
   // since that fetch is still unaccounted for.
-  const overallObservedMs = latestEvidenceAt(readings.length ? readings : [latest]);
+  // Checked finite on the next line, so a number from there on.
+  const overallObservedMs = /** @type {number} */ (latestEvidenceAt(readings.length ? readings : [latest]));
   if (!Number.isFinite(overallUsed) || !Number.isFinite(overallObservedMs)) {
     return { derived: false, reason: 'invalid-overall-reading' };
   }
@@ -391,14 +530,14 @@ function computeProjection(store, nowMs, { freshReadGraceMs } = {}) {
   // Without one the cycle starts at zero, which is right after a reset and
   // an understatement on a machine that joined the window late — reported as
   // lower confidence rather than papered over.
-  const anchor = [latestOfficialAt(store, 'claude-fable', FABLE_BUCKET, nowMs)]
+  const anchor = [latestOfficialAt(store, FABLE.id, FABLE_BUCKET, nowMs)]
     .find((row) => row && new Date(row.observed_at).getTime() >= cycleStartMs
       && Math.abs(new Date(row.resets_at).getTime() - resetMs) <= 60_000) || null;
   const baseUsed = anchor ? usedOf(anchor) : 0;
   // Likewise the anchor's figure holds as of its own evidence.
-  const baseAtMs = anchor ? Math.max(cycleStartMs, latestEvidenceAt(
-    officialBetween(store, 'claude-fable', FABLE_BUCKET, new Date(cycleStartMs).toISOString(), nowMs)
-      .filter((row) => Math.abs(new Date(row.resets_at).getTime() - resetMs) <= 60_000))) : cycleStartMs;
+  const baseAtMs = anchor ? Math.max(cycleStartMs, /** @type {number} */ (latestEvidenceAt(
+    officialBetween(store, FABLE.id, FABLE_BUCKET, new Date(cycleStartMs).toISOString(), nowMs)
+      .filter((row) => Math.abs(new Date(row.resets_at).getTime() - resetMs) <= 60_000)))) : cycleStartMs;
 
   // Structural ceiling at the timestamp of the latest overall observation.
   // Activity after that instant is deliberately added outside the ceiling.
@@ -411,10 +550,13 @@ function computeProjection(store, nowMs, { freshReadGraceMs } = {}) {
   // on a machine that mostly runs without the status line may never do.
   const pair = fablePairCalibration(store, nowMs, usedOf, freshReadGraceMs);
   let raw;
+  /** @type {FableEstimate['method']} */
   let method;
+  /** @type {FableStep[]} */
   let steps = [];
   let stepped = 0;
   let tail = 0;
+  /** @type {number | null} */
   let ratePerPressure = null;
   let clamped = false;
   if (pair.ratePerPressure != null) {
@@ -423,7 +565,7 @@ function computeProjection(store, nowMs, { freshReadGraceMs } = {}) {
     let boundedBase = baseUsed;
     let totalPressure = 0;
     if (baseAtMs < overallObservedMs) {
-      const bounded = allowancePressure(store, 'fable', new Date(baseAtMs).toISOString(), new Date(overallObservedMs).toISOString());
+      const bounded = allowancePressure(store, FABLE.ledgerModelLike, new Date(baseAtMs).toISOString(), new Date(overallObservedMs).toISOString());
       if (!bounded.complete) return { derived: false, reason: 'insufficient-activity-coverage' };
       totalPressure += bounded.pressure;
       const boundedRaw = baseUsed + ratePerPressure * bounded.pressure;
@@ -435,7 +577,7 @@ function computeProjection(store, nowMs, { freshReadGraceMs } = {}) {
     }
     const tailFromMs = Math.max(baseAtMs, overallObservedMs);
     if (nowMs > tailFromMs) {
-      const projected = allowancePressure(store, 'fable', new Date(tailFromMs).toISOString(), new Date(nowMs).toISOString());
+      const projected = allowancePressure(store, FABLE.ledgerModelLike, new Date(tailFromMs).toISOString(), new Date(nowMs).toISOString());
       if (!projected.complete) return { derived: false, reason: 'insufficient-activity-coverage' };
       totalPressure += projected.pressure;
       tail = ratePerPressure * projected.pressure;
@@ -463,7 +605,7 @@ function computeProjection(store, nowMs, { freshReadGraceMs } = {}) {
     // reading, but never before the anchor — value the anchor already includes
     // must not be projected a second time.
     const tailFromMs = Math.max(overallObservedMs, baseAtMs);
-    const tailResult = allowancePressure(store, 'fable', new Date(tailFromMs).toISOString(), new Date(nowMs).toISOString());
+    const tailResult = allowancePressure(store, FABLE.ledgerModelLike, new Date(tailFromMs).toISOString(), new Date(nowMs).toISOString());
     if (!tailResult.complete) return { derived: false, reason: 'insufficient-activity-coverage' };
     tail = ratePerPressure != null ? ratePerPressure * tailResult.pressure : 0;
     const contemporaneousRaw = baseUsed + stepped;
@@ -515,16 +657,28 @@ function computeProjection(store, nowMs, { freshReadGraceMs } = {}) {
 // learning series from this; the collector reports it as source status.
 // `freshReadGraceMs` is the store's wait for a lower status-line reading to be
 // confirmed; left out, the forecast's default applies.
+/**
+ * @param {import('./store.cjs').Store} store
+ * @param {number} [nowMs]
+ * @param {{ freshReadGraceMs?: number }} [options]
+ * @returns {FableProjection}
+ */
 function projectFableAllowance(store, nowMs = Date.now(), options = {}) {
   const result = computeProjection(store, nowMs, options);
   // The plan is kept on this refusal: a named plan other than Max has no
   // Fable allowance to wait for, while an unnamed one is only unknown.
-  if (!result.derived) return { available: false, reason: result.reason, ...(result.planType ? { planType: result.planType } : {}) };
+  if (!result.derived) return { available: /** @type {const} */ (false), reason: result.reason, ...(result.planType ? { planType: result.planType } : {}) };
   const { derived: _derived, ...projection } = result;
-  return { available: true, reason: null, ...projection };
+  return { available: /** @type {const} */ (true), reason: null, ...projection };
 }
 
 // The summary the Claude refresh has always reported for the estimate.
+/**
+ * @param {import('./store.cjs').Store} store
+ * @param {number} [nowMs]
+ * @returns {{ derived: false, reason: string }
+ *   | ({ derived: true } & Pick<FableEstimate, 'usedPercent' | 'ceiling' | 'clamped' | 'method' | 'measuredSteps' | 'measuredPairs' | 'anchored'>)}
+ */
 function deriveFableEstimate(store, nowMs = Date.now()) {
   const result = store.getFableProjection(store.getSettings(), nowMs);
   if (!result.available) return { derived: false, reason: result.reason };

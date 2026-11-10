@@ -1,8 +1,10 @@
 import { FormEvent, useId, useState } from 'react';
+import { useDashboardActions } from '../../app/dashboard';
 import type { ManualObservation } from '../../types';
 import { SettingRow, SettingsSection } from './fields';
 
-export function ManualSection({ onManual }: { onManual: (observation: ManualObservation) => Promise<boolean> }) {
+export function ManualSection() {
+  const { addManualObservation } = useDashboardActions();
   const id = useId();
   const [sourceId, setSourceId] = useState<ManualObservation['sourceId']>('claude-fable');
   const [used, setUsed] = useState('');
@@ -13,7 +15,11 @@ export function ManualSection({ onManual }: { onManual: (observation: ManualObse
     if (!used || !reset) return;
     setSaving(true);
     try {
-      const saved = await onManual({ sourceId, usedPercent: Number(used), resetsAt: new Date(reset).toISOString() });
+      const saved = await addManualObservation({
+        sourceId,
+        usedPercent: Number(used),
+        resetsAt: new Date(reset).toISOString(),
+      });
       if (saved) setUsed('');
     } finally {
       setSaving(false);

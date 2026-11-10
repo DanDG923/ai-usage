@@ -14,28 +14,44 @@
 // before two changes is scaled by both ratios and an entry stays correct
 // when the allowance changes again later.
 
-const ALLOWANCE_CHANGE_SOURCES = ['claude', 'codex'];
+const { PROVIDERS, allowanceFamily, isWeeklyBucket } = require('./providers.mjs');
+
+/** @typedef {import('./types').AllowanceChange} AllowanceChange */
+
+/**
+ * What createAllowanceScaler returns when a recorded change applies: the
+ * multiplier for a reading taken at `observedMs`, and whether a change was
+ * recorded between two moments.
+ * @typedef {NonNullable<ReturnType<typeof createAllowanceScaler>>} AllowanceScaler
+ */
+
+// A change is recorded against the provider that owns a weekly allowance.
+// Fable shares Claude's weekly pool (its cap is half of it), so a Claude
+// allowance change moves both readings by the same ratio: allowanceFamily, in
+// the provider registry, maps a source to the owner its changes are filed under.
+/** @type {string[]} */
+const ALLOWANCE_CHANGE_SOURCES = PROVIDERS.filter((provider) => provider.sharesAllowanceWith == null).map((provider) => provider.id);
 const MAX_ALLOWANCE_CHANGES = 24;
 const EARLIEST_CHANGE_MS = Date.parse('2020-01-01T00:00:00Z');
 const FUTURE_TOLERANCE_MS = 5 * 60_000;
-
-// Fable shares Claude's weekly pool (its cap is half of it), so a Claude
-// allowance change moves both readings by the same ratio.
-function allowanceFamily(sourceId) {
-  return sourceId === 'claude-fable' ? 'claude' : sourceId;
-}
 
 // These entries describe the main weekly pool, not independent short-term,
 // model or OAuth limits. Require both identity and duration: Codex can use
 // primary/secondary for either duration, and unknown buckets are not evidence
 // that a weekly change applies. Fable follows the shared Claude weekly pool.
+/**
+ * @param {string | undefined} sourceId
+ * @param {string | undefined} bucketId
+ * @param {number | null | undefined} windowMinutes
+ */
 function isWeeklyAllowance(sourceId, bucketId, windowMinutes) {
-  if (windowMinutes !== 10_080) return false;
-  if (sourceId === 'claude') return bucketId === 'seven_day';
-  if (sourceId === 'claude-fable') return ['fable_seven_day', 'fable:seven_day_fable'].includes(bucketId);
-  return sourceId === 'codex' && ['codex:weekly', 'codex:primary', 'codex:secondary'].includes(bucketId);
+  return windowMinutes === 10_080 && isWeeklyBucket(sourceId, bucketId);
 }
 
+/**
+ * @param {any} value A stored or submitted setting, of no known shape until checked here.
+ * @returns {value is AllowanceChange}
+ */
 function isAllowanceChange(value, nowMs = Date.now()) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const keys = Object.keys(value).sort();
@@ -51,6 +67,10 @@ function isAllowanceChange(value, nowMs = Date.now()) {
   return Number.isFinite(percent) && percent >= 1 && percent <= 10_000 && percent !== 100;
 }
 
+/**
+ * @param {unknown} value
+ * @returns {value is AllowanceChange[]}
+ */
 function isAllowanceChangeList(value, nowMs = Date.now()) {
   return Array.isArray(value) && value.length <= MAX_ALLOWANCE_CHANGES
     && value.every((entry) => isAllowanceChange(entry, nowMs));
@@ -58,7 +78,9 @@ function isAllowanceChangeList(value, nowMs = Date.now()) {
 
 // Stored in time order with one entry per source and instant, so equal
 // settings compare equal and cache keys built from them are stable.
+/** @param {unknown} value */
 function normalizeAllowanceChanges(value) {
+  /** @type {Map<string, AllowanceChange>} */
   const byKey = new Map();
   for (const entry of Array.isArray(value) ? value : []) {
     if (!entry || typeof entry !== 'object') continue;
@@ -72,6 +94,11 @@ function normalizeAllowanceChanges(value) {
 // The multiplier that expresses a reading taken at `observedMs` in the current
 // allowance, or null when nothing recorded applies to this source so callers
 // can skip the work entirely.
+/**
+ * @param {AllowanceChange[] | null | undefined} changes
+ * @param {string | undefined} sourceId
+ * @param {{ bucketId?: string, windowMinutes?: number | null, nowMs?: number }} [options]
+ */
 function createAllowanceScaler(changes, sourceId, { bucketId, windowMinutes, nowMs = Date.now() } = {}) {
   if (!isWeeklyAllowance(sourceId, bucketId, windowMinutes)) return null;
   const family = allowanceFamily(sourceId);
@@ -81,9 +108,14 @@ function createAllowanceScaler(changes, sourceId, { bucketId, windowMinutes, now
       && Number.isFinite(entry.previousAllowancePercent) && entry.previousAllowancePercent > 0)
     .map((entry) => ({ atMs: Date.parse(entry.at), factor: entry.previousAllowancePercent / 100 }));
   if (!relevant.length) return null;
+  /** @param {number} observedMs */
   const scaler = (observedMs) => relevant.reduce((factor, entry) => (observedMs < entry.atMs ? factor * entry.factor : factor), 1);
   // Two explained changes can cancel numerically; equal endpoint scales do
   // not mean that no allowance boundary was recorded between the readings.
+  /**
+   * @param {number} before
+   * @param {number} after
+   */
   scaler.hasChangeBetween = (before, after) => relevant.some((entry) => before < entry.atMs && entry.atMs <= after);
   return scaler;
 }

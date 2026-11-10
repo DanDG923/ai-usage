@@ -1,4 +1,5 @@
-export type Point = { at: number; remaining: number };
+/** `projected` is the same figure before it is held between 0 and 100, on forecast series only. */
+export type Point = { at: number; remaining: number; projected?: number };
 
 export type ForecastState = 'safe' | 'watch' | 'risk' | 'critical' | 'unknown';
 

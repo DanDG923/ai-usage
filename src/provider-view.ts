@@ -13,11 +13,54 @@ import {
   modelAllowanceName,
   primaryWindow,
   quotaWindows,
+  sourceNeedsAttention,
   windowLabel,
 } from './lib';
 import type { ForecastState, Quota, QuotaWindow, Snapshot, Source } from './types';
 
 export type ProviderId = 'codex' | 'claude' | 'fable';
+
+/**
+ * A record of the three providers holding only the shown subscriptions'
+ * entries: a hidden subscription's entry is replaced by `hidden`, so it is
+ * never counted, named as on track, or drawn.
+ */
+export function visibleOnly<T, H>(
+  settings: Snapshot['settings'],
+  entries: Record<ProviderId, T>,
+  hidden: H,
+): Record<ProviderId, T | H> {
+  const shown = (id: ProviderId) => (subscriptionVisible(settings, id) ? entries[id] : hidden);
+  return { codex: shown('codex'), claude: shown('claude'), fable: shown('fable') };
+}
+
+/** The quotas of the shown subscriptions; a hidden subscription reads as having none. */
+export function visibleQuotas(snapshot: Pick<Snapshot, 'settings' | 'quotas'>): Snapshot['quotas'] {
+  return visibleOnly(snapshot.settings, snapshot.quotas, null);
+}
+
+/** The latest successful collection among these sources, or null when none has succeeded yet. */
+export function latestSuccessAt(sources: readonly (Pick<Source, 'last_success_at'> | null | undefined)[]) {
+  let latest: number | null = null;
+  for (const source of sources) {
+    const at = Date.parse(source?.last_success_at ?? '');
+    if (Number.isFinite(at) && (latest == null || at > latest)) latest = at;
+  }
+  return latest;
+}
+
+/**
+ * When the visible subscriptions' sources last collected successfully. A
+ * snapshot's generatedAt is when it was built, which happens on demand, so it
+ * would read "just now" over data that is hours old.
+ */
+export function lastCollectedAt(snapshot: Pick<Snapshot, 'settings' | 'sources'>): number | null {
+  return latestSuccessAt(
+    SOURCES.filter(({ id }) => subscriptionVisible(snapshot.settings, id)).map(({ healthId }) =>
+      snapshot.sources.find((entry) => entry.id === healthId),
+    ),
+  );
+}
 
 export type ProviderView = {
   id: ProviderId;
@@ -41,6 +84,11 @@ export type ProviderView = {
   /** Fable only: what is left now is set by the Claude weekly limit, not Fable's own. */
   poolLimited: boolean;
 };
+
+/** Whether a view has an expected and a heavier projection: enough to draw a forecast, not only a balance. */
+export function hasProjection(view: ProviderView) {
+  return view.state !== 'unknown' && view.expectedRemaining != null && view.heavyRemaining != null;
+}
 
 function sentence(text: string) {
   return text ? text.charAt(0).toUpperCase() + text.slice(1) : text;
@@ -88,8 +136,7 @@ function providerSubtitle(id: ProviderId, current: QuotaWindow | null, source: S
         : current.provenance === 'manual-official'
           ? 'Manual observation'
           : 'Provider reading';
-    if (source && ['stale', 'degraded', 'error'].includes(source.status))
-      measurement = `Stale ${measurement.toLowerCase()}`;
+    if (source && sourceNeedsAttention(source.status)) measurement = `Stale ${measurement.toLowerCase()}`;
   }
   return `${sentence(measurement)} · ${modelAllowanceName(current) ? `${modelAllowanceName(current)} · ` : ''}${sentence(windowLabel(current.windowMinutes))}`;
 }
@@ -112,7 +159,7 @@ function providerNotes(
   if (current.provenance === 'derived-tokens') {
     notes.push('Allowance estimated from local activity and calibrated history.');
   }
-  if (source && ['stale', 'degraded', 'error'].includes(source.status)) {
+  if (source && sourceNeedsAttention(source.status)) {
     notes.push(`Latest source status: ${source.status}. The balance is being projected from the last reading.`);
   }
   if (id === 'fable') {
@@ -197,11 +244,7 @@ function buildProviderViews(snapshot: Snapshot): ProviderView[] {
         provenance: current?.provenance ?? 'unavailable',
         expired,
         estimated: current && !expired ? isEstimated(current) : false,
-        stale: Boolean(
-          expired ||
-          (source && ['stale', 'degraded', 'error'].includes(source.status)) ||
-          allowanceAged(quota, poolWindow),
-        ),
+        stale: Boolean(expired || (source && sourceNeedsAttention(source.status)) || allowanceAged(quota, poolWindow)),
         notes: providerNotes(id, current, source, poolWindow, snapshot),
         secondaryWindows: current ? selectDisplayedWindows(quotaWindows(quota)).secondary : [],
         poolLimited: Boolean(

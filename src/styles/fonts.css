@@ -4,6 +4,9 @@
  * dist/assets; vite.config.ts stops it from ever inlining one as data:.
  * Only 400 and 700 exist: ask for nothing in between, since synthesis is off.
  * The files are local, so blocking briefly for them never shows a fallback.
+ *
+ * Deliberately outside the cascade layers (see layers.css): @font-face rules
+ * do not take part in the cascade. A style rule must never be added here.
  */
 @font-face {
   font-family: 'B612';

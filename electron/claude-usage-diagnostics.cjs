@@ -12,7 +12,9 @@ const SNAPSHOT_MAX_AGE_S = 60;
 function createUsageDiagnostics() {
   let pending = '';
   let truncated = false;
+  /** @type {{ outcome: string, code: string | null, httpStatus: number | null }} */
   let state = { outcome: 'unverified', code: null, httpStatus: null };
+  /** @param {string} value One line of the CLI's debug output. */
   function line(value) {
     if (/fetchUtilization: GET \/api\/oauth\/usage \(attempt \d+\)/.test(value)) {
       state = { outcome: 'unverified', code: null, httpStatus: null };
@@ -34,6 +36,7 @@ function createUsageDiagnostics() {
     state = { outcome: 'failed', code, httpStatus };
   }
   return {
+    /** @param {string | Buffer} data A chunk of the CLI's stderr. */
     write(data) {
       for (const part of String(data).split(/(?<=\n)/)) {
         if (!truncated) {

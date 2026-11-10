@@ -1,4 +1,5 @@
 import { Bell, BellOff } from 'lucide-react';
+import { useDashboardActions } from '../../app/dashboard';
 import { shortDate } from '../../lib';
 import type { Settings, Snapshot } from '../../types';
 import {
@@ -14,12 +15,11 @@ import {
 export function AlertsSection({
   snapshot,
   update,
-  onSnooze,
 }: {
   snapshot: Snapshot;
   update: (patch: Partial<Settings>) => Promise<void | boolean>;
-  onSnooze: (hours: number) => Promise<void>;
 }) {
+  const { snooze } = useDashboardActions();
   const { settings } = snapshot;
   const snoozedUntil = settings.alertsSnoozedUntil ? Date.parse(settings.alertsSnoozedUntil) : Number.NaN;
   // Compared against the snapshot clock so the render stays pure; the main
@@ -118,7 +118,7 @@ export function AlertsSection({
           >
             <div className="action-row compact">
               {snoozed ? (
-                <button type="button" className="btn" onClick={() => onSnooze(0)}>
+                <button type="button" className="btn" onClick={() => snooze(0)}>
                   <Bell aria-hidden="true" />
                   Resume alerts
                 </button>
@@ -129,7 +129,7 @@ export function AlertsSection({
                     type="button"
                     className="btn"
                     aria-label={`Snooze alerts for ${hours} hour${hours === 1 ? '' : 's'}`}
-                    onClick={() => onSnooze(hours)}
+                    onClick={() => snooze(hours)}
                   >
                     {hours}h
                   </button>

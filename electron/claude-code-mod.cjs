@@ -42,6 +42,10 @@ const READING_IMPORT_MIN_INTERVAL_MS = 2 * 60_000;
 const TORN_REQUEST_GRACE_MS = 10_000;
 const TORN_REQUEST_RETRY_MS = 1_000;
 
+/** @typedef {import('./types').TraySnapshot} TraySnapshot */
+/** @typedef {'on' | 'disabled' | 'off'} ModState 'disabled' is installed, then turned off in Claude Code's /plugin */
+
+/** @param {string} root the app's folder for the mod */
 function claudeCodeModPaths(root) {
   const marketplace = path.join(root, 'marketplace');
   return {
@@ -54,11 +58,16 @@ function claudeCodeModPaths(root) {
   };
 }
 
+/** @param {string} text */
 function parseVersion(text) {
   const match = String(text || '').match(/(\d+)\.(\d+)\.(\d+)/);
   return match ? match.slice(1, 4).map(Number) : null;
 }
 
+/**
+ * @param {number[]} version
+ * @param {number[]} minimum
+ */
 function atLeast(version, minimum) {
   for (let index = 0; index < minimum.length; index += 1) {
     if (version[index] !== minimum[index]) return version[index] > minimum[index];
@@ -66,6 +75,12 @@ function atLeast(version, minimum) {
   return true;
 }
 
+/**
+ * @param {string} binary
+ * @param {string[]} args
+ * @param {{ environment: NodeJS.ProcessEnv, timeoutMs?: number }} options
+ * @returns {Promise<{ ok: boolean, timedOut: boolean, stdout: string }>}
+ */
 function runClaude(binary, args, { environment, timeoutMs = 90_000 }) {
   return new Promise((resolve) => {
     execFile(binary, args, { ...providerProcessOptions(binary, environment), windowsHide: true, timeout: timeoutMs, maxBuffer: 1024 * 1024 },
@@ -75,6 +90,10 @@ function runClaude(binary, args, { environment, timeoutMs = 90_000 }) {
 
 // `claude plugin … --json` prints one result line; anything else on stdout is
 // a human message.
+/**
+ * @param {string} stdout
+ * @returns {({ outcome: string } & Record<string, any>) | null} the line as Claude Code wrote it; only `outcome` is checked
+ */
 function resultOf(stdout) {
   for (const line of String(stdout).split(/\r?\n/).toReversed()) {
     try {
@@ -87,6 +106,10 @@ function resultOf(stdout) {
 
 // Writes only what differs, so an unchanged mod keeps its files' times and a
 // running Claude Code session sees nothing new.
+/**
+ * @param {string} filePath
+ * @param {string | Buffer} content
+ */
 function writeIfChanged(filePath, content) {
   try {
     if (fs.readFileSync(filePath).equals(Buffer.from(content))) return false;
@@ -99,6 +122,10 @@ function writeIfChanged(filePath, content) {
 // Replaces the glance in one step, so the mod never reads half a file. A
 // reader holding the old one open can refuse the swap on Windows; the copy is
 // then rewritten in place and the mod keeps its last good glance meanwhile.
+/**
+ * @param {string} filePath
+ * @param {string} text
+ */
 function writeAtomically(filePath, text) {
   const temporary = `${filePath}.${process.pid}.tmp`;
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -115,9 +142,17 @@ function writeAtomically(filePath, text) {
  * @param {object} options
  * @param {string} options.root the app's folder for the mod (userData/claude-code)
  * @param {string} options.sourceDirectory the mod as the app ships it
- * @param {() => object} options.readClaudeSettings Claude Code's user settings, parsed
+ * @param {() => Record<string, any>} options.readClaudeSettings Claude Code's user settings, parsed
  * @param {(action: 'sync' | 'open') => void} options.onRequest
  * @param {() => void} options.onReading
+ * @param {string | null} [options.appVersion]
+ * @param {NodeJS.ProcessEnv} [options.environment]
+ * @param {typeof findClaudeBinary} [options.findBinary]
+ * @param {typeof runClaude} [options.run]
+ * @param {() => TraySnapshot | null} [options.getSnapshot] the tray snapshot the glance is drawn from
+ * @param {(message: string) => void} [options.log]
+ * @param {() => number} [options.now]
+ * @param {typeof fs.watch} [options.watch]
  */
 function createClaudeCodeMod({
   root,
@@ -136,21 +171,30 @@ function createClaudeCodeMod({
 }) {
   const paths = claudeCodeModPaths(root);
   let busy = false;
+  /** @type {ModState} */
   let state = 'off';
+  /** @type {ReturnType<typeof buildGlance> | null} */
   let lastGlance = null;
+  /** @type {TraySnapshot | null} */
   let lastSnapshot = null;
+  /** @type {NodeJS.Timeout | null} */
   let checker = null;
   let lastBeatAt = -Infinity;
   // Folder → its watcher. Each is made on its own, so one the file system
   // refused or lost is made again at the next check.
+  /** @type {Map<string, fs.FSWatcher>} */
   const watchers = new Map();
+  /** @type {Set<string>} */
   const unwatchable = new Set();
   let lastSyncAt = -Infinity;
+  /** @type {NodeJS.Timeout | null} */
   let readingTimer = null;
+  /** @type {NodeJS.Timeout | null} */
   let requestRetry = null;
   // Requests from before this moment were left while the mod was off.
   let ignoreRequestsBefore = -Infinity;
   // The plugin state the app last saw, or null before its first look.
+  /** @type {ModState | null} */
   let lastSeenState = null;
   let lastReadingImportAt = -Infinity;
   let stopped = false;
@@ -188,6 +232,12 @@ function createClaudeCodeMod({
     return changed;
   }
 
+  /**
+   * @param {string} binary
+   * @param {string[]} args
+   * @param {string} failure what to say if the command fails
+   * @param {string[]} [accepted] failure codes that count as done
+   */
   async function claude(binary, args, failure, accepted = []) {
     const { stdout, timedOut } = await run(binary, [...args, '--json'], { environment });
     const result = resultOf(stdout);
@@ -195,6 +245,7 @@ function createClaudeCodeMod({
     throw new Error(timedOut ? `${failure} Claude Code did not answer in time.` : `${failure}${result?.message ? ` ${result.message}` : ''}`);
   }
 
+  /** @param {() => Promise<void>} action */
   async function exclusive(action) {
     if (busy) throw new Error('The Claude Code mod is already being changed.');
     busy = true;
@@ -242,17 +293,19 @@ function createClaudeCodeMod({
     log('Claude Code mod removed.');
   });
 
+  /** @param {ReturnType<typeof buildGlance>} glance */
   function writeGlance(glance) {
     try {
       writeAtomically(paths.glance, `${JSON.stringify(glance)}\n`);
     } catch (error) {
-      log(`Claude Code glance could not be written: ${error.message}`);
+      log(`Claude Code glance could not be written: ${/** @type {Error | null | undefined} */ (error)?.message}`);
     }
   }
 
   // Called after every publish. The glance is written only while the mod is
   // installed, so an app without it leaves nothing behind; one turned off in
   // Claude Code keeps it current for when it is turned on again.
+  /** @param {TraySnapshot | null | undefined} snapshot a tray snapshot, or a full one, which has the same fields */
   function publish(snapshot) {
     if (stopped || !snapshot) return;
     lastSnapshot = snapshot;
@@ -260,7 +313,7 @@ function createClaudeCodeMod({
     try {
       lastGlance = buildGlance(snapshot, { nowMs: now(), appVersion });
     } catch (error) {
-      log(`Claude Code glance could not be built: ${error.message}`);
+      log(`Claude Code glance could not be built: ${/** @type {Error | null | undefined} */ (error)?.message}`);
       return;
     }
     lastBeatAt = now();
@@ -278,6 +331,7 @@ function createClaudeCodeMod({
       const filePath = path.join(paths.requests, name);
       let stat;
       try { stat = fs.statSync(filePath); } catch { continue; }
+      /** @type {any} */
       let request = null;
       try {
         if (stat.size <= 4096) request = JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -337,6 +391,10 @@ function createClaudeCodeMod({
   }
 
   // True when this call started watching the folder.
+  /**
+   * @param {string} folder
+   * @param {() => void} listener
+   */
   function watchFolder(folder, listener) {
     if (watchers.has(folder)) return false;
     try {
@@ -351,7 +409,7 @@ function createClaudeCodeMod({
       return true;
     } catch (error) {
       // Logged once while it keeps failing, not at every check.
-      if (!unwatchable.has(folder)) log(`Claude Code mod folder could not be watched: ${error.message}`);
+      if (!unwatchable.has(folder)) log(`Claude Code mod folder could not be watched: ${/** @type {Error | null | undefined} */ (error)?.message}`);
       unwatchable.add(folder);
       return false;
     }
@@ -372,15 +430,15 @@ function createClaudeCodeMod({
       try { watcher.close(); } catch { /* Already closed. */ }
     }
     watchers.clear();
-    clearTimeout(readingTimer);
+    clearTimeout(readingTimer ?? undefined);
     readingTimer = null;
-    clearTimeout(requestRetry);
+    clearTimeout(requestRetry ?? undefined);
     requestRetry = null;
   }
 
   function stopWatching() {
     unfollow();
-    clearInterval(checker);
+    clearInterval(checker ?? undefined);
     checker = null;
   }
 
@@ -409,7 +467,7 @@ function createClaudeCodeMod({
       try {
         publish(getSnapshot());
       } catch (error) {
-        log(`Claude Code heartbeat could not be built: ${error.message}`);
+        log(`Claude Code heartbeat could not be built: ${/** @type {Error | null | undefined} */ (error)?.message}`);
       }
     }
   }
@@ -431,7 +489,7 @@ function createClaudeCodeMod({
       try {
         if (writeModFiles()) log('Claude Code mod files updated; Claude Code loads them at its next session.');
       } catch (error) {
-        log(`Claude Code mod files could not be updated: ${error.message}`);
+        log(`Claude Code mod files could not be updated: ${/** @type {Error | null | undefined} */ (error)?.message}`);
       }
     }
     lastBeatAt = now();

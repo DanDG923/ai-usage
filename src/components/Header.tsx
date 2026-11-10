@@ -1,21 +1,24 @@
 import {
   ArrowLeft,
-  CircleCheck,
   CircleDashed,
   CircleDollarSign,
-  Eye,
   History,
   Home,
-  OctagonAlert,
   RefreshCw,
   Settings as SettingsIcon,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { SOURCES, subscriptionVisible } from '../../electron/dashboard-decision.mjs';
-import { HEALTHY_SOURCE_STATUSES, relativeTime, shortDate } from '../lib';
-import { allowanceNeedsRefresh } from '../provider-view';
-import type { Snapshot } from '../types';
+import { HEALTHY_SOURCE_STATUSES, STALE_SOURCE_STATUSES, relativeTime, shortDate } from '../lib';
+import { allowanceNeedsRefresh, lastCollectedAt } from '../provider-view';
+import type { ForecastState, Snapshot } from '../types';
+import { BrandMark } from './BrandMark';
+import { STATE_ICON } from './StatePill';
+
+// The derivation lives with the other provider rules in provider-view.ts;
+// the header still exports it beside sourceHealth and refreshCadence.
+export { lastCollectedAt };
 
 export type Tab = 'overview' | 'activity' | 'costs' | 'settings';
 
@@ -26,24 +29,6 @@ export const TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
   { id: 'costs', label: 'Costs', icon: CircleDollarSign },
   { id: 'settings', label: 'Settings', icon: SettingsIcon },
 ];
-
-/** The Flight Deck mark: a fuel tape with a trace running into it. */
-export function BrandMark() {
-  return (
-    <svg
-      className="brand-mark"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.75"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M14 3h5v18h-5z M14 12h5 M3.5 16l4.5-5 3 3 3.5-4.5" />
-    </svg>
-  );
-}
 
 /** The collection schedule in words. The menu offers whole hours, but a restored setting can hold any minutes. */
 export function refreshCadence(minutes: number) {
@@ -59,7 +44,7 @@ export function refreshCadence(minutes: number) {
  * collected successfully still needs a refresh while the allowance it shows
  * is older than the verdict's freshness rule allows.
  */
-export function sourceHealth(snapshot: Snapshot) {
+export function sourceHealth(snapshot: Snapshot): { tone: ForecastState; text: string } {
   const visible = SOURCES.filter(({ id }) => subscriptionVisible(snapshot.settings, id));
   const rows = visible
     .map(({ id, healthId, label }) => ({
@@ -69,7 +54,7 @@ export function sourceHealth(snapshot: Snapshot) {
     }))
     .filter((row) => row.source);
   const failing = rows.filter((row) => row.source!.status === 'error');
-  const stale = rows.filter((row) => row.aged || ['stale', 'degraded'].includes(row.source!.status));
+  const stale = rows.filter((row) => row.aged || STALE_SOURCE_STATUSES.has(row.source!.status));
   const connected = rows.filter((row) => HEALTHY_SOURCE_STATUSES.has(row.source!.status));
   const list = (entries: typeof rows) => entries.map((row) => row.label).join(' and ');
   if (failing.length) return { tone: 'critical', text: `${list(failing)} unavailable` };
@@ -78,28 +63,6 @@ export function sourceHealth(snapshot: Snapshot) {
   return connected.length === rows.length
     ? { tone: 'safe', text: `${rows.length} source${rows.length === 1 ? '' : 's'} current` }
     : { tone: 'unknown', text: `${connected.length} of ${rows.length} sources connected` };
-}
-
-const HEALTH_ICON: Record<string, LucideIcon> = {
-  safe: CircleCheck,
-  watch: Eye,
-  critical: OctagonAlert,
-  unknown: CircleDashed,
-};
-
-/**
- * When the visible subscriptions' sources last collected successfully. A
- * snapshot's generatedAt is when it was built, which happens on demand, so it
- * would read "just now" over data that is hours old.
- */
-export function lastCollectedAt(snapshot: Snapshot): number | null {
-  let latest: number | null = null;
-  for (const { id, healthId } of SOURCES) {
-    if (!subscriptionVisible(snapshot.settings, id)) continue;
-    const at = Date.parse(snapshot.sources.find((entry) => entry.id === healthId)?.last_success_at ?? '');
-    if (Number.isFinite(at) && (latest == null || at > latest)) latest = at;
-  }
-  return latest;
 }
 
 /** Re-render every half minute so "Updated 2 min ago" keeps counting between snapshots. */
@@ -145,7 +108,7 @@ export function Header({
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const now = useClock();
   const health = sourceHealth(snapshot);
-  const HealthIcon = HEALTH_ICON[health.tone] ?? CircleDashed;
+  const HealthIcon = STATE_ICON[health.tone] ?? CircleDashed;
   const collectedAt = lastCollectedAt(snapshot);
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {

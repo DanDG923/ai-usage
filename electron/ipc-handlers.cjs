@@ -1,8 +1,61 @@
 'use strict';
 
 const path = require('node:path');
+const { CLAUDE, providerById } = require('./providers.mjs');
 const { REFRESH_TRIGGERS, refreshOptionsFor } = require('./refresh-policy.cjs');
 
+/** @typedef {import('./app/application.cjs').Application} Application */
+/** @typedef {import('electron').BrowserWindow} BrowserWindow */
+
+/**
+ * What the dashboard's channels reach. electron/app/ipc.cjs builds it from the
+ * application once the store and the services exist, which is why the Claude
+ * Code mod is always present here.
+ *
+ * @typedef {object} IpcContext
+ * @property {Application['ipc']['handleIpc']} handleIpc
+ * @property {import('electron').App} app
+ * @property {import('electron').Clipboard} clipboard
+ * @property {import('electron').Dialog} dialog
+ * @property {import('electron').Shell} shell
+ * @property {import('./types').Store} store
+ * @property {Application['maintenance']} maintenance
+ * @property {Application['databaseJobs']} databaseJobs
+ * @property {Application['claudeSetup']} claudeSetup
+ * @property {NonNullable<Application['claudeCodeMod']>} claudeCodeMod
+ * @property {Application['updateChecker']} updateChecker absent in a build that cannot update
+ * @property {typeof import('./claude-collector.cjs').installClaudeHelper} installClaudeHelper
+ * @property {typeof import('./claude-collector.cjs').uninstallClaudeHelper} uninstallClaudeHelper
+ * @property {typeof import('./notifications.cjs').buildSummaryText} buildSummaryText
+ * @property {Readonly<import('./types').SessionPage>} EMPTY_SESSION_PAGE what a page request gets while storage is closing
+ * @property {() => Application['dashboard']['window']} getWindow
+ * @property {Application['paths']['getInboxPath']} getInboxPath
+ * @property {Application['logs']['log']} log
+ * @property {Application['logs']['logRendererError']} logRendererError
+ * @property {Application['snapshots']['snapshot']} snapshot
+ * @property {Application['snapshots']['currentView']} currentView
+ * @property {Application['snapshots']['setPeriodDays']} setPeriodDays
+ * @property {Application['snapshots']['invalidateSnapshot']} invalidateSnapshot
+ * @property {Application['snapshots']['patchSnapshotSettings']} patchSnapshotSettings
+ * @property {() => Application['snapshots']['cachedSnapshot']} getCachedSnapshot
+ * @property {() => Application['snapshots']['lastFullSnapshot']} getPreviousSnapshot
+ * @property {Application['refresh']['refreshAll']} refreshAll
+ * @property {Application['refresh']['refreshClaudeOnly']} refreshClaudeOnly
+ * @property {Application['refresh']['publishAfterWrite']} publishAfterWrite
+ * @property {Application['tray']['updateTray']} updateTray
+ * @property {Application['tray']['setSnooze']} setSnooze
+ * @property {Application['lifecycle']['storageClosing']} storageClosing
+ * @property {Application['lifecycle']['applySettingsEffects']} applySettingsEffects
+ * @property {Application['lifecycle']['renderingMode']} renderingMode
+ * @property {Application['lifecycle']['renderingForced']} renderingForced
+ * @property {() => void} relaunch
+ */
+
+// What a renderer sends arrives as `unknown` (see IpcHandler in
+// electron/app/ipc.cjs), so each handler below checks an argument before it
+// uses it, or hands it to a store function that does.
+
+/** @param {IpcContext} context */
 function registerIpc(context) {
   const {
     handleIpc, claudeSetup, storageClosing, getPreviousSnapshot, getCachedSnapshot,
@@ -45,6 +98,7 @@ function registerIpc(context) {
       throw error;
     }
   });
+  /** @param {unknown} options */
   const pageOptions = (options) => (options && typeof options === 'object' ? options : {});
   handleIpc('dashboard:get-sessions', (_event, options) => (storageClosing() ? EMPTY_SESSION_PAGE : store.getSessionPage(pageOptions(options))));
   handleIpc('dashboard:get-tasks', (_event, options) => (storageClosing() ? EMPTY_SESSION_PAGE : store.getTaskPage(pageOptions(options))));
@@ -65,16 +119,19 @@ function registerIpc(context) {
     return { settings, snapshot: current };
   }));
   handleIpc('dashboard:update-price', (_event, price) => databaseJobs.run(() => {
-    store.updatePrice(price || {});
+    // The store checks every field of a price and refuses one it cannot use.
+    store.updatePrice(/** @type {Parameters<typeof store.updatePrice>[0]} */ (price || {}));
     invalidateSnapshot();
     return { snapshot: snapshot() };
   }));
-  handleIpc('dashboard:add-manual-observation', async (_event, observation) => {
+  // The observation is taken apart field by field, each checked before use.
+  handleIpc('dashboard:add-manual-observation', async (_event, /** @type {any} */ observation) => {
     if (!observation || typeof observation !== 'object') throw new Error('An observation is required.');
-    const sourceId = observation.sourceId;
+    const provider = providerById(observation.sourceId);
     const usedPercent = Number(observation.usedPercent);
     const resetsAt = new Date(observation.resetsAt);
-    if (!['codex', 'claude', 'claude-fable'].includes(sourceId)) throw new Error('Unknown source.');
+    if (!provider) throw new Error('Unknown source.');
+    const sourceId = provider.id;
     if (!Number.isFinite(usedPercent) || usedPercent < 0 || usedPercent > 100) throw new Error('Usage percentage must be between 0 and 100.');
     if (!Number.isFinite(resetsAt.getTime()) || resetsAt.getTime() <= Date.now()) throw new Error('Reset time must be a valid time in the future.');
     // Only the fields the renderer's form sends are accepted; bucket, window,
@@ -84,7 +141,7 @@ function registerIpc(context) {
       store.recordObservation({
         sourceId,
         bucketId: store.getManualBucketId(sourceId),
-        bucketName: sourceId === 'claude-fable' ? 'Fable weekly' : 'Weekly',
+        bucketName: provider.weeklyBucketName,
         observedAt: new Date().toISOString(),
         usedPercent,
         remainingPercent: 100 - usedPercent,
@@ -102,8 +159,9 @@ function registerIpc(context) {
     });
     // The observation is committed. Provider availability must not turn that
     // successful save into an error or hold the form open for a network call.
-    // Claude's derived view refreshes through the normal snapshot push.
-    if (sourceId !== 'codex') void refreshClaudeOnly().catch((error) => log(`Refresh after manual observation: ${error.message}`));
+    // Claude's derived view refreshes through the normal snapshot push. A
+    // Fable entry counts: the Claude collector derives Fable's view too.
+    if (provider.collector === CLAUDE.collector) void refreshClaudeOnly().catch((error) => log(`Refresh after manual observation: ${error.message}`));
     return current;
   });
   handleIpc('dashboard:install-claude-helper', async () => {
@@ -127,7 +185,7 @@ function registerIpc(context) {
       try {
         await databaseJobs.run(() => claudeCodeMod.publish(currentView()));
       } catch (error) {
-        log(`Claude Code glance after install: ${error.message}`);
+        log(`Claude Code glance after install: ${/** @type {Error | null | undefined} */ (error)?.message}`);
       }
     }
     void refreshClaudeOnly().catch((error) => log(`Refresh after the Claude Code mod was installed: ${error.message}`));
@@ -140,7 +198,8 @@ function registerIpc(context) {
     return { result };
   }));
   handleIpc('dashboard:restore-backup', async () => {
-    const chosen = await dialog.showOpenDialog(getWindow() ?? undefined, {
+    // Electron shows a dialog without a parent when the window is missing.
+    const chosen = await dialog.showOpenDialog(/** @type {BrowserWindow} */ (getWindow() ?? undefined), {
       title: 'Restore an AI Usage backup',
       defaultPath: store.backupDirectory,
       properties: ['openFile'],
@@ -167,7 +226,8 @@ function registerIpc(context) {
     if (error) throw new Error(`Windows could not open the backup folder: ${error}`);
   });
   handleIpc('dashboard:preview-desktop-export', async () => {
-    const chosen = await dialog.showOpenDialog(getWindow() ?? undefined, {
+    // Electron shows a dialog without a parent when the window is missing.
+    const chosen = await dialog.showOpenDialog(/** @type {BrowserWindow} */ (getWindow() ?? undefined), {
       title: 'Choose conversations.json from your Claude export', properties: ['openFile'],
       filters: [{ name: 'Claude conversation export', extensions: ['json'] }],
     });
@@ -191,7 +251,8 @@ function registerIpc(context) {
     });
   });
   handleIpc('dashboard:clear-desktop-estimates', async () => {
-    const choice = await dialog.showMessageBox(getWindow() ?? undefined, {
+    // Electron shows a dialog without a parent when the window is missing.
+    const choice = await dialog.showMessageBox(/** @type {BrowserWindow} */ (getWindow() ?? undefined), {
       type: 'question', title: 'Remove imported chat estimates?',
       message: 'Remove all imported Claude chat estimates?',
       detail: 'A backup is created first. Recorded token usage and quota history are kept.',
@@ -209,7 +270,8 @@ function registerIpc(context) {
   handleIpc('dashboard:export-csv', async (_event, days = 90) => {
     const period = Math.min(365, Math.max(1, Math.round(Number(days)) || 90));
     const stamp = new Date().toISOString().slice(0, 10);
-    const chosen = await dialog.showSaveDialog(getWindow() ?? undefined, {
+    // Electron shows a dialog without a parent when the window is missing.
+    const chosen = await dialog.showSaveDialog(/** @type {BrowserWindow} */ (getWindow() ?? undefined), {
       title: 'Export the token ledger',
       defaultPath: path.join(app.getPath('documents'), `ai-usage-ledger-${stamp}.csv`),
       filters: [{ name: 'CSV', extensions: ['csv'] }],
@@ -228,7 +290,8 @@ function registerIpc(context) {
     const current = await setSnooze(Number.isFinite(parsed) && parsed > 0 ? Math.min(72, parsed) : 0, { push: false });
     return { snapshot: current };
   });
-  handleIpc('app:renderer-error', (_event, detail) => {
+  // Both fields are checked to be text before anything is logged.
+  handleIpc('app:renderer-error', (_event, /** @type {any} */ detail) => {
     if (!detail || typeof detail.message !== 'string' || (detail.componentStack != null && typeof detail.componentStack !== 'string')) throw new Error('Invalid renderer error.');
     logRendererError(`Renderer error: ${detail.message.slice(0, 1000).replace(/[\r\n]+/g, ' ')} ${String(detail.componentStack || '').slice(0, 3000).replace(/[\r\n]+/g, ' ')}`);
   });

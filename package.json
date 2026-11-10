@@ -1,6 +1,6 @@
 {
   "name": "ai-usage",
-  "version": "1.0.61",
+  "version": "1.0.62",
   "private": true,
   "license": "MIT",
   "description": "Local-first Windows dashboard for Codex, Claude, and Fable subscription allowances, run-out forecasts, and API-equivalent cost.",
@@ -20,7 +20,7 @@
     "release:audit": "node tools/audit-release.cjs",
     "release:notes": "node tools/release-notes.cjs",
     "pack": "npm run build:web && electron-builder --config tools/electron-builder.cjs --dir --publish never",
-    "test": "node --require ./tests/setup.cjs --test --test-concurrency=2 tests/*.test.cjs",
+    "test": "node --require ./tests/setup.cjs --test --test-concurrency=2 tests/*/*.test.cjs",
     "test:mod": "cd claude-code-mod && claude plugin validate . && claude plugin test",
     "lint": "oxlint --deny-warnings",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",

@@ -5,7 +5,7 @@ import { inactiveRanges, isActiveAt, type Schedule } from '../budget';
 import { niceScale } from '../chart-scale';
 import type { CostAnalytics, DailyUsage, Point } from '../types';
 import { LOCALE, compactNumber, dateTimeLabel, formatInt, money, percent, whenLabel } from '../lib';
-import type { ProviderView } from '../provider-view';
+import { hasProjection, type ProviderView } from '../provider-view';
 import { recentDayKeys } from './details/cost-math';
 import { spreadRunwayLabels } from './details/runway-labels';
 
@@ -144,11 +144,6 @@ function windowStartOf(view: ProviderView) {
     return resetAt - current.windowMinutes * 60_000;
   }
   return current.forecast.series.observed[0]?.at ?? resetAt - 7 * 86_400_000;
-}
-
-/** Whether a view has an expected and heavier projection worth drawing. */
-function hasProjection(view: ProviderView) {
-  return view.state !== 'unknown' && view.expectedRemaining != null && view.heavyRemaining != null;
 }
 
 export function runwaySummary(view: ProviderView) {
@@ -663,9 +658,9 @@ export function RunwayChart({
               <caption>{view.name} allowance observations and projections</caption>
               <thead>
                 <tr>
-                  <th>Time</th>
-                  <th>Series</th>
-                  <th>Remaining</th>
+                  <th scope="col">Time</th>
+                  <th scope="col">Series</th>
+                  <th scope="col">Remaining</th>
                 </tr>
               </thead>
               <tbody>
@@ -916,10 +911,10 @@ export function CostChart({ costs }: { costs: CostAnalytics }) {
             <caption>Daily API-equivalent cost</caption>
             <thead>
               <tr>
-                <th>Date</th>
-                <th>Codex</th>
-                <th>Claude + Fable</th>
-                <th>Total</th>
+                <th scope="col">Date</th>
+                <th scope="col">Codex</th>
+                <th scope="col">Claude + Fable</th>
+                <th scope="col">Total</th>
               </tr>
             </thead>
             <tbody>
@@ -1061,8 +1056,8 @@ export function DailyUsageChart({ rows, days }: { rows: DailyUsage[]; days: numb
             <caption>Official daily Codex token usage</caption>
             <thead>
               <tr>
-                <th>Date</th>
-                <th>Tokens</th>
+                <th scope="col">Date</th>
+                <th scope="col">Tokens</th>
               </tr>
             </thead>
             <tbody>

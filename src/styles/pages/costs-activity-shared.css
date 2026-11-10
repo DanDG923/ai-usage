@@ -1,0 +1,44 @@
+/* Rules Costs and Activity share. Imported by both pages, before their own
+   stylesheets (costs.css, activity.css), and layered before both. Chrome
+   stays monochrome; provider colour appears only on provider data. */
+@layer pages.shared {
+  /* Cost figures, including the notes beneath, use tabular numerals. */
+  .cost-summary,
+  .savings-panel .savings-figure strong,
+  .saving-bars {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Reset cycles: each provider's bars in its own colour, a data mark and never
+     chrome; past windows are a tint of it over the panel, the open one is solid.
+     The flight-log layout around them is in activity.css. */
+  .cycle-bars {
+    --series: var(--text-3);
+  }
+  .cycle-bars.codex {
+    --series: var(--codex);
+  }
+  .cycle-bars.claude {
+    --series: var(--claude);
+  }
+  .cycle-bars.fable {
+    --series: var(--fable);
+  }
+  .cycle-bar i {
+    background: color-mix(in srgb, var(--series) 45%, var(--panel));
+  }
+  .cycle-bar.current i {
+    background: var(--series);
+  }
+
+  @media (forced-colors: active) {
+    .cycle-bar i,
+    .cycle-bar.current i {
+      background: CanvasText;
+      forced-color-adjust: none;
+    }
+    .cycle-limit {
+      border-top-color: CanvasText;
+    }
+  }
+}

@@ -14,6 +14,18 @@ let prepareSleep = null;
 let holdRefresh = false;
 let heldRefreshes = [];
 let refreshCalls = 0;
+// Writes that wait until released, so a second click lands while the first is in flight.
+let helperCalls = { install: 0, uninstall: 0 };
+let heldHelpers = [];
+let priceCalls = 0;
+let heldPrices = [];
+let holdConfigure = false;
+let heldConfigures = [];
+let cancelCalls = 0;
+const setHelperInstalled = (helperInstalled) => {
+  const claude = snapshot.sources.find((source) => source.id === 'claude');
+  claude.metadata = { ...claude.metadata, helperInstalled };
+};
 // A second window starts while storage is closed: reads answer null until
 // told, then answer at once for whichever period the saved view selects.
 const declining = process.argv.includes('--decline-reads');
@@ -48,7 +60,30 @@ contextBridge.exposeInMainWorld('aiUsage', {
     return { snapshot: structuredClone(snapshot) };
   },
   getClaudeSetup: async () => ({ installed: true, auth: 'signed-in', dismissed: false }),
-  configureClaude: async () => ({ dismissed: true }),
+  configureClaude: async () => {
+    if (holdConfigure) await new Promise((resolve) => heldConfigures.push(resolve));
+    return { dismissed: true };
+  },
+  cancelClaudeSetup: async () => { cancelCalls += 1; throw new Error('Deliberate cancel rejection'); },
+  installClaudeHelper: async () => {
+    helperCalls.install += 1;
+    await new Promise((resolve) => heldHelpers.push(resolve));
+    setHelperInstalled(true);
+    return { snapshot: structuredClone(snapshot) };
+  },
+  // The helper is disabled but its script is still open elsewhere and stays on disk.
+  uninstallClaudeHelper: async () => {
+    helperCalls.uninstall += 1;
+    await new Promise((resolve) => heldHelpers.push(resolve));
+    setHelperInstalled(false);
+    return { snapshot: structuredClone(snapshot),
+      result: { managed: true, restoredPreviousStatusLine: false, statusLineRemoved: true, helperScriptRemoved: false } };
+  },
+  updatePrice: async () => {
+    priceCalls += 1;
+    await new Promise((resolve) => heldPrices.push(resolve));
+    return { snapshot: structuredClone(snapshot) };
+  },
   refresh: async () => {
     refreshCalls += 1;
     if (holdRefresh) return new Promise((resolve) => heldRefreshes.push(() => resolve({ snapshot: structuredClone(snapshot), collectors: {} })));
@@ -75,6 +110,13 @@ contextBridge.exposeInMainWorld('testBridge', {
   releaseRefresh() { holdRefresh = false; for (const resolve of heldRefreshes.splice(0)) resolve(); },
   refreshCalls: () => refreshCalls,
   answerReads() { declineReads = false; },
+  helperCalls: () => ({ ...helperCalls }),
+  releaseHelpers() { for (const resolve of heldHelpers.splice(0)) resolve(); },
+  priceCalls: () => priceCalls,
+  releasePrices() { for (const resolve of heldPrices.splice(0)) resolve(); },
+  holdConfigure(value) { holdConfigure = value; },
+  releaseConfigure() { holdConfigure = false; for (const resolve of heldConfigures.splice(0)) resolve(); },
+  cancelCalls: () => cancelCalls,
   // What the renderer answers when the hidden window asks to release it.
   prepareSleep: () => (prepareSleep ? prepareSleep() : null),
 });

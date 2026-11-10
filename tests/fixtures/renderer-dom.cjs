@@ -122,6 +122,61 @@ app.whenReady().then(async () => {
   await until(() => document.querySelector('[role="dialog"]'));
   await evaluate(() => document.querySelector('[role="dialog"]').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
   await until(() => !document.querySelector('[role="dialog"]'));
+  // A Cancel that cannot be delivered is reported in the guide, from the button and from Escape, never left as an unhandled rejection.
+  await evaluate(() => { window.unhandledRejections = []; window.addEventListener('unhandledrejection', (event) => window.unhandledRejections.push(String(event.reason?.message ?? event.reason))); });
+  const setupButton = (label) => window.webContents.executeJavaScript(`[...document.querySelectorAll('[role="dialog"] button')].find((button) => button.textContent === ${JSON.stringify(label)})?.click()`);
+  await evaluate(() => [...document.querySelectorAll('#panel-settings button')].find((button) => button.textContent.includes('Set up Claude')).click());
+  await until(() => [...document.querySelectorAll('[role="dialog"] button')].some((button) => button.textContent === 'Start collecting' && !button.disabled));
+  await evaluate(() => window.testBridge.holdConfigure(true));
+  await setupButton('Check again');
+  await until(() => [...document.querySelectorAll('[role="dialog"] button')].some((button) => button.textContent === 'Cancel'));
+  await setupButton('Cancel');
+  await until(() => document.querySelector('[role="dialog"] [role="alert"]')?.textContent.includes('Deliberate cancel rejection'));
+  await evaluate(() => document.querySelector('[role="dialog"]').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+  await until(() => window.testBridge.cancelCalls() === 2);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.deepEqual(await evaluate(() => window.unhandledRejections), [], 'a failed Cancel is not an unhandled rejection');
+  assert.ok(await evaluate(() => document.querySelector('[role="dialog"]')), 'the step that could not be cancelled is still running');
+  await evaluate(() => window.testBridge.releaseConfigure());
+  await until(() => [...document.querySelectorAll('[role="dialog"] button')].some((button) => button.textContent === 'Set up later'));
+  await setupButton('Set up later');
+  await until(() => !document.querySelector('[role="dialog"]'));
+  // A double-click on the helper control sends one write, enabling and disabling.
+  const helperControl = () => [...document.querySelectorAll('#sources .source-card button')].find((button) => /helper/.test(button.textContent));
+  const doubleClick = (find) => window.webContents.executeJavaScript(`(() => { const find = ${find.toString()}; find().click(); find().click(); })()`);
+  await evaluate(() => document.querySelector('[aria-label="Dismiss message"]')?.click());
+  assert.equal(await window.webContents.executeJavaScript(`(${helperControl.toString()})().textContent`), 'Enable fallback helper');
+  await doubleClick(helperControl);
+  await until(() => window.testBridge.helperCalls().install === 1);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.deepEqual(await evaluate(() => window.testBridge.helperCalls()), { install: 1, uninstall: 0 }, 'a second click does not enable the helper twice');
+  assert.equal(await window.webContents.executeJavaScript(`(${helperControl.toString()})().disabled`), true, 'the helper control waits for the change in flight');
+  await evaluate(() => window.testBridge.releaseHelpers());
+  await until(() => document.querySelector('.toast')?.textContent.includes('Claude allowance helper enabled'));
+  await until(() => [...document.querySelectorAll('#sources .source-card button')].some((button) => button.textContent === 'Disable helper' && !button.disabled));
+  await doubleClick(helperControl);
+  await until(() => window.testBridge.helperCalls().uninstall === 1);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.deepEqual(await evaluate(() => window.testBridge.helperCalls()), { install: 1, uninstall: 1 }, 'a second click does not disable the helper twice');
+  await evaluate(() => window.testBridge.releaseHelpers());
+  // Disabling succeeded although the script stays on disk: the notice is a confirmation, not a failure.
+  await until(() => document.querySelector('.toast')?.textContent.includes('could not be deleted'));
+  assert.equal(await evaluate(() => document.querySelector('.toast').className), 'toast ok', 'a success that mentions what could not be done is drawn as a success');
+  assert.match(await evaluate(() => document.querySelector('.toast').previousElementSibling.previousElementSibling.textContent), /helper disabled and its status line removed/, 'and announced politely');
+  assert.equal(await evaluate(() => document.querySelector('.toast').previousElementSibling.textContent), '', 'not as an alert');
+  await until(() => [...document.querySelectorAll('#sources .source-card button')].some((button) => button.textContent === 'Enable fallback helper' && !button.disabled));
+  await evaluate(() => document.querySelector('[aria-label="Dismiss message"]')?.click());
+  // A double-click on a price's Save writes it once.
+  const priceSave = () => [...document.querySelectorAll('#pricing .price-save')].find((button) => !button.disabled || button.getAttribute('aria-busy') === 'true');
+  await doubleClick(priceSave);
+  await until(() => window.testBridge.priceCalls() === 1);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(await evaluate(() => window.testBridge.priceCalls()), 1, 'a second click does not save the price twice');
+  assert.equal(await evaluate(() => document.querySelectorAll('#pricing .price-save[aria-busy="true"]:disabled').length), 1, 'only the row being saved waits');
+  await evaluate(() => window.testBridge.releasePrices());
+  await until(() => document.querySelector('.toast')?.textContent.includes('pricing updated'));
+  await until(() => !document.querySelector('#pricing .price-save[aria-busy="true"]'));
+  await evaluate(() => document.querySelector('[aria-label="Dismiss message"]')?.click());
   // Settings: a screen-reader title, a section list with live badges, navigation into disclosures, and search.
   const searchSettings = (query) => window.webContents.executeJavaScript(`(() => { const input = document.querySelector('#panel-settings input[type="search"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(query)}); input.dispatchEvent(new Event('input', { bubbles: true })); })()`);
   const shownSections = () => evaluate(() => [...document.querySelectorAll('[data-settings-section]')].filter((slot) => !slot.hidden).map((slot) => slot.dataset.settingsSection).join(' '));
@@ -250,7 +305,29 @@ app.whenReady().then(async () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   waiting.destroy();
-  console.log('RENDERER_DOM_PASS: pushes, retained tasks, periods, reset timer, refresh state, currency, settings navigation and search, keyboard focus and alerts, declined first read');
+  // The browser preview has no desktop bridge: R does what its Refresh button does, and says so.
+  const preview = new BrowserWindow({ show: false, width: 1280, height: 900,
+    webPreferences: { contextIsolation: true, sandbox: true, backgroundThrottling: false, offscreen: true } });
+  const inPreview = (fn) => preview.webContents.executeJavaScript(`((r) => r instanceof Node ? true : r)((${fn.toString()})())`);
+  const inPreviewUntil = async (fn, what) => {
+    for (let attempt = 0; !(await inPreview(fn)); attempt++) {
+      if (attempt > 100) throw new Error(what);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
+  await preview.loadURL(process.env.AI_USAGE_RENDERER_URL);
+  await inPreviewUntil(() => document.querySelector('button[aria-keyshortcuts="R"]'), 'The preview did not load its demo data.');
+  await inPreview(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'r' })));
+  await inPreviewUntil(() => document.querySelector('.toast'), 'R did nothing in the browser preview.');
+  const byKey = await inPreview(() => document.querySelector('.toast').textContent);
+  await inPreview(() => document.querySelector('[aria-label="Dismiss message"]').click());
+  await inPreviewUntil(() => !document.querySelector('.toast'), 'The preview notice was not dismissed.');
+  await inPreview(() => document.querySelector('button[aria-keyshortcuts="R"]').click());
+  await inPreviewUntil(() => document.querySelector('.toast'), 'The preview Refresh button showed no notice.');
+  assert.equal(byKey, await inPreview(() => document.querySelector('.toast').textContent), 'R and the Refresh button agree in the preview');
+  assert.match(byKey, /installed desktop app/);
+  preview.destroy();
+  console.log('RENDERER_DOM_PASS: pushes, retained tasks, periods, reset timer, refresh state, currency, setup cancel, single writes, notice tone, settings navigation and search, keyboard focus and alerts, declined first read, preview refresh shortcut');
   app.exit(0);
  } catch (error) { console.error(error); app.exit(1); }
 }).catch((error) => { console.error(error); app.exit(1); });
