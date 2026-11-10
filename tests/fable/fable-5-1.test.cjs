@@ -96,7 +96,7 @@ test('only date suffixes borrow a catalogue row; the next point release is unpri
     ['gpt-5.6-sol-2026-08', 'gpt-5.6-sol'],
     ['CLAUDE-FABLE-5-1', 'claude-fable-5-1'],
   ]) assert.equal(store.resolvePrice(model)?.model, row, model);
-  for (const model of ['claude-fable-5-2', 'claude-opus-5-6', 'claude-fable-5-v2', 'claude-fable-5.1']) {
+  for (const model of ['claude-fable-5-3', 'claude-opus-5-6', 'claude-fable-5-v2', 'claude-fable-5.1']) {
     assert.equal(store.resolvePrice(model), null, `${model} must not borrow a predecessor's price`);
   }
 });
@@ -107,17 +107,17 @@ test('Costs price each version at its own rate and list the unknown point releas
   context.usage('fable-5-1', NOW - HOUR, 'claude-fable-5-1', { cachedInputTokens: MILLION });
   context.usage('fable-5', NOW - HOUR, 'claude-fable-5-20260829', { cachedInputTokens: MILLION });
   context.usage('opus-5-5', NOW - HOUR, 'claude-opus-5-5', { inputTokens: MILLION });
-  context.usage('fable-5-2', NOW - HOUR, 'claude-fable-5-2', { inputTokens: 1000 });
+  context.usage('fable-5-3', NOW - HOUR, 'claude-fable-5-3', { inputTokens: 1000 });
   const costs = context.costs();
   near(costs.actual, 0.25 + 1 + 4, 0.005, 'total');
   assert.equal(costs.isLowerBound, true);
-  assert.deepEqual(costs.unpricedModels, [{ sourceId: 'claude', model: 'claude-fable-5-2', tokens: 1000 }]);
+  assert.deepEqual(costs.unpricedModels, [{ sourceId: 'claude', model: 'claude-fable-5-3', tokens: 1000 }]);
   const byModel = Object.fromEntries(costs.byModel.map((row) => [row.model, row]));
   assert.equal(byModel['claude-fable-5-1'].cost, 0.25);
   assert.equal(byModel['claude-fable-5-20260829'].cost, 1);
   assert.equal(byModel['claude-opus-5-5'].cost, 4);
-  assert.equal(byModel['claude-fable-5-2'].cost, 0);
-  assert.equal(byModel['claude-fable-5-2'].coverage, 0);
+  assert.equal(byModel['claude-fable-5-3'].cost, 0);
+  assert.equal(byModel['claude-fable-5-3'].coverage, 0);
 });
 
 test('an existing database gains both rows on reopen, reprices history and keeps custom rates', (t) => {
@@ -170,7 +170,7 @@ test('allowance pressure weighs a Fable 5.1 cache read at its own quarter-dollar
   const fable51 = pairScenario(t, 'claude-fable-5-1');
   assert.equal(fable51.available, true);
   assert.equal(fable51.calibration.method, 'fable-anchor-pair');
-  assert.equal(fable51.calibration.profile, 'allowance-pressure-v3');
+  assert.equal(fable51.calibration.profile, 'allowance-pressure-v4');
   near(fable51.calibration.pairMeasuredPressure, 0.25, 1e-12, 'Fable 5.1 pressure');
   near(fable51.calibration.percentPerPressureUnit, 20, 1e-9, 'Fable 5.1 rate');
   const dated = pairScenario(t, 'claude-fable-5-1-20260901');
@@ -197,11 +197,11 @@ test('the overall-share split uses the Fable 5.1 and Opus 5.5 weights', (t) => {
   const { context, projection } = shareScenario(t, 'claude-fable-5-1', { cachedInputTokens: 4 * MILLION },
     'claude-opus-5-5', { inputTokens: 250_000 });
   assert.equal(projection.calibration.method, 'overall-share');
-  assert.equal(projection.calibration.profile, 'allowance-pressure-v3');
+  assert.equal(projection.calibration.profile, 'allowance-pressure-v4');
   near(projection.usedPercent, 10, 1e-9, 'Fable 5.1 with Opus 5.5');
   const quota = context.store.getQuota('claude-fable', context.store.getSettings(), NOW);
   assert.equal(quota.provenance, 'derived-tokens');
-  assert.equal(quota.metadata.calibration.profile, 'allowance-pressure-v3');
+  assert.equal(quota.metadata.calibration.profile, 'allowance-pressure-v4');
   assert.equal(quota.bucketName, 'Fable weekly');
 
   // The same tokens on the predecessors weigh differently.
@@ -315,7 +315,7 @@ test('Fable activity by version is costed at each version\'s rate in the setting
     context.usage(`fable-5-${key}`, NOW - 2 * HOUR, 'claude-fable-5', { inputTokens: 100_000, cachedInputTokens: MILLION });
   }
   context.usage('fable-5-1', NOW - HOUR, 'claude-fable-5-1', { inputTokens: 100_000, cachedInputTokens: MILLION, outputTokens: 10_000 });
-  context.usage('fable-5-2', NOW - HOUR, 'claude-fable-5-2', { inputTokens: 1000 });
+  context.usage('fable-5-3', NOW - HOUR, 'claude-fable-5-3', { inputTokens: 1000 });
   context.usage('opus', NOW - HOUR, 'claude-opus-5-5', { inputTokens: MILLION });
   context.usage('last-week', Date.parse(RESET) - 8 * DAY, 'claude-fable-5-1', { inputTokens: MILLION });
   const settings = store.getSettings();
@@ -325,8 +325,8 @@ test('Fable activity by version is costed at each version\'s rate in the setting
   assert.equal(activity.currency, 'GBP');
   assert.equal(activity.since, iso(Date.parse(RESET) - 7 * DAY));
   assert.equal(activity.through, iso(NOW));
-  assert.deepEqual(activity.models.map((entry) => entry.model), ['claude-fable-5', 'claude-fable-5-1', 'claude-fable-5-2']);
-  const [fable5, fable51, fable52] = activity.models;
+  assert.deepEqual(activity.models.map((entry) => entry.model), ['claude-fable-5', 'claude-fable-5-1', 'claude-fable-5-3']);
+  const [fable5, fable51, fable53] = activity.models;
   assert.equal(fable5.requests, 2);
   assert.equal(fable5.totalTokens, 2_200_000);
   assert.equal(fable5.cacheReadTokens, 2 * MILLION);
@@ -335,8 +335,8 @@ test('Fable activity by version is costed at each version\'s rate in the setting
   assert.equal(fable51.totalTokens, 1_110_000);
   near(fable51.cost, (1 + 0.25 + 0.5) * settings.usdToCurrency, 1e-4, 'Fable 5.1 cost');
   assert.equal(fable51.covered, true);
-  assert.equal(fable52.covered, false);
-  assert.equal(fable52.cost, 0);
+  assert.equal(fable53.covered, false);
+  assert.equal(fable53.cost, 0);
 
   // Costs by model agree with the per-version figures for the same events.
   const costs = store.getCostAnalytics(1, settings, NOW);

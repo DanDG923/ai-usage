@@ -88,7 +88,7 @@ export function claudeModelFamily(name) {
 // The Claude models the app knows by name: the ones a model-scoped limit can
 // be labelled with, and the ones the Fable estimate has a weight for.
 export const CLAUDE_MODEL_IDS = Object.freeze(/** @type {const} */ ([
-  'claude-fable-5-1', 'claude-fable-5', 'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8',
+  'claude-fable-5-2', 'claude-fable-5-1', 'claude-fable-5', 'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8',
   'claude-sonnet-5-5', 'claude-sonnet-5', 'claude-haiku-5-5', 'claude-haiku-4-5',
 ]));
 
@@ -167,7 +167,7 @@ export const FABLE = define({
   mainLimitId: null,
   weeklyBuckets: Object.freeze(['fable_seven_day', 'fable:seven_day_fable']),
   weeklyBucket: 'fable_seven_day',
-  // One allowance covers Fable 5 and Fable 5.1; Claude reports it as "Fable".
+  // One allowance covers every Fable version; Claude reports it as "Fable".
   weeklyBucketName: 'Fable weekly',
 });
 

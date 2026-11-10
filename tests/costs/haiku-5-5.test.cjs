@@ -211,7 +211,7 @@ test('Haiku 5.5 activity takes its share of the week instead of making the Fable
     const projection = shareScenario(t, model, { inputTokens: 10 * MILLION });
     assert.equal(projection.available, true, model);
     assert.equal(projection.calibration.method, 'overall-share');
-    assert.equal(projection.calibration.profile, 'allowance-pressure-v3');
+    assert.equal(projection.calibration.profile, 'allowance-pressure-v4');
     near(projection.usedPercent, 10, 1e-9, model);
   }
   near(shareScenario(t, 'claude-haiku-5-5', { cachedInputTokens: 100 * MILLION, outputTokens: 2 * MILLION })

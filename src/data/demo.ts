@@ -310,6 +310,16 @@ export const demoSnapshot: Snapshot = {
       source_url: 'https://developers.openai.com/api/docs/models/compare',
     },
     {
+      model: 'claude-fable-5-2',
+      input_usd_per_million: 8,
+      cache_write_usd_per_million: 10,
+      cache_write_1h_usd_per_million: 16,
+      cache_read_usd_per_million: 0.2,
+      output_usd_per_million: 40,
+      effective_from: '2026-11-09',
+      source_url: 'https://platform.claude.com/docs/en/about-claude/pricing',
+    },
+    {
       model: 'claude-fable-5-1',
       input_usd_per_million: 10,
       cache_write_usd_per_million: 12.5,

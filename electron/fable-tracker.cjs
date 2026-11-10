@@ -503,8 +503,8 @@ function localFableActivity(store, nowMs, allowance) {
     WHERE source_id = 'claude' AND occurred_at >= ? AND occurred_at <= ?
       AND LOWER(COALESCE(model, '')) LIKE '%fable%'
   `).get(since, through));
-  // Fable 5 and Fable 5.1 draw on the same allowance, so the totals above
-  // cover both; the versions seen are kept for diagnostics.
+  // Every Fable version draws on the same allowance, so the totals above
+  // cover them all; the versions seen are kept for diagnostics.
   const models = /** @type {{ model: string | null, requests: number }[]} */ (store.prepare(`
     SELECT model, COUNT(*) AS requests FROM usage_events
     WHERE source_id = 'claude' AND occurred_at >= ? AND occurred_at <= ?

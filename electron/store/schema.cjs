@@ -376,7 +376,7 @@ function seed(store) {
       'gpt-6-sol': '2026-09-22', 'gpt-6-luna': '2026-09-22',
     }[row[0]];
     const claudeEffective = {
-      'claude-fable-5-1': '2026-09-01', 'claude-opus-5-5': '2026-09-22',
+      'claude-fable-5-2': '2026-11-09', 'claude-fable-5-1': '2026-09-01', 'claude-opus-5-5': '2026-09-22',
       'claude-sonnet-5-5': '2026-10-07', 'claude-haiku-5-5': '2026-10-07',
     }[row[0]];
     const source = openAiEffective

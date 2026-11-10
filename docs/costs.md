@@ -18,10 +18,11 @@ The **Costs** search filters model and project summaries and searches every reco
 
 ## Pricing and the catalogue
 
-Costs include every model present in the imported Codex and Claude Code token records. Opus 5.5, Opus 5, Opus 4.8, Sonnet 5.5, Sonnet 5, Haiku 5.5, and Haiku 4.5 already have built-in prices alongside Astra, GPT-6.1 Sol, GPT-6.1 Terra, Sol, Terra, Luna, Fable 5.1 and Fable 5.
+Costs include every model present in the imported Codex and Claude Code token records. Opus 5.5, Opus 5, Opus 4.8, Sonnet 5.5, Sonnet 5, Haiku 5.5, and Haiku 4.5 already have built-in prices alongside Astra, GPT-6.1 Sol, GPT-6.1 Terra, Sol, Terra, Luna, Fable 5.2, Fable 5.1 and Fable 5.
 
 ### Claude models
 
+- [Fable 5.2](https://platform.claude.com/docs/en/models/fable-5-2/overview), released on 9 November 2026, costs $8 input, $10 five-minute cache writes, $16 one-hour cache writes, $0.20 cache reads and $40 output per million tokens, four fifths of Fable 5.1's rates, across its full 1M context window.
 - Fable 5.1 differs from Fable 5 only in cache reads, $0.25 rather than $1 per million tokens.
 - Sonnet 5.5 differs from Sonnet 5 only in cache reads, $0.10 rather than $0.20 since 7 October 2026.
 - [Haiku 5.5](https://platform.claude.com/docs/en/models/haiku-5-5/overview), released on 7 October 2026, is priced by prompt length: a request whose prompt (uncached input, cache reads and cache writes) is 100,000 tokens or fewer costs $0.10 input, $0.125 five-minute cache writes, $0.20 one-hour cache writes, $0.01 cache reads, and $0.50 output per million tokens, and a longer request pays five times each of those rates, output included. Settings shows the first set of rates; the longer-prompt rates are five times whatever is saved there.
@@ -41,7 +42,7 @@ These are standard API-equivalent estimates, not ChatGPT subscription charges.
 
 ### How a model is matched to a price
 
-- A model is priced by its own catalogue row or a dated snapshot of it (such as `-20251001`); a point release such as a future `claude-fable-5-2` shows as unpriced until it has a row, rather than borrowing its predecessor's price.
+- A model is priced by its own catalogue row or a dated snapshot of it (such as `-20251001`); a point release such as a future `claude-fable-5-3` shows as unpriced until it has a row, rather than borrowing its predecessor's price.
 - Unknown or future model names are not assigned a guessed price: their tokens remain visible, price coverage drops, and totals are labelled **At least** until you add the missing row.
 - Existing token records are repriced automatically when the new catalogue loads, and saved custom prices are preserved.
 

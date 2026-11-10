@@ -550,7 +550,7 @@ function getDailyUsage(store, days = 90, nowMs = Date.now()) {
     `).all(since));
 }
 
-// Fable 5 and Fable 5.1 draw on one allowance; this splits this device's
+// Every Fable version draws on one allowance; this splits this device's
 // Fable activity in the current Fable window by version, with what those
 // tokens are worth at today's API prices. Only tokens and money are split:
 // the provider reports one percentage for both.
