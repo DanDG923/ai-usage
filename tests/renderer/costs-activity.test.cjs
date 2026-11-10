@@ -5,11 +5,10 @@ require('../setup.cjs');
 // renderer-behavior.test.cjs. Only these pages and their dependencies load,
 // so a change elsewhere in the renderer cannot mask these results.
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const test = require('node:test');
-const React = require('react');
-const { renderToStaticMarkup } = require('react-dom/server');
+const { render, text } = require('../helpers/markup.cjs');
+const { startRendererServer } = require('../helpers/renderer-server.cjs');
+const { readRepoFile } = require('../helpers/repo.cjs');
 
 let server;
 let demoSnapshot;
@@ -21,15 +20,7 @@ let API_EQUIVALENT_EXPLAINER;
 let lib;
 
 test.before(async () => {
-  const [{ createServer }, { default: react }] = await Promise.all([import('vite'), import('@vitejs/plugin-react')]);
-  server = await createServer({
-    root: path.resolve(__dirname, '..', '..'),
-    configFile: false,
-    plugins: [react()],
-    server: { middlewareMode: true, watch: null, hmr: false, ws: false },
-    optimizeDeps: { noDiscovery: true, include: [] },
-    appType: 'custom',
-  });
+  server = await startRendererServer();
   [
     { demoSnapshot },
     { Costs },
@@ -53,12 +44,6 @@ test.after(async () => {
   await server?.close();
 });
 
-const render = (Component, props) => renderToStaticMarkup(React.createElement(Component, props));
-const text = (html) =>
-  html
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
 const costsPage = (snapshot) =>
   render(Costs, {
     snapshot,
@@ -148,7 +133,7 @@ test('lower-bound cost figures keep the ≥ floor and say what is excluded; comp
   assert.match(text(section(full, 'cost-summary')), /tracked usage updates/);
   assert.doesNotMatch(text(full.match(/<div class="saving-bars">[\s\S]*?<\/article>/)[0]), /≥/);
 
-  const css = fs.readFileSync(path.resolve(__dirname, '../../src/styles/pages/costs-activity-shared.css'), 'utf8');
+  const css = readRepoFile('src/styles/pages/costs-activity-shared.css');
   assert.match(
     css,
     /\.cost-summary,[\s\S]*?\{\s*font-variant-numeric: tabular-nums;/,
@@ -317,17 +302,17 @@ test('reset-cycle bars carry the provider colour, mark the open window and descr
   );
   assert.match(bars, /role="img"/);
 
-  const css = fs.readFileSync(path.resolve(__dirname, '../../src/styles/pages/costs-activity-shared.css'), 'utf8');
+  const css = readRepoFile('src/styles/pages/costs-activity-shared.css');
   for (const provider of ['codex', 'claude', 'fable'])
     assert.match(css, new RegExp(`\\.cycle-bars\\.${provider} \\{\\s*--series: var\\(--${provider}\\);`));
   const cycleRules = css.slice(css.indexOf('/* Reset cycles'));
   const barRules = cycleRules.slice(0, cycleRules.indexOf('@media')).match(/\.cycle-bar[^{]*\{[^}]*\}/g) ?? [];
-  assert.ok(barRules.length >= 2, 'pages.css paints the past and the open bars');
+  assert.ok(barRules.length >= 2, 'the shared stylesheet paints the past and the open bars');
   for (const rule of barRules)
     for (const fill of rule.match(/background[^;]*;/g) ?? [])
       assert.match(fill, /var\(--series\)/, 'bars take the provider colour, never chrome or status');
-  // The flight-log layout loads after pages.css, so it must not repaint the bars (forced-colors excepted).
-  const layout = fs.readFileSync(path.resolve(__dirname, '../../src/styles/pages/activity.css'), 'utf8');
+  // The flight-log layout is in a later layer than the shared stylesheet, so it must not repaint the bars (forced-colors excepted).
+  const layout = readRepoFile('src/styles/pages/activity.css');
   for (const rule of layout.slice(0, layout.indexOf('@media (forced-colors')).match(/\.cycle-bar[^{]*\{[^}]*\}/g) ?? [])
     assert.doesNotMatch(rule, /background/, 'the cycle layout does not override the provider fill');
 });
