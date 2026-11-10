@@ -25,7 +25,7 @@ import { DailyBudgetStrip } from './DailyBudgetStrip';
 import { SessionWindows } from './ProviderSummary';
 import { StatePill } from './StatePill';
 import { TokenCapacity } from './TokenCapacity';
-import '../styles/provider.css';
+import '../styles/pages/provider.css';
 
 function scheduleSummary(settings: Settings) {
   const days = [...(settings.activeDays ?? [])].sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7));

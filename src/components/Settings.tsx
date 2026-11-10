@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { useDashboardActions, useDashboardState } from '../app/dashboard';
-import '../settings.css';
+import '../styles/pages/settings.css';
 import type { Settings as SettingsType, Snapshot } from '../types';
 import { AlertsSection } from './settings/AlertsSection';
 import { AppearanceSection } from './settings/AppearanceSection';

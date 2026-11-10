@@ -8,8 +8,8 @@ import { ActivityHeatmap } from './details/ActivityHeatmap';
 import { CycleHistory } from './details/CycleHistory';
 import { RelativeTime } from './details/RelativeTime';
 import { ALERT_STATE_ICON } from './StatePill';
-import '../pages.css';
-import '../styles/activity.css';
+import '../styles/pages/costs-activity-shared.css';
+import '../styles/pages/activity.css';
 
 /**
  * A source's standing as an icon and a word (Deck-StatesParts frame 15):

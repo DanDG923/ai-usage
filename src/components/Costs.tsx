@@ -10,8 +10,8 @@ import { ModelTable, ProjectTable } from './details/Tables';
 import { TaskTable } from './details/TaskTable';
 import { SessionTable } from './details/SessionTable';
 import { DesktopEstimates } from './DesktopEstimates';
-import '../pages.css';
-import '../styles/costs.css';
+import '../styles/pages/costs-activity-shared.css';
+import '../styles/pages/costs.css';
 
 /**
  * The fuel ledger: what the tracked tokens would have cost at API rates. The

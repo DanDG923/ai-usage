@@ -2,13 +2,15 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { FlyoutApp } from './components/TrayFlyout';
 import type { FlyoutBridge } from './types';
-// The Flight Deck tokens, fonts, element defaults and the shared keys and
-// annunciator; the flyout's own layout lives in flyout.css.
+// The cascade layer order, then the Flight Deck tokens, fonts, element
+// defaults and the shared keys and annunciator; the flyout's own layout lives
+// in styles/flyout.css.
+import './styles/layers.css';
 import './styles/tokens.css';
 import './styles/fonts.css';
 import './styles/base.css';
 import './styles/components.css';
-import './flyout.css';
+import './styles/flyout.css';
 
 const root = createRoot(document.getElementById('root')!);
 

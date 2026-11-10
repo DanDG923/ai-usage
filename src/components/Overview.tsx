@@ -10,7 +10,7 @@ import type { ForecastState, Snapshot } from '../types';
 import { API_EQUIVALENT_EXPLAINER, InfoTip } from './InfoTip';
 import { ProviderSummary } from './ProviderSummary';
 import { ALERT_STATE_ICON } from './StatePill';
-import '../overview.css';
+import '../styles/pages/overview.css';
 
 /** The state whose icon a row in "Also worth knowing" carries: the same icon and colour as that state. */
 const INSIGHT_STATE: Record<Insight['tone'], ForecastState> = {

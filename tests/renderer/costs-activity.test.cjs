@@ -148,7 +148,7 @@ test('lower-bound cost figures keep the ≥ floor and say what is excluded; comp
   assert.match(text(section(full, 'cost-summary')), /tracked usage updates/);
   assert.doesNotMatch(text(full.match(/<div class="saving-bars">[\s\S]*?<\/article>/)[0]), /≥/);
 
-  const css = fs.readFileSync(path.resolve(__dirname, '../../src/pages.css'), 'utf8');
+  const css = fs.readFileSync(path.resolve(__dirname, '../../src/styles/pages/costs-activity-shared.css'), 'utf8');
   assert.match(
     css,
     /\.cost-summary,[\s\S]*?\{\s*font-variant-numeric: tabular-nums;/,
@@ -317,7 +317,7 @@ test('reset-cycle bars carry the provider colour, mark the open window and descr
   );
   assert.match(bars, /role="img"/);
 
-  const css = fs.readFileSync(path.resolve(__dirname, '../../src/pages.css'), 'utf8');
+  const css = fs.readFileSync(path.resolve(__dirname, '../../src/styles/pages/costs-activity-shared.css'), 'utf8');
   for (const provider of ['codex', 'claude', 'fable'])
     assert.match(css, new RegExp(`\\.cycle-bars\\.${provider} \\{\\s*--series: var\\(--${provider}\\);`));
   const cycleRules = css.slice(css.indexOf('/* Reset cycles'));
@@ -327,7 +327,7 @@ test('reset-cycle bars carry the provider colour, mark the open window and descr
     for (const fill of rule.match(/background[^;]*;/g) ?? [])
       assert.match(fill, /var\(--series\)/, 'bars take the provider colour, never chrome or status');
   // The flight-log layout loads after pages.css, so it must not repaint the bars (forced-colors excepted).
-  const layout = fs.readFileSync(path.resolve(__dirname, '../../src/styles/activity.css'), 'utf8');
+  const layout = fs.readFileSync(path.resolve(__dirname, '../../src/styles/pages/activity.css'), 'utf8');
   for (const rule of layout.slice(0, layout.indexOf('@media (forced-colors')).match(/\.cycle-bar[^{]*\{[^}]*\}/g) ?? [])
     assert.doesNotMatch(rule, /background/, 'the cycle layout does not override the provider fill');
 });
