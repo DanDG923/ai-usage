@@ -239,6 +239,10 @@ const PRICE_ROWS = [
   ['codex-auto-review', 4, 5, 5, 0.4, 20],
   ['gpt-5.6-terra', 2, 2.5, 2.5, 0.2, 12],
   ['gpt-5.6-luna', 0.2, 0.25, 0.25, 0.02, 1.2],
+  // Fable 5.2 standard rates verified 2026-11-10, released 2026-11-09: every
+  // category is four fifths of Fable 5.1's, and the full 1M window is at
+  // these rates, with no long-context tier.
+  ['claude-fable-5-2', 8, 10, 16, 0.2, 40],
   // Fable 5.1 and Opus 5.5 standard rates verified 2026-09-26. Fable 5.1
   // differs from Fable 5 only in cache reads: $0.25 against $1 per MTok.
   ['claude-fable-5-1', 10, 12.5, 20, 0.25, 50],
@@ -766,7 +770,7 @@ class UsageStore {
         'gpt-6-sol': '2026-09-22', 'gpt-6-luna': '2026-09-22',
       }[row[0]];
       const claudeEffective = {
-        'claude-fable-5-1': '2026-09-01', 'claude-opus-5-5': '2026-09-22',
+        'claude-fable-5-2': '2026-11-09', 'claude-fable-5-1': '2026-09-01', 'claude-opus-5-5': '2026-09-22',
         'claude-sonnet-5-5': '2026-10-07', 'claude-haiku-5-5': '2026-10-07',
       }[row[0]];
       const source = openAiEffective
@@ -2264,7 +2268,7 @@ class UsageStore {
     };
   }
 
-  // Fable 5 and Fable 5.1 draw on one allowance; this splits this device's
+  // Every Fable version draws on one allowance; this splits this device's
   // Fable activity in the current Fable window by version, with what those
   // tokens are worth at today's API prices. Only tokens and money are split:
   // the provider reports one percentage for both.

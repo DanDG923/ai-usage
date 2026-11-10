@@ -51,7 +51,7 @@ function allowanceCycles(rows, nowMs, freshReadGraceMs, usedOf = rawUsedPercent)
 }
 
 const FABLE_BUCKET = 'fable_seven_day';
-// One allowance covers Fable 5 and Fable 5.1; Claude reports it as "Fable".
+// One allowance covers every Fable version; Claude reports it as "Fable".
 const FABLE_BUCKET_NAME = 'Fable weekly';
 const OVERALL_BUCKET = 'seven_day';
 // Fable's cap is half the overall weekly allowance: spending all of Fable is
@@ -77,7 +77,12 @@ const FABLE_ALLOWANCE_SHARE = 0.5;
 // unavailable. It is weighed at the rates for prompts up to 100,000 tokens
 // whatever the prompt: the higher card for longer prompts is a per-request
 // billing rule, and no plan-usage counterpart is published.
-const ALLOWANCE_PRESSURE_V3 = [
+//
+// v4 adds Fable 5.2. The family fallback matched it to Fable 5, so its cache
+// reads weighed five times their $0.20 rate and every other category a quarter
+// more than its own.
+const ALLOWANCE_PRESSURE_V4 = [
+  ['claude-fable-5-2', 8, 10, 16, 0.2, 40],
   ['claude-fable-5-1', 10, 12.5, 20, 0.25, 50],
   ['claude-fable-5', 10, 12.5, 20, 1, 50],
   ['claude-opus-5-5', 4, 5, 8, 0.2, 20],
@@ -96,7 +101,7 @@ const ALLOWANCE_PRESSURE_V3 = [
 // a variant matches its exact family, not a shorter prefix. Built once; the
 // per-model answer is remembered because the pressure scan asks for it once
 // per usage event.
-const ALLOWANCE_PROFILES = ALLOWANCE_PRESSURE_V3
+const ALLOWANCE_PROFILES = ALLOWANCE_PRESSURE_V4
   .map(([name, input, write5m, write1h, read, output]) => ({ name, input, write5m, write1h, read, output }))
   .sort((a, b) => b.name.length - a.name.length);
 const allowanceProfiles = new Map();
@@ -497,7 +502,7 @@ function computeProjection(store, nowMs, { freshReadGraceMs } = {}) {
       anchoredAt: anchor ? anchor.observed_at : null,
       measuredSteps: steps.length,
       measuredPairs: pair.pairs,
-      profile: 'allowance-pressure-v3',
+      profile: 'allowance-pressure-v4',
       pairMeasuredPressure: pair.measuredPressure,
       steppedPercent: stepped,
       projectedTailPercent: tail,

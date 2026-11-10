@@ -244,7 +244,7 @@ function ClaudeWeeklyPanel({
         <div className="pd-pool-versions">
           <table className="pd-pool-table">
             <caption>
-              Both versions share one Fable limit. This split is this device’s activity this week, not allowance.
+              Every Fable version shares one Fable limit. This split is this device’s activity this week, not allowance.
             </caption>
             <thead>
               <tr>
@@ -266,7 +266,8 @@ function ClaudeWeeklyPanel({
             </tbody>
           </table>
           <p className="pd-detail">
-            Fable 5.1 cache reads cost less at API prices; Anthropic has not said whether they use less of the limit.
+            Fable 5.2 costs less than 5.1 at API prices, and both cache reads cost less than Fable 5’s; Anthropic has not
+            said whether either uses less of the limit.
           </p>
         </div>
       )}

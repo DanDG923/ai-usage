@@ -106,6 +106,6 @@ test('the Fable estimate weighs Sonnet 5.5 cache reads at $0.10, not Sonnet 5\'s
   const projection = projectFableAllowance(context.store, NOW);
   assert.equal(projection.available, true);
   assert.equal(projection.calibration.method, 'overall-share');
-  assert.equal(projection.calibration.profile, 'allowance-pressure-v3');
+  assert.equal(projection.calibration.profile, 'allowance-pressure-v4');
   near(projection.usedPercent, 10, 1e-9, 'Fable 5.1 with Sonnet 5.5');
 });
