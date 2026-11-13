@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.64 — 13 November 2026
+
+- Update the indirect `@hono/node-server` dependency from 2.1.5 to 2.1.8, including upstream security fixes and improvements to request and response handling.
+- Update the indirect `hono` dependency from 4.13.14 to 4.13.18 to include upstream security fixes.
+- Preserve local usage history, settings, observations, and backups during an in-place update.
+
 ## 1.0.63 — 10 November 2026
 
 - Add built-in Claude Fable 5.2 API-equivalent pricing: $8 input, $10 five-minute and $16 one-hour cache writes, $0.20 cache reads and $40 output per million tokens, verified on 10 November 2026. Fable 5.2 was released on 9 November 2026 and its work was unpriced until now; existing records are priced when the catalogue loads, and saved custom prices are kept.
