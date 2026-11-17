@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.65 — 17 November 2026
+
+- Add built-in API-equivalent costs for GPT-6.2 Astra and GPT-6.2 Sol. Previously imported sessions are priced automatically on startup, and any prices you entered for these models take precedence.
+- Apply OpenAI’s long-context rates to requests above 272,000 input tokens. For the full request, input and cache rates double and the output rate increases by 50%.
+- Show short and extended cache-write prices in Settings. For GPT-6.2 these cover 30 minutes and 12 hours. Codex session logs report a single write count, so the estimate uses the 30-minute rate.
+
 ## 1.0.64 — 13 November 2026
 
 - Update the indirect `@hono/node-server` dependency from 2.1.5 to 2.1.8, including upstream security fixes and improvements to request and response handling.

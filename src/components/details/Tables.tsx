@@ -170,10 +170,10 @@ export const ModelTable = memo(function ModelTable({ costs, query }: { costs: Co
                 Cache read
               </th>
               <th scope="col" className="num">
-                Write 5m
+                Short write
               </th>
               <th scope="col" className="num">
-                Write 1h
+                Extended write
               </th>
               <th scope="col" className="num">
                 Output

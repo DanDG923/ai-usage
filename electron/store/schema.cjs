@@ -372,6 +372,7 @@ function seed(store) {
     // OpenAI rows sourced from the model's own page, with their effective
     // dates; the other OpenAI rows cite the comparison page.
     const openAiEffective = {
+      'gpt-6.2-astra': '2026-11-17', 'gpt-6.2-sol': '2026-11-17',
       'gpt-6-astra': '2026-09-04', 'gpt-6.1-sol': '2026-09-29', 'gpt-6.1-terra': '2026-10-26',
       'gpt-6-sol': '2026-09-22', 'gpt-6-luna': '2026-09-22',
     }[row[0]];

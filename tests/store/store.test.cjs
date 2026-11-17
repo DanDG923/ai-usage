@@ -231,13 +231,15 @@ for (const [model, standardUsd, longUsd, effectiveFrom, inputUsd] of [
   ['gpt-6-luna', 0.0212, 0.0421502, '2026-09-22', 0.01],
   ['gpt-6.1-sol', 0.414, 0.823004, '2026-09-29', 0.2],
   ['gpt-6.1-terra', 0.207, 0.411502, '2026-10-26', 0.1],
+  ['gpt-6.2-astra', 1.906, 3.792016, '2026-11-17', 0.8],
+  ['gpt-6.2-sol', 0.4765, 0.948004, '2026-11-17', 0.2],
 ]) {
   test(`${model} prices every token category at the long-context boundary`, () => withStore((store) => {
     for (const name of [model, `${model}-${effectiveFrom.replaceAll('-', '')}`, `${model}-${effectiveFrom}`]) {
       const row = {
         source_id: 'codex', model: name, input_tokens: 172_000, cached_input_tokens: 100_000,
-        cache_write_input_tokens: 100_000, cache_write_5m_input_tokens: 50_000,
-        cache_write_1h_input_tokens: 50_000, output_tokens: 1_000,
+        cache_write_input_tokens: 100_000, cache_write_5m_input_tokens: 75_000,
+        cache_write_1h_input_tokens: 25_000, output_tokens: 1_000,
       };
       const standard = store.calculateCost(row);
       assert.equal(standard.covered, true);
