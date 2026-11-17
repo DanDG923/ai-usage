@@ -24,8 +24,8 @@ const FIELDS = [
 type Field = (typeof FIELDS)[number];
 const FIELD_LABELS: Record<Field, string> = {
   input_usd_per_million: 'input price',
-  cache_write_usd_per_million: 'five minute cache write price',
-  cache_write_1h_usd_per_million: 'one hour cache write price',
+  cache_write_usd_per_million: 'short retention cache write price',
+  cache_write_1h_usd_per_million: 'extended retention cache write price',
   cache_read_usd_per_million: 'cache read price',
   output_usd_per_million: 'output price',
 };
@@ -214,7 +214,7 @@ export function PricingSection({
     <SettingsSection
       id="pricing"
       title="API pricing"
-      description="USD per million tokens. Five-minute and one-hour cache writes are priced separately. Detected models without a price appear first so the estimate can be completed here."
+      description="USD per million tokens. Short and extended cache writes cover 5 minutes and 1 hour for Claude, or 30 minutes and 12 hours for GPT-6.2. Codex logs use the short write rate. Unpriced models appear first."
     >
       <SettingColumns>
         <div className="setting-col">
@@ -318,10 +318,10 @@ export function PricingSection({
                 Input
               </th>
               <th scope="col" className="num">
-                Write 5m
+                Short write
               </th>
               <th scope="col" className="num">
-                Write 1h
+                Extended write
               </th>
               <th scope="col" className="num">
                 Cache read

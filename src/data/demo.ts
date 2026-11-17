@@ -240,6 +240,26 @@ export const demoSnapshot: Snapshot = {
   resetCredits: 1,
   priceCatalog: [
     {
+      model: 'gpt-6.2-astra',
+      input_usd_per_million: 8,
+      cache_write_usd_per_million: 10,
+      cache_write_1h_usd_per_million: 20,
+      cache_read_usd_per_million: 0.4,
+      output_usd_per_million: 40,
+      effective_from: '2026-11-17',
+      source_url: 'https://developers.openai.com/api/docs/models/gpt-6.2-astra',
+    },
+    {
+      model: 'gpt-6.2-sol',
+      input_usd_per_million: 2,
+      cache_write_usd_per_million: 2.5,
+      cache_write_1h_usd_per_million: 5,
+      cache_read_usd_per_million: 0.1,
+      output_usd_per_million: 10,
+      effective_from: '2026-11-17',
+      source_url: 'https://developers.openai.com/api/docs/models/gpt-6.2-sol',
+    },
+    {
       model: 'gpt-6-astra',
       input_usd_per_million: 10,
       cache_write_usd_per_million: 12.5,

@@ -18,7 +18,7 @@ The **Costs** search filters model and project summaries and searches every reco
 
 ## Pricing and the catalogue
 
-Costs include every model present in the imported Codex and Claude Code token records. Opus 5.5, Opus 5, Opus 4.8, Sonnet 5.5, Sonnet 5, Haiku 5.5, and Haiku 4.5 already have built-in prices alongside Astra, GPT-6.1 Sol, GPT-6.1 Terra, Sol, Terra, Luna, Fable 5.2, Fable 5.1 and Fable 5.
+Costs include every model present in the imported Codex and Claude Code token records. The built-in catalogue covers GPT-6.2 Astra and Sol alongside earlier Astra, Sol, Terra and Luna models. Claude prices include Opus 5.5, Opus 5, Opus 4.8, Sonnet 5.5, Sonnet 5, Haiku 5.5, Haiku 4.5, Fable 5.2, Fable 5.1 and Fable 5.
 
 ### Claude models
 
@@ -29,14 +29,23 @@ Costs include every model present in the imported Codex and Claude Code token re
 
 ### OpenAI models
 
-GPT-6.1 Sol differs from GPT-6 Sol only in cached input, $0.10 rather than $0.20. The built-in rates are:
+GPT-6.2 standard API rates took effect on 17 November 2026. All prices below are USD per million tokens. [OpenAI API changelog](https://developers.openai.com/api/docs/changelog)
+
+| Model | Input | Cached input | 30-minute cache write | 12-hour cache write | Output |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| [GPT-6.2 Astra](https://developers.openai.com/api/docs/models/gpt-6.2-astra) | $8 | $0.40 | $10 | $20 | $40 |
+| [GPT-6.2 Sol](https://developers.openai.com/api/docs/models/gpt-6.2-sol) | $2 | $0.10 | $2.50 | $5 | $10 |
+
+Codex session logs provide one cache-write count without a retention duration. AI Usage prices those writes at the 30-minute rate for GPT-6.2.
+
+Earlier OpenAI models have the following built-in rates.
 
 - Astra is included in the built-in catalogue at standard API rates of $10 input, $1 cached input, $12.50 cache writes, and $50 output per million tokens, verified against [OpenAI's model documentation](https://developers.openai.com/api/docs/models/gpt-6-astra) on 4 September 2026.
 - [GPT-6 Sol](https://developers.openai.com/api/docs/models/gpt-6-sol) adds $2 input, $0.20 cached input, $2.50 cache writes, and $10 output; [GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna) adds $0.10 input, $0.01 cached input, $0.125 cache writes, and $0.50 output per million tokens, verified on 22 September 2026.
 - [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol) adds $2 input, $0.10 cached input, $2.50 cache writes, and $10 output per million tokens, verified on 1 October 2026.
 - [GPT-6.1 Terra](https://developers.openai.com/api/docs/models/gpt-6.1-terra), released on 26 October 2026, adds $1 input, $0.05 cached input, $1.25 cache writes, and $5 output per million tokens, verified on 30 October 2026.
 
-OpenAI GPT-6.1 Sol and Terra, GPT-6 Astra, Sol, and Luna, and GPT-5.6 Sol, Terra, and Luna requests over the published 272,000-input-token threshold use the long-context multipliers, including cached prompt input when determining whether the threshold is crossed. Above the threshold, input and cache rates double and output rates increase by 50%.
+For GPT-6.2 Astra and Sol, GPT-6.1 Sol and Terra, GPT-6 Astra, Sol and Luna, and GPT-5.6 Sol, Terra and Luna, long-context pricing applies when a single request exceeds 272,000 input tokens, including cached prompt tokens. Above the threshold, input and cache rates double and output rates increase by 50% for the whole request.
 
 These are standard API-equivalent estimates, not ChatGPT subscription charges.
 

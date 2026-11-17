@@ -42,7 +42,8 @@ const { iso } = require('./shared.cjs');
 // Haiku 5.5's second rate card, for prompts over 100,000, is five times its first.
 const OPENAI_LONG_CONTEXT = { threshold: 272_000, input: 2, output: 1.5 };
 const LONG_CONTEXT_PRICING = new Map(/** @type {[string, typeof OPENAI_LONG_CONTEXT][]} */ ([
-  ...['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']
+  ...['gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra',
+    'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']
     .map((model) => [model, OPENAI_LONG_CONTEXT]),
   ['claude-haiku-5-5', { threshold: 100_000, input: 5, output: 5 }],
 ]));
@@ -94,10 +95,14 @@ function priceSourceUrl(value) {
   return value;
 }
 
-// model, input, five-minute cache write, one-hour cache write, cache read, output
+// model, input, short cache write, extended cache write, cache read, output
 /** @type {[string, number, number, number, number, number][]} */
 const PRICE_ROWS = [
-  // Standard API rates verified 2026-09-04; OpenAI has one cache-write rate.
+  // GPT-6.2 cache retention is 30 minutes or 12 hours. Codex reports one
+  // cache-write count, which the collector puts in the short-retention bucket.
+  ['gpt-6.2-astra', 8, 10, 20, 0.4, 40],
+  ['gpt-6.2-sol', 2, 2.5, 5, 0.1, 10],
+  // Standard API rates verified 2026-09-04.
   ['gpt-6-astra', 10, 12.5, 12.5, 1, 50],
   // GPT-6.1 Sol standard rates verified 2026-10-01. It differs from GPT-6 Sol
   // only in cached input: $0.10 against $0.20 per MTok.
