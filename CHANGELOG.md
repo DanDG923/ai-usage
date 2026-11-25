@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.66 — 25 November 2026
+
+- Add a **Reset** button in **Settings → API pricing** for any built-in model whose saved rates or provenance have been edited locally, restoring the bundled default rates, effective date, and official source reference.
+- Consolidate built-in model pricing, effective dates, source links, and long-context rules into a single catalogue definition.
+- Paginate GitHub release lookups in the release workflow so release checks continue working past 100 published releases, and add a weekly read-only check for upstream changes to Anthropic’s Claude Code installer script.
+- Update Electron to 45.3.2, the Claude Agent SDK to 0.3.325, Vite to 8.3.8, `@vitejs/plugin-react` to 6.3.0, Prettier to 3.10.1, and `concurrently` to 10.0.7.
+- Preserve local usage history, settings, observations, and backups during an in-place update.
+
 ## 1.0.65 — 17 November 2026
 
 - Add built-in API-equivalent costs for GPT-6.2 Astra and GPT-6.2 Sol. Previously imported sessions are priced automatically on startup, and any prices you entered for these models take precedence.

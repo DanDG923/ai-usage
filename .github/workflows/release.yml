@@ -158,8 +158,9 @@ jobs:
             throw 'Release publication requires the destination repository to be public.'
           }
           $version = (Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json).version
-          $releases = gh api "repos/$repo/releases?per_page=100" | ConvertFrom-Json
+          $releasePages = gh api "repos/$repo/releases?per_page=100" --paginate --slurp | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0) { throw 'Unable to verify existing releases.' }
+          $releases = @($releasePages | ForEach-Object { $_ })
           foreach ($existing in $releases) {
             if ($existing.tag_name -ceq $env:RELEASE_TAG) {
               throw 'A release for this tag already exists. Review it before retrying; released assets are never overwritten.'
@@ -200,8 +201,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Draft release creation or upload failed.' }
           # The by-tag REST endpoint only returns published releases. A writer
           # can see this new draft through the release-list endpoint.
-          $afterUpload = gh api "repos/$repo/releases?per_page=100" | ConvertFrom-Json
+          $afterUploadPages = gh api "repos/$repo/releases?per_page=100" --paginate --slurp | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0) { throw 'Unable to read the uploaded draft release.' }
+          $afterUpload = @($afterUploadPages | ForEach-Object { $_ })
           $matchingDrafts = @($afterUpload | Where-Object { $_.tag_name -ceq $env:RELEASE_TAG -and $_.draft })
           if ($matchingDrafts.Count -ne 1 -or $matchingDrafts[0].assets.Count -ne $assetNames.Count) {
             throw 'The draft release is incomplete; it has not been published.'

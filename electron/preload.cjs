@@ -56,6 +56,7 @@ contextBridge.exposeInMainWorld('aiUsage', /** @satisfies {import('../src/types'
   refresh: () => invoke('dashboard:refresh'),
   updateSettings: (patch) => invoke('dashboard:update-settings', patch),
   updatePrice: (price) => invoke('dashboard:update-price', price),
+  resetPrice: (model) => invoke('dashboard:reset-price', model),
   addManualObservation: (observation) => invoke('dashboard:add-manual-observation', observation),
   installClaudeHelper: () => invoke('dashboard:install-claude-helper'),
   uninstallClaudeHelper: () => invoke('dashboard:uninstall-claude-helper'),

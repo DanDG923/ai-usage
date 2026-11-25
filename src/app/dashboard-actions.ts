@@ -335,6 +335,17 @@ export function createDashboardActions({
     }
   };
 
+  const resetPrice = async (model: string) => {
+    if (!bridge) return;
+    try {
+      const result = await bridge.resetPrice(model);
+      store.commit(result.snapshot);
+      setNotice({ text: `${model} pricing reset to built-in default.`, tone: 'ok' });
+    } catch (error) {
+      failWith('Pricing could not be reset.')(error);
+    }
+  };
+
   const exportCsv = async (period: number) => {
     if (!bridge || dataOperationRunning()) return;
     store.set({ dataOperation: 'export' });
@@ -404,6 +415,7 @@ export function createDashboardActions({
     refresh,
     updateSettings,
     updatePrice,
+    resetPrice,
     addManualObservation,
     installClaudeHelper: installClaude,
     uninstallClaudeHelper: uninstallClaude,

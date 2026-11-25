@@ -140,6 +140,11 @@ test('public releases build without credentials and publish complete verified as
   assert.match(publish.run, /repository\.private -ne \$false/);
   assert.match(publish.run, /A release for this tag already exists/);
   assert.match(publish.run, /refusing to move the update feed backwards/);
+  assert.equal(
+    (publish.run.match(/gh api "repos\/\$repo\/releases\?per_page=100" --paginate --slurp/g) || []).length,
+    2,
+    'both release list checks paginate past 100 releases',
+  );
   // `--draft=false` appears later in the script, so match the create command.
   assert.match(publish.run, /gh release create [^\n]* --verify-tag --draft /);
   assert.doesNotMatch(publish.run, /releases\/tags\//);
@@ -209,4 +214,22 @@ test('public releases build without credentials and publish complete verified as
   assert.deepEqual(linux.steps.map((step) => step.run).filter(Boolean),
     ['npm ci --ignore-scripts', 'npm run lint', 'npm run format:check', 'npm run typecheck', 'npm test']);
   for (const run of ['npm run lint', 'npm run format:check', 'npm run typecheck', 'npm test']) assert.ok(packRuns.includes(run), `the Windows job still runs ${run}`);
+
+  // Scheduled drift check for Anthropic's Claude installer pin: read-only,
+  // SHA-pinned to the same actions as CI, never installs third-party packages
+  // or auto-updates the pin.
+  const pinCheck = yaml.load(readRepoFile('.github/workflows/installer-pin-check.yml'));
+  assert.ok(Array.isArray(pinCheck.on.schedule) && pinCheck.on.schedule.length === 1);
+  assert.ok('workflow_dispatch' in pinCheck.on);
+  assert.deepEqual(pinCheck.permissions, { contents: 'read' });
+  assert.deepEqual(Object.keys(pinCheck.jobs), ['check']);
+  const checkJob = pinCheck.jobs.check;
+  assert.equal(checkJob['runs-on'], 'ubuntu-latest');
+  assert.equal(checkJob.permissions, undefined);
+  assert.equal(checkJob.steps[0].with['persist-credentials'], false);
+  const pinActions = checkJob.steps.filter((item) => item.uses).map((item) => item.uses);
+  assert.deepEqual(pinActions, linuxActions, 'pin check pins the same actions as CI');
+  const pinNode = checkJob.steps.find((step) => usesAction(step, 'actions/setup-node'));
+  assert.equal(pinNode.with['node-version-file'], '.nvmrc');
+  assert.deepEqual(checkJob.steps.map((step) => step.run).filter(Boolean), ['node tools/claude-installer-pin.cjs --check']);
 });

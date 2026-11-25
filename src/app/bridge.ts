@@ -12,6 +12,7 @@ export type DashboardBridge = Pick<
   | 'refresh'
   | 'updateSettings'
   | 'updatePrice'
+  | 'resetPrice'
   | 'addManualObservation'
   | 'installClaudeHelper'
   | 'uninstallClaudeHelper'
@@ -88,10 +89,20 @@ export function previewBridge(demo: Snapshot, shown: () => Snapshot | null): Das
                 output_usd_per_million: price.outputUsdPerMillion,
                 effective_from: price.effectiveFrom ?? row.effective_from,
                 source_url: price.sourceUrl ?? null,
+                can_reset: demo.priceCatalog.some((entry) => entry.model === price.model) || undefined,
               }
             : row,
         ),
       })),
+    resetPrice: (model) =>
+      showOnly((current) => {
+        const builtIn = demo.priceCatalog.find((entry) => entry.model === model);
+        if (!builtIn) return current;
+        return {
+          ...current,
+          priceCatalog: current.priceCatalog.map((row) => (row.model === model ? { ...builtIn } : row)),
+        };
+      }),
     addManualObservation: () => desktopOnly('Manual observations are saved by the installed desktop app.'),
     installClaudeHelper: () => desktopOnly(),
     uninstallClaudeHelper: () => desktopOnly(),

@@ -84,6 +84,7 @@ contextBridge.exposeInMainWorld('aiUsage', {
     await new Promise((resolve) => heldPrices.push(resolve));
     return { snapshot: structuredClone(snapshot) };
   },
+  resetPrice: async () => ({ snapshot: structuredClone(snapshot) }),
   refresh: async () => {
     refreshCalls += 1;
     if (holdRefresh) return new Promise((resolve) => heldRefreshes.push(() => resolve({ snapshot: structuredClone(snapshot), collectors: {} })));

@@ -413,6 +413,38 @@ test('a custom zero one-hour cache price survives subsequent launches', () => {
   } finally { store.close(); }
 });
 
+test('edited built-in prices expose can_reset and resetPrice restores defaults and provenance', () => withStore((store) => {
+  const original = store.getPriceCatalog().find((row) => row.model === 'claude-opus-5');
+  assert.equal(original.can_reset, undefined);
+  assert.match(original.source_url, /^https:\/\/platform\.claude\.com\//);
+
+  const afterEdit = store.updatePrice({
+    model: 'claude-opus-5', inputUsdPerMillion: 99, cacheWriteUsdPerMillion: 100,
+    cacheWrite1hUsdPerMillion: 120, cacheReadUsdPerMillion: 5, outputUsdPerMillion: 200,
+    effectiveFrom: '2026-11-25', sourceUrl: null,
+  });
+  const edited = afterEdit.find((row) => row.model === 'claude-opus-5');
+  assert.equal(edited.input_usd_per_million, 99);
+  assert.equal(edited.source_url, null);
+  assert.equal(edited.can_reset, true);
+  assert.equal(store.db.prepare("SELECT is_seed FROM price_catalog WHERE model = 'claude-opus-5'").get().is_seed, 0);
+
+  // Custom models without a built-in default never expose can_reset and cannot be reset.
+  const custom = store.updatePrice({
+    model: 'custom-model', inputUsdPerMillion: 1, cacheWriteUsdPerMillion: 1,
+    cacheWrite1hUsdPerMillion: 1, cacheReadUsdPerMillion: 0.1, outputUsdPerMillion: 2,
+  }).find((row) => row.model === 'custom-model');
+  assert.equal(custom.can_reset, undefined);
+  assert.throws(() => store.resetPrice('custom-model'), /No built-in default price/);
+  assert.throws(() => store.resetPrice(''), /No built-in default price/);
+  assert.throws(() => store.resetPrice(null), /No built-in default price/);
+
+  const afterReset = store.resetPrice('claude-opus-5');
+  const restored = afterReset.find((row) => row.model === 'claude-opus-5');
+  assert.deepEqual(restored, original);
+  assert.equal(store.db.prepare("SELECT is_seed FROM price_catalog WHERE model = 'claude-opus-5'").get().is_seed, 1);
+}));
+
 test('manual Codex weekly history merges into the official overall bucket', () => withStore((store) => {
   const future = new Date(Date.now() + 5 * 86_400_000).toISOString();
   store.recordObservation({ sourceId: 'codex', bucketId: 'codex:weekly', observedAt: new Date(Date.now() - 60_000).toISOString(), usedPercent: 70, resetsAt: future, windowMinutes: 10_080, provenance: 'manual-official' });

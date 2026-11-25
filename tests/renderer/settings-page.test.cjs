@@ -388,3 +388,13 @@ test('a local calendar day is not the UTC day', () => {
   // 00:30 on 30 September in London is still 29 September in UTC.
   assert.equal(lib.localDateKey(new Date('2026-09-29T23:30:00Z')), '2026-09-30');
 });
+
+test('pricing shows a Reset button only for edited built-in models', () => {
+  const snapshot = structuredClone(demoSnapshot);
+  assert.doesNotMatch(section(renderSettings(snapshot), 'pricing'), /price-reset/);
+  const target = snapshot.priceCatalog[0];
+  target.can_reset = true;
+  const html = section(renderSettings(snapshot), 'pricing');
+  assert.equal((html.match(/class="btn price-reset"/g) || []).length, 1);
+  assert.match(html, new RegExp(`aria-label="Reset ${target.model.replaceAll('.', '\\.')} prices to built-in default"`));
+});

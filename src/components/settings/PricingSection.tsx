@@ -59,11 +59,13 @@ function catalogRowNote(row: PriceRow) {
 function PriceEditor({
   row,
   onSave,
+  onReset,
   unpricedSource,
   templates,
 }: {
   row: PriceRow;
   onSave: (row: PriceRow) => Promise<void>;
+  onReset?: (model: string) => Promise<void>;
   unpricedSource?: string;
   templates: PriceRow[];
 }) {
@@ -85,12 +87,14 @@ function PriceEditor({
   const valid = FIELDS.every(
     (key) => draft[key].trim() !== '' && Number.isFinite(Number(draft[key])) && Number(draft[key]) >= 0,
   );
-  // One save per row at a time: a double-click must not write the price twice.
-  const saveInFlight = useRef(false);
+  // One write per row at a time: a double-click or overlapping reset cannot send two writes.
+  const writeInFlight = useRef(false);
   const [saving, setSaving] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const busy = saving || resetting;
   const save = async () => {
-    if (!valid || saveInFlight.current) return;
-    saveInFlight.current = true;
+    if (!valid || writeInFlight.current) return;
+    writeInFlight.current = true;
     setSaving(true);
     try {
       // Once a catalogue row is edited locally, its old official URL/date no
@@ -103,8 +107,19 @@ function PriceEditor({
         source_url: null,
       });
     } finally {
-      saveInFlight.current = false;
+      writeInFlight.current = false;
       setSaving(false);
+    }
+  };
+  const reset = async () => {
+    if (!onReset || !row.can_reset || writeInFlight.current) return;
+    writeInFlight.current = true;
+    setResetting(true);
+    try {
+      await onReset(row.model);
+    } finally {
+      writeInFlight.current = false;
+      setResetting(false);
     }
   };
   return (
@@ -149,16 +164,30 @@ function PriceEditor({
         </td>
       ))}
       <td>
-        <button
-          type="button"
-          className="btn price-save"
-          aria-label={`Save ${row.model} prices`}
-          disabled={!valid || saving}
-          aria-busy={saving || undefined}
-          onClick={() => void save()}
-        >
-          Save
-        </button>
+        <div className="price-actions">
+          <button
+            type="button"
+            className="btn price-save"
+            aria-label={`Save ${row.model} prices`}
+            disabled={!valid || busy}
+            aria-busy={saving || undefined}
+            onClick={() => void save()}
+          >
+            Save
+          </button>
+          {row.can_reset && onReset && (
+            <button
+              type="button"
+              className="btn price-reset"
+              aria-label={`Reset ${row.model} prices to built-in default`}
+              disabled={busy}
+              aria-busy={resetting || undefined}
+              onClick={() => void reset()}
+            >
+              Reset
+            </button>
+          )}
+        </div>
       </td>
     </tr>
   );
@@ -172,7 +201,7 @@ export function PricingSection({
   update: (patch: Partial<Settings>) => Promise<void | boolean>;
 }) {
   const { settings } = snapshot;
-  const { updatePrice } = useDashboardActions();
+  const { updatePrice, resetPrice } = useDashboardActions();
   const id = useId();
   const [pendingCurrency, setPendingCurrency] = useState<string | null>(null);
   const [rateDraft, setRateDraft] = useState('');
@@ -345,7 +374,7 @@ export function PricingSection({
               />
             ))}
             {snapshot.priceCatalog.map((row) => (
-              <PriceEditor key={row.model} row={row} onSave={updatePrice} templates={[]} />
+              <PriceEditor key={row.model} row={row} onSave={updatePrice} onReset={resetPrice} templates={[]} />
             ))}
           </tbody>
         </table>

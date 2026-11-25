@@ -380,6 +380,8 @@ export type PriceRow = {
   output_usd_per_million: number;
   effective_from: string;
   source_url: string | null;
+  /** True when this is a built-in model whose saved row differs from the bundled default. */
+  can_reset?: boolean;
 };
 
 /** This device's Fable activity in the current Fable window, split by version. */
@@ -506,6 +508,7 @@ export type Bridge = {
     effectiveFrom?: string;
     sourceUrl?: string | null;
   }): Promise<{ snapshot: Snapshot }>;
+  resetPrice(model: string): Promise<{ snapshot: Snapshot }>;
   addManualObservation(observation: ManualObservation): Promise<Snapshot>;
   installClaudeHelper(): Promise<{ snapshot?: Snapshot }>;
   uninstallClaudeHelper(): Promise<{

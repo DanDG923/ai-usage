@@ -195,6 +195,8 @@ class UsageStore {
   getPriceCatalog() { return impl.pricing.getPriceCatalog(this); }
   /** @type {Method<typeof impl.pricing.updatePrice>} */
   updatePrice(row) { return impl.pricing.updatePrice(this, row); }
+  /** @type {Method<typeof impl.pricing.resetPrice>} */
+  resetPrice(model) { return impl.pricing.resetPrice(this, model); }
   /** @type {Method<typeof impl.pricing.calculateCost>} */
   calculateCost(row) { return impl.pricing.calculateCost(this, row); }
 

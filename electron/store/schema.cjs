@@ -9,7 +9,7 @@ const { FABLE_BUCKET_NAME } = require('../fable-projection.cjs');
 const { PROVIDERS } = require('../providers.mjs');
 const { LEGACY_FABLE_BUCKET_NAME, iso } = require('./shared.cjs');
 const { DEFAULT_SETTINGS, SETTING_ALIASES } = require('./settings.cjs');
-const { PRICE_ROWS } = require('./pricing.cjs');
+const { BUILT_IN_PRICES } = require('./pricing.cjs');
 
 // SQLITE_CORRUPT and SQLITE_NOTADB: the file exists but SQLite cannot read it.
 const UNREADABLE_DATABASE_CODES = new Set([11, 26]);
@@ -368,24 +368,17 @@ function seed(store) {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
       ON CONFLICT(model) DO NOTHING
     `);
-  for (const row of PRICE_ROWS) {
-    // OpenAI rows sourced from the model's own page, with their effective
-    // dates; the other OpenAI rows cite the comparison page.
-    const openAiEffective = {
-      'gpt-6.2-astra': '2026-11-17', 'gpt-6.2-sol': '2026-11-17',
-      'gpt-6-astra': '2026-09-04', 'gpt-6.1-sol': '2026-09-29', 'gpt-6.1-terra': '2026-10-26',
-      'gpt-6-sol': '2026-09-22', 'gpt-6-luna': '2026-09-22',
-    }[row[0]];
-    const claudeEffective = {
-      'claude-fable-5-2': '2026-11-09', 'claude-fable-5-1': '2026-09-01', 'claude-opus-5-5': '2026-09-22',
-      'claude-sonnet-5-5': '2026-10-07', 'claude-haiku-5-5': '2026-10-07',
-    }[row[0]];
-    const source = openAiEffective
-      ? `https://developers.openai.com/api/docs/models/${row[0]}`
-      : row[0].startsWith('claude')
-      ? 'https://platform.claude.com/docs/en/about-claude/pricing'
-      : 'https://developers.openai.com/api/docs/models/compare';
-    insertPrice.run(...row, openAiEffective ?? claudeEffective ?? '2026-08-01', source);
+  for (const entry of BUILT_IN_PRICES) {
+    insertPrice.run(
+      entry.model,
+      entry.input,
+      entry.cacheWrite,
+      entry.cacheWrite1h,
+      entry.cacheRead,
+      entry.output,
+      entry.effectiveFrom,
+      entry.sourceUrl,
+    );
   }
   // Repair only the obsolete built-in Sonnet row. User-edited rows do not
   // match this complete old vector and are left alone.
@@ -400,7 +393,7 @@ function seed(store) {
     const setOneHour = store.prepare(`UPDATE price_catalog
         SET cache_write_1h_usd_per_million = ?
         WHERE model = ? AND cache_write_1h_usd_per_million = 0`);
-    for (const [model, , , oneHour] of PRICE_ROWS) setOneHour.run(oneHour, model);
+    for (const entry of BUILT_IN_PRICES) setOneHour.run(entry.cacheWrite1h, entry.model);
   }
   store.repairSettings();
 }

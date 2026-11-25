@@ -124,6 +124,11 @@ function registerIpc(context) {
     invalidateSnapshot();
     return { snapshot: snapshot() };
   }));
+  handleIpc('dashboard:reset-price', (_event, model) => databaseJobs.run(() => {
+    store.resetPrice(model);
+    invalidateSnapshot();
+    return { snapshot: snapshot() };
+  }));
   // The observation is taken apart field by field, each checked before use.
   handleIpc('dashboard:add-manual-observation', async (_event, /** @type {any} */ observation) => {
     if (!observation || typeof observation !== 'object') throw new Error('An observation is required.');

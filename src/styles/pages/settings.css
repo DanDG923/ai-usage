@@ -1053,7 +1053,13 @@
     height: 30px;
     padding: 0 6px;
   }
-  .settings-page .price-table .price-save {
+  .settings-page .price-table .price-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .settings-page .price-table .price-save,
+  .settings-page .price-table .price-reset {
     width: 100%;
   }
   .unpriced-badge {

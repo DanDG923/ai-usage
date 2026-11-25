@@ -1,0 +1,30 @@
+name: Claude installer pin check
+
+on:
+  schedule:
+    # Weekly on Monday at 09:00 UTC so upstream installer changes are noticed
+    # before a user hits CLAUDE_INSTALLER_CHANGED.
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: installer-pin-check
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      # Only Node built-ins are used by the pin check, so no dependencies are
+      # installed and the workflow never modifies the pinned digest.
+      - run: node tools/claude-installer-pin.cjs --check

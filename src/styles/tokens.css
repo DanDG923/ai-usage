@@ -23,7 +23,7 @@
  * Colour means a provider or a status, never both. Status is always an icon
  * and a word; text never wears a provider colour; controls are monochrome.
  * Source of the values: Deck-system.md (night, and the Daylight table).
- * electron/main.cjs (CHROME) and electron/flyout.cjs (FLYOUT_BACKGROUND)
+ * electron/app/dashboard.cjs (CHROME) and electron/flyout.cjs (FLYOUT_BACKGROUND)
  * mirror --ground, --text-2 and --panel by hand; change them together.
  */
 @layer tokens {
@@ -110,7 +110,7 @@
     --sp-6: 32px;
     --radius: 2px;
 
-    /* Layout. --bar-height equals titleBarOverlay.height in electron/main.cjs. */
+    /* Layout. --bar-height equals titleBarOverlay.height in electron/app/dashboard.cjs. */
     --bar-height: 52px;
     --footer-height: 36px;
     --page-gutter: 24px;
